@@ -183,6 +183,12 @@ func generateID() string {
 }
 
 func (s *SSHServer) handleSession(sess ssh.Session) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("PANIC in handleSession: %v", r)
+			sess.Exit(1)
+		}
+	}()
 	clientID := sess.User()
 	client, ok := s.srv.GetClient(clientID)
 	if !ok {
@@ -218,6 +224,7 @@ func (s *SSHServer) handleSession(sess ssh.Session) {
 		StderrCh: make(chan []byte, 2048),
 		CloseCh:  make(chan struct{}, 1),
 		Done:     make(chan struct{}),
+		exitDone: make(chan struct{}),
 		CloseSSH: func() { sess.Close() },
 		ExitSSH:  func(code int) { sess.Exit(code) },
 	}
@@ -278,7 +285,7 @@ func (s *SSHServer) handleSession(sess ssh.Session) {
 		for data := range proxySess.WriteCh {
 			sess.Write(data)
 		}
-		sess.Exit(proxySess.GetExitCode())
+			sess.Exit(proxySess.WaitExitCode(500 * time.Millisecond))
 		cleanup()
 	}()
 

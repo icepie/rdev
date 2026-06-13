@@ -6,6 +6,7 @@ package ptyutil
 import (
 	"fmt"
 	"os"
+	"runtime"
 
 	"github.com/aymanbagabas/go-pty"
 	"golang.org/x/crypto/ssh"
@@ -29,6 +30,15 @@ type Config struct {
 	Modes   ssh.TerminalModes // SSH terminal modes (nil = skip)
 }
 
+// shellFlag returns the command-line flag for running a command in the shell.
+// Windows cmd.exe uses /c; POSIX shells use -c.
+func shellFlag(shell string) string {
+	if runtime.GOOS == "windows" {
+		return "/c"
+	}
+	return "-c"
+}
+
 // Start creates a new PTY process. On Windows this uses ConPty;
 // on Unix this uses creack/pty. On unsupported platforms it returns an error.
 func Start(cfg *Config) (*Process, error) {
@@ -42,9 +52,11 @@ func Start(cfg *Config) (*Process, error) {
 		shell = detectShell()
 	}
 
+	flag := shellFlag(shell)
+
 	var cmd *pty.Cmd
 	if cfg.Command != "" {
-		cmd = pseudo.Command(shell, "-c", cfg.Command)
+		cmd = pseudo.Command(shell, flag, cfg.Command)
 	} else {
 		cmd = pseudo.Command(shell)
 	}

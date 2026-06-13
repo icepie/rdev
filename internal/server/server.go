@@ -58,6 +58,7 @@ type ProxySession struct {
 	CloseCh  chan struct{}
 	Done     chan struct{}
 	exitCode int
+	exitDone chan struct{} // closed when exit code is set
 	exitMu   sync.Mutex
 	CloseSSH func()
 	ExitSSH  func(code int)
@@ -67,12 +68,32 @@ func (s *ProxySession) SetExitCode(code int) {
 	s.exitMu.Lock()
 	s.exitCode = code
 	s.exitMu.Unlock()
+	// Signal that exit code is available
+	select {
+	case <-s.exitDone:
+		// already closed
+	default:
+		close(s.exitDone)
+	}
 }
 
 func (s *ProxySession) GetExitCode() int {
 	s.exitMu.Lock()
 	defer s.exitMu.Unlock()
 	return s.exitCode
+}
+
+// WaitExitCode blocks until an exit code is set or timeout expires
+func (s *ProxySession) WaitExitCode(timeout time.Duration) int {
+	select {
+	case <-s.exitDone:
+		s.exitMu.Lock()
+		code := s.exitCode
+		s.exitMu.Unlock()
+		return code
+	case <-time.After(timeout):
+		return -1
+	}
 }
 
 // ProxyForward represents a proxied TCP connection (port forwarding)
@@ -162,6 +183,11 @@ func (h *wsHandler) OnClose(socket *gws.Conn, err error) {
 }
 
 func (h *wsHandler) OnMessage(socket *gws.Conn, message *gws.Message) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("PANIC in wsHandler.OnMessage: %v", r)
+		}
+	}()
 	defer message.Close()
 
 	// Binary frame = raw data message
@@ -175,6 +201,7 @@ func (h *wsHandler) OnMessage(socket *gws.Conn, message *gws.Message) {
 	if err != nil {
 		return
 	}
+
 
 	// First message must be register
 	if msg.Type == protocol.MsgRegister {
@@ -243,6 +270,8 @@ func (h *wsHandler) handleBinaryMessage(socket *gws.Conn, raw []byte) {
 	if err != nil {
 		return
 	}
+
+	log.Printf("binary data: type=0x%02x id=%s len=%d", typ, id, len(payload))
 
 	clientID, _ := socket.Session().Load("clientID")
 	if clientID == nil {

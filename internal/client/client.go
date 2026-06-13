@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -441,115 +442,138 @@ func (c *Client) startShellExecSession(msg *protocol.Message) (*clientSession, e
 			Rows:    uint16(msg.Rows),
 			Cols:    uint16(msg.Cols),
 		}
-		proc, err := ptyutil.Start(cfg)
-		if err != nil {
-			return nil, err
-		}
-		sess.ptyProc = proc
-
-		// Read PTY output -> coalesced binary send to server
-		cw := newCoalescingWriter(c, msg.SessionID, protocol.BinData)
-		go func() {
-			io.Copy(cw, proc)
-			cw.flush()
-		}()
-
-		go func() {
-			exitCode, _ := proc.Wait()
-			proc.Close()
-			c.sendExitCode(msg.SessionID, exitCode)
-			c.sendClose(msg.SessionID)
-			sess.close()
-		}()
-
-		log.Printf("session %s: PTY started (cmd=%q)", msg.SessionID, msg.Command)
-	} else {
-		shell := c.shell
-		if shell == "" {
-			shell = os.Getenv("SHELL")
-			if shell == "" {
-				shell = "/bin/sh"
-			}
-		}
-
-		var cmd *exec.Cmd
-		if msg.Command != "" {
-			cmd = exec.Command(shell, "-c", msg.Command)
+		proc, ptyErr := ptyutil.Start(cfg)
+		if ptyErr != nil {
+			// PTY unavailable (e.g. ConPty on Wine, no /dev/pts) → fallback to exec mode
+			log.Printf("session %s: PTY unavailable (%v), falling back to exec mode", msg.SessionID, ptyErr)
+			sess.pty = false
 		} else {
-			cmd = exec.Command(shell)
-		}
-		cmd.Env = append(os.Environ(), msg.Env...)
+			sess.ptyProc = proc
 
-		stdinR, stdinW, err := os.Pipe()
-		if err != nil {
-			return nil, err
-		}
-		stdoutR, stdoutW, err := os.Pipe()
-		if err != nil {
-			return nil, err
-		}
-		stderrR, stderrW, err := os.Pipe()
-		if err != nil {
-			return nil, err
-		}
-
-		cmd.Stdin = stdinR
-		cmd.Stdout = stdoutW
-		cmd.Stderr = stderrW
-
-		if err := cmd.Start(); err != nil {
-			stdinR.Close(); stdinW.Close()
-			stdoutR.Close(); stdoutW.Close()
-			stderrR.Close(); stderrW.Close()
-			return nil, err
-		}
-
-		stdinR.Close()
-		stdoutW.Close()
-		stderrW.Close()
-
-		sess.stdinPipe = stdinW
-		sess.cmdWaitFn = func() (int, error) {
-			err := cmd.Wait()
-			if err == nil {
-				return 0, nil
-			}
-			if exitErr, ok := err.(*exec.ExitError); ok {
-				return exitErr.ExitCode(), nil
-			}
-			return -1, err
-		}
-
-		var ioWg sync.WaitGroup
-
-		ioWg.Add(1)
-		go func() {
-			defer ioWg.Done()
-			defer stdoutR.Close()
+			// Read PTY output -> coalesced binary send to server
 			cw := newCoalescingWriter(c, msg.SessionID, protocol.BinData)
-			io.Copy(cw, stdoutR)
-			cw.flush()
-		}()
+			go func() {
+				io.Copy(cw, proc)
+				cw.flush()
+			}()
 
-		ioWg.Add(1)
-		go func() {
-			defer ioWg.Done()
-			defer stderrR.Close()
-			cw := newCoalescingWriter(c, msg.SessionID, protocol.BinStderr)
-			io.Copy(cw, stderrR)
-			cw.flush()
-		}()
+			go func() {
+				exitCode, _ := proc.Wait()
+				proc.Close()
+				c.sendExitCode(msg.SessionID, exitCode)
+				c.sendClose(msg.SessionID)
+				sess.close()
+			}()
 
-		go func() {
-			ioWg.Wait()
-			exitCode, _ := sess.cmdWaitFn()
-			c.sendExitCode(msg.SessionID, exitCode)
-			c.sendClose(msg.SessionID)
-			sess.close()
-		}()
-
-		log.Printf("session %s: exec started (cmd=%q)", msg.SessionID, msg.Command)
+			log.Printf("session %s: PTY started (cmd=%q)", msg.SessionID, msg.Command)
+			return sess, nil
+		}
 	}
+
+	// Exec mode (non-PTY, or PTY fallback)
+	shell := c.shell
+	if shell == "" {
+		shell = os.Getenv("SHELL")
+		if shell == "" {
+			shell = os.Getenv("COMSPEC")
+			if shell == "" {
+				if runtime.GOOS == "windows" {
+					shell = "cmd.exe"
+				} else {
+					shell = "/bin/sh"
+				}
+			}
+		}
+	}
+
+	flag := "-c"
+	if runtime.GOOS == "windows" {
+		flag = "/c"
+	}
+
+	var cmd *exec.Cmd
+	if msg.Command != "" {
+		cmd = exec.Command(shell, flag, msg.Command)
+	} else {
+		cmd = exec.Command(shell)
+	}
+	cmd.Env = append(os.Environ(), msg.Env...)
+
+	stdinR, stdinW, err := os.Pipe()
+	if err != nil {
+		return nil, err
+	}
+	stdoutR, stdoutW, err := os.Pipe()
+	if err != nil {
+		return nil, err
+	}
+	stderrR, stderrW, err := os.Pipe()
+	if err != nil {
+		return nil, err
+	}
+
+	cmd.Stdin = stdinR
+	cmd.Stdout = stdoutW
+	cmd.Stderr = stderrW
+
+	if err := cmd.Start(); err != nil {
+		stdinR.Close(); stdinW.Close()
+		stdoutR.Close(); stdoutW.Close()
+		stderrR.Close(); stderrW.Close()
+		return nil, err
+	}
+
+	stdinR.Close()
+	stdoutW.Close()
+	stderrW.Close()
+
+	sess.stdinPipe = stdinW
+
+	// For non-interactive commands, close stdin immediately so the shell doesn't hang
+	if msg.Command != "" {
+		stdinW.Close()
+		sess.stdinPipe = nil
+	}
+	sess.cmdWaitFn = func() (int, error) {
+		err := cmd.Wait()
+		if err == nil {
+			return 0, nil
+		}
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			return exitErr.ExitCode(), nil
+		}
+		return -1, err
+	}
+
+	var ioWg sync.WaitGroup
+
+	ioWg.Add(1)
+	go func() {
+		defer ioWg.Done()
+		defer stdoutR.Close()
+		cw := newCoalescingWriter(c, msg.SessionID, protocol.BinData)
+		io.Copy(cw, stdoutR)
+		cw.flush()
+	}()
+
+	ioWg.Add(1)
+	go func() {
+		defer ioWg.Done()
+		defer stderrR.Close()
+		cw := newCoalescingWriter(c, msg.SessionID, protocol.BinStderr)
+		io.Copy(cw, stderrR)
+		cw.flush()
+	}()
+
+	go func() {
+		ioWg.Wait()
+		exitCode, _ := sess.cmdWaitFn()
+		c.sendExitCode(msg.SessionID, exitCode)
+		c.sendClose(msg.SessionID)
+		sess.close()
+	}()
+
+	log.Printf("session %s: exec started (cmd=%q)", msg.SessionID, msg.Command)
 
 	return sess, nil
 }

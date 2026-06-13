@@ -30,7 +30,7 @@ type batchMsg struct {
 
 	// Response fields (text frames)
 	DeviceID string `json:"deviceId,omitempty"`
-	Code     int    `json:"code,omitempty"`
+	Code     int    `json:"code"`
 	Success  bool   `json:"success,omitempty"`
 	Message  string `json:"message,omitempty"`
 }
@@ -47,6 +47,11 @@ func (h *batchWSHandler) OnOpen(socket *gws.Conn)  {}
 func (h *batchWSHandler) OnClose(socket *gws.Conn, err error) {}
 
 func (h *batchWSHandler) OnMessage(socket *gws.Conn, message *gws.Message) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("PANIC in batch OnMessage: %v", r)
+		}
+	}()
 	defer message.Close()
 
 	// Only text frames for commands
@@ -112,6 +117,7 @@ func (h *batchWSHandler) execOnDevice(socket *gws.Conn, client *ClientConn, devi
 		StderrCh: make(chan []byte, 2048),
 		CloseCh:  make(chan struct{}, 1),
 		Done:     make(chan struct{}),
+		exitDone: make(chan struct{}),
 		CloseSSH: func() {},
 		ExitSSH:  func(code int) {},
 	}
@@ -124,7 +130,7 @@ func (h *batchWSHandler) execOnDevice(socket *gws.Conn, client *ClientConn, devi
 		Command:   command,
 		Pty:       false,
 	}); err != nil {
-		h.sendBatchText(socket, batchMsg{Op: "error", DeviceID: deviceID, Message: "failed to reach device"})
+		h.sendBatchText(socket, batchMsg{Op: "error", DeviceID: deviceID, Message: fmt.Sprintf("failed to reach device: %v", err)})
 		h.srv.removeSession(sessionID)
 		return
 	}
@@ -144,7 +150,7 @@ func (h *batchWSHandler) execOnDevice(socket *gws.Conn, client *ClientConn, devi
 					h.sendBatchText(socket, batchMsg{
 						Op:       "exec_exit",
 						DeviceID: deviceID,
-						Code:     proxySess.GetExitCode(),
+						Code:     proxySess.WaitExitCode(500*time.Millisecond),
 					})
 					return
 				}
@@ -162,7 +168,7 @@ func (h *batchWSHandler) execOnDevice(socket *gws.Conn, client *ClientConn, devi
 				h.sendBatchText(socket, batchMsg{
 					Op:       "exec_exit",
 					DeviceID: deviceID,
-					Code:     proxySess.GetExitCode(),
+					Code:     proxySess.WaitExitCode(500*time.Millisecond),
 				})
 				return
 			}

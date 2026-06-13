@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"runtime"
 	"sync"
+	"time"
 
 	"github.com/lxzan/gws"
 	"rdev/internal/protocol"
@@ -82,6 +83,7 @@ func (h *terminalWSHandler) OnOpen(socket *gws.Conn) {
 		StderrCh: make(chan []byte, 2048),
 		CloseCh:  make(chan struct{}, 1),
 		Done:     make(chan struct{}),
+		exitDone: make(chan struct{}),
 		CloseSSH: func() {},
 		ExitSSH:  func(code int) {},
 	}
@@ -125,6 +127,11 @@ func (h *terminalWSHandler) OnClose(socket *gws.Conn, err error) {
 }
 
 func (h *terminalWSHandler) OnMessage(socket *gws.Conn, message *gws.Message) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("PANIC in terminal OnMessage: %v", r)
+		}
+	}()
 	defer message.Close()
 
 	tcRaw, _ := socket.Session().Load("terminalConn")
@@ -177,7 +184,7 @@ func (tc *terminalConn) pumpOutput() {
 		select {
 		case data, ok := <-tc.sess.WriteCh:
 			if !ok {
-				tc.sendExit(tc.sess.GetExitCode())
+				tc.sendExit(tc.sess.WaitExitCode(500 * time.Millisecond))
 				return
 			}
 			// Binary frame = raw terminal output (no header needed, xterm.js handles raw bytes)
@@ -192,7 +199,7 @@ func (tc *terminalConn) pumpOutput() {
 		case <-tc.sess.CloseCh:
 			close(tc.sess.WriteCh)
 			close(tc.sess.StderrCh)
-			tc.sendExit(tc.sess.GetExitCode())
+			tc.sendExit(tc.sess.WaitExitCode(500 * time.Millisecond))
 			return
 
 		case <-tc.done:
