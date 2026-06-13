@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
@@ -251,6 +252,10 @@ func (c *Client) handleMessage(msg *protocol.Message) {
 		c.handleTCPData(msg)
 	case protocol.MsgTCPClose:
 		c.handleTCPClose(msg)
+
+	// File distribution
+	case protocol.MsgFilePut:
+		c.handleFilePut(msg)
 	}
 }
 
@@ -525,6 +530,54 @@ func (c *Client) handleClose(msg *protocol.Message) {
 		sess.close()
 		log.Printf("session %s closed", msg.SessionID)
 	}
+}
+
+// --- File distribution ---
+
+func (c *Client) handleFilePut(msg *protocol.Message) {
+	path := msg.FilePath
+	log.Printf("file_put: writing %s", path)
+
+	data, err := protocol.DecodeData(msg.Data)
+	if err != nil {
+		c.send(&protocol.Message{
+			Type:     protocol.MsgFileResult,
+			FilePath: path,
+			Error:    fmt.Sprintf("decode error: %v", err),
+		})
+		return
+	}
+
+	// Ensure parent directory exists
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		c.send(&protocol.Message{
+			Type:     protocol.MsgFileResult,
+			FilePath: path,
+			Error:    fmt.Sprintf("mkdir error: %v", err),
+		})
+		return
+	}
+
+	mode := os.FileMode(0644)
+	if msg.FileMode > 0 {
+		mode = os.FileMode(msg.FileMode)
+	}
+	if err := os.WriteFile(path, data, mode); err != nil {
+		c.send(&protocol.Message{
+			Type:     protocol.MsgFileResult,
+			FilePath: path,
+			Error:    err.Error(),
+		})
+		return
+	}
+
+	log.Printf("file_put: wrote %d bytes to %s", len(data), path)
+	c.send(&protocol.Message{
+		Type:     protocol.MsgFileResult,
+		FilePath: path,
+		Success:  true,
+	})
 }
 
 // --- TCP forwarding (-L) ---

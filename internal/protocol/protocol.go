@@ -30,6 +30,10 @@ const (
 	MsgTCPListen   MessageType = "tcp_listen"   // S->C: start TCP listener (for -R via device)
 	MsgTCPListenOK MessageType = "tcp_listen_ok" // C->S: listener started
 	MsgTCPAccept   MessageType = "tcp_accept"   // C->S: new connection on listener
+
+	// File distribution (S->C then C->S)
+	MsgFilePut    MessageType = "file_put"    // S->C: write file to device {path, data, mode}
+	MsgFileResult MessageType = "file_result" // C->S: file write result {success, error}
 )
 
 // Message is the WebSocket protocol message
@@ -65,6 +69,11 @@ type Message struct {
 	Port       int    `json:"port,omitempty"`         // target port
 	SourceAddr string `json:"sourceAddr,omitempty"`  // origin address for accepted connections
 	Error      string `json:"error,omitempty"`        // error message for failures
+
+	// File distribution
+	FilePath string `json:"filePath,omitempty"` // destination path on device
+	FileMode  int32  `json:"fileMode,omitempty"`  // file permission mode (e.g. 0644)
+	Success   bool   `json:"success,omitempty"`  // file write result
 }
 
 // Encode marshals a message to JSON bytes

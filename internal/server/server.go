@@ -74,21 +74,24 @@ type ProxyForward struct {
 
 // Server manages WebSocket clients and SSH proxy
 type Server struct {
-	clients  map[string]*ClientConn
-	mu       sync.RWMutex
-	sessions map[string]*ProxySession
-	sessMu   sync.RWMutex
-	forwards map[string]*ProxyForward
-	fwdMu    sync.RWMutex
-	upgrader *gws.Upgrader
+	clients     map[string]*ClientConn
+	mu          sync.RWMutex
+	sessions    map[string]*ProxySession
+	sessMu      sync.RWMutex
+	forwards    map[string]*ProxyForward
+	fwdMu       sync.RWMutex
+	fileResults map[string]chan *protocol.Message // key: filePutID
+	fileMu      sync.RWMutex
+	upgrader    *gws.Upgrader
 }
 
 // NewServer creates a new Server
 func NewServer() *Server {
 	s := &Server{
-		clients:  make(map[string]*ClientConn),
-		sessions: make(map[string]*ProxySession),
-		forwards: make(map[string]*ProxyForward),
+		clients:     make(map[string]*ClientConn),
+		sessions:    make(map[string]*ProxySession),
+		forwards:    make(map[string]*ProxyForward),
+		fileResults: make(map[string]chan *protocol.Message),
 	}
 	s.upgrader = gws.NewUpgrader(&wsHandler{srv: s}, &gws.ServerOption{
 		ReadMaxPayloadSize: 16 * 1024 * 1024,
@@ -302,6 +305,10 @@ func (s *Server) handleClientMessage(client *ClientConn, msg *protocol.Message) 
 			default:
 			}
 		}
+
+	// File distribution
+	case protocol.MsgFileResult:
+		s.handleFileResult(msg)
 	}
 }
 
@@ -355,6 +362,34 @@ func (s *Server) removeForward(id string) {
 	s.fwdMu.Lock()
 	delete(s.forwards, id)
 	s.fwdMu.Unlock()
+}
+
+// --- File distribution ---
+
+// RegisterFileResult registers a channel to receive file write results
+func (s *Server) RegisterFileResult(id string, ch chan *protocol.Message) {
+	s.fileMu.Lock()
+	s.fileResults[id] = ch
+	s.fileMu.Unlock()
+}
+
+func (s *Server) unregisterFileResult(id string) {
+	s.fileMu.Lock()
+	delete(s.fileResults, id)
+	s.fileMu.Unlock()
+}
+
+func (s *Server) handleFileResult(msg *protocol.Message) {
+	// Use SessionID as the file result key (server sets it when sending MsgFilePut)
+	s.fileMu.RLock()
+	ch, ok := s.fileResults[msg.SessionID]
+	s.fileMu.RUnlock()
+	if ok {
+		select {
+		case ch <- msg:
+		default:
+		}
+	}
 }
 
 // HandleAPI returns the list of connected clients as JSON
