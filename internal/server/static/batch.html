@@ -184,11 +184,14 @@
 
     function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
 
-    function fromBase64(str) {
-        const binary = atob(str);
-        const bytes = new Uint8Array(binary.length);
-        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-        return new TextDecoder().decode(bytes);
+    // Decode binary frame: [1 byte type] [1 byte idLen] [idLen bytes devId] [payload]
+    function decodeBinFrame(buf) {
+        const view = new DataView(buf);
+        const typ = view.getUint8(0);
+        const idLen = view.getUint8(1);
+        const devId = new TextDecoder().decode(new Uint8Array(buf, 2, idLen));
+        const payload = new Uint8Array(buf, 2 + idLen);
+        return { typ, devId, payload };
     }
 
     // ---- Tabs ----
@@ -222,43 +225,45 @@
 
         const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
         const ws = new WebSocket(`${proto}//${location.host}/batch`);
+        ws.binaryType = 'arraybuffer'; // for binary output frames
 
         ws.onopen = () => {
             ws.send(JSON.stringify({ op: 'exec', devices: deviceList, command: cmd }));
         };
 
         ws.onmessage = (evt) => {
-            const msg = JSON.parse(evt.data);
-            if (msg.deviceId && msg.op === 'exec_output') {
-                const el = document.getElementById('output-' + msg.deviceId);
-                if (el) el.textContent += fromBase64(msg.data);
-            } else if (msg.deviceId && msg.op === 'exec_exit') {
-                const card = document.getElementById('result-' + msg.deviceId);
-                if (card) {
-                    const badge = card.querySelector('.exit');
-                    badge.className = 'exit ' + (msg.code === 0 ? 'ok' : 'fail');
-                    badge.textContent = msg.code === 0 ? 'exit 0' : `exit ${msg.code}`;
-                }
-                // Check if all done
-                const allDone = deviceList.every(id => {
-                    const c = document.getElementById('result-' + id);
-                    return c && !c.querySelector('.exit.running');
-                });
-                if (allDone) ws.close();
-            } else if (msg.op === 'error') {
-                if (msg.deviceId) {
-                    const el = document.getElementById('output-' + msg.deviceId);
-                    if (el) el.textContent += '\n[Error: ' + msg.message + ']';
+            if (evt.data instanceof ArrayBuffer) {
+                // Binary frame = exec output [0x01] [devIdLen] [devId] [raw output]
+                const { devId, payload } = decodeBinFrame(evt.data);
+                const el = document.getElementById('output-' + devId);
+                if (el) el.textContent += new TextDecoder().decode(payload);
+            } else {
+                // Text frame = JSON control
+                const msg = JSON.parse(evt.data);
+                if (msg.deviceId && msg.op === 'exec_exit') {
                     const card = document.getElementById('result-' + msg.deviceId);
                     if (card) {
                         const badge = card.querySelector('.exit');
-                        if (badge && badge.classList.contains('running')) {
-                            badge.className = 'exit fail';
-                            badge.textContent = 'error';
-                        }
+                        badge.className = 'exit ' + (msg.code === 0 ? 'ok' : 'fail');
+                        badge.textContent = msg.code === 0 ? 'exit 0' : `exit ${msg.code}`;
                     }
-                } else {
-                    results.innerHTML += `<div style="color:var(--red);font-size:0.85rem;padding:8px">Error: ${esc(msg.message)}</div>`;
+                    const allDone = deviceList.every(id => {
+                        const c = document.getElementById('result-' + id);
+                        return c && !c.querySelector('.exit.running');
+                    });
+                    if (allDone) ws.close();
+                } else if (msg.op === 'error') {
+                    if (msg.deviceId) {
+                        const el = document.getElementById('output-' + msg.deviceId);
+                        if (el) el.textContent += '\n[Error: ' + msg.message + ']';
+                        const card = document.getElementById('result-' + msg.deviceId);
+                        if (card) {
+                            const badge = card.querySelector('.exit');
+                            if (badge && badge.classList.contains('running')) { badge.className = 'exit fail'; badge.textContent = 'error'; }
+                        }
+                    } else {
+                        results.innerHTML += `<div style="color:var(--red);font-size:0.85rem;padding:8px">Error: ${esc(msg.message)}</div>`;
+                    }
                 }
             }
         };

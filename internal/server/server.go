@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
+	"runtime"
 	"sync"
 	"time"
 
@@ -27,7 +28,7 @@ type ClientConn struct {
 	mu          sync.Mutex
 }
 
-// Send sends a protocol message to the client over WebSocket
+// Send sends a JSON control message to the client (text frame)
 func (c *ClientConn) Send(msg *protocol.Message) error {
 	data, err := protocol.Encode(msg)
 	if err != nil {
@@ -36,12 +37,24 @@ func (c *ClientConn) Send(msg *protocol.Message) error {
 	return c.Conn.WriteMessage(gws.OpcodeText, data)
 }
 
+// SendBinary sends a binary data frame to the client
+func (c *ClientConn) SendBinary(typ byte, id string, data []byte) error {
+	frame := protocol.EncodeBinFrame(typ, id, data)
+	return c.Conn.WriteMessage(gws.OpcodeBinary, frame)
+}
+
+// SendFilePut sends a file to the client device (binary frame)
+func (c *ClientConn) SendFilePut(id, path string, mode int32, fileData []byte) error {
+	frame := protocol.EncodeBinFilePut(id, path, mode, fileData)
+	return c.Conn.WriteMessage(gws.OpcodeBinary, frame)
+}
+
 // ProxySession represents a proxied SSH session (shell/exec/sftp)
 type ProxySession struct {
 	ID       string
 	ClientID string
-	WriteCh  chan []byte
-	StderrCh chan []byte
+	WriteCh  chan []byte // client device -> SSH stdout / terminal
+	StderrCh chan []byte // client device -> SSH stderr
 	CloseCh  chan struct{}
 	Done     chan struct{}
 	exitCode int
@@ -80,7 +93,7 @@ type Server struct {
 	sessMu      sync.RWMutex
 	forwards    map[string]*ProxyForward
 	fwdMu       sync.RWMutex
-	fileResults map[string]chan *protocol.Message // key: filePutID
+	fileResults map[string]chan *protocol.Message
 	fileMu      sync.RWMutex
 	upgrader    *gws.Upgrader
 }
@@ -95,6 +108,13 @@ func NewServer() *Server {
 	}
 	s.upgrader = gws.NewUpgrader(&wsHandler{srv: s}, &gws.ServerOption{
 		ReadMaxPayloadSize: 16 * 1024 * 1024,
+		ParallelGolimit:    runtime.GOMAXPROCS(0),
+		PermessageDeflate: gws.PermessageDeflate{
+			Enabled:               true,
+			ServerContextTakeover:  true,
+			ClientContextTakeover: true,
+			Threshold:             256,
+		},
 	})
 	return s
 }
@@ -105,9 +125,7 @@ type wsHandler struct {
 	srv *Server
 }
 
-func (h *wsHandler) OnOpen(socket *gws.Conn) {
-	// Will register when first message (register) arrives
-}
+func (h *wsHandler) OnOpen(socket *gws.Conn) {}
 
 func (h *wsHandler) OnClose(socket *gws.Conn, err error) {
 	clientID, _ := socket.Session().Load("clientID")
@@ -146,6 +164,13 @@ func (h *wsHandler) OnClose(socket *gws.Conn, err error) {
 func (h *wsHandler) OnMessage(socket *gws.Conn, message *gws.Message) {
 	defer message.Close()
 
+	// Binary frame = raw data message
+	if message.Opcode == gws.OpcodeBinary {
+		h.handleBinaryMessage(socket, message.Bytes())
+		return
+	}
+
+	// Text frame = JSON control message
 	msg, err := protocol.Decode(message.Bytes())
 	if err != nil {
 		return
@@ -187,7 +212,6 @@ func (h *wsHandler) handleRegister(socket *gws.Conn, msg *protocol.Message) {
 		Forwards:    make(map[string]*ProxyForward),
 	}
 
-	// Store clientID in session for later lookup
 	socket.Session().Store("clientID", msg.ClientID)
 
 	h.srv.mu.Lock()
@@ -213,6 +237,52 @@ func (h *wsHandler) handleRegister(socket *gws.Conn, msg *protocol.Message) {
 	client.Send(&protocol.Message{Type: protocol.MsgRegister, ClientID: msg.ClientID})
 }
 
+// handleBinaryMessage processes binary data frames from device clients
+func (h *wsHandler) handleBinaryMessage(socket *gws.Conn, raw []byte) {
+	typ, id, payload, err := protocol.DecodeBinFrame(raw)
+	if err != nil {
+		return
+	}
+
+	clientID, _ := socket.Session().Load("clientID")
+	if clientID == nil {
+		return
+	}
+
+	// Copy payload since message buffer will be recycled by gws
+	data := make([]byte, len(payload))
+	copy(data, payload)
+
+	switch typ {
+	case protocol.BinData:
+		sess := h.srv.getSession(id)
+		if sess != nil && len(data) > 0 {
+			select {
+			case sess.WriteCh <- data:
+			default:
+			}
+		}
+
+	case protocol.BinStderr:
+		sess := h.srv.getSession(id)
+		if sess != nil && len(data) > 0 {
+			select {
+			case sess.StderrCh <- data:
+			default:
+			}
+		}
+
+	case protocol.BinTCPData:
+		fwd := h.srv.getForward(id)
+		if fwd != nil && len(data) > 0 {
+			select {
+			case fwd.WriteCh <- data:
+			default:
+			}
+		}
+	}
+}
+
 // HandleWS handles a WebSocket connection from a client device
 func (s *Server) HandleWS(w http.ResponseWriter, r *http.Request) {
 	socket, err := s.upgrader.Upgrade(w, r)
@@ -225,35 +295,6 @@ func (s *Server) HandleWS(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleClientMessage(client *ClientConn, msg *protocol.Message) {
 	switch msg.Type {
-	// --- Session ---
-	case protocol.MsgData:
-		sess := s.getSession(msg.SessionID)
-		if sess == nil {
-			return
-		}
-		data, err := protocol.DecodeData(msg.Data)
-		if err != nil || len(data) == 0 {
-			return
-		}
-		select {
-		case sess.WriteCh <- data:
-		default:
-		}
-
-	case protocol.MsgStderrData:
-		sess := s.getSession(msg.SessionID)
-		if sess == nil {
-			return
-		}
-		data, err := protocol.DecodeData(msg.Stderr)
-		if err != nil || len(data) == 0 {
-			return
-		}
-		select {
-		case sess.StderrCh <- data:
-		default:
-		}
-
 	case protocol.MsgExitCode:
 		sess := s.getSession(msg.SessionID)
 		if sess != nil {
@@ -269,12 +310,9 @@ func (s *Server) handleClientMessage(client *ClientConn, msg *protocol.Message) 
 			}
 		}
 
-	// --- TCP forwarding ---
+	// TCP forwarding control
 	case protocol.MsgTCPOpen:
-		fwd := s.getForward(msg.ForwardID)
-		if fwd == nil {
-			return
-		}
+		// Connection succeeded on client device
 
 	case protocol.MsgTCPFail:
 		fwd := s.getForward(msg.ForwardID)
@@ -282,20 +320,6 @@ func (s *Server) handleClientMessage(client *ClientConn, msg *protocol.Message) 
 			fwd.CloseSSH()
 		}
 		s.removeForward(msg.ForwardID)
-
-	case protocol.MsgTCPData:
-		fwd := s.getForward(msg.ForwardID)
-		if fwd == nil {
-			return
-		}
-		data, err := protocol.DecodeData(msg.Data)
-		if err != nil || len(data) == 0 {
-			return
-		}
-		select {
-		case fwd.WriteCh <- data:
-		default:
-		}
 
 	case protocol.MsgTCPClose:
 		fwd := s.getForward(msg.ForwardID)
@@ -364,9 +388,7 @@ func (s *Server) removeForward(id string) {
 	s.fwdMu.Unlock()
 }
 
-// --- File distribution ---
-
-// RegisterFileResult registers a channel to receive file write results
+// File distribution
 func (s *Server) RegisterFileResult(id string, ch chan *protocol.Message) {
 	s.fileMu.Lock()
 	s.fileResults[id] = ch
@@ -380,7 +402,6 @@ func (s *Server) unregisterFileResult(id string) {
 }
 
 func (s *Server) handleFileResult(msg *protocol.Message) {
-	// Use SessionID as the file result key (server sets it when sending MsgFilePut)
 	s.fileMu.RLock()
 	ch, ok := s.fileResults[msg.SessionID]
 	s.fileMu.RUnlock()
@@ -422,6 +443,30 @@ func (s *Server) HandleAPI(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(clients)
+}
+
+// HandleTerminalAPI returns available devices for the terminal page
+func (s *Server) HandleTerminalAPI(w http.ResponseWriter, r *http.Request) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	type deviceInfo struct {
+		ID          string `json:"id"`
+		ConnectedAt string `json:"connectedAt"`
+		HasPassword bool   `json:"hasPassword"`
+	}
+
+	var devices []deviceInfo
+	for _, c := range s.clients {
+		devices = append(devices, deviceInfo{
+			ID:          c.ID,
+			ConnectedAt: c.ConnectedAt.Format(time.RFC3339),
+			HasPassword: c.Password != "",
+		})
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(devices)
 }
 
 // StaticHandler returns an http.Handler for the embedded web UI

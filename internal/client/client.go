@@ -1,6 +1,7 @@
 package client
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"log"
@@ -20,30 +21,70 @@ import (
 	"rdev/internal/ptyutil"
 )
 
-// --- io.Writer adapters for sending data via WebSocket ---
+// --- Write adapters ---
 
-type dataWriter struct {
+// coalescingWriter batches small writes into larger WebSocket frames.
+// Sends immediately for >= 4KB, otherwise buffers up to 5ms.
+type coalescingWriter struct {
 	client    *Client
 	sessionID string
+	typ       byte // BinData or BinStderr
+	buf       bytes.Buffer
+	timer     *time.Timer
+	mu        sync.Mutex
 }
 
-func (d *dataWriter) Write(p []byte) (int, error) {
-	if err := d.client.sendData(d.sessionID, p); err != nil {
-		return 0, err
+func newCoalescingWriter(client *Client, sessionID string, typ byte) *coalescingWriter {
+	return &coalescingWriter{
+		client:    client,
+		sessionID: sessionID,
+		typ:       typ,
+		buf:       *bytes.NewBuffer(make([]byte, 0, 8192)),
+	}
+}
+
+func (w *coalescingWriter) Write(p []byte) (int, error) {
+	if len(p) >= 4096 {
+		// Large write: send immediately
+		w.flush() // drain any pending buffer
+		w.client.sendBinary(w.typ, w.sessionID, p)
+		return len(p), nil
+	}
+
+	w.mu.Lock()
+	w.buf.Write(p)
+	if w.buf.Len() >= 4096 {
+		data := make([]byte, w.buf.Len())
+		copy(data, w.buf.Bytes())
+		w.buf.Reset()
+		if w.timer != nil {
+			w.timer.Stop()
+			w.timer = nil
+		}
+		w.mu.Unlock()
+		w.client.sendBinary(w.typ, w.sessionID, data)
+	} else if w.timer == nil {
+		w.timer = time.AfterFunc(5*time.Millisecond, w.flush)
+		w.mu.Unlock()
+	} else {
+		w.mu.Unlock()
 	}
 	return len(p), nil
 }
 
-type stderrWriter struct {
-	client    *Client
-	sessionID string
-}
-
-func (s *stderrWriter) Write(p []byte) (int, error) {
-	if err := s.client.sendStderr(s.sessionID, p); err != nil {
-		return 0, err
+func (w *coalescingWriter) flush() {
+	w.mu.Lock()
+	if w.buf.Len() == 0 {
+		w.timer = nil
+		w.mu.Unlock()
+		return
 	}
-	return len(p), nil
+	data := make([]byte, w.buf.Len())
+	copy(data, w.buf.Bytes())
+	w.buf.Reset()
+	w.timer = nil
+	w.mu.Unlock()
+	w.client.sendBinary(w.typ, w.sessionID, data)
 }
 
 // sftpRWC bridges SFTP server over WebSocket
@@ -108,7 +149,6 @@ type Client struct {
 	forwards  map[string]net.Conn
 	mu        sync.Mutex
 	done      chan struct{}
-	connected chan struct{} // signaled when connected
 }
 
 // NewClient creates a new client
@@ -120,8 +160,7 @@ func NewClient(serverURL, clientID, password, shell string) *Client {
 		shell:     shell,
 		sessions:  make(map[string]*clientSession),
 		forwards:  make(map[string]net.Conn),
-		done:      make(chan struct{}),
-		connected: make(chan struct{}, 1),
+		done:      make(chan struct{}, 1),
 	}
 }
 
@@ -132,7 +171,6 @@ type wsEventHandler struct {
 }
 
 func (h *wsEventHandler) OnOpen(socket *gws.Conn) {
-	// Send register message
 	h.client.conn = socket
 	if err := h.client.send(&protocol.Message{
 		Type:     protocol.MsgRegister,
@@ -158,8 +196,6 @@ func (h *wsEventHandler) OnClose(socket *gws.Conn, err error) {
 	}
 	h.client.conn = nil
 	h.client.mu.Unlock()
-
-	// Signal disconnect
 	select {
 	case h.client.done <- struct{}{}:
 	default:
@@ -169,11 +205,38 @@ func (h *wsEventHandler) OnClose(socket *gws.Conn, err error) {
 func (h *wsEventHandler) OnMessage(socket *gws.Conn, message *gws.Message) {
 	defer message.Close()
 
+	if message.Opcode == gws.OpcodeBinary {
+		h.handleBinaryMessage(message.Bytes())
+		return
+	}
+
+	// Text frame = JSON control message
 	msg, err := protocol.Decode(message.Bytes())
 	if err != nil {
 		return
 	}
 	h.client.handleMessage(msg)
+}
+
+func (h *wsEventHandler) handleBinaryMessage(raw []byte) {
+	typ, id, payload, err := protocol.DecodeBinFrame(raw)
+	if err != nil {
+		return
+	}
+
+	h.client.mu.Lock()
+	h.client.mu.Unlock()
+
+	switch typ {
+	case protocol.BinData:
+		h.client.handleBinData(id, payload)
+	case protocol.BinStderr:
+		// stderr not expected from server in current design
+	case protocol.BinTCPData:
+		h.client.handleBinTCPData(id, payload)
+	case protocol.BinFilePut:
+		h.client.handleBinFilePut(id, payload)
+	}
 }
 
 // Run starts the client with auto-reconnect
@@ -220,9 +283,15 @@ func (c *Client) connect() error {
 
 	handler := &wsEventHandler{client: c}
 	socket, _, err := gws.NewClient(handler, &gws.ClientOption{
-		Addr:              wsURL,
-		HandshakeTimeout:  10 * time.Second,
+		Addr:               wsURL,
+		HandshakeTimeout:   10 * time.Second,
 		ReadMaxPayloadSize: 16 * 1024 * 1024,
+		PermessageDeflate: gws.PermessageDeflate{
+			Enabled:               true,
+			ServerContextTakeover:  true,
+			ClientContextTakeover: true,
+			Threshold:             256,
+		},
 	})
 	if err != nil {
 		return fmt.Errorf("dial: %w", err)
@@ -236,8 +305,6 @@ func (c *Client) handleMessage(msg *protocol.Message) {
 	switch msg.Type {
 	case protocol.MsgNewSession:
 		c.handleNewSession(msg)
-	case protocol.MsgData:
-		c.handleData(msg)
 	case protocol.MsgStdinClose:
 		c.handleStdinClose(msg)
 	case protocol.MsgResize:
@@ -245,18 +312,87 @@ func (c *Client) handleMessage(msg *protocol.Message) {
 	case protocol.MsgClose:
 		c.handleClose(msg)
 
-	// TCP forwarding
+	// TCP forwarding control
 	case protocol.MsgTCPConnect:
 		c.handleTCPConnect(msg)
-	case protocol.MsgTCPData:
-		c.handleTCPData(msg)
 	case protocol.MsgTCPClose:
 		c.handleTCPClose(msg)
-
-	// File distribution
-	case protocol.MsgFilePut:
-		c.handleFilePut(msg)
 	}
+}
+
+func (c *Client) handleBinData(sessionID string, data []byte) {
+	c.mu.Lock()
+	sess, ok := c.sessions[sessionID]
+	c.mu.Unlock()
+	if !ok || len(data) == 0 {
+		return
+	}
+
+	switch {
+	case sess.ptyProc != nil:
+		sess.ptyProc.Write(data)
+	case sess.stdinPipe != nil:
+		sess.stdinPipe.Write(data)
+	case sess.sftpInput != nil:
+		sess.sftpInput.Write(data)
+	}
+}
+
+func (c *Client) handleBinTCPData(forwardID string, data []byte) {
+	c.mu.Lock()
+	conn, ok := c.forwards[forwardID]
+	c.mu.Unlock()
+	if !ok || len(data) == 0 {
+		return
+	}
+	conn.Write(data)
+}
+
+func (c *Client) handleBinFilePut(id string, payload []byte) {
+	path, mode, fileData, err := protocol.DecodeBinFilePut(payload)
+	if err != nil {
+		c.send(&protocol.Message{
+			Type:      protocol.MsgFileResult,
+			SessionID: id,
+			Error:     fmt.Sprintf("decode error: %v", err),
+		})
+		return
+	}
+
+	log.Printf("file_put: writing %s (%d bytes)", path, len(fileData))
+
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		c.send(&protocol.Message{
+			Type:      protocol.MsgFileResult,
+			SessionID: id,
+			FilePath:  path,
+			Error:     fmt.Sprintf("mkdir error: %v", err),
+		})
+		return
+	}
+
+	fm := os.FileMode(0644)
+	if mode > 0 {
+		fm = os.FileMode(mode)
+	}
+	if err := os.WriteFile(path, fileData, fm); err != nil {
+		c.send(&protocol.Message{
+			Type:      protocol.MsgFileResult,
+			SessionID: id,
+			FilePath:  path,
+			Error:     err.Error(),
+		})
+		return
+	}
+
+	log.Printf("file_put: wrote %d bytes to %s", len(fileData), path)
+	c.send(&protocol.Message{
+		Type:      protocol.MsgFileResult,
+		SessionID: id,
+		FilePath:  path,
+		Success:   true,
+	})
 }
 
 // --- Session handling ---
@@ -311,12 +447,13 @@ func (c *Client) startShellExecSession(msg *protocol.Message) (*clientSession, e
 		}
 		sess.ptyProc = proc
 
-		// Read PTY output -> send to server
+		// Read PTY output -> coalesced binary send to server
+		cw := newCoalescingWriter(c, msg.SessionID, protocol.BinData)
 		go func() {
-			io.Copy(&dataWriter{c, msg.SessionID}, proc)
+			io.Copy(cw, proc)
+			cw.flush()
 		}()
 
-		// Wait for process to exit, then send exit code and close
 		go func() {
 			exitCode, _ := proc.Wait()
 			proc.Close()
@@ -327,7 +464,6 @@ func (c *Client) startShellExecSession(msg *protocol.Message) (*clientSession, e
 
 		log.Printf("session %s: PTY started (cmd=%q)", msg.SessionID, msg.Command)
 	} else {
-		// Non-PTY exec: use os.Pipe for reliable I/O
 		shell := c.shell
 		if shell == "" {
 			shell = os.Getenv("SHELL")
@@ -390,14 +526,18 @@ func (c *Client) startShellExecSession(msg *protocol.Message) (*clientSession, e
 		go func() {
 			defer ioWg.Done()
 			defer stdoutR.Close()
-			io.Copy(&dataWriter{c, msg.SessionID}, stdoutR)
+			cw := newCoalescingWriter(c, msg.SessionID, protocol.BinData)
+			io.Copy(cw, stdoutR)
+			cw.flush()
 		}()
 
 		ioWg.Add(1)
 		go func() {
 			defer ioWg.Done()
 			defer stderrR.Close()
-			io.Copy(&stderrWriter{c, msg.SessionID}, stderrR)
+			cw := newCoalescingWriter(c, msg.SessionID, protocol.BinStderr)
+			io.Copy(cw, stderrR)
+			cw.flush()
 		}()
 
 		go func() {
@@ -415,8 +555,8 @@ func (c *Client) startShellExecSession(msg *protocol.Message) (*clientSession, e
 }
 
 func (c *Client) startSFTPSession(sessionID string) (*clientSession, error) {
-	pr1, pw1 := io.Pipe() // WebSocket -> SFTP server
-	pr2, pw2 := io.Pipe() // SFTP server -> WebSocket
+	pr1, pw1 := io.Pipe()
+	pr2, pw2 := io.Pipe()
 
 	rwc := &sftpRWC{reader: pr1, writer: pw2, closer: pw1}
 
@@ -446,61 +586,28 @@ func (c *Client) startSFTPSession(sessionID string) (*clientSession, error) {
 		c.sendClose(sessionID)
 	}()
 
+	// SFTP output → binary frames (coalesced)
 	go func() {
-		buf := make([]byte, 32*1024)
-		for {
-			n, err := pr2.Read(buf)
-			if n > 0 {
-				c.sendData(sessionID, buf[:n])
-			}
-			if err != nil {
-				break
-			}
-		}
+		cw := newCoalescingWriter(c, sessionID, protocol.BinData)
+		io.Copy(cw, pr2)
+		cw.flush()
 	}()
 
 	log.Printf("session %s: SFTP server started", sessionID)
 	return sess, nil
 }
 
-func (c *Client) handleData(msg *protocol.Message) {
-	data, err := protocol.DecodeData(msg.Data)
-	if err != nil || len(data) == 0 {
-		return
-	}
-
-	c.mu.Lock()
-	sess, ok := c.sessions[msg.SessionID]
-	c.mu.Unlock()
-
-	if !ok {
-		return
-	}
-
-	switch {
-	case sess.ptyProc != nil:
-		sess.ptyProc.Write(data)
-	case sess.stdinPipe != nil:
-		sess.stdinPipe.Write(data)
-	case sess.sftpInput != nil:
-		sess.sftpInput.Write(data)
-	}
-}
-
 func (c *Client) handleStdinClose(msg *protocol.Message) {
 	c.mu.Lock()
 	sess, ok := c.sessions[msg.SessionID]
 	c.mu.Unlock()
-
 	if !ok {
 		return
 	}
-
 	if sess.stdinPipe != nil {
 		sess.stdinPipe.Close()
 		sess.stdinPipe = nil
 	}
-
 	if sess.sftpInput != nil {
 		sess.sftpInput.Close()
 	}
@@ -510,11 +617,9 @@ func (c *Client) handleResize(msg *protocol.Message) {
 	c.mu.Lock()
 	sess, ok := c.sessions[msg.SessionID]
 	c.mu.Unlock()
-
 	if !ok || sess.ptyProc == nil {
 		return
 	}
-
 	sess.ptyProc.Resize(uint16(msg.Rows), uint16(msg.Cols))
 }
 
@@ -525,59 +630,10 @@ func (c *Client) handleClose(msg *protocol.Message) {
 		delete(c.sessions, msg.SessionID)
 	}
 	c.mu.Unlock()
-
 	if ok {
 		sess.close()
 		log.Printf("session %s closed", msg.SessionID)
 	}
-}
-
-// --- File distribution ---
-
-func (c *Client) handleFilePut(msg *protocol.Message) {
-	path := msg.FilePath
-	log.Printf("file_put: writing %s", path)
-
-	data, err := protocol.DecodeData(msg.Data)
-	if err != nil {
-		c.send(&protocol.Message{
-			Type:     protocol.MsgFileResult,
-			FilePath: path,
-			Error:    fmt.Sprintf("decode error: %v", err),
-		})
-		return
-	}
-
-	// Ensure parent directory exists
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		c.send(&protocol.Message{
-			Type:     protocol.MsgFileResult,
-			FilePath: path,
-			Error:    fmt.Sprintf("mkdir error: %v", err),
-		})
-		return
-	}
-
-	mode := os.FileMode(0644)
-	if msg.FileMode > 0 {
-		mode = os.FileMode(msg.FileMode)
-	}
-	if err := os.WriteFile(path, data, mode); err != nil {
-		c.send(&protocol.Message{
-			Type:     protocol.MsgFileResult,
-			FilePath: path,
-			Error:    err.Error(),
-		})
-		return
-	}
-
-	log.Printf("file_put: wrote %d bytes to %s", len(data), path)
-	c.send(&protocol.Message{
-		Type:     protocol.MsgFileResult,
-		FilePath: path,
-		Success:  true,
-	})
 }
 
 // --- TCP forwarding (-L) ---
@@ -603,16 +659,13 @@ func (c *Client) handleTCPConnect(msg *protocol.Message) {
 
 	c.send(&protocol.Message{Type: protocol.MsgTCPOpen, ForwardID: msg.ForwardID})
 
+	// Read TCP response → binary frames
 	go func() {
 		buf := make([]byte, 32*1024)
 		for {
 			n, err := conn.Read(buf)
 			if n > 0 {
-				c.send(&protocol.Message{
-					Type:      protocol.MsgTCPData,
-					ForwardID: msg.ForwardID,
-					Data:      protocol.EncodeData(buf[:n]),
-				})
+				c.sendBinary(protocol.BinTCPData, msg.ForwardID, buf[:n])
 			}
 			if err != nil {
 				c.send(&protocol.Message{Type: protocol.MsgTCPClose, ForwardID: msg.ForwardID})
@@ -627,22 +680,6 @@ func (c *Client) handleTCPConnect(msg *protocol.Message) {
 	log.Printf("forward: connected to %s (id=%s)", addr, msg.ForwardID)
 }
 
-func (c *Client) handleTCPData(msg *protocol.Message) {
-	c.mu.Lock()
-	conn, ok := c.forwards[msg.ForwardID]
-	c.mu.Unlock()
-
-	if !ok {
-		return
-	}
-
-	data, err := protocol.DecodeData(msg.Data)
-	if err != nil || len(data) == 0 {
-		return
-	}
-	conn.Write(data)
-}
-
 func (c *Client) handleTCPClose(msg *protocol.Message) {
 	c.mu.Lock()
 	conn, ok := c.forwards[msg.ForwardID]
@@ -650,7 +687,6 @@ func (c *Client) handleTCPClose(msg *protocol.Message) {
 		delete(c.forwards, msg.ForwardID)
 	}
 	c.mu.Unlock()
-
 	if ok {
 		conn.Close()
 		log.Printf("forward: closed %s", msg.ForwardID)
@@ -663,7 +699,6 @@ func (c *Client) send(msg *protocol.Message) error {
 	c.mu.Lock()
 	conn := c.conn
 	c.mu.Unlock()
-
 	if conn == nil {
 		return fmt.Errorf("not connected")
 	}
@@ -674,20 +709,15 @@ func (c *Client) send(msg *protocol.Message) error {
 	return conn.WriteMessage(gws.OpcodeText, data)
 }
 
-func (c *Client) sendData(sessionID string, raw []byte) error {
-	return c.send(&protocol.Message{
-		Type:      protocol.MsgData,
-		SessionID: sessionID,
-		Data:      protocol.EncodeData(raw),
-	})
-}
-
-func (c *Client) sendStderr(sessionID string, raw []byte) error {
-	return c.send(&protocol.Message{
-		Type:      protocol.MsgStderrData,
-		SessionID: sessionID,
-		Stderr:    protocol.EncodeData(raw),
-	})
+func (c *Client) sendBinary(typ byte, id string, data []byte) error {
+	c.mu.Lock()
+	conn := c.conn
+	c.mu.Unlock()
+	if conn == nil {
+		return fmt.Errorf("not connected")
+	}
+	frame := protocol.EncodeBinFrame(typ, id, data)
+	return conn.WriteMessage(gws.OpcodeBinary, frame)
 }
 
 func (c *Client) sendClose(sessionID string) error {
@@ -718,7 +748,6 @@ func (c *Client) cleanup() {
 		delete(c.forwards, fid)
 	}
 	c.mu.Unlock()
-
 	if c.conn != nil {
 		c.conn.WriteClose(1000, nil)
 	}

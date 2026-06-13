@@ -4,36 +4,29 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"runtime"
 	"sync"
-	"time"
 
 	"github.com/lxzan/gws"
 	"rdev/internal/protocol"
 )
 
-// TerminalHandler bridges browser xterm.js ↔ device shell over WebSocket
+// Terminal WebSocket protocol (optimized):
 //
-// Browser connects to /terminal?device=<deviceID>
-//
-// Protocol between server and browser (simplified JSON):
-//
-//	Browser → Server:  { "op": "input",  "data": "<base64>" }
-//	                   { "op": "resize", "rows": N, "cols": N }
-//	Server → Browser:  { "op": "output", "data": "<base64>" }
-//	                   { "op": "exit",   "code": N }
-//	                   { "op": "error",  "message": "..." }
+//	Server → Browser:  Binary frame = raw terminal output (zero overhead)
+//	                   Text frame   = JSON {"op":"exit","code":N} or {"op":"error","message":"..."}
+//	Browser → Server:  Binary frame = raw input data (zero overhead)
+//	                   Text frame   = JSON {"op":"resize","rows":N,"cols":N}
 
-// terminalMsg is the JSON protocol between server and browser terminal
+// terminalMsg is the JSON control message for terminal (text frames only)
 type terminalMsg struct {
-	Op      string `json:"op"`                // "input", "resize", "output", "exit", "error"
-	Data    string `json:"data,omitempty"`    // base64 encoded for input/output
-	Rows    int    `json:"rows,omitempty"`    // for resize
-	Cols    int    `json:"cols,omitempty"`    // for resize
-	Code    int    `json:"code,omitempty"`    // for exit
-	Message string `json:"message,omitempty"` // for error
+	Op      string `json:"op"`
+	Rows    int    `json:"rows,omitempty"`
+	Cols    int    `json:"cols,omitempty"`
+	Code    int    `json:"code,omitempty"`
+	Message string `json:"message,omitempty"`
 }
 
-// terminalConn tracks a browser terminal WebSocket connection
 type terminalConn struct {
 	deviceID  string
 	sessionID string
@@ -43,7 +36,6 @@ type terminalConn struct {
 	once      sync.Once
 }
 
-// terminalWSHandler implements gws.Event for browser terminal connections
 type terminalWSHandler struct {
 	gws.BuiltinEventHandler
 	srv *Server
@@ -69,7 +61,6 @@ func (h *terminalWSHandler) OnOpen(socket *gws.Conn) {
 
 	sessionID := generateID()
 
-	// Request a PTY interactive shell on the device
 	if err := client.Send(&protocol.Message{
 		Type:      protocol.MsgNewSession,
 		ClientID:  deviceID,
@@ -87,8 +78,8 @@ func (h *terminalWSHandler) OnOpen(socket *gws.Conn) {
 	proxySess := &ProxySession{
 		ID:       sessionID,
 		ClientID: deviceID,
-		WriteCh:  make(chan []byte, 4096),
-		StderrCh: make(chan []byte, 256),
+		WriteCh:  make(chan []byte, 8192),
+		StderrCh: make(chan []byte, 2048),
 		CloseCh:  make(chan struct{}, 1),
 		Done:     make(chan struct{}),
 		CloseSSH: func() {},
@@ -106,8 +97,6 @@ func (h *terminalWSHandler) OnOpen(socket *gws.Conn) {
 	}
 
 	socket.Session().Store("terminalConn", tc)
-
-	// ProxySession output → browser
 	go tc.pumpOutput()
 }
 
@@ -118,7 +107,6 @@ func (h *terminalWSHandler) OnClose(socket *gws.Conn, err error) {
 	}
 	tc := tcRaw.(*terminalConn)
 
-	// Tell device to close the session
 	h.srv.mu.RLock()
 	client, ok := h.srv.clients[tc.deviceID]
 	h.srv.mu.RUnlock()
@@ -127,9 +115,11 @@ func (h *terminalWSHandler) OnClose(socket *gws.Conn, err error) {
 	}
 
 	h.srv.removeSession(tc.sessionID)
-	client.mu.Lock()
-	delete(client.Sessions, tc.sessionID)
-	client.mu.Unlock()
+	if ok {
+		client.mu.Lock()
+		delete(client.Sessions, tc.sessionID)
+		client.mu.Unlock()
+	}
 
 	tc.close()
 }
@@ -143,11 +133,6 @@ func (h *terminalWSHandler) OnMessage(socket *gws.Conn, message *gws.Message) {
 	}
 	tc := tcRaw.(*terminalConn)
 
-	var tmsg terminalMsg
-	if err := json.Unmarshal(message.Bytes(), &tmsg); err != nil {
-		return
-	}
-
 	h.srv.mu.RLock()
 	client, ok := h.srv.clients[tc.deviceID]
 	h.srv.mu.RUnlock()
@@ -156,19 +141,22 @@ func (h *terminalWSHandler) OnMessage(socket *gws.Conn, message *gws.Message) {
 		return
 	}
 
-	switch tmsg.Op {
-	case "input":
-		data, err := protocol.DecodeData(tmsg.Data)
-		if err != nil || len(data) == 0 {
-			return
-		}
-		client.Send(&protocol.Message{
-			Type:      protocol.MsgData,
-			SessionID: tc.sessionID,
-			Data:      protocol.EncodeData(data),
-		})
+	if message.Opcode == gws.OpcodeBinary {
+		// Binary frame = raw input data → forward to device
+		raw := message.Bytes()
+		data := make([]byte, len(raw))
+		copy(data, raw)
+		client.SendBinary(protocol.BinData, tc.sessionID, data)
+		return
+	}
 
-	case "resize":
+	// Text frame = JSON control
+	var tmsg terminalMsg
+	if err := json.Unmarshal(message.Bytes(), &tmsg); err != nil {
+		return
+	}
+
+	if tmsg.Op == "resize" {
 		client.Send(&protocol.Message{
 			Type:      protocol.MsgResize,
 			SessionID: tc.sessionID,
@@ -183,7 +171,7 @@ func (h *terminalWSHandler) sendError(socket *gws.Conn, msg string) {
 	socket.WriteMessage(gws.OpcodeText, data)
 }
 
-// pumpOutput forwards ProxySession output to the browser
+// pumpOutput forwards ProxySession output to browser as binary frames
 func (tc *terminalConn) pumpOutput() {
 	for {
 		select {
@@ -192,18 +180,16 @@ func (tc *terminalConn) pumpOutput() {
 				tc.sendExit(tc.sess.GetExitCode())
 				return
 			}
-			msg, _ := json.Marshal(terminalMsg{Op: "output", Data: protocol.EncodeData(data)})
-			tc.socket.WriteMessage(gws.OpcodeText, msg)
+			// Binary frame = raw terminal output (no header needed, xterm.js handles raw bytes)
+			tc.socket.WriteMessage(gws.OpcodeBinary, data)
 
 		case data, ok := <-tc.sess.StderrCh:
 			if !ok {
 				return
 			}
-			msg, _ := json.Marshal(terminalMsg{Op: "output", Data: protocol.EncodeData(data)})
-			tc.socket.WriteMessage(gws.OpcodeText, msg)
+			tc.socket.WriteMessage(gws.OpcodeBinary, data)
 
 		case <-tc.sess.CloseCh:
-			// Device said close — drain remaining output then exit
 			close(tc.sess.WriteCh)
 			close(tc.sess.StderrCh)
 			tc.sendExit(tc.sess.GetExitCode())
@@ -225,7 +211,6 @@ func (tc *terminalConn) close() {
 }
 
 // HandleTerminalWS handles browser terminal WebSocket connections
-// URL: /terminal?device=<deviceID>
 func (s *Server) HandleTerminalWS(w http.ResponseWriter, r *http.Request) {
 	deviceID := r.URL.Query().Get("device")
 	if deviceID == "" {
@@ -235,9 +220,16 @@ func (s *Server) HandleTerminalWS(w http.ResponseWriter, r *http.Request) {
 
 	upgrader := gws.NewUpgrader(&terminalWSHandler{srv: s}, &gws.ServerOption{
 		ReadMaxPayloadSize: 16 * 1024 * 1024,
+		ParallelGolimit:    runtime.GOMAXPROCS(0),
 		Authorize: func(r *http.Request, session gws.SessionStorage) bool {
 			session.Store("deviceID", deviceID)
 			return true
+		},
+		PermessageDeflate: gws.PermessageDeflate{
+			Enabled:               true,
+			ServerContextTakeover:  true,
+			ClientContextTakeover: true,
+			Threshold:             128,
 		},
 	})
 
@@ -247,28 +239,4 @@ func (s *Server) HandleTerminalWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	socket.ReadLoop()
-}
-
-// HandleTerminalAPI returns available devices for the terminal page
-func (s *Server) HandleTerminalAPI(w http.ResponseWriter, r *http.Request) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	type deviceInfo struct {
-		ID          string `json:"id"`
-		ConnectedAt string `json:"connectedAt"`
-		HasPassword bool   `json:"hasPassword"`
-	}
-
-	var devices []deviceInfo
-	for _, c := range s.clients {
-		devices = append(devices, deviceInfo{
-			ID:          c.ID,
-			ConnectedAt: c.ConnectedAt.Format(time.RFC3339),
-			HasPassword: c.Password != "",
-		})
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(devices)
 }

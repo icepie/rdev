@@ -214,8 +214,8 @@ func (s *SSHServer) handleSession(sess ssh.Session) {
 	proxySess := &ProxySession{
 		ID:       sessionID,
 		ClientID: clientID,
-		WriteCh:  make(chan []byte, 1024),
-		StderrCh: make(chan []byte, 256),
+		WriteCh:  make(chan []byte, 8192),
+		StderrCh: make(chan []byte, 2048),
 		CloseCh:  make(chan struct{}, 1),
 		Done:     make(chan struct{}),
 		CloseSSH: func() { sess.Close() },
@@ -253,17 +253,13 @@ func (s *SSHServer) handleSession(sess ssh.Session) {
 		}()
 	}
 
-	// SSH client stdin -> client device
+	// SSH client stdin -> client device (binary frame)
 	go func() {
 		buf := make([]byte, 32*1024)
 		for {
 			n, err := sess.Read(buf)
 			if n > 0 {
-				client.Send(&protocol.Message{
-					Type:      protocol.MsgData,
-					SessionID: sessionID,
-					Data:      protocol.EncodeData(buf[:n]),
-				})
+				client.SendBinary(protocol.BinData, sessionID, buf[:n])
 			}
 			if err != nil {
 				if err == io.EOF {
@@ -344,7 +340,7 @@ func (s *SSHServer) handleDirectTCPIP(srv *ssh.Server, conn *gossh.ServerConn, n
 	fwd := &ProxyForward{
 		ID:       forwardID,
 		ClientID: clientID,
-		WriteCh:  make(chan []byte, 4096),
+		WriteCh:  make(chan []byte, 16384),
 		CloseCh:  make(chan struct{}, 1),
 		Done:     make(chan struct{}),
 		CloseSSH: func() { ch.Close() },
@@ -360,17 +356,13 @@ func (s *SSHServer) handleDirectTCPIP(srv *ssh.Server, conn *gossh.ServerConn, n
 	var once sync.Once
 	cleanup := func() { once.Do(func() { close(fwd.Done) }) }
 
-	// SSH channel -> client device (data from SSH client)
+	// SSH channel -> client device (binary frame)
 	go func() {
 		buf := make([]byte, 32*1024)
 		for {
 			n, err := ch.Read(buf)
 			if n > 0 {
-				client.Send(&protocol.Message{
-					Type:      protocol.MsgTCPData,
-					ForwardID: forwardID,
-					Data:      protocol.EncodeData(buf[:n]),
-				})
+				client.SendBinary(protocol.BinTCPData, forwardID, buf[:n])
 			}
 			if err != nil {
 				client.Send(&protocol.Message{Type: protocol.MsgTCPClose, ForwardID: forwardID})
