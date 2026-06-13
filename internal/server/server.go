@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gorilla/websocket"
+	"github.com/lxzan/gws"
 	"rdev/internal/protocol"
 )
 
@@ -19,32 +19,29 @@ var templateFS embed.FS
 // ClientConn represents a connected client device
 type ClientConn struct {
 	ID          string
-	Conn        *websocket.Conn
+	Conn        *gws.Conn
 	ConnectedAt time.Time
 	Password    string
 	Sessions    map[string]*ProxySession
-	Forwards    map[string]*ProxyForward // TCP forwarding channels
+	Forwards    map[string]*ProxyForward
 	mu          sync.Mutex
-	sendMu      sync.Mutex
 }
 
 // Send sends a protocol message to the client over WebSocket
 func (c *ClientConn) Send(msg *protocol.Message) error {
-	c.sendMu.Lock()
-	defer c.sendMu.Unlock()
 	data, err := protocol.Encode(msg)
 	if err != nil {
 		return err
 	}
-	return c.Conn.WriteMessage(websocket.TextMessage, data)
+	return c.Conn.WriteMessage(gws.OpcodeText, data)
 }
 
 // ProxySession represents a proxied SSH session (shell/exec/sftp)
 type ProxySession struct {
 	ID       string
 	ClientID string
-	WriteCh  chan []byte // client device -> SSH stdout
-	StderrCh chan []byte // client device -> SSH stderr
+	WriteCh  chan []byte
+	StderrCh chan []byte
 	CloseCh  chan struct{}
 	Done     chan struct{}
 	exitCode int
@@ -67,12 +64,12 @@ func (s *ProxySession) GetExitCode() int {
 
 // ProxyForward represents a proxied TCP connection (port forwarding)
 type ProxyForward struct {
-	ID        string
-	ClientID  string
-	WriteCh   chan []byte // client device -> SSH channel (outgoing data to SSH client)
-	CloseCh   chan struct{}
-	Done      chan struct{}
-	CloseSSH  func() // close the SSH channel
+	ID       string
+	ClientID string
+	WriteCh  chan []byte
+	CloseCh  chan struct{}
+	Done     chan struct{}
+	CloseSSH func()
 }
 
 // Server manages WebSocket clients and SSH proxy
@@ -83,105 +80,144 @@ type Server struct {
 	sessMu   sync.RWMutex
 	forwards map[string]*ProxyForward
 	fwdMu    sync.RWMutex
-	upgrader websocket.Upgrader
+	upgrader *gws.Upgrader
 }
 
 // NewServer creates a new Server
 func NewServer() *Server {
-	return &Server{
+	s := &Server{
 		clients:  make(map[string]*ClientConn),
 		sessions: make(map[string]*ProxySession),
 		forwards: make(map[string]*ProxyForward),
-		upgrader: websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }},
 	}
+	s.upgrader = gws.NewUpgrader(&wsHandler{srv: s}, &gws.ServerOption{
+		ReadMaxPayloadSize: 16 * 1024 * 1024,
+	})
+	return s
 }
 
-// HandleWS handles a WebSocket connection from a client device
-func (s *Server) HandleWS(w http.ResponseWriter, r *http.Request) {
-	conn, err := s.upgrader.Upgrade(w, r, nil)
-	if err != nil {
-		log.Printf("ws upgrade error: %v", err)
-		return
-	}
-	defer conn.Close()
+// wsHandler implements gws.Event for server-side WebSocket connections
+type wsHandler struct {
+	gws.BuiltinEventHandler
+	srv *Server
+}
 
-	_, raw, err := conn.ReadMessage()
+func (h *wsHandler) OnOpen(socket *gws.Conn) {
+	// Will register when first message (register) arrives
+}
+
+func (h *wsHandler) OnClose(socket *gws.Conn, err error) {
+	clientID, _ := socket.Session().Load("clientID")
+	if clientID == nil {
+		return
+	}
+	id := clientID.(string)
+
+	h.srv.mu.Lock()
+	client, ok := h.srv.clients[id]
+	if ok {
+		delete(h.srv.clients, id)
+	}
+	h.srv.mu.Unlock()
+
+	if ok {
+		client.mu.Lock()
+		for sid, sess := range client.Sessions {
+			close(sess.CloseCh)
+			h.srv.sessMu.Lock()
+			delete(h.srv.sessions, sid)
+			h.srv.sessMu.Unlock()
+		}
+		for fid, fwd := range client.Forwards {
+			close(fwd.CloseCh)
+			h.srv.fwdMu.Lock()
+			delete(h.srv.forwards, fid)
+			h.srv.fwdMu.Unlock()
+		}
+		client.mu.Unlock()
+	}
+
+	log.Printf("client unregistered: %s", id)
+}
+
+func (h *wsHandler) OnMessage(socket *gws.Conn, message *gws.Message) {
+	defer message.Close()
+
+	msg, err := protocol.Decode(message.Bytes())
 	if err != nil {
 		return
 	}
-	msg, err := protocol.Decode(raw)
-	if err != nil {
+
+	// First message must be register
+	if msg.Type == protocol.MsgRegister {
+		h.handleRegister(socket, msg)
 		return
 	}
-	if msg.Type != protocol.MsgRegister || msg.ClientID == "" {
+
+	clientID, _ := socket.Session().Load("clientID")
+	if clientID == nil {
+		return
+	}
+
+	h.srv.mu.RLock()
+	client, ok := h.srv.clients[clientID.(string)]
+	h.srv.mu.RUnlock()
+	if !ok {
+		return
+	}
+
+	h.srv.handleClientMessage(client, msg)
+}
+
+func (h *wsHandler) handleRegister(socket *gws.Conn, msg *protocol.Message) {
+	if msg.ClientID == "" {
+		socket.WriteClose(1000, nil)
 		return
 	}
 
 	client := &ClientConn{
 		ID:          msg.ClientID,
-		Conn:        conn,
+		Conn:        socket,
 		ConnectedAt: time.Now(),
 		Password:    msg.Password,
 		Sessions:    make(map[string]*ProxySession),
 		Forwards:    make(map[string]*ProxyForward),
 	}
 
-	s.mu.Lock()
-	if old, ok := s.clients[msg.ClientID]; ok {
-		old.Conn.Close()
+	// Store clientID in session for later lookup
+	socket.Session().Store("clientID", msg.ClientID)
+
+	h.srv.mu.Lock()
+	if old, ok := h.srv.clients[msg.ClientID]; ok {
+		old.Conn.WriteClose(1000, []byte("replaced by new connection"))
 		for sid, sess := range old.Sessions {
 			close(sess.CloseCh)
-			s.sessMu.Lock()
-			delete(s.sessions, sid)
-			s.sessMu.Unlock()
+			h.srv.sessMu.Lock()
+			delete(h.srv.sessions, sid)
+			h.srv.sessMu.Unlock()
 		}
 		for fid, fwd := range old.Forwards {
 			close(fwd.CloseCh)
-			s.fwdMu.Lock()
-			delete(s.forwards, fid)
-			s.fwdMu.Unlock()
+			h.srv.fwdMu.Lock()
+			delete(h.srv.forwards, fid)
+			h.srv.fwdMu.Unlock()
 		}
 	}
-	s.clients[msg.ClientID] = client
-	s.mu.Unlock()
+	h.srv.clients[msg.ClientID] = client
+	h.srv.mu.Unlock()
 
 	log.Printf("client registered: %s", msg.ClientID)
 	client.Send(&protocol.Message{Type: protocol.MsgRegister, ClientID: msg.ClientID})
+}
 
-	for {
-		_, raw, err := conn.ReadMessage()
-		if err != nil {
-			log.Printf("client %s disconnected: %v", msg.ClientID, err)
-			break
-		}
-		msg, err := protocol.Decode(raw)
-		if err != nil {
-			continue
-		}
-		s.handleClientMessage(client, msg)
+// HandleWS handles a WebSocket connection from a client device
+func (s *Server) HandleWS(w http.ResponseWriter, r *http.Request) {
+	socket, err := s.upgrader.Upgrade(w, r)
+	if err != nil {
+		log.Printf("ws upgrade error: %v", err)
+		return
 	}
-
-	// Cleanup
-	s.mu.Lock()
-	delete(s.clients, client.ID)
-	s.mu.Unlock()
-
-	client.mu.Lock()
-	for sid, sess := range client.Sessions {
-		close(sess.CloseCh)
-		s.sessMu.Lock()
-		delete(s.sessions, sid)
-		s.sessMu.Unlock()
-	}
-	for fid, fwd := range client.Forwards {
-		close(fwd.CloseCh)
-		s.fwdMu.Lock()
-		delete(s.forwards, fid)
-		s.fwdMu.Unlock()
-	}
-	client.mu.Unlock()
-
-	log.Printf("client unregistered: %s", client.ID)
+	socket.ReadLoop()
 }
 
 func (s *Server) handleClientMessage(client *ClientConn, msg *protocol.Message) {
@@ -236,7 +272,6 @@ func (s *Server) handleClientMessage(client *ClientConn, msg *protocol.Message) 
 		if fwd == nil {
 			return
 		}
-		// Connection succeeded on client device, data will flow
 
 	case protocol.MsgTCPFail:
 		fwd := s.getForward(msg.ForwardID)
@@ -346,7 +381,7 @@ func (s *Server) HandleAPI(w http.ResponseWriter, r *http.Request) {
 			ConnectedAt: c.ConnectedAt.Format(time.RFC3339),
 			Sessions:    n,
 			Forwards:    f,
-			HasPassword:  c.Password != "",
+			HasPassword: c.Password != "",
 		})
 	}
 

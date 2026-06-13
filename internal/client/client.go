@@ -13,7 +13,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/gorilla/websocket"
+	"github.com/lxzan/gws"
 	"github.com/pkg/sftp"
 	"rdev/internal/protocol"
 	"rdev/internal/ptyutil"
@@ -101,13 +101,13 @@ type Client struct {
 	serverURL string
 	clientID  string
 	password  string
-	shell     string // user-specified shell (empty = auto-detect)
-	conn      *websocket.Conn
+	shell     string
+	conn      *gws.Conn
 	sessions  map[string]*clientSession
-	forwards  map[string]net.Conn // forwardID -> TCP connection (for -L forwarding)
+	forwards  map[string]net.Conn
 	mu        sync.Mutex
-	sendMu    sync.Mutex
 	done      chan struct{}
+	connected chan struct{} // signaled when connected
 }
 
 // NewClient creates a new client
@@ -120,7 +120,59 @@ func NewClient(serverURL, clientID, password, shell string) *Client {
 		sessions:  make(map[string]*clientSession),
 		forwards:  make(map[string]net.Conn),
 		done:      make(chan struct{}),
+		connected: make(chan struct{}, 1),
 	}
+}
+
+// wsEventHandler implements gws.Event for the client
+type wsEventHandler struct {
+	gws.BuiltinEventHandler
+	client *Client
+}
+
+func (h *wsEventHandler) OnOpen(socket *gws.Conn) {
+	// Send register message
+	h.client.conn = socket
+	if err := h.client.send(&protocol.Message{
+		Type:     protocol.MsgRegister,
+		ClientID: h.client.clientID,
+		Password: h.client.password,
+	}); err != nil {
+		log.Printf("register send error: %v", err)
+		return
+	}
+	log.Printf("connected to %s as '%s'", h.client.serverURL, h.client.clientID)
+}
+
+func (h *wsEventHandler) OnClose(socket *gws.Conn, err error) {
+	log.Printf("connection closed: %v", err)
+	h.client.mu.Lock()
+	for sid, sess := range h.client.sessions {
+		sess.close()
+		delete(h.client.sessions, sid)
+	}
+	for fid, tcpConn := range h.client.forwards {
+		tcpConn.Close()
+		delete(h.client.forwards, fid)
+	}
+	h.client.conn = nil
+	h.client.mu.Unlock()
+
+	// Signal disconnect
+	select {
+	case h.client.done <- struct{}{}:
+	default:
+	}
+}
+
+func (h *wsEventHandler) OnMessage(socket *gws.Conn, message *gws.Message) {
+	defer message.Close()
+
+	msg, err := protocol.Decode(message.Bytes())
+	if err != nil {
+		return
+	}
+	h.client.handleMessage(msg)
 }
 
 // Run starts the client with auto-reconnect
@@ -165,49 +217,18 @@ func (c *Client) connect() error {
 		wsURL += "/ws"
 	}
 
-	dialer := websocket.Dialer{HandshakeTimeout: 10 * time.Second}
-	conn, _, err := dialer.Dial(wsURL, nil)
+	handler := &wsEventHandler{client: c}
+	socket, _, err := gws.NewClient(handler, &gws.ClientOption{
+		Addr:              wsURL,
+		HandshakeTimeout:  10 * time.Second,
+		ReadMaxPayloadSize: 16 * 1024 * 1024,
+	})
 	if err != nil {
 		return fmt.Errorf("dial: %w", err)
 	}
-	c.conn = conn
 
-	if err := c.send(&protocol.Message{
-		Type:     protocol.MsgRegister,
-		ClientID: c.clientID,
-		Password: c.password,
-	}); err != nil {
-		conn.Close()
-		return fmt.Errorf("register: %w", err)
-	}
-
-	log.Printf("connected to %s as '%s'", wsURL, c.clientID)
-
-	defer func() {
-		conn.Close()
-		c.mu.Lock()
-		for sid, sess := range c.sessions {
-			sess.close()
-			delete(c.sessions, sid)
-		}
-		for fid, tcpConn := range c.forwards {
-			tcpConn.Close()
-			delete(c.forwards, fid)
-		}
-		c.mu.Unlock()
-	}()
-
-	for {
-		_, raw, err := conn.ReadMessage()
-		if err != nil {
-			return fmt.Errorf("read: %w", err)
-		}
-		msg, err := protocol.Decode(raw)
-		if err != nil {
-			continue
-		}
-		c.handleMessage(msg)
-	}
+	go socket.ReadLoop()
+	return nil
 }
 
 func (c *Client) handleMessage(msg *protocol.Message) {
@@ -271,7 +292,6 @@ func (c *Client) startShellExecSession(msg *protocol.Message) (*clientSession, e
 	}
 
 	if msg.Pty {
-		// Use cross-platform PTY (Unix: creack/pty, Windows: ConPty)
 		cfg := &ptyutil.Config{
 			Command: msg.Command,
 			Shell:   c.shell,
@@ -343,16 +363,11 @@ func (c *Client) startShellExecSession(msg *protocol.Message) (*clientSession, e
 			return nil, err
 		}
 
-		// Close parent's copy of child pipe ends
 		stdinR.Close()
 		stdoutW.Close()
 		stderrW.Close()
 
 		sess.stdinPipe = stdinW
-		sess.cmdWaitFn = func() (int, error) {
-			return cmd.ProcessState.ExitCode(), cmd.Wait()
-		}
-		// Override wait to handle cmd.Wait properly
 		sess.cmdWaitFn = func() (int, error) {
 			err := cmd.Wait()
 			if err == nil {
@@ -366,7 +381,6 @@ func (c *Client) startShellExecSession(msg *protocol.Message) (*clientSession, e
 
 		var ioWg sync.WaitGroup
 
-		// stdout -> server
 		ioWg.Add(1)
 		go func() {
 			defer ioWg.Done()
@@ -374,7 +388,6 @@ func (c *Client) startShellExecSession(msg *protocol.Message) (*clientSession, e
 			io.Copy(&dataWriter{c, msg.SessionID}, stdoutR)
 		}()
 
-		// stderr -> server
 		ioWg.Add(1)
 		go func() {
 			defer ioWg.Done()
@@ -382,7 +395,6 @@ func (c *Client) startShellExecSession(msg *protocol.Message) (*clientSession, e
 			io.Copy(&stderrWriter{c, msg.SessionID}, stderrR)
 		}()
 
-		// Wait for I/O to complete, then cmd.Wait and exit
 		go func() {
 			ioWg.Wait()
 			exitCode, _ := sess.cmdWaitFn()
@@ -411,7 +423,6 @@ func (c *Client) startSFTPSession(sessionID string) (*clientSession, error) {
 		done:       make(chan struct{}),
 	}
 
-	// Start SFTP server
 	go func() {
 		defer pw2.Close()
 		defer pr1.Close()
@@ -430,7 +441,6 @@ func (c *Client) startSFTPSession(sessionID string) (*clientSession, error) {
 		c.sendClose(sessionID)
 	}()
 
-	// SFTP output -> WebSocket
 	go func() {
 		buf := make([]byte, 32*1024)
 		for {
@@ -481,15 +491,11 @@ func (c *Client) handleStdinClose(msg *protocol.Message) {
 		return
 	}
 
-	// For exec sessions, close stdin pipe so the process knows
-	// no more input is coming.
 	if sess.stdinPipe != nil {
 		sess.stdinPipe.Close()
 		sess.stdinPipe = nil
 	}
 
-	// For SFTP sessions, closing sftpInput signals the SFTP server
-	// that no more data is coming, which causes it to exit gracefully.
 	if sess.sftpInput != nil {
 		sess.sftpInput.Close()
 	}
@@ -542,10 +548,8 @@ func (c *Client) handleTCPConnect(msg *protocol.Message) {
 	c.forwards[msg.ForwardID] = conn
 	c.mu.Unlock()
 
-	// Tell server the connection succeeded
 	c.send(&protocol.Message{Type: protocol.MsgTCPOpen, ForwardID: msg.ForwardID})
 
-	// Read from TCP connection -> send to server
 	go func() {
 		buf := make([]byte, 32*1024)
 		for {
@@ -603,13 +607,18 @@ func (c *Client) handleTCPClose(msg *protocol.Message) {
 // --- WebSocket send helpers ---
 
 func (c *Client) send(msg *protocol.Message) error {
-	c.sendMu.Lock()
-	defer c.sendMu.Unlock()
+	c.mu.Lock()
+	conn := c.conn
+	c.mu.Unlock()
+
+	if conn == nil {
+		return fmt.Errorf("not connected")
+	}
 	data, err := protocol.Encode(msg)
 	if err != nil {
 		return err
 	}
-	return c.conn.WriteMessage(websocket.TextMessage, data)
+	return conn.WriteMessage(gws.OpcodeText, data)
 }
 
 func (c *Client) sendData(sessionID string, raw []byte) error {
@@ -658,7 +667,7 @@ func (c *Client) cleanup() {
 	c.mu.Unlock()
 
 	if c.conn != nil {
-		c.conn.Close()
+		c.conn.WriteClose(1000, nil)
 	}
 	close(c.done)
 }
