@@ -215,6 +215,7 @@ func (s *SSHServer) handleSession(sess ssh.Session) {
 		Term:      ptyReq.Term,
 		Rows:      ptyReq.Window.Height,
 		Cols:      ptyReq.Window.Width,
+		Modes:     ptyReq.Modes,
 	}
 
 	proxySess := &ProxySession{

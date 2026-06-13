@@ -18,9 +18,23 @@ import (
 
 	"github.com/lxzan/gws"
 	"github.com/pkg/sftp"
+	gossh "golang.org/x/crypto/ssh"
 	"rdev/internal/protocol"
 	"rdev/internal/ptyutil"
 )
+
+// convertModes converts protocol modes (map[uint8]uint32) to ssh.TerminalModes.
+// Returns nil if the map is empty.
+func convertModes(m map[uint8]uint32) gossh.TerminalModes {
+	if len(m) == 0 {
+		return nil
+	}
+	modes := make(gossh.TerminalModes, len(m))
+	for k, v := range m {
+		modes[k] = v
+	}
+	return modes
+}
 
 // --- Write adapters ---
 
@@ -441,6 +455,7 @@ func (c *Client) startShellExecSession(msg *protocol.Message) (*clientSession, e
 			Term:    msg.Term,
 			Rows:    uint16(msg.Rows),
 			Cols:    uint16(msg.Cols),
+			Modes:   convertModes(msg.Modes),
 		}
 		proc, ptyErr := ptyutil.Start(cfg)
 		if ptyErr != nil {
