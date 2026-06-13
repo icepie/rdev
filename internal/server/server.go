@@ -373,6 +373,13 @@ func (s *Server) GetClient(clientID string) (*ClientConn, bool) {
 	return c, ok
 }
 
+// ConnectedDeviceCount returns the number of connected device clients.
+func (s *Server) ConnectedDeviceCount() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.clients)
+}
+
 // Session management
 func (s *Server) RegisterSession(sess *ProxySession, client *ClientConn) {
 	s.sessMu.Lock()

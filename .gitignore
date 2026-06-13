@@ -1,11 +1,11 @@
 # Binaries
-rdev-server
-rdev-client
+/rdev-server
+/rdev-client
 *.exe
 
 # Cross-compiled
-rdev-server-*
-rdev-client-*
+/rdev-server-*
+/rdev-client-*
 
 # Go
 /vendor/

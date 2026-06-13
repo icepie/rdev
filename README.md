@@ -31,6 +31,8 @@
 | 自动重连 | 客户端断开后自动重连 |
 | 指定 Shell | `--shell /bin/bash` 或 `$RDEV_SHELL` |
 | 跨平台 | Unix (creack/pty) / Windows (ConPty) / 其他 (pipe) |
+| Terminal Modes | SSH pty-req modes 完整转发 (ECHO, ONLCR, etc.) |
+| GUI 模式 | `--gui` 系统托盘 + 自动打开浏览器 Dashboard |
 
 ## 快速开始
 
@@ -45,6 +47,9 @@
 
 # 数据目录 (host key, authorized_keys)
 ./rdev-server --data /etc/rdev
+
+# GUI 模式 — 系统托盘图标 + 自动打开浏览器
+./rdev-server --gui
 ```
 
 ### 启动客户端
@@ -92,13 +97,36 @@ ssh -R 3000:localhost:3000 my-device@your-server -p 2222
 ## 构建
 
 ```bash
-go build -o rdev-server ./cmd/rdev-server
-go build -o rdev-client ./cmd/rdev-client
+# 标准构建
+make build
 
-# 交叉编译
+# 交叉编译 (无 CGO)
+make cross
+
+# 带 GUI 支持的构建 (需要 CGO + GTK3 dev headers)
+make gui
+
+# 手动构建
+CGO_ENABLED=0 go build -o rdev-server ./cmd/rdev-server  # 无 GUI
+CGO_ENABLED=1 go build -o rdev-server-gui ./cmd/rdev-server  # 带 GUI
+
+# 交叉编译客户端
 CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -o rdev-client.exe ./cmd/rdev-client
 CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o rdev-client-arm64 ./cmd/rdev-client
 ```
+
+### GUI 模式说明
+
+`--gui` 标志启动系统托盘 + 自动打开浏览器 Dashboard。
+
+| 桌面环境 | 托盘图标 | 说明 |
+|----------|----------|------|
+| GNOME/KDE/Cinnamon | ✅ 开箱即用 | 原生 StatusNotifierWatcher |
+| i3/Sway | ⚠️ 需安装 `status-notifier-watcher` | 或使用 polybar/dunst |
+| Windows/macOS | ✅ 开箱即用 | 原生系统托盘 |
+| 无 CGO 构建 | 浏览器自动打开 | 降级为仅打开浏览器 |
+
+无 CGO 构建时 `--gui` 仍可用 — 自动打开浏览器，但无系统托盘图标。
 
 ## 目录结构
 
