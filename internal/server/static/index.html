@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RDev - Remote Debug Server</title>
+    <style>
+        :root {
+            --bg: #0f1117;
+            --card: #1a1d27;
+            --border: #2a2d3a;
+            --text: #e4e4e7;
+            --muted: #71717a;
+            --accent: #22d3ee;
+            --green: #4ade80;
+            --red: #f87171;
+            --yellow: #facc15;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+        .container { max-width: 1020px; margin: 0 auto; padding: 2rem; }
+        header { margin-bottom: 2rem; }
+        header h1 { font-size: 1.8rem; font-weight: 700; letter-spacing: -0.02em; }
+        header h1 span { color: var(--accent); }
+        header p { color: var(--muted); margin-top: 0.5rem; font-size: 0.9rem; }
+        .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1rem; margin-bottom: 2rem; }
+        .stat-card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 1.2rem; }
+        .stat-card .label { font-size: 0.75rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+        .stat-card .value { font-size: 1.8rem; font-weight: 700; margin-top: 0.3rem; }
+        .stat-card .value.online { color: var(--green); }
+        .stat-card .value.accent { color: var(--accent); }
+        .stat-card .value.yellow { color: var(--yellow); }
+        table { width: 100%; border-collapse: collapse; background: var(--card); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+        thead th { text-align: left; padding: 0.8rem 1rem; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); border-bottom: 1px solid var(--border); }
+        tbody td { padding: 0.8rem 1rem; border-bottom: 1px solid var(--border); font-size: 0.9rem; }
+        tbody tr:last-child td { border-bottom: none; }
+        tbody tr:hover { background: rgba(255,255,255,0.02); }
+        .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+        .dot.online { background: var(--green); box-shadow: 0 0 6px var(--green); }
+        .badge { display: inline-block; padding: 2px 8px; border-radius: 6px; font-size: 0.75rem; font-weight: 500; margin-right: 4px; }
+        .badge.green { background: rgba(74,222,128,0.15); color: var(--green); }
+        .badge.muted { background: rgba(113,113,122,0.15); color: var(--muted); }
+        .badge.accent { background: rgba(34,211,238,0.15); color: var(--accent); }
+        .empty { text-align: center; padding: 3rem; color: var(--muted); }
+        .empty .icon { font-size: 3rem; margin-bottom: 1rem; opacity: 0.3; }
+        .hint { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 1rem 1.2rem; margin-top: 2rem; }
+        .hint h3 { font-size: 0.85rem; color: var(--accent); margin-bottom: 0.5rem; }
+        .hint code { display: block; background: #000; padding: 0.5rem 1rem; border-radius: 6px; font-family: 'SF Mono','Fira Code',monospace; font-size: 0.8rem; color: var(--muted); margin-top: 0.3rem; overflow-x: auto; }
+        code .hl { color: var(--accent); }
+        code .hl2 { color: var(--green); }
+        code .hl3 { color: var(--yellow); }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1><span>RDev</span> Remote Debug</h1>
+            <p>SSH 远程调试已连接设备 · Shell / SCP / SFTP / 端口转发 / 免密</p>
+        </header>
+
+        <div class="stats">
+            <div class="stat-card">
+                <div class="label">在线设备</div>
+                <div class="value online" id="stat-online">0</div>
+            </div>
+            <div class="stat-card">
+                <div class="label">活跃会话</div>
+                <div class="value accent" id="stat-sessions">0</div>
+            </div>
+            <div class="stat-card">
+                <div class="label">端口转发</div>
+                <div class="value yellow" id="stat-forwards">0</div>
+            </div>
+            <div class="stat-card">
+                <div class="label">SSH 端口</div>
+                <div class="value" id="stat-ssh">2222</div>
+            </div>
+        </div>
+
+        <table>
+            <thead>
+                <tr>
+                    <th>状态</th>
+                    <th>设备 ID</th>
+                    <th>连接时间</th>
+                    <th>会话</th>
+                    <th>转发</th>
+                    <th>认证</th>
+                </tr>
+            </thead>
+            <tbody id="tbody">
+                <tr><td colspan="6" class="empty"><div class="icon">📡</div>等待设备连接...</td></tr>
+            </tbody>
+        </table>
+
+        <div class="hint">
+            <h3>⚡ 连接方式</h3>
+            <code><span class="hl">ssh</span> &lt;deviceID&gt;@&lt;server&gt; -p 2222</code>
+            <code><span class="hl">scp</span> file &lt;deviceID&gt;@&lt;server&gt;:/tmp/ -P 2222</code>
+            <code><span class="hl">sftp</span> -P 2222 &lt;deviceID&gt;@&lt;server&gt;</code>
+            <h3 style="margin-top:0.8rem">🔀 端口转发</h3>
+            <code><span class="hl3"># -L 本地转发: 访问设备上的服务</span></code>
+            <code><span class="hl">ssh</span> -L 8080:localhost:80 &lt;deviceID&gt;@&lt;server&gt; -p 2222</code>
+            <code><span class="hl3"># -R 远程转发: 暴露本地服务到服务器</span></code>
+            <code><span class="hl">ssh</span> -R 3000:localhost:3000 &lt;deviceID&gt;@&lt;server&gt; -p 2222</code>
+            <h3 style="margin-top:0.8rem">🔑 免密登录</h3>
+            <code><span class="hl2"># 将公钥加入服务端 ~/.rdev/authorized_keys</span></code>
+            <code>cat ~/.ssh/id_ed25519.pub >> ~/.rdev/authorized_keys</code>
+            <code><span class="hl">ssh</span> &lt;deviceID&gt;@&lt;server&gt; -p 2222  <span class="hl2"># 无需密码!</span></code>
+        </div>
+    </div>
+    <script>
+        async function refresh() {
+            try {
+                const r = await fetch('/api/clients');
+                const c = await r.json();
+                const totalS = c.reduce((s,x) => s + x.sessions, 0);
+                const totalF = c.reduce((s,x) => s + x.forwards, 0);
+                document.getElementById('stat-online').textContent = c.length;
+                document.getElementById('stat-sessions').textContent = totalS;
+                document.getElementById('stat-forwards').textContent = totalF;
+                const tb = document.getElementById('tbody');
+                if (!c.length) { tb.innerHTML = '<tr><td colspan="6" class="empty"><div class="icon">📡</div>等待设备连接...</td></tr>'; return; }
+                tb.innerHTML = c.map(d => `<tr>
+                    <td><span class="dot online"></span>在线</td>
+                    <td style="font-weight:600">${esc(d.id)}</td>
+                    <td style="color:var(--muted)">${timeAgo(d.connectedAt)}</td>
+                    <td>${d.sessions}</td>
+                    <td>${d.forwards}</td>
+                    <td>${d.hasPassword ? '<span class="badge green">密码</span>' : ''}<span class="badge accent">公钥</span></td>
+                </tr>`).join('');
+            } catch(e) {}
+        }
+        function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+        function timeAgo(iso) {
+            const d = new Date(iso), diff = Math.floor((Date.now()-d)/1000);
+            if (diff < 60) return '刚刚';
+            if (diff < 3600) return Math.floor(diff/60) + ' 分钟前';
+            if (diff < 86400) return Math.floor(diff/3600) + ' 小时前';
+            return Math.floor(diff/86400) + ' 天前';
+        }
+        refresh(); setInterval(refresh, 3000);
+    </script>
+</body>
+</html>

@@ -1,0 +1,29 @@
+# Binaries
+rdev-server
+rdev-client
+*.exe
+
+# Cross-compiled
+rdev-server-*
+rdev-client-*
+
+# Go
+/vendor/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Data (host keys, authorized_keys - generated at runtime)
+*.pem
+host_key
+authorized_keys
+
+# Test artifacts
+/tmp/
