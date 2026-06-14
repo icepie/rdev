@@ -28,6 +28,20 @@
     const style = document.createElement('style');
     style.id = 'rdev-icon-styles';
     style.textContent = `
+      :root[data-theme="dark"] {
+        --rdev-code-bg: #05070d;
+        --rdev-code-text: var(--text);
+        --rdev-code-border: transparent;
+        --rdev-hover-bg: rgba(255,255,255,0.03);
+        --rdev-auth-overlay: rgba(15,17,23,0.92);
+      }
+      :root[data-theme="light"] {
+        --rdev-code-bg: #f8fafc;
+        --rdev-code-text: #334155;
+        --rdev-code-border: #e2e8f0;
+        --rdev-hover-bg: rgba(15,23,42,0.04);
+        --rdev-auth-overlay: rgba(248,250,252,0.92);
+      }
       .icon {
         width: 1em;
         height: 1em;
@@ -40,29 +54,44 @@
       .icon-inline {
         display: inline-flex;
         align-items: center;
-        gap: 0.45em;
+        gap: 6px;
         min-width: 0;
         line-height: 1.2;
       }
-      .icon-inline > .icon,
-      .icon-inline > [data-icon],
-      .icon-inline > span[id$="-icon"] {
+      .icon-inline > [data-icon] {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
         flex: 0 0 auto;
-      }
-      .btn .icon,
-      .nav a .icon,
-      .term-btn .icon,
-      .copy-btn .icon,
-      .new-tab-btn .icon,
-      .theme-toggle .icon {
         width: 1rem;
         height: 1rem;
+      }
+      .icon-inline > [data-icon] > .icon {
+        display: block;
+      }
+      #lang-slot {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+        min-width: 0;
+      }
+      #lang-slot .lang-switch {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        min-height: 28px;
+        margin: 0;
+        line-height: 1;
+        white-space: nowrap;
+      }
+      #lang-slot .lang-switch select {
+        min-height: 28px;
       }
       .theme-toggle {
         display: inline-flex;
         align-items: center;
-        justify-content: center;
-        gap: 0.45rem;
+        gap: 6px;
         min-height: 28px;
         border: 1px solid var(--border);
         background: var(--card);
@@ -70,34 +99,31 @@
         border-radius: 7px;
         padding: 4px 8px;
         cursor: pointer;
-        font: inherit;
         font-size: 0.78rem;
-        line-height: 1;
         white-space: nowrap;
       }
       .theme-toggle:hover {
         color: var(--accent);
         border-color: var(--accent);
       }
-      .empty-icon {
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        color: var(--accent);
-        line-height: 1;
+      .cmd-code,
+      .hint code {
+        background: var(--rdev-code-bg) !important;
+        color: var(--rdev-code-text) !important;
+        border: 1px solid var(--rdev-code-border);
       }
-      .empty-icon .icon {
-        width: 1em;
-        height: 1em;
-        display: block;
+      :root[data-theme="light"] .cmd-code,
+      :root[data-theme="light"] .hint code {
+        box-shadow: inset 0 0 0 1px rgba(226,232,240,0.6);
       }
-      .gh-link .icon,
-      h2 .icon,
-      h3 .icon,
-      .cmd-label .icon,
-      .tab .icon {
-        width: 1rem;
-        height: 1rem;
+      tbody tr:hover,
+      .device-item:hover,
+      .sess-item:hover,
+      .tab-item:hover {
+        background: var(--rdev-hover-bg) !important;
+      }
+      .auth-overlay {
+        background: var(--rdev-auth-overlay) !important;
       }
     `;
     document.head.appendChild(style);
