@@ -149,7 +149,16 @@ function global:RDev {
 
     # ── Download helper ──────────────────────────────────────
     function Dl([string]$Url, [string]$Out) {
-        try { try { Invoke-WebRequest -Uri $Url -OutFile $Out -ErrorAction Stop } catch { $w = New-Object Net.WebClient; $w.DownloadFile($Url, $Out) }; return $true } catch { return $false }
+        try {
+            $w = New-Object Net.WebClient
+            $w.Headers.Add('User-Agent', 'rdev-installer')
+            $w.DownloadFile($Url, $Out)
+            return $true
+        } catch {
+            Write-Host "  Download error: $($_.Exception.Message)" -ForegroundColor DarkGray
+            try { if ($_.Exception.InnerException) { Write-Host "  Inner error: $($_.Exception.InnerException.Message)" -ForegroundColor DarkGray } } catch {}
+            return $false
+        }
     }
 
     # ── Download (mirror → github) ────────────────────────────
