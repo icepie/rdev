@@ -162,7 +162,8 @@ function global:RDev {
     }
 
     # ── Download (mirror → github) ────────────────────────────
-    $OutPath = Join-Path $env:TEMP "rdev-client.exe"
+    $SafeTag = $Tag -replace '[^A-Za-z0-9_.-]', '-'
+    $OutPath = Join-Path $env:TEMP "rdev-client-$SafeTag-windows-$Arch.exe"
     $OK = $false
 
     Write-Host "  Downloading rdev-client (windows/$Arch)..." -ForegroundColor Cyan
