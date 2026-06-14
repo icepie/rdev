@@ -47,6 +47,36 @@
     return layer;
   }
 
+  function base64ToBytes(raw) {
+    const bin = atob(raw.replace(/\s+/g, ''));
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return bytes;
+  }
+
+  function bytesToBase64(bytes) {
+    let out = '';
+    const chunk = 0x8000;
+    for (let i = 0; i < bytes.length; i += chunk) {
+      out += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+    }
+    return btoa(out);
+  }
+
+  async function inflateZlib(bytes) {
+    if (!('DecompressionStream' in window)) {
+      throw new Error('compressed Kitty images are not supported by this browser');
+    }
+    const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate'));
+    return new Uint8Array(await new Response(stream).arrayBuffer());
+  }
+
+  async function payloadToDataURL(params, payload) {
+    let bytes = base64ToBytes(payload);
+    if (params.o === 'z') bytes = await inflateZlib(bytes);
+    return 'data:' + mimeFor(params) + ';base64,' + bytesToBase64(bytes);
+  }
+
   function create(term, options = {}) {
     const maxSequence = options.maxSequence || DEFAULT_MAX_SEQUENCE;
     const maxStorage = options.maxStorage || DEFAULT_MAX_STORAGE;
@@ -86,7 +116,12 @@
       else if (params.s) img.style.width = Math.max(1, parseInt(params.s, 10)) + 'px';
       if (params.r) img.style.height = Math.max(1, parseInt(params.r, 10)) * cell.height + 'px';
       else if (params.v) img.style.height = Math.max(1, parseInt(params.v, 10)) + 'px';
-      img.src = 'data:' + mimeFor(params) + ';base64,' + payload.replace(/\s+/g, '');
+      payloadToDataURL(params, payload)
+        .then(src => { img.src = src; })
+        .catch(err => {
+          if (img.parentNode) img.parentNode.removeChild(img);
+          writePlain('\r\n\x1b[31m[RDev: kitty image decode failed: ' + err.message + ']\x1b[0m\r\n');
+        });
       layer.appendChild(img);
       rendered.push(img);
       trimRendered();
@@ -154,5 +189,5 @@
     };
   }
 
-  window.RDevTerminalImages = { create, parseParams, mimeFor };
+  window.RDevTerminalImages = { create, parseParams, mimeFor, payloadToDataURL };
 })();

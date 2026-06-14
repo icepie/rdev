@@ -1,3 +1,4 @@
+import { deflateSync } from 'node:zlib';
 import { JSDOM } from 'jsdom';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
@@ -15,6 +16,9 @@ async function setupTerminalImagesDom() {
     runScripts: 'outside-only',
     pretendToBeVisual: true
   });
+  dom.window.DecompressionStream = globalThis.DecompressionStream;
+  dom.window.Response = globalThis.Response;
+  dom.window.Blob = globalThis.Blob;
   const source = await readFile(resolve(publicDir, 'terminal-images.js'), 'utf8');
   dom.window.eval(source);
   return dom;
@@ -33,6 +37,14 @@ function fakeTerm(window) {
     write: text => writes.push(text),
     writes
   };
+}
+
+async function waitForImageSrc(img) {
+  for (let i = 0; i < 30; i++) {
+    if (img.src) return img.src;
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+  return img.src;
 }
 
 describe('RDevTerminalImages', () => {
@@ -58,7 +70,7 @@ describe('RDevTerminalImages', () => {
     const img = term.element.querySelector('.rdev-kitty-image-layer img');
     expect(term.writes.join('')).toBe('before\n\nafter');
     expect(img).not.toBeNull();
-    expect(img.src).toBe(`data:image/png;base64,${PNG_1X1}`);
+    expect(await waitForImageSrc(img)).toBe(`data:image/png;base64,${PNG_1X1}`);
     expect(img.style.left).toBe('20px');
     expect(img.style.top).toBe('60px');
     expect(img.style.width).toBe('40px');
@@ -78,7 +90,7 @@ describe('RDevTerminalImages', () => {
 
     const img = term.element.querySelector('.rdev-kitty-image-layer img');
     expect(img).not.toBeNull();
-    expect(img.src).toBe(`data:image/png;base64,${PNG_1X1}`);
+    expect(await waitForImageSrc(img)).toBe(`data:image/png;base64,${PNG_1X1}`);
     expect(term.writes.join('')).toBe('');
   });
 
@@ -92,9 +104,22 @@ describe('RDevTerminalImages', () => {
     writer.write(`_Ga=T,f=101,s=9,v=7;${PNG_1X1}${ST}`);
 
     const img = term.element.querySelector('.rdev-kitty-image-layer img');
-    expect(img.src).toBe(`data:image/jpeg;base64,${PNG_1X1}`);
+    expect(await waitForImageSrc(img)).toBe(`data:image/jpeg;base64,${PNG_1X1}`);
     expect(img.style.width).toBe('9px');
     expect(img.style.height).toBe('7px');
+  });
+
+  it('decodes zlib-compressed Kitty image payloads', async () => {
+    const dom = await setupTerminalImagesDom();
+    const term = fakeTerm(dom.window);
+    const writer = dom.window.RDevTerminalImages.create(term);
+    const compressed = deflateSync(Buffer.from(PNG_1X1, 'base64')).toString('base64');
+
+    writer.write(`${ESC}_Ga=T,f=100,o=z,s=8,v=8;${compressed}${ST}`);
+    const img = term.element.querySelector('.rdev-kitty-image-layer img');
+
+    expect(img).not.toBeNull();
+    expect(await waitForImageSrc(img)).toBe(`data:image/png;base64,${PNG_1X1}`);
   });
 
   it('reports unsupported Kitty path mode and oversized sequences', async () => {
