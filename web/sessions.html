@@ -13,7 +13,7 @@
             --purple: #c084fc;
         }
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); height: 100vh; display: flex; flex-direction: column; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); height: 100vh; height: 100dvh; display: flex; flex-direction: column; overflow: hidden; }
 
         /* ── Top toolbar ── */
         .toolbar { display: flex; align-items: center; padding: 6px 12px; background: var(--card); border-bottom: 1px solid var(--border); gap: 10px; flex-shrink: 0; }
@@ -27,7 +27,7 @@
         .nav a:hover { color: var(--accent); border-color: var(--accent); }
 
         /* ── Split layout: left list, right terminal ── */
-        .split { flex: 1; display: flex; overflow: hidden; }
+        .split { flex: 1; display: flex; overflow: hidden; min-height: 0; }
 
         /* ── Session list panel ── */
         .list-panel { width: 360px; min-width: 260px; background: var(--card); border-right: 1px solid var(--border); display: flex; flex-direction: column; flex-shrink: 0; }
@@ -65,13 +65,30 @@
         .btn:hover { border-color: var(--accent); color: var(--accent); }
         .btn.danger { border-color: rgba(248,113,113,0.3); color: var(--red); }
         .btn.danger:hover { background: rgba(248,113,113,0.1); }
-        .terminal-area { flex: 1; position: relative; overflow: hidden; padding: 4px; }
+        .terminal-area { flex: 1; position: relative; overflow: hidden; padding: 4px; min-height: 0; touch-action: manipulation; }
         .terminal-area .xterm { height: 100%; }
+        .mobile-keys { display: none; flex-shrink: 0; gap: 6px; padding: 6px 8px; background: var(--card); border-top: 1px solid var(--border); overflow-x: auto; -webkit-overflow-scrolling: touch; }
+        .mobile-keys button { min-width: 44px; min-height: 34px; padding: 6px 10px; border-radius: 7px; border: 1px solid var(--border); background: var(--bg); color: var(--text); font-size: 0.8rem; }
 
         /* ── Placeholder when no session selected ── */
         .no-select { flex: 1; display: flex; align-items: center; justify-content: center; color: var(--muted); }
         .no-select .icon { font-size: 4rem; opacity: 0.2; margin-bottom: 1rem; text-align: center; }
         .no-select .hint { font-size: 0.9rem; text-align: center; }
+        @media (max-width: 780px) {
+            .toolbar { flex-wrap: wrap; gap: 6px; padding: 6px 8px; }
+            .toolbar .logo { width: 100%; }
+            .gh-link { display: none; }
+            .nav { width: 100%; overflow-x: auto; padding-bottom: 2px; }
+            .nav a { flex: 0 0 auto; padding: 5px 9px; }
+            .split { flex-direction: column; }
+            .list-panel { width: 100%; min-width: 0; max-height: 38dvh; border-right: 0; border-bottom: 1px solid var(--border); }
+            .list-header, .list-search { padding: 8px 10px; }
+            .sess-item { padding: 8px 10px; }
+            .attach-header { flex-wrap: wrap; gap: 6px; padding: 6px 8px; }
+            .attach-header .info { white-space: normal; }
+            .terminal-area { padding: 2px; }
+            .mobile-keys { display: flex; }
+        }
     </style>
 </head>
 <body>
@@ -107,6 +124,10 @@
                 <button class="btn danger" id="btn-detach">✕ 断开</button>
             </div>
             <div class="terminal-area" id="terminal-area"></div>
+            <div class="mobile-keys" id="mobile-keys">
+                <button data-key="\u001b">Esc</button><button data-key="\t">Tab</button><button data-key="\u0003">Ctrl+C</button><button data-key="\u0004">Ctrl+D</button>
+                <button data-key="\u001b[A">↑</button><button data-key="\u001b[B">↓</button><button data-key="\u001b[D">←</button><button data-key="\u001b[C">→</button><button data-key="\r">Enter</button>
+            </div>
         </div>
 
         <div class="no-select" id="no-select">
@@ -133,6 +154,21 @@
     const WebglAddon = window.AddonWebgl?.WebglAddon;
 
     let sessions = [], activeId = null, term = null, fitAddon = null, ws = null;
+    function sendAttachData(data) {
+        if (ws && ws.readyState === WebSocket.OPEN) ws.send(new TextEncoder().encode(data));
+    }
+    function prepareTerminalInput() {
+        const textarea = document.querySelector('#terminal-area textarea');
+        if (!textarea) return;
+        textarea.setAttribute('inputmode', 'text');
+        textarea.setAttribute('enterkeyhint', 'enter');
+        textarea.setAttribute('autocapitalize', 'off');
+        textarea.setAttribute('autocomplete', 'off');
+        textarea.setAttribute('autocorrect', 'off');
+        textarea.setAttribute('spellcheck', 'false');
+        textarea.addEventListener('compositionend', () => setTimeout(() => { if (fitAddon) try { fitAddon.fit(); } catch(e) {} }, 30));
+        textarea.addEventListener('focus', () => setTimeout(() => { if (fitAddon) try { fitAddon.fit(); } catch(e) {} }, 80));
+    }
 
     function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
 
@@ -230,6 +266,7 @@
         term.loadAddon(fitAddon);
         term.loadAddon(new WebLinksAddon.WebLinksAddon());
         term.open(area);
+        prepareTerminalInput();
         try { const webgl = new WebglAddon(); webgl.onContextLoss(() => webgl.dispose()); term.loadAddon(webgl); } catch(e) {}
         try { fitAddon.fit(); } catch(e) {}
 
@@ -258,9 +295,7 @@
         };
 
         term.onData(data => {
-            if (ws && ws.readyState === WebSocket.OPEN) {
-                ws.send(new TextEncoder().encode(data));
-            }
+            sendAttachData(data);
         });
 
         term.onResize(({ cols, rows }) => {
@@ -280,14 +315,26 @@
     }
 
     document.getElementById('btn-detach').addEventListener('click', detachSession);
+    document.getElementById('mobile-keys').addEventListener('click', (e) => {
+        const btn = e.target.closest('button[data-key]');
+        if (!btn) return;
+        sendAttachData(btn.dataset.key);
+        if (term) { term.focus(); setTimeout(() => { if (fitAddon) try { fitAddon.fit(); } catch(e) {} }, 50); }
+    });
+    document.getElementById('terminal-area').addEventListener('pointerdown', () => { if (term) term.focus(); });
 
 
     // ── Resize handling ──
     let resizeTimer;
-    window.addEventListener('resize', () => {
+    function scheduleResize(delay = 80) {
         clearTimeout(resizeTimer);
-        resizeTimer = setTimeout(() => { if (fitAddon) try { fitAddon.fit(); } catch(e) {} }, 100);
-    });
+        resizeTimer = setTimeout(() => { if (fitAddon) try { fitAddon.fit(); } catch(e) {} }, delay);
+    }
+    window.addEventListener('resize', () => scheduleResize(100));
+    if (window.visualViewport) {
+        visualViewport.addEventListener('resize', () => scheduleResize(80));
+        visualViewport.addEventListener('scroll', () => scheduleResize(80));
+    }
 
     // ── Auto-refresh session list ──
     loadSessions();

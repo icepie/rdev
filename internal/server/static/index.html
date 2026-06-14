@@ -70,6 +70,29 @@
         .hint h3 { font-size: 0.95rem; color: var(--accent); margin-bottom: 0.8rem; }
         .hint code { display: block; background: #000; padding: 0.5rem 1rem; border-radius: 6px; font-family: 'SF Mono','Fira Code',monospace; font-size: 0.8rem; color: var(--muted); margin-top: 0.3rem; overflow-x: auto; }
         code .h1 { color: var(--accent); } code .h2 { color: var(--green); } code .h3 { color: var(--yellow); }
+        @media (max-width: 760px) {
+            .container { padding: 1rem; }
+            header { align-items: stretch; margin-bottom: 1rem; }
+            header h1 { font-size: 1.45rem; }
+            .header-right, .header-btns { width: 100%; }
+            .header-btns { display: grid; grid-template-columns: repeat(3, 1fr); }
+            .btn { justify-content: center; padding: 9px 10px; }
+            .gh-link { display: none; }
+            .stats { grid-template-columns: repeat(2, 1fr); gap: 0.7rem; margin-bottom: 1rem; }
+            .stat-card { padding: 0.9rem; }
+            .stat-card .value { font-size: 1.35rem; }
+            table, thead, tbody, tr, td { display: block; width: 100%; }
+            thead { display: none; }
+            tbody tr { background: var(--card); border: 1px solid var(--border); border-radius: 12px; margin-bottom: 0.75rem; padding: 0.7rem; }
+            tbody td { border: 0; padding: 0.35rem 0; word-break: break-word; }
+            tbody td:nth-child(2) { font-size: 1rem; font-weight: 600; }
+            .term-btn { width: 100%; justify-content: center; padding: 8px 10px; margin-top: 0.3rem; }
+            .install, .hint { padding: 1rem; margin-top: 1rem; }
+            .install-tabs { overflow-x: auto; }
+            .install-tab { flex: 0 0 auto; }
+            .cmd-row { flex-direction: column; align-items: stretch; }
+            .copy-btn { padding: 8px 12px; }
+        }
     </style>
 </head>
 <body>

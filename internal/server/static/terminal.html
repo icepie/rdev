@@ -12,7 +12,7 @@
             --green: #4ade80; --red: #f87171; --yellow: #facc15;
         }
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); height: 100vh; display: flex; flex-direction: column; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); height: 100vh; height: 100dvh; display: flex; flex-direction: column; overflow: hidden; }
         .toolbar { display: flex; align-items: center; padding: 6px 12px; background: var(--card); border-bottom: 1px solid var(--border); gap: 10px; flex-shrink: 0; }
         .toolbar .logo { font-size: 0.85rem; font-weight: 600; color: var(--accent); white-space: nowrap; }
         .toolbar .logo span { color: var(--muted); font-weight: 400; }
@@ -37,9 +37,11 @@
         .tab-dot.connected { background: var(--green); }
         .tab-dot.disconnected { background: var(--red); }
         .tab-dot.authing { background: var(--yellow); }
-        .terminal-panes { flex: 1; position: relative; overflow: hidden; }
-        .terminal-pane { position: absolute; inset: 0; padding: 4px; display: none; }
+        .terminal-panes { flex: 1; position: relative; overflow: hidden; min-height: 0; }
+        .terminal-pane { position: absolute; inset: 0; padding: 4px; display: none; touch-action: manipulation; }
         .terminal-pane.active { display: block; }
+        .mobile-keys { display: none; flex-shrink: 0; gap: 6px; padding: 6px 8px; background: var(--card); border-top: 1px solid var(--border); overflow-x: auto; -webkit-overflow-scrolling: touch; }
+        .mobile-keys button { min-width: 44px; min-height: 34px; padding: 6px 10px; border-radius: 7px; border: 1px solid var(--border); background: var(--bg); color: var(--text); font-size: 0.8rem; }
 
         /* ── Auth overlay ── */
         .auth-overlay { position: absolute; inset: 0; background: rgba(15,17,23,0.92); display: flex; align-items: center; justify-content: center; z-index: 10; }
@@ -51,6 +53,20 @@
         .auth-box .auth-btn { width: 100%; padding: 10px; border-radius: 8px; border: none; background: var(--accent); color: var(--bg); font-size: 0.9rem; font-weight: 600; cursor: pointer; transition: opacity .15s; }
         .auth-box .auth-btn:hover { opacity: 0.85; }
         .auth-box .auth-err { color: var(--red); font-size: 0.8rem; margin-top: 0.5rem; min-height: 1.2em; }
+        @media (max-width: 720px) {
+            .toolbar { flex-wrap: wrap; gap: 6px; padding: 6px 8px; }
+            .toolbar .logo { width: 100%; }
+            .device-select { flex: 1; min-width: 0; }
+            .new-tab-btn { padding: 5px 10px; }
+            .gh-link { display: none; }
+            .nav { width: 100%; overflow-x: auto; padding-bottom: 2px; }
+            .nav a { flex: 0 0 auto; padding: 5px 9px; }
+            .tab-bar { padding: 0 6px; }
+            .tab-item { padding: 7px 10px; }
+            .auth-box { width: min(92vw, 340px); padding: 1.25rem; }
+            .mobile-keys { display: flex; }
+            .terminal-pane { padding: 2px; }
+        }
     </style>
 </head>
 <body>
@@ -68,6 +84,10 @@
     </div>
     <div class="tab-bar" id="tab-bar"></div>
     <div class="terminal-panes" id="terminal-panes"></div>
+    <div class="mobile-keys" id="mobile-keys">
+        <button data-key="\u001b">Esc</button><button data-key="\t">Tab</button><button data-key="\u0003">Ctrl+C</button><button data-key="\u0004">Ctrl+D</button>
+        <button data-key="\u001b[A">↑</button><button data-key="\u001b[B">↓</button><button data-key="\u001b[D">←</button><button data-key="\u001b[C">→</button><button data-key="\r">Enter</button>
+    </div>
 
     <script src="/vendor/xterm.js"></script>
     <script src="/vendor/xterm-addon-fit.js"></script>
@@ -86,6 +106,24 @@
     document.querySelectorAll('[data-auth-link]').forEach(a => a.href = authURL(a.getAttribute('href')));
 
     let tabs = [], activeTabId = null, tabCounter = 0;
+    function activeTab() { return tabs.find(t => t.id === activeTabId); }
+    function sendTerminalData(tab, data) {
+        if (tab && tab.ws && tab.ws.readyState === WebSocket.OPEN && !tab.needAuth) {
+            tab.ws.send(new TextEncoder().encode(data));
+        }
+    }
+    function prepareTerminalInput(tab) {
+        const textarea = document.querySelector(`#pane-${tab.id} textarea`);
+        if (!textarea) return;
+        textarea.setAttribute('inputmode', 'text');
+        textarea.setAttribute('enterkeyhint', 'enter');
+        textarea.setAttribute('autocapitalize', 'off');
+        textarea.setAttribute('autocomplete', 'off');
+        textarea.setAttribute('autocorrect', 'off');
+        textarea.setAttribute('spellcheck', 'false');
+        textarea.addEventListener('compositionend', () => setTimeout(() => doResize(tab), 30));
+        textarea.addEventListener('focus', () => setTimeout(() => doResize(tab), 80));
+    }
 
     function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
 
@@ -129,6 +167,7 @@
 
         const tab = { id, deviceId: deviceID, ws: null, term, fitAddon, status: 'disconnected', needAuth: false };
         tabs.push(tab);
+        prepareTerminalInput(tab);
         connectTab(tab);
         switchTab(id);
         renderTabs();
@@ -240,10 +279,9 @@
 
         // Only send input when authenticated and connected
         tab.term.onData(data => {
-            if (tab.ws && tab.ws.readyState === WebSocket.OPEN && !tab.needAuth) {
-                tab.ws.send(new TextEncoder().encode(data));
-            }
+            sendTerminalData(tab, data);
         });
+
 
         tab.term.onResize(({ cols, rows }) => {
             if (tab.ws && tab.ws.readyState === WebSocket.OPEN && !tab.needAuth) {
@@ -259,7 +297,7 @@
         tabs.forEach(t => {
             const pane = document.getElementById('pane-' + t.id);
             if (pane) pane.classList.toggle('active', t.id === id);
-            if (t.id === id) { try { t.fitAddon.fit(); } catch(e) {} t.term.focus(); }
+            if (t.id === id) { try { t.fitAddon.fit(); } catch(e) {} setTimeout(() => t.term.focus(), 0); }
         });
         renderTabs();
     }
@@ -313,11 +351,30 @@
         if (id) createTab(id);
     });
 
-    let resizeTimer;
-    window.addEventListener('resize', () => {
-        clearTimeout(resizeTimer);
-        resizeTimer = setTimeout(() => { const t = tabs.find(t => t.id === activeTabId); if (t) doResize(t); }, 100);
+    document.getElementById('mobile-keys').addEventListener('click', (e) => {
+        const btn = e.target.closest('button[data-key]');
+        if (!btn) return;
+        const tab = activeTab();
+        sendTerminalData(tab, btn.dataset.key);
+        if (tab) { tab.term.focus(); setTimeout(() => doResize(tab), 50); }
     });
+
+    document.getElementById('terminal-panes').addEventListener('pointerdown', () => {
+        const tab = activeTab();
+        if (tab) tab.term.focus();
+    });
+
+    function scheduleActiveResize(delay = 80) {
+        clearTimeout(resizeTimer);
+        resizeTimer = setTimeout(() => { const tab = activeTab(); if (tab) doResize(tab); }, delay);
+    }
+
+    let resizeTimer;
+    window.addEventListener('resize', () => scheduleActiveResize(100));
+    if (window.visualViewport) {
+        visualViewport.addEventListener('resize', () => scheduleActiveResize(80));
+        visualViewport.addEventListener('scroll', () => scheduleActiveResize(80));
+    }
 
     const params = new URLSearchParams(location.search);
     const preselect = params.get('device');
