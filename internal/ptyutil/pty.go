@@ -41,7 +41,14 @@ func shellFlag(shell string) string {
 
 // Start creates a new PTY process. On Windows this uses ConPty;
 // on Unix this uses creack/pty. On unsupported platforms it returns an error.
-func Start(cfg *Config) (*Process, error) {
+func Start(cfg *Config) (proc *Process, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			proc = nil
+			err = fmt.Errorf("pty panic: %v", r)
+		}
+	}()
+
 	pseudo, err := pty.New()
 	if err != nil {
 		return nil, fmt.Errorf("pty new: %w", err)
