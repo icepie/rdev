@@ -134,6 +134,24 @@ describe('RDevTerminalImages', () => {
     expect(output).toContain('kitty image sequence too large');
   });
 
+  it('fits unicode-placeholder Kitty images to the placeholder grid', async () => {
+    const dom = await setupTerminalImagesDom();
+    const term = fakeTerm(dom.window);
+    const writer = dom.window.RDevTerminalImages.create(term);
+    const placeholder = String.fromCodePoint(0x10eeee);
+
+    writer.write(`${ESC}_Ga=T,f=100,U=1,i=42;${PNG_1X1}${ST}`);
+    writer.write(`${ESC}[2;51H${placeholder}${placeholder}${placeholder}${ESC}[3;51H${placeholder}${placeholder}${placeholder}`);
+
+    const img = term.element.querySelector('.rdev-kitty-image-layer img');
+    expect(img).not.toBeNull();
+    expect(await waitForImageSrc(img)).toBe(`data:image/png;base64,${PNG_1X1}`);
+    expect(img.style.left).toBe('500px');
+    expect(img.style.top).toBe('20px');
+    expect(img.style.width).toBe('30px');
+    expect(img.style.height).toBe('40px');
+  });
+
   it('deletes rendered Kitty images when requested', async () => {
     const dom = await setupTerminalImagesDom();
     const term = fakeTerm(dom.window);

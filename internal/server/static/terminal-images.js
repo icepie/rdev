@@ -2,6 +2,7 @@
   const ESC = '\x1b';
   const START = ESC + '_G';
   const END = ESC + '\\';
+  const PLACEHOLDER = 0x10EEEE;
   const DEFAULT_MAX_SEQUENCE = 24 * 1024 * 1024;
   const DEFAULT_MAX_STORAGE = 64;
 
@@ -120,9 +121,75 @@
     let chunks = new Map();
     let currentChunkKey = '_default';
     let rendered = [];
+    let virtualCursor = { row: 0, col: 0 };
+    let activePlaceholderImage = null;
+
+    function fitImageToPlaceholder(img, bounds) {
+      const cell = getCellSize(term);
+      img.style.left = Math.max(0, bounds.left * cell.width) + 'px';
+      img.style.top = Math.max(0, bounds.top * cell.height) + 'px';
+      img.style.width = Math.max(1, bounds.right - bounds.left + 1) * cell.width + 'px';
+      img.style.height = Math.max(1, bounds.bottom - bounds.top + 1) * cell.height + 'px';
+    }
+
+    function notePlaceholder(row, col) {
+      const img = activePlaceholderImage || rendered[rendered.length - 1];
+      if (!img) return;
+      const bounds = img._rdevPlaceholderBounds || { top: row, left: col, bottom: row, right: col };
+      bounds.top = Math.min(bounds.top, row);
+      bounds.left = Math.min(bounds.left, col);
+      bounds.bottom = Math.max(bounds.bottom, row);
+      bounds.right = Math.max(bounds.right, col);
+      img._rdevPlaceholderBounds = bounds;
+      fitImageToPlaceholder(img, bounds);
+    }
+
+    function observeTerminalLayout(text) {
+      let idx = 0;
+      while (idx < text.length) {
+        if (text.charCodeAt(idx) === 0x1b && text[idx + 1] === '[') {
+          const match = /^\x1b\[([0-9;?]*)([@-~])/.exec(text.slice(idx));
+          if (match) {
+            const args = match[1].replace(/^\?/, '').split(';').filter(Boolean).map(value => parseInt(value, 10));
+            const cmd = match[2];
+            if (cmd === 'H' || cmd === 'f') {
+              virtualCursor.row = Math.max(0, (args[0] || 1) - 1);
+              virtualCursor.col = Math.max(0, (args[1] || 1) - 1);
+            } else if (cmd === 'A') {
+              virtualCursor.row = Math.max(0, virtualCursor.row - (args[0] || 1));
+            } else if (cmd === 'B') {
+              virtualCursor.row += args[0] || 1;
+            } else if (cmd === 'C') {
+              virtualCursor.col += args[0] || 1;
+            } else if (cmd === 'D') {
+              virtualCursor.col = Math.max(0, virtualCursor.col - (args[0] || 1));
+            }
+            idx += match[0].length;
+            continue;
+          }
+        }
+        const code = text.codePointAt(idx);
+        const char = String.fromCodePoint(code);
+        const charLength = char.length;
+        if (code === PLACEHOLDER) {
+          notePlaceholder(virtualCursor.row, virtualCursor.col);
+          virtualCursor.col += 1;
+        } else if (char === '\r') {
+          virtualCursor.col = 0;
+        } else if (char === '\n') {
+          virtualCursor.row += 1;
+        } else if (!/\p{Mark}/u.test(char) && code >= 0x20) {
+          virtualCursor.col += 1;
+        }
+        idx += charLength;
+      }
+    }
 
     function writePlain(text) {
-      if (text) term.write(text);
+      if (text) {
+        observeTerminalLayout(text);
+        term.write(text);
+      }
     }
 
     function trimRendered() {
@@ -140,6 +207,7 @@
       if (params.d === 'A' || (!params.i && !params.I)) {
         rendered.forEach(removeNode);
         rendered = [];
+        activePlaceholderImage = null;
         chunks.clear();
         currentChunkKey = '_default';
         return;
@@ -147,6 +215,7 @@
       const id = params.i || params.I;
       rendered = rendered.filter(node => {
         if (node.dataset.rdevKittyId !== id) return true;
+        if (activePlaceholderImage === node) activePlaceholderImage = null;
         removeNode(node);
         return false;
       });
@@ -162,8 +231,8 @@
       const layer = ensureLayer(term);
       if (!layer) return;
       const cell = getCellSize(term);
-      const cursorX = term.buffer?.active?.cursorX || 0;
-      const cursorY = term.buffer?.active?.cursorY || 0;
+      const cursorX = term.buffer?.active?.cursorX ?? virtualCursor.col ?? 0;
+      const cursorY = term.buffer?.active?.cursorY ?? virtualCursor.row ?? 0;
       const img = document.createElement('img');
       if (params.i || params.I) img.dataset.rdevKittyId = params.i || params.I;
       img.decoding = 'async';
@@ -183,6 +252,7 @@
         });
       layer.appendChild(img);
       rendered.push(img);
+      if (params.U === '1') activePlaceholderImage = img;
       trimRendered();
       if (params.r) writePlain('\n'.repeat(Math.max(1, parseInt(params.r, 10))));
     }
