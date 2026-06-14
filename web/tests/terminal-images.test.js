@@ -134,6 +134,25 @@ describe('RDevTerminalImages', () => {
     expect(output).toContain('kitty image sequence too large');
   });
 
+  it('deletes rendered Kitty images when requested', async () => {
+    const dom = await setupTerminalImagesDom();
+    const term = fakeTerm(dom.window);
+    const writer = dom.window.RDevTerminalImages.create(term);
+
+    writer.write(`${ESC}_Ga=T,f=100,i=42;${PNG_1X1}${ST}`);
+    expect(term.element.querySelectorAll('.rdev-kitty-image-layer img')).toHaveLength(1);
+
+    writer.write(`${ESC}_Ga=d,i=42${ST}`);
+    expect(term.element.querySelectorAll('.rdev-kitty-image-layer img')).toHaveLength(0);
+
+    writer.write(`${ESC}_Ga=T,f=100,i=1;${PNG_1X1}${ST}`);
+    writer.write(`${ESC}_Ga=T,f=100,i=2;${PNG_1X1}${ST}`);
+    expect(term.element.querySelectorAll('.rdev-kitty-image-layer img')).toHaveLength(2);
+
+    writer.write(`${ESC}_Gq=2,a=d,d=A${ST}`);
+    expect(term.element.querySelectorAll('.rdev-kitty-image-layer img')).toHaveLength(0);
+  });
+
   it('exposes parser helpers for automated protocol assertions', async () => {
     const dom = await setupTerminalImagesDom();
     const { RDevTerminalImages } = dom.window;

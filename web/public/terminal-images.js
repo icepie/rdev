@@ -132,6 +132,28 @@
       }
     }
 
+    function removeNode(node) {
+      if (node && node.parentNode) node.parentNode.removeChild(node);
+    }
+
+    function deleteImages(params) {
+      if (params.d === 'A' || (!params.i && !params.I)) {
+        rendered.forEach(removeNode);
+        rendered = [];
+        chunks.clear();
+        currentChunkKey = '_default';
+        return;
+      }
+      const id = params.i || params.I;
+      rendered = rendered.filter(node => {
+        if (node.dataset.rdevKittyId !== id) return true;
+        removeNode(node);
+        return false;
+      });
+      chunks.delete(id);
+      if (currentChunkKey === id) currentChunkKey = '_default';
+    }
+
     function render(params, payload) {
       if (!payload || params.t === 'f' || params.t === 't') {
         writePlain('\r\n\x1b[33m[RDev: kitty image path mode is not supported yet]\x1b[0m\r\n');
@@ -143,6 +165,7 @@
       const cursorX = term.buffer?.active?.cursorX || 0;
       const cursorY = term.buffer?.active?.cursorY || 0;
       const img = document.createElement('img');
+      if (params.i || params.I) img.dataset.rdevKittyId = params.i || params.I;
       img.decoding = 'async';
       img.loading = 'eager';
       img.style.cssText = 'position:absolute;object-fit:contain;image-rendering:auto;';
@@ -169,6 +192,10 @@
       const params = parseParams(sep >= 0 ? body.slice(0, sep) : body);
       const payload = sep >= 0 ? body.slice(sep + 1) : '';
       const key = params.i || params.I || currentChunkKey || '_default';
+      if (params.a === 'd') {
+        deleteImages(params);
+        return;
+      }
       if (params.a && params.a !== 'T' && params.a !== 't') return;
       if (params.m === '1') {
         const existing = chunks.get(key) || { params: {}, payload: '' };
