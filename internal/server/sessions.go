@@ -70,11 +70,12 @@ func (s *Server) HandleSessionsAPI(w http.ResponseWriter, r *http.Request) {
 //	                   Text frame   = JSON {"op":"resize","rows":N,"cols":N}
 
 type sessionAttachMsg struct {
-	Op      string `json:"op"`
-	Rows    int    `json:"rows,omitempty"`
-	Cols    int    `json:"cols,omitempty"`
-	Code    int    `json:"code,omitempty"`
-	Message string `json:"message,omitempty"`
+	Op       string `json:"op"`
+	Rows     int    `json:"rows,omitempty"`
+	Cols     int    `json:"cols,omitempty"`
+	Code     int    `json:"code,omitempty"`
+	Password string `json:"password,omitempty"`
+	Message  string `json:"message,omitempty"`
 }
 
 type sessionAttachHandler struct {
@@ -88,6 +89,7 @@ type sessionAttachConn struct {
 	sess      *ProxySession
 	obsID     string
 	writeMu   sync.Mutex
+	authOK    bool
 	done      chan struct{}
 	once      sync.Once
 }
@@ -110,18 +112,38 @@ func (h *sessionAttachHandler) OnOpen(socket *gws.Conn) {
 		return
 	}
 
-	obsID := generateID()
-	writeCh, stderrCh, done := sess.AddObserver(obsID)
-
 	ac := &sessionAttachConn{
 		sessionID: sessionID,
 		socket:    socket,
 		sess:      sess,
-		obsID:     obsID,
 		done:      make(chan struct{}),
 	}
-
 	socket.Session().Store("attachConn", ac)
+
+	h.srv.mu.RLock()
+	client, ok := h.srv.clients[sess.ClientID]
+	h.srv.mu.RUnlock()
+	if !ok {
+		h.sendError(socket, "device not connected")
+		socket.WriteClose(1000, nil)
+		return
+	}
+	if client.Password != "" {
+		h.sendJSON(socket, sessionAttachMsg{Op: "auth", Message: "Device '" + sess.ClientID + "' requires password"})
+		return
+	}
+	h.attach(ac)
+}
+
+func (h *sessionAttachHandler) attach(ac *sessionAttachConn) {
+	if ac.authOK {
+		return
+	}
+	obsID := generateID()
+	writeCh, stderrCh, done := ac.sess.AddObserver(obsID)
+	ac.obsID = obsID
+	ac.authOK = true
+	h.sendJSON(ac.socket, sessionAttachMsg{Op: "auth_ok"})
 	go ac.pumpOutput(writeCh, stderrCh, done)
 }
 
@@ -131,7 +153,9 @@ func (h *sessionAttachHandler) OnClose(socket *gws.Conn, err error) {
 		return
 	}
 	ac := acRaw.(*sessionAttachConn)
-	ac.sess.RemoveObserver(ac.obsID)
+	if ac.obsID != "" {
+		ac.sess.RemoveObserver(ac.obsID)
+	}
 	ac.close()
 }
 
@@ -150,6 +174,9 @@ func (h *sessionAttachHandler) OnMessage(socket *gws.Conn, message *gws.Message)
 	ac := acRaw.(*sessionAttachConn)
 
 	if message.Opcode == gws.OpcodeBinary {
+		if !ac.authOK {
+			return
+		}
 		// Binary input → forward to the device via the existing session's client.
 		h.srv.mu.RLock()
 		client, ok := h.srv.clients[ac.sess.ClientID]
@@ -171,7 +198,26 @@ func (h *sessionAttachHandler) OnMessage(socket *gws.Conn, message *gws.Message)
 	}
 
 	switch msg.Op {
+	case "auth":
+		if ac.authOK {
+			return
+		}
+		h.srv.mu.RLock()
+		client, ok := h.srv.clients[ac.sess.ClientID]
+		h.srv.mu.RUnlock()
+		if !ok {
+			h.sendError(socket, "device not connected")
+			return
+		}
+		if client.Password == "" || constantTimeEqual(client.Password, msg.Password) {
+			h.attach(ac)
+			return
+		}
+		h.sendJSON(socket, sessionAttachMsg{Op: "auth_fail", Message: "Wrong password"})
 	case "resize":
+		if !ac.authOK {
+			return
+		}
 		// Forward resize to device.
 		h.srv.mu.RLock()
 		client, ok := h.srv.clients[ac.sess.ClientID]

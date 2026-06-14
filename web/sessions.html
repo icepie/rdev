@@ -69,6 +69,14 @@
         .terminal-area .xterm { height: 100%; }
         .mobile-keys { display: none; flex-shrink: 0; gap: 6px; padding: 6px 8px; background: var(--card); border-top: 1px solid var(--border); overflow-x: auto; -webkit-overflow-scrolling: touch; }
         .mobile-keys button { min-width: 44px; min-height: 34px; padding: 6px 10px; border-radius: 7px; border: 1px solid var(--border); background: var(--bg); color: var(--text); font-size: 0.8rem; }
+        .auth-overlay { position: absolute; inset: 0; background: rgba(15,17,23,0.92); display: flex; align-items: center; justify-content: center; z-index: 10; }
+        .auth-box { background: var(--card); border: 1px solid var(--border); border-radius: 16px; padding: 1.5rem; width: min(92vw, 340px); text-align: center; }
+        .auth-box h3 { font-size: 1.05rem; color: var(--accent); margin-bottom: 0.5rem; }
+        .auth-box p { color: var(--muted); font-size: 0.85rem; margin-bottom: 1rem; }
+        .auth-box input { width: 100%; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg); color: var(--text); font-size: 16px; outline: none; margin-bottom: 0.75rem; }
+        .auth-box input:focus { border-color: var(--accent); }
+        .auth-box button { width: 100%; padding: 10px; border-radius: 8px; border: 0; background: var(--accent); color: var(--bg); font-weight: 600; }
+        .auth-err { min-height: 1.2em; color: var(--red); font-size: 0.8rem; margin-top: 0.5rem; }
 
         /* ── Placeholder when no session selected ── */
         .no-select { flex: 1; display: flex; align-items: center; justify-content: center; color: var(--muted); }
@@ -153,9 +161,9 @@
     const WebLinksAddon = window.WebLinksAddon;
     const WebglAddon = window.AddonWebgl?.WebglAddon;
 
-    let sessions = [], activeId = null, term = null, fitAddon = null, ws = null;
+    let sessions = [], activeId = null, term = null, fitAddon = null, ws = null, needAuth = false;
     function sendAttachData(data) {
-        if (ws && ws.readyState === WebSocket.OPEN) ws.send(new TextEncoder().encode(data));
+        if (ws && ws.readyState === WebSocket.OPEN && !needAuth) ws.send(new TextEncoder().encode(data));
     }
     function prepareTerminalInput() {
         const textarea = document.querySelector('#terminal-area textarea');
@@ -168,6 +176,37 @@
         textarea.setAttribute('spellcheck', 'false');
         textarea.addEventListener('compositionend', () => setTimeout(() => { if (fitAddon) try { fitAddon.fit(); } catch(e) {} }, 30));
         textarea.addEventListener('focus', () => setTimeout(() => { if (fitAddon) try { fitAddon.fit(); } catch(e) {} }, 80));
+    }
+
+    function showAuthOverlay(session) {
+        const area = document.getElementById('terminal-area');
+        if (area.querySelector('.auth-overlay')) return;
+        const overlay = document.createElement('div');
+        overlay.className = 'auth-overlay';
+        overlay.innerHTML = `<div class="auth-box">
+            <h3>🔐 会话认证</h3>
+            <p>${esc(session.clientId)} 需要设备密码</p>
+            <input type="password" id="session-auth-pw" placeholder="输入密码" autocomplete="current-password">
+            <button id="session-auth-btn">连接</button>
+            <div class="auth-err" id="session-auth-err"></div>
+        </div>`;
+        area.appendChild(overlay);
+        const input = document.getElementById('session-auth-pw');
+        const button = document.getElementById('session-auth-btn');
+        const submit = () => {
+            if (!ws || ws.readyState !== WebSocket.OPEN || !input.value) return;
+            button.disabled = true;
+            button.textContent = '验证中...';
+            ws.send(JSON.stringify({ op: 'auth', password: input.value }));
+        };
+        button.addEventListener('click', submit);
+        input.addEventListener('keydown', e => { if (e.key === 'Enter') submit(); });
+        setTimeout(() => input.focus(), 50);
+    }
+
+    function removeAuthOverlay() {
+        const overlay = document.querySelector('#terminal-area .auth-overlay');
+        if (overlay) overlay.remove();
     }
 
     function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
@@ -233,6 +272,7 @@
         detachSession();
 
         activeId = sessionID;
+        needAuth = false;
         renderList();
 
         const sess = sessions.find(s => s.id === sessionID);
@@ -277,13 +317,32 @@
 
         ws.onmessage = (evt) => {
             if (evt.data instanceof ArrayBuffer) {
+                removeAuthOverlay();
+                needAuth = false;
                 term.write(new Uint8Array(evt.data));
                 return;
             }
             const msg = JSON.parse(evt.data);
-            if (msg.op === 'exit') {
+            if (msg.op === 'auth') {
+                needAuth = true;
+                showAuthOverlay(sess);
+            } else if (msg.op === 'auth_ok') {
+                needAuth = false;
+                removeAuthOverlay();
+                term.focus();
+                try { fitAddon.fit(); } catch(e) {}
+            } else if (msg.op === 'auth_fail') {
+                const err = document.getElementById('session-auth-err');
+                const btn = document.getElementById('session-auth-btn');
+                const input = document.getElementById('session-auth-pw');
+                if (err) err.textContent = msg.message || '密码错误';
+                if (btn) { btn.disabled = false; btn.textContent = '连接'; }
+                if (input) { input.value = ''; input.focus(); }
+            } else if (msg.op === 'exit') {
+                removeAuthOverlay();
                 term.write('\r\n\x1b[33m[Session exited with code ' + msg.code + ']\x1b[0m\r\n');
             } else if (msg.op === 'error') {
+                removeAuthOverlay();
                 term.write('\r\n\x1b[31m[Error: ' + msg.message + ']\x1b[0m\r\n');
             }
         };
@@ -307,8 +366,10 @@
 
     function detachSession() {
         if (ws) { ws.close(); ws = null; }
+        removeAuthOverlay();
         if (term) { term.dispose(); term = null; }
         activeId = null;
+        needAuth = false;
         document.getElementById('attach-panel').style.display = 'none';
         document.getElementById('no-select').style.display = 'flex';
         renderList();
