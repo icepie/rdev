@@ -688,7 +688,7 @@ func (c *Client) handleClose(msg *protocol.Message) {
 // --- TCP forwarding (-L) ---
 
 func (c *Client) handleTCPConnect(msg *protocol.Message) {
-	addr := fmt.Sprintf("%s:%d", msg.Host, msg.Port)
+	addr := net.JoinHostPort(msg.Host, fmt.Sprintf("%d", msg.Port))
 	log.Printf("forward: connecting to %s (id=%s)", addr, msg.ForwardID)
 
 	conn, err := net.DialTimeout("tcp", addr, 10*time.Second)
