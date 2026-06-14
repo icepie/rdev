@@ -5,7 +5,7 @@
     "": {
       "name": "rdev-web-ui",
       "devDependencies": {
-        "@types/node": "^25.9.3",
+        "@types/node": "latest",
         "@vitejs/plugin-basic-ssl": "latest",
         "typescript": "latest",
         "vite": "latest",

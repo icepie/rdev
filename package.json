@@ -10,8 +10,8 @@
   },
   "devDependencies": {
     "@types/node": "^25.9.3",
-    "@vitejs/plugin-basic-ssl": "latest",
-    "typescript": "latest",
-    "vite": "latest"
+    "@vitejs/plugin-basic-ssl": "^2.3.0",
+    "typescript": "^6.0.3",
+    "vite": "^8.0.16"
   }
 }
