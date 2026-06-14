@@ -17,7 +17,14 @@ try {
 }
 
 # ── Mirror list ─────────────────────────────────────────────
-$script:Mirrors = @('ghgo.xyz', 'gh-proxy.com', 'ghfast.top')
+$script:Mirrors = @(
+    'gh.llkk.cc',
+    'gh.idayer.com',
+    'gh.ddlc.top',
+    'gh-proxy.com',
+    'ghfast.top',
+    'ghproxy.net'
+)
 $script:Repo = 'icepie/rdev'
 
 function global:RDev {
