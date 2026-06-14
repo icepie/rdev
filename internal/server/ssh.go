@@ -51,6 +51,13 @@ func NewSSHServer(srv *Server, addr, hostKeyPath, authorizedKeysPath string) (*S
 		PublicKeyHandler:        s.handlePublicKey,
 		PasswordHandler:         s.handlePassword,
 		KeyboardInteractiveHandler: s.handleKeyboardInteractive,
+		BannerHandler: func(ctx ssh.Context) string {
+			clientID := ctx.User()
+			if _, ok := srv.GetClient(clientID); !ok {
+				return fmt.Sprintf("\r\n⚠ Device '%s' is not connected.\r\n", clientID)
+			}
+			return ""
+		},
 		SubsystemHandlers: map[string]ssh.SubsystemHandler{
 			"sftp": s.handleSession,
 		},
@@ -150,7 +157,7 @@ func (s *SSHServer) handlePublicKey(ctx ssh.Context, key ssh.PublicKey) bool {
 	clientID := ctx.User()
 	client, ok := s.srv.GetClient(clientID)
 	if !ok {
-		return false
+		return true // let auth pass, session handler will show error and close
 	}
 	s.authKeysMu.RLock()
 	defer s.authKeysMu.RUnlock()
@@ -172,7 +179,7 @@ func (s *SSHServer) handlePassword(ctx ssh.Context, pass string) bool {
 	clientID := ctx.User()
 	client, ok := s.srv.GetClient(clientID)
 	if !ok {
-		return false
+		return true // let auth pass, session handler will show error and close
 	}
 	// Open mode: no password set, any password works
 	if client.Password == "" {
@@ -190,7 +197,7 @@ func (s *SSHServer) handleKeyboardInteractive(ctx ssh.Context, challenger gossh.
 	clientID := ctx.User()
 	client, ok := s.srv.GetClient(clientID)
 	if !ok {
-		return false
+		return true // let auth pass, session handler will show error and close
 	}
 	// Open mode: no challenge, auto-accept
 	if client.Password == "" {
