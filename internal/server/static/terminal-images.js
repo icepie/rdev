@@ -118,6 +118,7 @@
     const decoder = new TextDecoder();
     let pending = '';
     let chunks = new Map();
+    let currentChunkKey = '_default';
     let rendered = [];
 
     function writePlain(text) {
@@ -167,15 +168,20 @@
       const sep = body.indexOf(';');
       const params = parseParams(sep >= 0 ? body.slice(0, sep) : body);
       const payload = sep >= 0 ? body.slice(sep + 1) : '';
-      const key = params.i || params.I || '_default';
+      const key = params.i || params.I || currentChunkKey || '_default';
       if (params.a && params.a !== 'T' && params.a !== 't') return;
       if (params.m === '1') {
-        chunks.set(key, (chunks.get(key) || '') + payload);
+        const existing = chunks.get(key) || { params: {}, payload: '' };
+        chunks.set(key, { params: { ...existing.params, ...params }, payload: existing.payload + payload });
+        currentChunkKey = key;
         return;
       }
-      const fullPayload = (chunks.get(key) || '') + payload;
+      const existing = chunks.get(key);
+      const fullPayload = (existing?.payload || '') + payload;
+      const fullParams = { ...(existing?.params || {}), ...params };
       chunks.delete(key);
-      render(params, fullPayload);
+      if (chunks.size === 0 || key === currentChunkKey) currentChunkKey = '_default';
+      render(fullParams, fullPayload);
     }
 
     function processText(text) {

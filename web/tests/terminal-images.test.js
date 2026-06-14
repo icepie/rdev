@@ -85,8 +85,7 @@ describe('RDevTerminalImages', () => {
     const partB = PNG_1X1.slice(24);
 
     writer.write(`${ESC}_Ga=T,f=100,i=42,m=1;${partA}${ST}`);
-    writer.write(`${ESC}_Ga=T,f=100,i=42;`);
-    writer.write(`${partB}${ST}`);
+    writer.write(`${ESC}_Gm=0;${partB}${ST}`);
 
     const img = term.element.querySelector('.rdev-kitty-image-layer img');
     expect(img).not.toBeNull();
