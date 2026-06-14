@@ -62,19 +62,30 @@ jobs:
         with:
           go-version: '1.25'
 
-      - name: Build server
-        env:
-          GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
-          CGO_ENABLED: 0
-        run: go build -ldflags "-s -w" -o rdev-server${{ matrix.ext }} ./cmd/rdev-server
+      - name: Install UPX
+        run: |
+          curl -fSL --retry 3 -o /tmp/upx.tar.xz \
+            "https://github.com/upx/upx/releases/download/v4.2.4/upx-4.2.4-amd64_linux.tar.xz"
+          tar xf /tmp/upx.tar.xz -C /tmp
+          sudo cp /tmp/upx-4.2.4-amd64_linux/upx /usr/local/bin/
 
-      - name: Build client
+      - name: Build & compress server
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: 0
-        run: go build -ldflags "-s -w" -o rdev-client${{ matrix.ext }} ./cmd/rdev-client
+        run: |
+          go build -ldflags "-s -w" -o rdev-server-raw ./cmd/rdev-server
+          upx --best rdev-server-raw -o rdev-server${{ matrix.ext }} || cp rdev-server-raw rdev-server${{ matrix.ext }}
+
+      - name: Build & compress client
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0
+        run: |
+          go build -ldflags "-s -w" -o rdev-client-raw ./cmd/rdev-client
+          upx --best rdev-client-raw -o rdev-client${{ matrix.ext }} || cp rdev-client-raw rdev-client${{ matrix.ext }}
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -106,13 +117,18 @@ jobs:
             -o go-win7.zip \
             "https://github.com/XTLS/go-win7/releases/download/${GO_WIN7_VERSION}/go-for-win7-linux-amd64.zip"
           mkdir -p /home/runner/go-win7
-          # Zip root contains bin/ src/ directly (no go/ subdirectory)
           unzip -q go-win7.zip -d /home/runner/go-win7
-          # Verify
           test -x /home/runner/go-win7/bin/go
           /home/runner/go-win7/bin/go version
 
-      - name: Build windows/amd64
+      - name: Install UPX
+        run: |
+          curl -fSL --retry 3 -o /tmp/upx.tar.xz \
+            "https://github.com/upx/upx/releases/download/v4.2.4/upx-4.2.4-amd64_linux.tar.xz"
+          tar xf /tmp/upx.tar.xz -C /tmp
+          sudo cp /tmp/upx-4.2.4-amd64_linux/upx /usr/local/bin/
+
+      - name: Build & compress windows/amd64
         env:
           GOOS: windows
           GOARCH: amd64
@@ -120,10 +136,12 @@ jobs:
           GOROOT: /home/runner/go-win7
         run: |
           export PATH="/home/runner/go-win7/bin:$PATH"
-          go build -ldflags "-s -w" -o rdev-server-windows-amd64.exe ./cmd/rdev-server
-          go build -ldflags "-s -w" -o rdev-client-windows-amd64.exe ./cmd/rdev-client
+          go build -ldflags "-s -w" -o rdev-server-raw ./cmd/rdev-server
+          upx --best rdev-server-raw -o rdev-server-windows-amd64.exe || cp rdev-server-raw rdev-server-windows-amd64.exe
+          go build -ldflags "-s -w" -o rdev-client-raw ./cmd/rdev-client
+          upx --best rdev-client-raw -o rdev-client-windows-amd64.exe || cp rdev-client-raw rdev-client-windows-amd64.exe
 
-      - name: Build windows/arm64
+      - name: Build & compress windows/arm64
         env:
           GOOS: windows
           GOARCH: arm64
@@ -131,8 +149,10 @@ jobs:
           GOROOT: /home/runner/go-win7
         run: |
           export PATH="/home/runner/go-win7/bin:$PATH"
-          go build -ldflags "-s -w" -o rdev-server-windows-arm64.exe ./cmd/rdev-server
-          go build -ldflags "-s -w" -o rdev-client-windows-arm64.exe ./cmd/rdev-client
+          go build -ldflags "-s -w" -o rdev-server-raw ./cmd/rdev-server
+          upx --best rdev-server-raw -o rdev-server-windows-arm64.exe || cp rdev-server-raw rdev-server-windows-arm64.exe
+          go build -ldflags "-s -w" -o rdev-client-raw ./cmd/rdev-client
+          upx --best rdev-client-raw -o rdev-client-windows-arm64.exe || cp rdev-client-raw rdev-client-windows-arm64.exe
 
       - name: Upload windows/amd64
         uses: actions/upload-artifact@v4
@@ -178,6 +198,7 @@ jobs:
             fi
           done
           rm -rf rdev-*/
+          echo "=== Release files ==="
           ls -lh
 
       - name: Create GitHub Release

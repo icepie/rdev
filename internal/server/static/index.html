@@ -89,7 +89,7 @@
             <div class="stat-card"><div class="label">在线设备</div><div class="value online" id="stat-online">0</div></div>
             <div class="stat-card"><div class="label">活跃会话</div><div class="value accent" id="stat-sessions">0</div></div>
             <div class="stat-card"><div class="label">端口转发</div><div class="value yellow" id="stat-forwards">0</div></div>
-            <div class="stat-card"><div class="label">SSH 端口</div><div class="value" id="stat-ssh">2222</div></div>
+            <div class="stat-card"><div class="label">SSH 端口</div><div class="value" id="stat-ssh">—</div></div>
         </div>
 
         <table>
@@ -99,17 +99,16 @@
 
         <!-- ── Quick Install ── -->
         <div class="install">
-            <h3>🚀 一键部署客户端</h3>
+            <h3>🚀 一键启动客户端</h3>
             <div class="install-tabs">
                 <div class="install-tab active" onclick="sw(this,'linux')">Linux / macOS</div>
                 <div class="install-tab" onclick="sw(this,'win')">Windows (PS3+)</div>
                 <div class="install-tab" onclick="sw(this,'win7')">Win 7/8 (PS2)</div>
             </div>
 
-            <!-- Linux / macOS -->
             <div class="install-panel active" id="p-linux">
                 <div class="cmd-group">
-                    <div class="cmd-label">📦 一键安装并启动</div>
+                    <div class="cmd-label">📦 curl 一键启动（无需安装）</div>
                     <div class="cmd-row">
                         <div class="cmd-code" id="c-lc">curl -sL http://<span class="h1">HOST</span>/install.sh | sh -s -- ws://<span class="h1">HOST</span></div>
                         <button class="copy-btn" onclick="cp('c-lc')">复制</button>
@@ -131,37 +130,35 @@
                 </div>
             </div>
 
-            <!-- Windows PS 3.0+ -->
             <div class="install-panel" id="p-win">
                 <div class="cmd-group">
                     <div class="cmd-label">📦 PowerShell 3.0+（Win10/11）</div>
                     <div class="cmd-row">
-                        <div class="cmd-code" id="c-w3">$u='<span class="h1">http://HOST/install.ps1</span>';iwr $u -OutFile $env:TEMP\rdev.ps1;& $env:TEMP\rdev.ps1 -Server <span class="h1">ws://HOST</span></div>
+                        <div class="cmd-code" id="c-w3">$u='<span class="h1">http://HOST/install.ps1</span>';iwr $u -OutFile $env:TEMP\rdev.ps1;& $env:TEMP\rdev.ps1 <span class="h1">ws://HOST</span></div>
                         <button class="copy-btn" onclick="cp('c-w3')">复制</button>
                     </div>
                 </div>
                 <div class="cmd-group">
                     <div class="cmd-label">⚙️ 自定义 ID 和密码</div>
                     <div class="cmd-row">
-                        <div class="cmd-code" id="c-w3c">$u='<span class="h1">http://HOST/install.ps1</span>';iwr $u -OutFile $env:TEMP\rdev.ps1;& $env:TEMP\rdev.ps1 -Server <span class="h1">ws://HOST</span> <span class="h2">-Id my-pc -Password secret</span></div>
+                        <div class="cmd-code" id="c-w3c">$u='<span class="h1">http://HOST/install.ps1</span>';iwr $u -OutFile $env:TEMP\rdev.ps1;& $env:TEMP\rdev.ps1 <span class="h1">ws://HOST</span> <span class="h2">-Id my-pc -Password secret</span></div>
                         <button class="copy-btn" onclick="cp('c-w3c')">复制</button>
                     </div>
                 </div>
             </div>
 
-            <!-- Windows PS 2.0 (Win7/8) -->
             <div class="install-panel" id="p-win7">
                 <div class="cmd-group">
                     <div class="cmd-label">📦 PowerShell 2.0（Win7/8）</div>
                     <div class="cmd-row">
-                        <div class="cmd-code" id="c-w2">$wc=New-Object Net.WebClient;$wc.DownloadFile('<span class="h1">http://HOST/install.ps1</span>',"$env:TEMP\rdev.ps1");& "$env:TEMP\rdev.ps1" -Server <span class="h1">ws://HOST</span></div>
+                        <div class="cmd-code" id="c-w2">$wc=New-Object Net.WebClient;$wc.DownloadFile('<span class="h1">http://HOST/install.ps1</span>',"$env:TEMP\rdev.ps1");& "$env:TEMP\rdev.ps1" <span class="h1">ws://HOST</span></div>
                         <button class="copy-btn" onclick="cp('c-w2')">复制</button>
                     </div>
                 </div>
                 <div class="cmd-group">
                     <div class="cmd-label">⚙️ 自定义 ID 和密码</div>
                     <div class="cmd-row">
-                        <div class="cmd-code" id="c-w2c">$wc=New-Object Net.WebClient;$wc.DownloadFile('<span class="h1">http://HOST/install.ps1</span>',"$env:TEMP\rdev.ps1");& "$env:TEMP\rdev.ps1" -Server <span class="h1">ws://HOST</span> <span class="h2">-Id my-pc -Password secret</span></div>
+                        <div class="cmd-code" id="c-w2c">$wc=New-Object Net.WebClient;$wc.DownloadFile('<span class="h1">http://HOST/install.ps1</span>',"$env:TEMP\rdev.ps1");& "$env:TEMP\rdev.ps1" <span class="h1">ws://HOST</span> <span class="h2">-Id my-pc -Password secret</span></div>
                         <button class="copy-btn" onclick="cp('c-w2c')">复制</button>
                     </div>
                 </div>
@@ -170,23 +167,36 @@
 
         <div class="hint">
             <h3>⚡ SSH 连接方式</h3>
-            <code><span class="h1">ssh</span> &lt;deviceID&gt;@&lt;server&gt; -p 2222</code>
-            <code><span class="h1">scp</span> file &lt;deviceID&gt;@&lt;server&gt;:/tmp/ -P 2222</code>
-            <code><span class="h1">sftp</span> -P 2222 &lt;deviceID&gt;@&lt;server&gt;</code>
+            <code id="h-ssh"><span class="h1">ssh</span> &lt;deviceID&gt;@&lt;server&gt; -p <span class="h3">SSHPORT</span></code>
+            <code id="h-scp"><span class="h1">scp</span> file &lt;deviceID&gt;@&lt;server&gt;:/tmp/ -P <span class="h3">SSHPORT</span></code>
+            <code id="h-sftp"><span class="h1">sftp</span> -P <span class="h3">SSHPORT</span> &lt;deviceID&gt;@&lt;server&gt;</code>
             <h3 style="margin-top:0.8rem">🔀 端口转发</h3>
             <code><span class="h3"># -L 访问设备上的服务</span></code>
-            <code><span class="h1">ssh</span> -L 8080:localhost:80 &lt;deviceID&gt;@&lt;server&gt; -p 2222</code>
+            <code id="h-lfwd"><span class="h1">ssh</span> -L 8080:localhost:80 &lt;deviceID&gt;@&lt;server&gt; -p <span class="h3">SSHPORT</span></code>
             <code><span class="h3"># -R 暴露本地服务到服务器</span></code>
-            <code><span class="h1">ssh</span> -R 3000:localhost:3000 &lt;deviceID&gt;@&lt;server&gt; -p 2222</code>
+            <code id="h-rfwd"><span class="h1">ssh</span> -R 3000:localhost:3000 &lt;deviceID&gt;@&lt;server&gt; -p <span class="h3">SSHPORT</span></code>
             <h3 style="margin-top:0.8rem">🔑 免密登录</h3>
             <code><span class="h2"># 将公钥加入服务端 ~/.rdev/authorized_keys</span></code>
             <code>cat ~/.ssh/id_ed25519.pub &gt;&gt; ~/.rdev/authorized_keys</code>
-            <code><span class="h1">ssh</span> &lt;deviceID&gt;@&lt;server&gt; -p 2222  <span class="h2"># 无需密码!</span></code>
+            <code id="h-nopw"><span class="h1">ssh</span> &lt;deviceID&gt;@&lt;server&gt; -p <span class="h3">SSHPORT</span>  <span class="h2"># 无需密码!</span></code>
         </div>
     </div>
 
     <script>
-        // ── Fill HOST with current page host ──
+        // ── Fetch server config, then fill all placeholders ──
+        let SSHPORT = '2222';
+        fetch('/api/config').then(r=>r.json()).then(cfg => {
+            if (cfg.sshPort) SSHPORT = cfg.sshPort;
+            document.getElementById('stat-ssh').textContent = SSHPORT;
+            // Fill SSH hints with real port
+            document.querySelectorAll('.hint code[id]').forEach(el => {
+                el.innerHTML = el.innerHTML.replace(/SSHPORT/g, SSHPORT);
+            });
+        }).catch(() => {
+            document.getElementById('stat-ssh').textContent = SSHPORT;
+        });
+
+        // ── Fill HOST with current page location ──
         const H = location.host;
         document.querySelectorAll('.cmd-code').forEach(el => {
             el.innerHTML = el.innerHTML.replace(/HOST/g, H);
@@ -200,7 +210,7 @@
             document.getElementById('p-' + id).classList.add('active');
         }
 
-        // ── Copy command (strips HTML, copies plain text) ──
+        // ── Copy (strips HTML tags) ──
         function cp(id) {
             const el = document.getElementById(id);
             const text = (el.innerText || el.textContent).replace(/\s+/g, ' ').trim();

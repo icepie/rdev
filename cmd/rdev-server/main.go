@@ -87,7 +87,14 @@ Examples:
 		log.Printf("created %s — add your SSH public keys there for passwordless access", authorizedKeysPath)
 	}
 
+	// Detect outbound IP early for connection hints
+	outboundIP := detectOutboundIP()
+	httpPort := portFromAddr(httpAddr)
+	sshPort := portFromAddr(sshAddr)
+
 	srv := server.NewServer()
+	srv.SSHPort = sshPort
+	srv.HTTPHost = outboundIP + ":" + httpPort
 
 	sshServer, err := server.NewSSHServer(srv, sshAddr, hostKeyPath, authorizedKeysPath)
 	if err != nil {
@@ -101,6 +108,7 @@ Examples:
 	mux.HandleFunc("/batch", srv.HandleBatchWS)
 	mux.HandleFunc("/api/clients", srv.HandleAPI)
 	mux.HandleFunc("/api/devices", srv.HandleTerminalAPI)
+	mux.HandleFunc("/api/config", srv.HandleConfigAPI)
 	mux.HandleFunc("/api/upload", srv.HandleFileUpload)
 	mux.Handle("/", srv.StaticHandler())
 
@@ -109,12 +117,6 @@ Examples:
 			log.Fatalf("SSH server error: %v", err)
 		}
 	}()
-
-	// Detect outbound IP for connection hints
-	outboundIP := detectOutboundIP()
-
-	httpPort := portFromAddr(httpAddr)
-	sshPort := portFromAddr(sshAddr)
 
 	fmt.Println()
 	fmt.Println("  ╔════════════════════════════════════════════════╗")

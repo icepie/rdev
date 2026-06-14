@@ -117,6 +117,10 @@ type Server struct {
 	fileResults map[string]chan *protocol.Message
 	fileMu      sync.RWMutex
 	upgrader    *gws.Upgrader
+
+	// Public config (set by main) for API/UI
+	SSHPort  string // e.g. "2222"
+	HTTPHost string // e.g. "192.168.1.100:8080"
 }
 
 // NewServer creates a new Server
@@ -479,6 +483,15 @@ func (s *Server) HandleAPI(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(clients)
+}
+
+// HandleConfigAPI returns server configuration for the web UI
+func (s *Server) HandleConfigAPI(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"sshPort":  s.SSHPort,
+		"httpHost": s.HTTPHost,
+	})
 }
 
 // HandleTerminalAPI returns available devices for the terminal page
