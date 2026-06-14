@@ -3,9 +3,12 @@ package main
 import (
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
+	"time"
 
 	"rdev/internal/server"
 )
@@ -107,29 +110,73 @@ Examples:
 		}
 	}()
 
+	// Detect outbound IP for connection hints
+	outboundIP := detectOutboundIP()
+
+	httpPort := portFromAddr(httpAddr)
+	sshPort := portFromAddr(sshAddr)
+
 	fmt.Println()
-	fmt.Println("  ╔═══════════════════════════════════════════╗")
-	fmt.Println("  ║         RDev Remote Debug Server          ║")
-	fmt.Println("  ╠═══════════════════════════════════════════╣")
-	fmt.Printf("  ║  Web UI:   http://0.0.0.0%s            ║\n", httpAddr)
-	fmt.Printf("  ║  SSH:      ssh <device>@0.0.0.0 -p %s  ║\n", sshAddr[1:])
-	fmt.Printf("  ║  DataDir:  %-30s  ║\n", dataDir)
+	fmt.Println("  ╔════════════════════════════════════════════════╗")
+	fmt.Println("  ║          RDev Remote Debug Server              ║")
+	fmt.Println("  ╠════════════════════════════════════════════════╣")
+	fmt.Printf("  ║  Web:    http://%s:%s                  ║\n", outboundIP, httpPort)
+	fmt.Printf("  ║  SSH:    %s:%s                       ║\n", outboundIP, sshPort)
+	fmt.Printf("  ║  Data:   %-37s║\n", dataDir)
 	if guiMode && guiEnabled {
-		fmt.Println("  ║  Mode:     GUI (system tray)             ║")
+		fmt.Println("  ║  Mode:   GUI (system tray)                    ║")
 	}
-	fmt.Println("  ╚═══════════════════════════════════════════╝")
-	fmt.Println()
-	fmt.Printf("  Host key:     %s\n", hostKeyPath)
-	fmt.Printf("  Auth keys:    %s\n", authorizedKeysPath)
-	fmt.Println()
+	fmt.Println("  ╚════════════════════════════════════════════════╝")
 
 	// Start GUI mode if requested
 	if guiMode {
 		startGUI(httpAddr, srv)
 	}
 
+	// Start HTTP listener before printing info, so we know it's bound
+	httpListener, err := net.Listen("tcp", httpAddr)
+	if err != nil {
+		log.Fatalf("HTTP listen error: %v", err)
+	}
+
+	// Print connection examples — server is ready now
+	fmt.Println()
+	fmt.Println("  ── Connection ──────────────────────────────────")
+	fmt.Printf("  Client:   ./rdev-client -s ws://%s:%s -i <device-id>\n", outboundIP, httpPort)
+	fmt.Printf("  SSH:      ssh <device-id>@%s -p %s\n", outboundIP, sshPort)
+	fmt.Printf("  Dashboard: http://%s:%s\n", outboundIP, httpPort)
+	fmt.Println("  ────────────────────────────────────────────────")
+	fmt.Println()
+	fmt.Printf("  Host key:     %s\n", hostKeyPath)
+	fmt.Printf("  Auth keys:    %s\n", authorizedKeysPath)
+	fmt.Println()
+
 	log.Printf("HTTP server listening on %s", httpAddr)
-	if err := http.ListenAndServe(httpAddr, mux); err != nil {
+	if err := http.Serve(httpListener, mux); err != nil {
 		log.Fatalf("HTTP server error: %v", err)
 	}
+}
+
+// detectOutboundIP returns the preferred outbound IP (local network).
+func detectOutboundIP() string {
+	conn, err := net.DialTimeout("udp", "8.8.8.8:53", 1*time.Second)
+	if err == nil {
+		defer conn.Close()
+		if addr, ok := conn.LocalAddr().(*net.UDPAddr); ok {
+			return addr.IP.String()
+		}
+	}
+	return "0.0.0.0"
+}
+
+// portFromAddr extracts port from ":8080" or "0.0.0.0:8080".
+func portFromAddr(addr string) string {
+	if strings.HasPrefix(addr, ":") {
+		return addr[1:]
+	}
+	_, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return addr
+	}
+	return port
 }

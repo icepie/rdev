@@ -164,6 +164,10 @@ type Client struct {
 	forwards  map[string]net.Conn
 	mu        sync.Mutex
 	done      chan struct{}
+
+	// OnConnect is called after successfully connecting and registering.
+	// Use it to print connection info, etc.
+	OnConnect func(c *Client)
 }
 
 // NewClient creates a new client
@@ -196,6 +200,9 @@ func (h *wsEventHandler) OnOpen(socket *gws.Conn) {
 		return
 	}
 	log.Printf("connected to %s as '%s'", h.client.serverURL, h.client.clientID)
+	if h.client.OnConnect != nil {
+		h.client.OnConnect(h.client)
+	}
 }
 
 func (h *wsEventHandler) OnClose(socket *gws.Conn, err error) {
@@ -303,7 +310,7 @@ func (c *Client) connect() error {
 		ReadMaxPayloadSize: 16 * 1024 * 1024,
 		PermessageDeflate: gws.PermessageDeflate{
 			Enabled:               true,
-			ServerContextTakeover:  true,
+			ServerContextTakeover: true,
 			ClientContextTakeover: true,
 			Threshold:             256,
 		},
@@ -532,9 +539,12 @@ func (c *Client) startShellExecSession(msg *protocol.Message) (*clientSession, e
 	cmd.Stderr = stderrW
 
 	if err := cmd.Start(); err != nil {
-		stdinR.Close(); stdinW.Close()
-		stdoutR.Close(); stdoutW.Close()
-		stderrR.Close(); stderrW.Close()
+		stdinR.Close()
+		stdinW.Close()
+		stdoutR.Close()
+		stdoutW.Close()
+		stderrR.Close()
+		stderrW.Close()
 		return nil, err
 	}
 

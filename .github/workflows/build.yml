@@ -1,0 +1,174 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+env:
+  # go-win7 patched Go version (for Windows 7/8 support)
+  GO_WIN7_VERSION: 'patched-1.26.4'
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test ./...
+
+      - name: Build check
+        run: |
+          CGO_ENABLED=0 go build -o /dev/null ./cmd/rdev-server
+          CGO_ENABLED=0 go build -o /dev/null ./cmd/rdev-client
+
+  # ── Standard builds (linux, darwin) using official Go ──────────────
+  build:
+    name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
+    needs: test
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            ext: ""
+          - goos: linux
+            goarch: arm64
+            ext: ""
+          - goos: darwin
+            goarch: amd64
+            ext: ""
+          - goos: darwin
+            goarch: arm64
+            ext: ""
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+
+      - name: Build server
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0
+        run: go build -ldflags "-s -w" -o rdev-server${{ matrix.ext }} ./cmd/rdev-server
+
+      - name: Build client
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0
+        run: go build -ldflags "-s -w" -o rdev-client${{ matrix.ext }} ./cmd/rdev-client
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: rdev-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: |
+            rdev-server${{ matrix.ext }}
+            rdev-client${{ matrix.ext }}
+
+  # ── Windows builds using go-win7 (supports Win 7/8/8.1/10/11) ────
+  build-windows:
+    name: Build windows/${{ matrix.goarch }} (go-win7)
+    needs: test
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - goarch: amd64
+            ext: ".exe"
+          - goarch: arm64
+            ext: ".exe"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download go-win7
+        run: |
+          curl -sL -o go-win7.zip \
+            "https://github.com/XTLS/go-win7/releases/download/${{ env.GO_WIN7_VERSION }}/go-for-win7-linux-amd64.zip"
+          unzip -q go-win7.zip -d $HOME/go-win7
+          # The zip contains a "go" directory
+          ls $HOME/go-win7/go/bin/
+
+      - name: Build server
+        env:
+          GOOS: windows
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0
+        run: |
+          export PATH="$HOME/go-win7/go/bin:$PATH"
+          export GOROOT="$HOME/go-win7/go"
+          go build -ldflags "-s -w" -o rdev-server${{ matrix.ext }} ./cmd/rdev-server
+
+      - name: Build client
+        env:
+          GOOS: windows
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0
+        run: |
+          export PATH="$HOME/go-win7/go/bin:$PATH"
+          export GOROOT="$HOME/go-win7/go"
+          go build -ldflags "-s -w" -o rdev-client${{ matrix.ext }} ./cmd/rdev-client
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: rdev-windows-${{ matrix.goarch }}
+          path: |
+            rdev-server${{ matrix.ext }}
+            rdev-client${{ matrix.ext }}
+
+  # ── Release (only on v* tags) ─────────────────────────────────────
+  release:
+    name: Release
+    needs: [build, build-windows]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Rename for release
+        run: |
+          cd artifacts
+          for dir in rdev-*; do
+            if [ -d "$dir" ]; then
+              os_arch=${dir#rdev-}
+              for f in "$dir"/*; do
+                base=$(basename "$f")
+                name="${base%.*}"
+                ext="${base##*.}"
+                # Handle files without extension (linux/darwin)
+                if [ "$ext" = "$base" ]; then ext=""; else ext=".$ext"; fi
+                mv "$f" "${name}-${os_arch}${ext}"
+              done
+            fi
+          done
+          rm -rf rdev-*/
+          ls -lh
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: artifacts/*
