@@ -19,7 +19,7 @@ RDEV_VERSION=""
 RDEV_REPO="icepie/rdev"
 
 # CN GitHub mirrors (tried first, fallback to direct)
-MIRRORS="ghgo.xyz gh-proxy.com ghfast.top"
+MIRRORS="gh.llkk.cc gh.idayer.com gh.ddlc.top gh-proxy.com ghfast.top ghproxy.net"
 
 # ── Parse arguments ─────────────────────────────────────────
 while [ $# -gt 0 ]; do
