@@ -48,6 +48,16 @@ type terminalWSHandler struct {
 	passOK bool // true if device has no password (skip auth)
 }
 
+const terminalImageProtocols = "sixel,iterm2,kitty"
+
+func terminalSessionEnv() []string {
+	return []string{
+		"COLORTERM=truecolor",
+		"TERM_PROGRAM=RDev",
+		"RDEV_IMAGE_PROTOCOLS=" + terminalImageProtocols,
+	}
+}
+
 func (h *terminalWSHandler) OnOpen(socket *gws.Conn) {
 	deviceIDI, _ := socket.Session().Load("deviceID")
 	if deviceIDI == nil {
@@ -98,11 +108,7 @@ func (h *terminalWSHandler) createSession(socket *gws.Conn, deviceID string) {
 		Term:      "xterm-256color",
 		Rows:      24,
 		Cols:      80,
-		Env: []string{
-			"COLORTERM=truecolor",
-			"TERM_PROGRAM=RDev",
-			"RDEV_IMAGE_PROTOCOLS=sixel,iterm2",
-		},
+		Env:       terminalSessionEnv(),
 	}); err != nil {
 		h.sendError(socket, "failed to reach device")
 		socket.WriteClose(1000, nil)

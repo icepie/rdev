@@ -110,6 +110,7 @@
     <script src="/vendor/xterm-addon-fit.js"></script>
     <script src="/vendor/xterm-addon-web-links.js"></script>
     <script src="/vendor/addon-image.js"></script>
+    <script src="/terminal-images.js"></script>
     <script src="/vendor/addon-webgl.js"></script>
     <script>
 
@@ -218,7 +219,7 @@
 
         fitAddon.fit();
 
-        const tab = { id, deviceId: deviceID, ws: null, term, fitAddon, imageAddon, status: 'disconnected', needAuth: false };
+        const tab = { id, deviceId: deviceID, ws: null, term, fitAddon, imageAddon, imageWriter: RDevTerminalImages.create(term), status: 'disconnected', needAuth: false };
         tabs.push(tab);
         prepareTerminalInput(tab);
         connectTab(tab);
@@ -288,7 +289,7 @@
                 // Binary = terminal output (only after auth)
                 removeAuthOverlay(tab);
                 tab.status = 'connected'; renderTabs();
-                tab.term.write(new Uint8Array(evt.data));
+                tab.imageWriter.write(evt.data);
                 return;
             }
             // Text = JSON control

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -22,6 +23,19 @@ func TestAllocateClientIDLockedUsesSuffixOnConflict(t *testing.T) {
 	s.clients["device-3"] = &ClientConn{ID: "device-3"}
 	if got := s.allocateClientIDLocked("device"); got != "device-4" {
 		t.Fatalf("expected suffix allocation to skip occupied IDs, got %q", got)
+	}
+}
+
+func TestTerminalSessionEnvAdvertisesImageProtocols(t *testing.T) {
+	env := strings.Join(terminalSessionEnv(), "\n")
+	for _, want := range []string{
+		"COLORTERM=truecolor",
+		"TERM_PROGRAM=RDev",
+		"RDEV_IMAGE_PROTOCOLS=sixel,iterm2,kitty",
+	} {
+		if !strings.Contains(env, want) {
+			t.Fatalf("terminalSessionEnv() missing %q in %q", want, env)
+		}
 	}
 }
 

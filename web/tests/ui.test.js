@@ -71,6 +71,13 @@ describe('RDevI18n', () => {
     expect(document.documentElement.lang).toBe('en');
     expect(langEvents).toEqual(['zh', 'en']);
   });
+
+  it('keeps built-in static image bridge in sync with the web source', async () => {
+    const source = await readFile(resolve(root, 'web/public/terminal-images.js'), 'utf8');
+    const embedded = await readFile(resolve(root, 'internal/server/static/terminal-images.js'), 'utf8');
+
+    expect(embedded).toBe(source);
+  });
 });
 
 describe('RDevUI', () => {
@@ -190,5 +197,23 @@ describe('RDevUI', () => {
     const nativeSocket = nativeDom.window.RDevUI.socket('wss://rdev.test/terminal');
     expect(nativeSocket).toBeInstanceOf(FakeWebSocket);
     expect(opened).toEqual(['wss://rdev.test/terminal']);
+  });
+});
+
+describe('terminal image wiring', () => {
+  it('loads SIXEL, iTerm2, and Kitty image support on terminal pages', async () => {
+    const terminal = await readFile(resolve(root, 'web/terminal.html'), 'utf8');
+    const sessions = await readFile(resolve(root, 'web/sessions.html'), 'utf8');
+    const staticTerminal = await readFile(resolve(root, 'internal/server/static/terminal.html'), 'utf8');
+    const staticSessions = await readFile(resolve(root, 'internal/server/static/sessions.html'), 'utf8');
+
+    for (const html of [terminal, sessions, staticTerminal, staticSessions]) {
+      expect(html).toContain('/vendor/addon-image.js');
+      expect(html).toContain('/terminal-images.js');
+      expect(html).toContain('sixelSupport: true');
+      expect(html).toContain('iipSupport: true');
+      expect(html).toContain('RDevTerminalImages.create(term)');
+      expect(html).toContain('imageWriter.write(evt.data)');
+    }
   });
 });

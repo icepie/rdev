@@ -92,11 +92,11 @@ ssh -R 3000:localhost:3000 my-device@your-server -p 2222
 
 ## Web 终端图片预览
 
-Web Terminal 和 Sessions 支持 Sixel 与 iTerm2 inline image，可用于 `yazi`、`chafa`、`img2sixel` 等工具的图片预览。Web Terminal 会设置：
+Web Terminal 和 Sessions 支持 Sixel、iTerm2 inline image 与 Kitty graphics inline image，可用于 `yazi`、`chafa`、`img2sixel` 等工具的图片预览。Web Terminal 会设置：
 
 ```bash
 echo "$TERM $COLORTERM $TERM_PROGRAM $RDEV_IMAGE_PROTOCOLS"
-# xterm-256color truecolor RDev sixel,iterm2
+# xterm-256color truecolor RDev sixel,iterm2,kitty
 ```
 
 可用以下命令快速测试：
@@ -109,9 +109,20 @@ img2sixel image.png
 # iTerm2 inline image：无需额外工具，测试 1x1 PNG
 printf '\033]1337;File=inline=1;width=10px;height=10px:%s\a\n' \
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII='
+
+# Kitty graphics inline image：测试 1x1 PNG
+printf '\033_Ga=T,f=100,s=10,v=10;%s\033\\\n' \
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII='
 ```
 
-`yazi` 建议先配置为 `sixel` 或 `iterm2` 预览协议。Kitty graphics 的 inline/path 模式暂未桥接；不要把 Web 终端声明为 `xterm-kitty`，否则部分程序可能走浏览器暂不能读取的远端文件路径模式。
+`yazi` 可配置为 `sixel`、`iterm2` 或 Kitty inline 预览协议。Kitty graphics 的远端文件路径/临时文件模式不会桥接到浏览器，优先使用 inline 数据模式。
+
+相关自动化测试：
+
+```bash
+bun run test:web
+go test ./...
+```
 
 ## Windows 兼容性
 

@@ -169,6 +169,7 @@
     <script src="/vendor/xterm-addon-fit.js"></script>
     <script src="/vendor/xterm-addon-web-links.js"></script>
     <script src="/vendor/addon-image.js"></script>
+    <script src="/terminal-images.js"></script>
     <script src="/vendor/addon-webgl.js"></script>
     <script>
     document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n.langSelector();
@@ -186,7 +187,7 @@
     const WebLinksAddon = window.WebLinksAddon;
     const WebglAddon = window.AddonWebgl?.WebglAddon;
 
-    let sessions = [], activeId = null, term = null, fitAddon = null, ws = null, needAuth = false;
+    let sessions = [], activeId = null, term = null, fitAddon = null, imageWriter = null, ws = null, needAuth = false;
 
     function loadTerminalImageAddon(term) {
         if (!window.ImageAddon || !window.ImageAddon.ImageAddon) return null;
@@ -355,6 +356,7 @@
         term.loadAddon(fitAddon);
         term.loadAddon(new WebLinksAddon.WebLinksAddon());
         loadTerminalImageAddon(term);
+        imageWriter = RDevTerminalImages.create(term);
         term.open(area);
         prepareTerminalInput();
         try { const webgl = new WebglAddon(); webgl.onContextLoss(() => webgl.dispose()); term.loadAddon(webgl); } catch(e) {}
@@ -369,7 +371,7 @@
             if (evt.data instanceof ArrayBuffer) {
                 removeAuthOverlay();
                 needAuth = false;
-                term.write(new Uint8Array(evt.data));
+                imageWriter.write(evt.data);
                 return;
             }
             const msg = JSON.parse(evt.data);
@@ -421,6 +423,7 @@
         if (ws) { ws.close(); ws = null; }
         removeAuthOverlay();
         if (term) { term.dispose(); term = null; }
+        imageWriter = null;
         activeId = null;
         needAuth = false;
         document.getElementById('attach-panel').style.display = 'none';
