@@ -6,12 +6,24 @@
     <title>RDev Terminal</title>
     <link rel="stylesheet" href="/vendor/xterm.css">
     <style>
-        :root {
+        :root { color-scheme: dark; }
+        :root[data-theme="dark"] {
             --bg: #0f1117; --card: #1a1d27; --border: #2a2d3a;
             --text: #e4e4e7; --muted: #71717a; --accent: #22d3ee;
             --green: #4ade80; --red: #f87171; --yellow: #facc15;
         }
+        :root[data-theme="light"] {
+            color-scheme: light;
+            --bg: #f6f8fb; --card: #ffffff; --border: #d8dee9;
+            --text: #1f2937; --muted: #6b7280; --accent: #0891b2;
+            --green: #16a34a; --red: #dc2626; --yellow: #ca8a04;
+        }
         * { margin: 0; padding: 0; box-sizing: border-box; }
+        .icon { width: 1em; height: 1em; vertical-align: -0.16em; flex-shrink: 0; }
+        .icon-inline { display:inline-flex; align-items:center; gap:6px; }
+        .empty-icon { display:inline-flex; align-items:center; justify-content:center; font-size:3rem; margin-bottom:1rem; opacity:.32; color:var(--accent); }
+        .theme-toggle { display:inline-flex; align-items:center; gap:6px; border:1px solid var(--border); background:var(--card); color:var(--muted); border-radius:7px; padding:4px 8px; cursor:pointer; font-size:0.78rem; }
+        .theme-toggle:hover { color:var(--accent); border-color:var(--accent); }
         body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); height: 100vh; height: 100dvh; display: flex; flex-direction: column; overflow: hidden; }
         .toolbar { display: flex; align-items: center; padding: 6px 12px; background: var(--card); border-bottom: 1px solid var(--border); gap: 10px; flex-shrink: 0; }
         .toolbar .logo { font-size: 0.85rem; font-weight: 600; color: var(--accent); white-space: nowrap; }
@@ -23,6 +35,8 @@
         .spacer { flex: 1; }
         .gh-link { font-size: 0.85rem; color: var(--muted); text-decoration: none; }
         .gh-link:hover { color: var(--accent); }
+        .lang-switch { display:inline-flex; align-items:center; gap:6px; color:var(--muted); font-size:0.78rem; }
+        .lang-switch select { background:var(--bg); color:var(--text); border:1px solid var(--border); border-radius:6px; padding:4px 6px; }
         .nav { display: flex; gap: 6px; }
         .nav a { padding: 4px 10px; border-radius: 6px; font-size: 0.78rem; text-decoration: none; border: 1px solid var(--border); color: var(--muted); transition: all .15s; }
         .nav a:hover { color: var(--accent); border-color: var(--accent); }
@@ -71,15 +85,16 @@
 </head>
 <body>
     <div class="toolbar">
-        <div class="logo">RDev <span>Terminal</span></div>
-        <select id="device-select" class="device-select"><option value="">-- device --</option></select>
-        <button class="new-tab-btn" id="new-tab-btn">+ New Tab</button>
+        <div class="logo">RDev <span data-i18n="nav.terminal">Terminal</span></div>
+        <select id="device-select" class="device-select"><option value="" data-i18n="terminal.devicePlaceholder">-- device --</option></select>
+        <button class="new-tab-btn" id="new-tab-btn" data-i18n="terminal.newTab">+ New Tab</button>
         <div class="spacer"></div>
-        <a class="gh-link" href="https://github.com/icepie/rdev" target="_blank" title="GitHub">⭐ GitHub</a>
+        <a class="gh-link" href="https://github.com/icepie/rdev" target="_blank" title="GitHub"><span class="icon-inline"><span data-icon="github"></span>GitHub</span></a>
+        <div id="lang-slot"></div>
         <div class="nav">
-            <a href="/" data-auth-link>Dashboard</a>
-            <a href="/sessions.html" data-auth-link>Sessions</a>
-            <a href="/batch.html" data-auth-link>Batch</a>
+            <a href="/" data-auth-link data-i18n="nav.dashboard">Dashboard</a>
+            <a href="/sessions.html" data-auth-link data-i18n="nav.sessions">Sessions</a>
+            <a href="/batch.html" data-auth-link data-i18n="nav.batch">Batch</a>
         </div>
     </div>
     <div class="tab-bar" id="tab-bar"></div>
@@ -89,16 +104,23 @@
         <button data-key="\u001b[A">↑</button><button data-key="\u001b[B">↓</button><button data-key="\u001b[D">←</button><button data-key="\u001b[C">→</button><button data-key="\r">Enter</button>
     </div>
 
+    <script src="/i18n.js"></script>
+    <script src="/ui.js"></script>
     <script src="/vendor/xterm.js"></script>
     <script src="/vendor/xterm-addon-fit.js"></script>
     <script src="/vendor/xterm-addon-web-links.js"></script>
     <script src="/vendor/addon-webgl.js"></script>
     <script>
 
+    document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n.langSelector();
+    RDevI18n.apply();
+    document.querySelectorAll('[data-icon]').forEach(el => { el.innerHTML = icon(el.dataset.icon); });
+    window.addEventListener('rdev:langchange', () => { if (typeof renderDevices === 'function') renderDevices(); if (typeof renderList === 'function') renderList(); });
+
     const adminToken = new URLSearchParams(location.search).get('token') || localStorage.getItem('rdevAdminToken') || '';
     if (adminToken) localStorage.setItem('rdevAdminToken', adminToken);
     function authURL(path) { return adminToken ? path + (path.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(adminToken) : path; }
-    function authFetch(path, init) { return fetch(authURL(path), init).then(r => { if (r.status === 401) { const t = prompt('Admin token required'); if (t) { localStorage.setItem('rdevAdminToken', t); location.search = 'token=' + encodeURIComponent(t); } } return r; }); }
+    function authFetch(path, init) { return fetch(authURL(path), init).then(r => { if (r.status === 401) { const token = prompt(t('common.adminTokenRequired')); if (token) { localStorage.setItem('rdevAdminToken', token); location.search = 'token=' + encodeURIComponent(token); } } return r; }); }
     const FitAddon = window.FitAddon;
     const WebLinksAddon = window.WebLinksAddon;
     const WebglAddon = window.AddonWebgl?.WebglAddon;
@@ -183,10 +205,10 @@
         overlay.className = 'auth-overlay';
         overlay.innerHTML = `
             <div class="auth-box">
-                <h3>🔐 设备认证</h3>
-                <p>${esc(tab.deviceId)} 需要密码验证</p>
-                <input type="password" id="auth-pw-${tab.id}" placeholder="输入密码" autofocus>
-                <button class="auth-btn" id="auth-btn-${tab.id}">连接</button>
+                <h3 class="icon-inline">${icon('lock')}${t('terminal.authTitle')}</h3>
+                <p>${t('terminal.authDesc', {id: esc(tab.deviceId)})}</p>
+                <input type="password" id="auth-pw-${tab.id}" placeholder="${t('terminal.passwordPlaceholder')}" autofocus>
+                <button class="auth-btn" id="auth-btn-${tab.id}">${t('common.connect')}</button>
                 <div class="auth-err" id="auth-err-${tab.id}"></div>
             </div>`;
         pane.appendChild(overlay);
@@ -198,7 +220,7 @@
         const submit = () => {
             const pw = input.value;
             if (!pw) return;
-            btn.textContent = '验证中...'; btn.disabled = true;
+            btn.textContent = t('common.connecting'); btn.disabled = true;
             err.textContent = '';
             if (tab.ws && tab.ws.readyState === WebSocket.OPEN) {
                 tab.ws.send(JSON.stringify({ op: 'auth', password: pw }));
@@ -250,9 +272,9 @@
                 doResize(tab);
             } else if (msg.op === 'auth_fail') {
                 const err = document.getElementById('auth-err-' + tab.id);
-                if (err) err.textContent = msg.message || '密码错误';
+                if (err) err.textContent = msg.message || t('common.passwordWrong');
                 const btn = document.getElementById('auth-btn-' + tab.id);
-                if (btn) { btn.textContent = '连接'; btn.disabled = false; }
+                if (btn) { btn.textContent = t('common.connect'); btn.disabled = false; }
                 const input = document.getElementById('auth-pw-' + tab.id);
                 if (input) { input.value = ''; input.focus(); }
             } else if (msg.op === 'exit') {
@@ -323,7 +345,7 @@
             return `<div class="tab-item ${active}" data-id="${t.id}">
                 <span class="tab-dot ${dotClass}"></span>
                 <span>${esc(t.deviceId)}</span>
-                <span class="tab-close" data-close="${t.id}">✕</span>
+                <span class="tab-close" data-close="${t.id}">${icon('close')}</span>
             </div>`;
         }).join('');
         bar.querySelectorAll('.tab-item').forEach(el => {
@@ -340,7 +362,7 @@
             const r = await authFetch('/api/devices'); devices = await r.json();
             const sel = document.getElementById('device-select');
             const cur = sel.value;
-            sel.innerHTML = '<option value="">-- device --</option>';
+            sel.innerHTML = '<option value="">' + t('terminal.devicePlaceholder') + '</option>';
             devices.forEach(d => { const opt = document.createElement('option'); opt.value = d.id; opt.textContent = d.id + (d.hasPassword ? ' 🔒' : ''); sel.appendChild(opt); });
             if (cur && devices.find(d => d.id === cur)) sel.value = cur;
         } catch(e) {}

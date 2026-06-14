@@ -5,16 +5,17 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>RDev - Batch</title>
     <style>
-        :root {
-            --bg: #0f1117;
-            --card: #1a1d27;
-            --border: #2a2d3a;
-            --text: #e4e4e7;
-            --muted: #71717a;
-            --accent: #22d3ee;
-            --green: #4ade80;
-            --red: #f87171;
-            --yellow: #facc15;
+        :root { color-scheme: dark; }
+        :root[data-theme="dark"] {
+            --bg: #0f1117; --card: #1a1d27; --border: #2a2d3a;
+            --text: #e4e4e7; --muted: #71717a; --accent: #22d3ee;
+            --green: #4ade80; --red: #f87171; --yellow: #facc15;
+        }
+        :root[data-theme="light"] {
+            color-scheme: light;
+            --bg: #f6f8fb; --card: #ffffff; --border: #d8dee9;
+            --text: #1f2937; --muted: #6b7280; --accent: #0891b2;
+            --green: #16a34a; --red: #dc2626; --yellow: #ca8a04;
         }
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
@@ -23,6 +24,8 @@
         header h1 { font-size: 1.5rem; font-weight: 700; }
         header h1 span { color: var(--accent); }
         .nav { display: flex; gap: 8px; }
+        .lang-switch { display:inline-flex; align-items:center; gap:6px; color:var(--muted); font-size:0.78rem; }
+        .lang-switch select { background:var(--card); color:var(--text); border:1px solid var(--border); border-radius:6px; padding:4px 6px; }
         .nav a { padding: 6px 14px; border-radius: 7px; font-size: 0.85rem; text-decoration: none; border: 1px solid var(--border); color: var(--muted); transition: all .15s; }
         .nav a:hover, .nav a.active { border-color: var(--accent); color: var(--accent); }
 
@@ -101,58 +104,66 @@
 <body>
     <div class="container">
         <header>
-            <h1><span>RDev</span> Batch</h1>
+            <h1><span>RDev</span> <span data-i18n="nav.batch">Batch</span></h1>
+            <div id="lang-slot"></div>
             <div class="nav">
-                <a href="/" data-auth-link>Dashboard</a>
-                <a href="/terminal.html" data-auth-link>Terminal</a>
-                <a href="/sessions.html" data-auth-link>Sessions</a>
-                <a href="/batch.html" data-auth-link class="active">Batch</a>
+                <a href="/" data-auth-link data-i18n="nav.dashboard">Dashboard</a>
+                <a href="/terminal.html" data-auth-link data-i18n="nav.terminal">Terminal</a>
+                <a href="/sessions.html" data-auth-link data-i18n="nav.sessions">Sessions</a>
+                <a href="/batch.html" data-auth-link class="active" data-i18n="nav.batch">Batch</a>
             </div>
         </header>
 
         <!-- Device selector -->
         <div class="device-panel">
-            <h3>📡 Target Devices</h3>
-            <div class="select-all" id="select-all">Select all</div>
+            <h3 class="icon-inline"><span data-icon="radio"></span><span data-i18n="batch.devices">Target Devices</span></h3>
+            <div class="select-all" id="select-all" data-i18n="batch.selectAll">Select all</div>
             <div class="device-grid" id="device-grid"></div>
         </div>
 
         <!-- Tab panels: Exec / Upload -->
         <div class="tabs">
-            <div class="tab active" data-tab="exec">⚡ Batch Command</div>
-            <div class="tab" data-tab="upload">📁 File Distribution</div>
+            <div class="tab active icon-inline" data-tab="exec"><span data-icon="terminal"></span><span data-i18n="batch.commandTab">Batch Command</span></div>
+            <div class="tab icon-inline" data-tab="upload"><span data-icon="folder"></span><span data-i18n="batch.uploadTab">File Distribution</span></div>
         </div>
 
         <div class="tab-panel active" id="panel-exec">
             <div class="exec-row">
                 <input type="text" class="exec-input" id="exec-cmd" placeholder="e.g. uname -a &amp;&amp; uptime" spellcheck="false" autocomplete="off">
-                <button class="exec-btn" id="exec-run">Run</button>
+                <button class="exec-btn" id="exec-run" data-i18n="batch.run">Run</button>
             </div>
             <div class="results" id="exec-results"></div>
         </div>
 
         <div class="tab-panel" id="panel-upload">
             <div class="upload-zone" id="drop-zone">
-                <div class="icon">📂</div>
-                <div class="hint">Click or drag file here</div>
+                <div class="empty-icon" data-icon="upload"></div>
+                <div class="hint" data-i18n="batch.dropHint">Click or drag file here</div>
                 <div class="filename" id="upload-name"></div>
             </div>
             <input type="file" id="file-input" style="display:none">
             <div class="path-row">
                 <span style="color:var(--muted);font-size:0.85rem">→</span>
                 <input type="text" class="path-input" id="dest-path" placeholder="/tmp/file.txt" spellcheck="false" autocomplete="off">
-                <button class="upload-btn" id="upload-run">Distribute</button>
+                <button class="upload-btn" id="upload-run" data-i18n="batch.distribute">Distribute</button>
             </div>
             <div class="results" id="upload-results"></div>
         </div>
     </div>
 
+    <script src="/i18n.js"></script>
+    <script src="/ui.js"></script>
     <script>
+
+    document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n.langSelector();
+    RDevI18n.apply();
+    document.querySelectorAll('[data-icon]').forEach(el => { el.innerHTML = icon(el.dataset.icon); });
+    window.addEventListener('rdev:langchange', () => { if (typeof renderDevices === 'function') renderDevices(); if (typeof renderList === 'function') renderList(); });
 
     const adminToken = new URLSearchParams(location.search).get('token') || localStorage.getItem('rdevAdminToken') || '';
     if (adminToken) localStorage.setItem('rdevAdminToken', adminToken);
     function authURL(path) { return adminToken ? path + (path.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(adminToken) : path; }
-    function authFetch(path, init) { return fetch(authURL(path), init).then(r => { if (r.status === 401) { const t = prompt('Admin token required'); if (t) { localStorage.setItem('rdevAdminToken', t); location.search = 'token=' + encodeURIComponent(t); } } return r; }); }
+    function authFetch(path, init) { return fetch(authURL(path), init).then(r => { if (r.status === 401) { const token = prompt(t('common.adminTokenRequired')); if (token) { localStorage.setItem('rdevAdminToken', token); location.search = 'token=' + encodeURIComponent(token); } } return r; }); }
     document.querySelectorAll('[data-auth-link]').forEach(a => a.href = authURL(a.getAttribute('href')));
 
     // ---- Device list ----
@@ -173,7 +184,7 @@
     function renderDevices() {
         const grid = document.getElementById('device-grid');
         if (!devices.length) {
-            grid.innerHTML = '<div style="color:var(--muted);font-size:0.85rem">No devices connected</div>';
+            grid.innerHTML = '<div style="color:var(--muted);font-size:0.85rem">' + t('common.noDevices') + '</div>';
             return;
         }
         grid.innerHTML = devices.map(d => {
@@ -237,12 +248,12 @@
     async function authorizeSelectedDevices(ws) {
         const locked = selectedDeviceObjects().filter(d => d.hasPassword);
         if (!locked.length) return true;
-        const password = prompt(`Password required for ${locked.map(d => d.id).join(', ')}`);
+        const password = prompt(t('batch.passwordRequired', {ids: locked.map(d => d.id).join(', ')}));
         if (password === null) return false;
         for (const device of locked) {
             const ok = await authDevice(ws, device, password);
             if (!ok) {
-                alert(`Wrong password for ${device.id}`);
+                alert(t('batch.wrongPassword', {id: device.id}));
                 return false;
             }
         }
@@ -393,7 +404,7 @@
         const deviceList = [...selectedDevices];
         const results = document.getElementById('upload-results');
         results.innerHTML = deviceList.map(id => `<div class="result-card" id="upload-result-${esc(id)}">
-            <div class="result-header"><span class="device">${esc(id)}</span><span class="exit running">uploading...</span></div>
+            <div class="result-header"><span class="device">${esc(id)}</span><span class="exit running">${t('batch.uploading')}</span></div>
             <div class="result-body" id="upload-output-${esc(id)}">${esc(destPath)}</div>
         </div>`).join('');
 

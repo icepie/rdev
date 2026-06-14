@@ -6,13 +6,26 @@
     <title>RDev - Session Manager</title>
     <link rel="stylesheet" href="/vendor/xterm.css">
     <style>
-        :root {
+        :root { color-scheme: dark; }
+        :root[data-theme="dark"] {
             --bg: #0f1117; --card: #1a1d27; --border: #2a2d3a;
             --text: #e4e4e7; --muted: #71717a; --accent: #22d3ee;
             --green: #4ade80; --red: #f87171; --yellow: #facc15;
             --purple: #c084fc;
         }
+        :root[data-theme="light"] {
+            color-scheme: light;
+            --bg: #f6f8fb; --card: #ffffff; --border: #d8dee9;
+            --text: #1f2937; --muted: #6b7280; --accent: #0891b2;
+            --green: #16a34a; --red: #dc2626; --yellow: #ca8a04;
+            --purple: #9333ea;
+        }
         * { margin: 0; padding: 0; box-sizing: border-box; }
+        .icon { width: 1em; height: 1em; vertical-align: -0.16em; flex-shrink: 0; }
+        .icon-inline { display:inline-flex; align-items:center; gap:6px; }
+        .empty-icon { display:inline-flex; align-items:center; justify-content:center; font-size:3rem; margin-bottom:1rem; opacity:.32; color:var(--accent); }
+        .theme-toggle { display:inline-flex; align-items:center; gap:6px; border:1px solid var(--border); background:var(--card); color:var(--muted); border-radius:7px; padding:4px 8px; cursor:pointer; font-size:0.78rem; }
+        .theme-toggle:hover { color:var(--accent); border-color:var(--accent); }
         body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); height: 100vh; height: 100dvh; display: flex; flex-direction: column; overflow: hidden; }
 
         /* ── Top toolbar ── */
@@ -22,6 +35,8 @@
         .spacer { flex: 1; }
         .gh-link { font-size: 0.85rem; color: var(--muted); text-decoration: none; }
         .gh-link:hover { color: var(--accent); }
+        .lang-switch { display:inline-flex; align-items:center; gap:6px; color:var(--muted); font-size:0.78rem; }
+        .lang-switch select { background:var(--bg); color:var(--text); border:1px solid var(--border); border-radius:6px; padding:4px 6px; }
         .nav { display: flex; gap: 6px; }
         .nav a { padding: 4px 10px; border-radius: 6px; font-size: 0.78rem; text-decoration: none; border: 1px solid var(--border); color: var(--muted); transition: all .15s; }
         .nav a:hover { color: var(--accent); border-color: var(--accent); }
@@ -101,25 +116,26 @@
 </head>
 <body>
     <div class="toolbar">
-        <div class="logo">RDev <span>Session Manager</span></div>
+        <div class="logo">RDev <span data-i18n="sessions.title">Session Manager</span></div>
         <div class="spacer"></div>
-        <a class="gh-link" href="https://github.com/icepie/rdev" target="_blank">⭐ GitHub</a>
+        <a class="gh-link" href="https://github.com/icepie/rdev" target="_blank"><span class="icon-inline"><span data-icon="github"></span>GitHub</span></a>
+        <div id="lang-slot"></div>
         <div class="nav">
-            <a href="/" data-auth-link>Dashboard</a>
-            <a href="/terminal.html" data-auth-link>Terminal</a>
-            <a href="/batch.html" data-auth-link>Batch</a>
-            <a href="/sessions.html" data-auth-link>Sessions</a>
+            <a href="/" data-auth-link data-i18n="nav.dashboard">Dashboard</a>
+            <a href="/terminal.html" data-auth-link data-i18n="nav.terminal">Terminal</a>
+            <a href="/batch.html" data-auth-link data-i18n="nav.batch">Batch</a>
+            <a href="/sessions.html" data-auth-link data-i18n="nav.sessions">Sessions</a>
         </div>
     </div>
 
     <div class="split">
         <div class="list-panel">
             <div class="list-header">
-                <h2>📡 活跃会话</h2>
+                <h2 class="icon-inline"><span data-icon="sessions"></span><span data-i18n="sessions.active">活跃会话</span></h2>
                 <span class="count" id="sess-count">0</span>
             </div>
             <div class="list-search">
-                <input type="text" id="search" placeholder="搜索设备ID / 会话ID / 命令...">
+                <input type="text" id="search" data-i18n-placeholder="sessions.searchPlaceholder" placeholder="搜索设备ID / 会话ID / 命令...">
             </div>
             <div class="list-scroll" id="sess-list"></div>
         </div>
@@ -129,7 +145,7 @@
                 <span class="info" id="attach-info"></span>
                 <span class="mode-badge" id="mode-badge">⌨ Writable</span>
                 <div class="spacer"></div>
-                <button class="btn danger" id="btn-detach">✕ 断开</button>
+                <button class="btn danger" id="btn-detach"><span data-icon="close"></span><span data-i18n="sessions.detach">断开</span></button>
             </div>
             <div class="terminal-area" id="terminal-area"></div>
             <div class="mobile-keys" id="mobile-keys">
@@ -140,17 +156,24 @@
 
         <div class="no-select" id="no-select">
             <div>
-                <div class="icon">📡</div>
-                <div class="hint">选择左侧会话以监控或接管</div>
+                <div class="empty-icon" data-icon="sessions"></div>
+                <div class="hint" data-i18n="sessions.emptyHint">选择左侧会话以附加</div>
             </div>
         </div>
     </div>
 
+    <script src="/i18n.js"></script>
+    <script src="/ui.js"></script>
     <script src="/vendor/xterm.js"></script>
     <script src="/vendor/xterm-addon-fit.js"></script>
     <script src="/vendor/xterm-addon-web-links.js"></script>
     <script src="/vendor/addon-webgl.js"></script>
     <script>
+    document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n.langSelector();
+    RDevI18n.apply();
+    document.querySelectorAll('[data-icon]').forEach(el => { el.innerHTML = icon(el.dataset.icon); });
+    window.addEventListener('rdev:langchange', () => { if (typeof renderDevices === 'function') renderDevices(); if (typeof renderList === 'function') renderList(); });
+
     const adminToken = new URLSearchParams(location.search).get('token') || localStorage.getItem('rdevAdminToken') || '';
     if (adminToken) localStorage.setItem('rdevAdminToken', adminToken);
     function authURL(path) { return adminToken ? path + (path.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(adminToken) : path; }
@@ -184,10 +207,10 @@
         const overlay = document.createElement('div');
         overlay.className = 'auth-overlay';
         overlay.innerHTML = `<div class="auth-box">
-            <h3>🔐 会话认证</h3>
-            <p>${esc(session.clientId)} 需要设备密码</p>
-            <input type="password" id="session-auth-pw" placeholder="输入密码" autocomplete="current-password">
-            <button id="session-auth-btn">连接</button>
+            <h3 class="icon-inline">${icon('lock')}${t('sessions.authTitle')}</h3>
+            <p>${t('sessions.authDesc', {id: esc(session.clientId)})}</p>
+            <input type="password" id="session-auth-pw" placeholder="${t('terminal.passwordPlaceholder')}" autocomplete="current-password">
+            <button id="session-auth-btn">${t('common.connect')}</button>
             <div class="auth-err" id="session-auth-err"></div>
         </div>`;
         area.appendChild(overlay);
@@ -196,7 +219,7 @@
         const submit = () => {
             if (!ws || ws.readyState !== WebSocket.OPEN || !input.value) return;
             button.disabled = true;
-            button.textContent = '验证中...';
+            button.textContent = t('common.connecting');
             ws.send(JSON.stringify({ op: 'auth', password: input.value }));
         };
         button.addEventListener('click', submit);
@@ -228,7 +251,7 @@
         );
         const el = document.getElementById('sess-list');
         if (!filtered.length) {
-            el.innerHTML = '<div class="empty-list"><div class="icon">📭</div>无活跃会话</div>';
+            el.innerHTML = '<div class="empty-list"><div class="empty-icon">' + icon('inbox') + '</div>' + t('sessions.noActive') + '</div>';
             return;
         }
         el.innerHTML = filtered.map(s => {
@@ -258,10 +281,10 @@
     function timeAgo(iso) {
         if (!iso) return '';
         const d = new Date(iso), s = Math.floor((Date.now()-d)/1000);
-        if (s < 60) return '刚刚';
-        if (s < 3600) return Math.floor(s/60) + '分钟前';
-        if (s < 86400) return Math.floor(s/3600) + '小时前';
-        return Math.floor(s/86400) + '天前';
+        if (s < 60) return t('common.justNow');
+        if (s < 3600) return t('common.minutesAgo', {n: Math.floor(s/60)});
+        if (s < 86400) return t('common.hoursAgo', {n: Math.floor(s/3600)});
+        return t('common.daysAgo', {n: Math.floor(s/86400)});
     }
 
     document.getElementById('search').addEventListener('input', renderList);
@@ -335,8 +358,8 @@
                 const err = document.getElementById('session-auth-err');
                 const btn = document.getElementById('session-auth-btn');
                 const input = document.getElementById('session-auth-pw');
-                if (err) err.textContent = msg.message || '密码错误';
-                if (btn) { btn.disabled = false; btn.textContent = '连接'; }
+                if (err) err.textContent = msg.message || t('common.passwordWrong');
+                if (btn) { btn.disabled = false; btn.textContent = t('common.connect'); }
                 if (input) { input.value = ''; input.focus(); }
             } else if (msg.op === 'exit') {
                 removeAuthOverlay();
@@ -349,7 +372,7 @@
 
         ws.onclose = () => {
             if (activeId === sessionID) {
-                term.write('\r\n\x1b[31m[Disconnected]\x1b[0m\r\n');
+                term.write('\r\n\x1b[31m' + t('sessions.disconnected') + '\x1b[0m\r\n');
             }
         };
 
