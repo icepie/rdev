@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"sync"
+	"sync/atomic"
 
 	"github.com/aymanbagabas/go-pty"
 	"golang.org/x/crypto/ssh"
@@ -29,6 +31,9 @@ type Process struct {
 	pty    pty.Pty
 	cmd    *pty.Cmd
 	term   string
+
+	closed  int32 // atomic: 1 = closed, prevents use-after-close
+	closeMu sync.Mutex
 }
 
 // Config for creating a PTY process
@@ -125,8 +130,33 @@ func Start(cfg *Config) (proc *Process, err error) {
 	}, nil
 }
 
+var errPtyClosed = errors.New("pty: closed")
+
+// CloseInput closes only the input (stdin) side of the PTY.
+// On Windows ConPTY, closing the input pipe signals the attached process that
+// stdin is gone and helps the ConPTY host drain and close the output pipe,
+// which in turn unblocks a blocked Read call. On other backends this is a no-op.
+func (p *Process) CloseInput() {
+	if atomic.LoadInt32(&p.closed) == 1 {
+		return
+	}
+	if p.legacy != nil {
+		// WinPTY: no separate input close; will be handled by full Close.
+		return
+	}
+	// go-pty ConPTY: close the input pipe so Read can unblock.
+	if cp, ok := p.pty.(interface{ InputPipe() *os.File }); ok {
+		if in := cp.InputPipe(); in != nil {
+			_ = in.Close()
+		}
+	}
+}
+
 // Read from the PTY (stdout)
 func (p *Process) Read(b []byte) (int, error) {
+	if atomic.LoadInt32(&p.closed) == 1 {
+		return 0, errPtyClosed
+	}
 	if p.legacy != nil {
 		return p.legacy.Read(b)
 	}
@@ -135,6 +165,9 @@ func (p *Process) Read(b []byte) (int, error) {
 
 // Write to the PTY (stdin)
 func (p *Process) Write(b []byte) (int, error) {
+	if atomic.LoadInt32(&p.closed) == 1 {
+		return 0, errPtyClosed
+	}
 	if p.legacy != nil {
 		return p.legacy.Write(b)
 	}
@@ -143,14 +176,22 @@ func (p *Process) Write(b []byte) (int, error) {
 
 // Resize the terminal window
 func (p *Process) Resize(rows, cols uint16) error {
+	if atomic.LoadInt32(&p.closed) == 1 {
+		return errPtyClosed // avoid ResizePseudoConsole on freed handle
+	}
 	if p.legacy != nil {
 		return p.legacy.Resize(rows, cols)
 	}
 	return p.pty.Resize(int(cols), int(rows))
 }
 
-// Close the PTY. Does NOT wait for the process.
+// Close the PTY. Safe to call multiple times.
 func (p *Process) Close() error {
+	if !atomic.CompareAndSwapInt32(&p.closed, 0, 1) {
+		return nil // already closed
+	}
+	p.closeMu.Lock()
+	defer p.closeMu.Unlock()
 	if p.legacy != nil {
 		return p.legacy.Close()
 	}

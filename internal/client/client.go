@@ -556,13 +556,31 @@ func (c *Client) startShellExecSession(msg *protocol.Message) (*clientSession, e
 			// output-only aggregation window keeps SSH input responsive while
 			// avoiding WebSocket frame storms during screen redraws.
 			cw := newCoalescingWriterWithInterval(c, msg.SessionID, protocol.BinData, 16*time.Millisecond)
+			readDone := make(chan struct{})
 			go func() {
+				defer close(readDone)
 				io.Copy(cw, proc)
 				cw.flush()
 			}()
 
 			go func() {
 				exitCode, _ := proc.Wait()
+
+				// On some Windows versions, ConPTY output pipe does not EOF
+				// after the process exits. Close the input side first so the
+				// ConPTY host drains and closes the output pipe, unblocking Read.
+				// For the go-pty ConPTY backend this means we close inPipe early;
+				// Process.Close handles the rest idempotently.
+				proc.CloseInput()
+
+				// Give the read loop a few seconds to drain remaining output.
+				select {
+				case <-readDone:
+					// read loop finished normally
+				case <-time.After(5 * time.Second):
+					log.Printf("session %s: PTY read did not finish after process exit, forcing close", msg.SessionID)
+				}
+
 				proc.Close()
 				c.sendExitCode(msg.SessionID, exitCode)
 				c.sendClose(msg.SessionID)
@@ -751,7 +769,10 @@ func (c *Client) handleResize(msg *protocol.Message) {
 	if !ok || sess.ptyProc == nil {
 		return
 	}
-	sess.ptyProc.Resize(uint16(msg.Rows), uint16(msg.Cols))
+	if err := sess.ptyProc.Resize(uint16(msg.Rows), uint16(msg.Cols)); err != nil {
+		// Silently ignore resize on closed PTY (common during session teardown)
+		log.Printf("session %s: resize error: %v", msg.SessionID, err)
+	}
 }
 
 func (c *Client) handleClose(msg *protocol.Message) {

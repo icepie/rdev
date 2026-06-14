@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"syscall"
 
 	winpty "github.com/iamacarpet/go-winpty"
@@ -24,6 +25,7 @@ type winPTYProcess struct {
 	wp     *winpty.WinPTY
 	stdin  io.WriteCloser
 	stdout io.ReadCloser
+	closed int32 // atomic: 1 = closed
 }
 
 func startWinPTY(cfg *Config) (*Process, error) {
@@ -108,13 +110,29 @@ func quoteWindowsArg(s string) string {
 	return `"` + strings.ReplaceAll(s, `"`, `\"`) + `"`
 }
 
-func (p *winPTYProcess) Read(b []byte) (int, error)  { return p.stdout.Read(b) }
-func (p *winPTYProcess) Write(b []byte) (int, error) { return p.stdin.Write(b) }
+func (p *winPTYProcess) Read(b []byte) (int, error) {
+	if atomic.LoadInt32(&p.closed) == 1 {
+		return 0, io.EOF
+	}
+	return p.stdout.Read(b)
+}
+func (p *winPTYProcess) Write(b []byte) (int, error) {
+	if atomic.LoadInt32(&p.closed) == 1 {
+		return 0, fmt.Errorf("winpty: closed")
+	}
+	return p.stdin.Write(b)
+}
 func (p *winPTYProcess) Resize(rows, cols uint16) error {
+	if atomic.LoadInt32(&p.closed) == 1 {
+		return fmt.Errorf("winpty: closed")
+	}
 	p.wp.SetSize(uint32(cols), uint32(rows))
 	return nil
 }
 func (p *winPTYProcess) Close() error {
+	if !atomic.CompareAndSwapInt32(&p.closed, 0, 1) {
+		return nil
+	}
 	p.wp.Close()
 	return nil
 }
