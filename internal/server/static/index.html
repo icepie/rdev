@@ -154,14 +154,14 @@
                 <div class="cmd-group">
                     <div class="cmd-label">📦 PowerShell 2.0（替换 <span class="hl">密码</span> 为你的密码）</div>
                     <div class="cmd-row">
-                        <div class="cmd-code" data-tpl='powershell -Command "$wc=New-Object Net.WebClient; $wc.DownloadString('{{HTTP}}{{H}}/install.ps1') | iex; RDev {{WS}}{{H}} -Password <自定义密码>"'></div>
+                        <div class="cmd-code" id="c-w7-pw"></div>
                         <button class="copy-btn" onclick="cp(this)">复制</button>
                     </div>
                 </div>
                 <div class="cmd-group">
                     <div class="cmd-label">🔓 开放模式（无密码，仅限内网）</div>
                     <div class="cmd-row">
-                        <div class="cmd-code" data-tpl='powershell -Command "$wc=New-Object Net.WebClient; $wc.DownloadString('{{HTTP}}{{H}}/install.ps1') | iex; RDev {{WS}}{{H}}"'></div>
+                        <div class="cmd-code" id="c-w7-open"></div>
                         <button class="copy-btn" onclick="cp(this)">复制</button>
                     </div>
                 </div>
@@ -195,11 +195,13 @@
         function render() {
             document.querySelectorAll('.cmd-code[data-tpl]').forEach(el => {
                 el.textContent = el.dataset.tpl
-                    .replace(/\{\{WS\}\}/g, WS)
-                    .replace(/\{\{HTTP\}\}/g, HTTP)
-                    .replace(/\{\{H\}\}/g, H)
-                    .replace(/\{\{SP\}\}/g, SP);
+                    .replace(/\{\{WS\}\}/g, WS).replace(/\{\{HTTP\}\}/g, HTTP)
+                    .replace(/\{\{H\}\}/g, H).replace(/\{\{SP\}\}/g, SP);
             });
+            // Win7/8 PS2.0 commands (nested quotes break data-tpl, render via JS)
+            const el = id => document.getElementById(id);
+            if (el('c-w7-pw'))   el('c-w7-pw').textContent   = `powershell -Command "$wc=New-Object Net.WebClient; $wc.DownloadString('${HTTP}${H}/install.ps1') | iex; RDev ${WS}${H} -Password <自定义密码>"`;
+            if (el('c-w7-open')) el('c-w7-open').textContent  = `powershell -Command "$wc=New-Object Net.WebClient; $wc.DownloadString('${HTTP}${H}/install.ps1') | iex; RDev ${WS}${H}"`;
             document.querySelectorAll('.hint code[id]').forEach(el => {
                 el.innerHTML = el.innerHTML
                     .replace(/\{\{H\}\}/g, '<span class="h1">' + H + '</span>')
