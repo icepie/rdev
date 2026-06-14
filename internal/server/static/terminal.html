@@ -21,11 +21,11 @@
         .new-tab-btn { padding: 4px 12px; border-radius: 6px; border: 1px solid var(--border); background: transparent; color: var(--muted); font-size: 0.8rem; cursor: pointer; transition: all .15s; white-space: nowrap; }
         .new-tab-btn:hover { border-color: var(--accent); color: var(--accent); }
         .spacer { flex: 1; }
+        .gh-link { font-size: 0.85rem; color: var(--muted); text-decoration: none; }
+        .gh-link:hover { color: var(--accent); }
         .nav { display: flex; gap: 6px; }
         .nav a { padding: 4px 10px; border-radius: 6px; font-size: 0.78rem; text-decoration: none; border: 1px solid var(--border); color: var(--muted); transition: all .15s; }
         .nav a:hover { color: var(--accent); border-color: var(--accent); }
-        .gh-link { font-size: 0.85rem; color: var(--muted); text-decoration: none; }
-        .gh-link:hover { color: var(--accent); }
         .tab-bar { display: flex; background: var(--card); border-bottom: 1px solid var(--border); flex-shrink: 0; padding: 0 12px; overflow-x: auto; }
         .tab-item { display: flex; align-items: center; gap: 6px; padding: 6px 14px; font-size: 0.82rem; cursor: pointer; border-right: 1px solid var(--border); color: var(--muted); transition: all .1s; white-space: nowrap; position: relative; }
         .tab-item:hover { color: var(--text); background: rgba(255,255,255,0.02); }
@@ -36,9 +36,21 @@
         .tab-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
         .tab-dot.connected { background: var(--green); }
         .tab-dot.disconnected { background: var(--red); }
+        .tab-dot.authing { background: var(--yellow); }
         .terminal-panes { flex: 1; position: relative; overflow: hidden; }
         .terminal-pane { position: absolute; inset: 0; padding: 4px; display: none; }
         .terminal-pane.active { display: block; }
+
+        /* ── Auth overlay ── */
+        .auth-overlay { position: absolute; inset: 0; background: rgba(15,17,23,0.92); display: flex; align-items: center; justify-content: center; z-index: 10; }
+        .auth-box { background: var(--card); border: 1px solid var(--border); border-radius: 16px; padding: 2rem; width: 340px; text-align: center; }
+        .auth-box h3 { font-size: 1.1rem; margin-bottom: 0.5rem; color: var(--accent); }
+        .auth-box p { font-size: 0.85rem; color: var(--muted); margin-bottom: 1.2rem; }
+        .auth-box input { width: 100%; padding: 10px 14px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg); color: var(--text); font-size: 0.95rem; outline: none; margin-bottom: 0.8rem; }
+        .auth-box input:focus { border-color: var(--accent); }
+        .auth-box .auth-btn { width: 100%; padding: 10px; border-radius: 8px; border: none; background: var(--accent); color: var(--bg); font-size: 0.9rem; font-weight: 600; cursor: pointer; transition: opacity .15s; }
+        .auth-box .auth-btn:hover { opacity: 0.85; }
+        .auth-box .auth-err { color: var(--red); font-size: 0.8rem; margin-top: 0.5rem; min-height: 1.2em; }
     </style>
 </head>
 <body>
@@ -107,60 +119,126 @@
 
         fitAddon.fit();
 
-        const tab = { id, deviceId: deviceID, ws: null, term, fitAddon, status: 'disconnected' };
+        const tab = { id, deviceId: deviceID, ws: null, term, fitAddon, status: 'disconnected', needAuth: false };
         tabs.push(tab);
         connectTab(tab);
         switchTab(id);
         renderTabs();
     }
 
+    function showAuthOverlay(tab) {
+        const pane = document.getElementById('pane-' + tab.id);
+        // Remove existing overlay
+        const old = pane.querySelector('.auth-overlay');
+        if (old) old.remove();
+
+        const overlay = document.createElement('div');
+        overlay.className = 'auth-overlay';
+        overlay.innerHTML = `
+            <div class="auth-box">
+                <h3>🔐 设备认证</h3>
+                <p>${esc(tab.deviceId)} 需要密码验证</p>
+                <input type="password" id="auth-pw-${tab.id}" placeholder="输入密码" autofocus>
+                <button class="auth-btn" id="auth-btn-${tab.id}">连接</button>
+                <div class="auth-err" id="auth-err-${tab.id}"></div>
+            </div>`;
+        pane.appendChild(overlay);
+
+        const input = document.getElementById('auth-pw-' + tab.id);
+        const btn = document.getElementById('auth-btn-' + tab.id);
+        const err = document.getElementById('auth-err-' + tab.id);
+
+        const submit = () => {
+            const pw = input.value;
+            if (!pw) return;
+            btn.textContent = '验证中...'; btn.disabled = true;
+            err.textContent = '';
+            if (tab.ws && tab.ws.readyState === WebSocket.OPEN) {
+                tab.ws.send(JSON.stringify({ op: 'auth', password: pw }));
+            }
+        };
+
+        btn.addEventListener('click', submit);
+        input.addEventListener('keydown', (e) => { if (e.key === 'Enter') submit(); });
+        setTimeout(() => input.focus(), 50);
+    }
+
+    function removeAuthOverlay(tab) {
+        const pane = document.getElementById('pane-' + tab.id);
+        const overlay = pane?.querySelector('.auth-overlay');
+        if (overlay) overlay.remove();
+    }
+
     function connectTab(tab) {
         if (tab.ws) { tab.ws.close(); tab.ws = null; }
-        tab.status = 'connecting'; tab.term.reset(); renderTabs();
+        tab.status = 'connecting'; tab.needAuth = false; tab.term.reset(); renderTabs();
 
         const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
         tab.ws = new WebSocket(`${proto}//${location.host}/terminal?device=${encodeURIComponent(tab.deviceId)}`);
         tab.ws.binaryType = 'arraybuffer';
 
         tab.ws.onopen = () => {
-            tab.status = 'connected'; tab.term.focus();
-            try { tab.fitAddon.fit(); } catch(e) {}
-            doResize(tab); renderTabs();
+            tab.status = 'authing'; renderTabs();
         };
 
         tab.ws.onmessage = (evt) => {
             if (evt.data instanceof ArrayBuffer) {
+                // Binary = terminal output (only after auth)
+                removeAuthOverlay(tab);
+                tab.status = 'connected'; renderTabs();
                 tab.term.write(new Uint8Array(evt.data));
-            } else {
-                const msg = JSON.parse(evt.data);
-                if (msg.op === 'exit') {
-                    tab.term.write('\r\n\x1b[33m[Process exited with code ' + msg.code + ']\x1b[0m\r\n');
-                    tab.status = 'disconnected'; renderTabs();
-                    tab.ws.close(); tab.ws = null;
-                } else if (msg.op === 'error') {
-                    tab.term.write('\r\n\x1b[31m[Error: ' + msg.message + ']\x1b[0m\r\n');
-                    tab.status = 'disconnected'; renderTabs();
-                }
+                return;
+            }
+            // Text = JSON control
+            const msg = JSON.parse(evt.data);
+            if (msg.op === 'auth') {
+                tab.needAuth = true;
+                tab.status = 'authing'; renderTabs();
+                showAuthOverlay(tab);
+            } else if (msg.op === 'auth_ok') {
+                removeAuthOverlay(tab);
+                tab.needAuth = false;
+                tab.status = 'connected'; tab.term.focus(); renderTabs();
+                try { tab.fitAddon.fit(); } catch(e) {}
+                doResize(tab);
+            } else if (msg.op === 'auth_fail') {
+                const err = document.getElementById('auth-err-' + tab.id);
+                if (err) err.textContent = msg.message || '密码错误';
+                const btn = document.getElementById('auth-btn-' + tab.id);
+                if (btn) { btn.textContent = '连接'; btn.disabled = false; }
+                const input = document.getElementById('auth-pw-' + tab.id);
+                if (input) { input.value = ''; input.focus(); }
+            } else if (msg.op === 'exit') {
+                removeAuthOverlay(tab);
+                tab.term.write('\r\n\x1b[33m[Process exited with code ' + msg.code + ']\x1b[0m\r\n');
+                tab.status = 'disconnected'; renderTabs();
+                tab.ws.close(); tab.ws = null;
+            } else if (msg.op === 'error') {
+                removeAuthOverlay(tab);
+                tab.term.write('\r\n\x1b[31m[Error: ' + msg.message + ']\x1b[0m\r\n');
+                tab.status = 'disconnected'; renderTabs();
             }
         };
 
         tab.ws.onclose = () => {
+            removeAuthOverlay(tab);
             if (tab.status !== 'disconnected') {
                 tab.status = 'disconnected';
                 tab.term.write('\r\n\x1b[31m[Connection closed]\x1b[0m\r\n');
                 renderTabs();
             }
         };
-        tab.ws.onerror = () => { tab.status = 'disconnected'; renderTabs(); };
+        tab.ws.onerror = () => { removeAuthOverlay(tab); tab.status = 'disconnected'; renderTabs(); };
 
+        // Only send input when authenticated and connected
         tab.term.onData(data => {
-            if (tab.ws && tab.ws.readyState === WebSocket.OPEN) {
+            if (tab.ws && tab.ws.readyState === WebSocket.OPEN && !tab.needAuth) {
                 tab.ws.send(new TextEncoder().encode(data));
             }
         });
 
         tab.term.onResize(({ cols, rows }) => {
-            if (tab.ws && tab.ws.readyState === WebSocket.OPEN) {
+            if (tab.ws && tab.ws.readyState === WebSocket.OPEN && !tab.needAuth) {
                 tab.ws.send(JSON.stringify({ op: 'resize', rows, cols }));
             }
         });
@@ -195,7 +273,7 @@
         const bar = document.getElementById('tab-bar');
         bar.innerHTML = tabs.map(t => {
             const active = t.id === activeTabId ? 'active' : '';
-            const dotClass = t.status === 'connected' ? 'connected' : 'disconnected';
+            const dotClass = t.status === 'connected' ? 'connected' : t.status === 'authing' ? 'authing' : 'disconnected';
             return `<div class="tab-item ${active}" data-id="${t.id}">
                 <span class="tab-dot ${dotClass}"></span>
                 <span>${esc(t.deviceId)}</span>
@@ -217,7 +295,7 @@
             const sel = document.getElementById('device-select');
             const cur = sel.value;
             sel.innerHTML = '<option value="">-- device --</option>';
-            devices.forEach(d => { const opt = document.createElement('option'); opt.value = d.id; opt.textContent = d.id; sel.appendChild(opt); });
+            devices.forEach(d => { const opt = document.createElement('option'); opt.value = d.id; opt.textContent = d.id + (d.hasPassword ? ' 🔒' : ''); sel.appendChild(opt); });
             if (cur && devices.find(d => d.id === cur)) sel.value = cur;
         } catch(e) {}
     }

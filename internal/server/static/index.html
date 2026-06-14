@@ -44,6 +44,7 @@
         .badge { display: inline-block; padding: 2px 8px; border-radius: 6px; font-size: 0.75rem; font-weight: 500; margin-right: 4px; }
         .badge.green { background: rgba(74,222,128,0.15); color: var(--green); }
         .badge.accent { background: rgba(34,211,238,0.15); color: var(--accent); }
+        .badge.yellow { background: rgba(250,204,21,0.15); color: var(--yellow); }
         .empty { text-align: center; padding: 3rem; color: var(--muted); }
         .empty .icon { font-size: 3rem; margin-bottom: 1rem; opacity: 0.3; }
         .term-btn { display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px; border-radius: 6px; font-size: 0.8rem; cursor: pointer; border: 1px solid rgba(34,211,238,0.3); background: rgba(34,211,238,0.08); color: var(--accent); text-decoration: none; transition: all 0.15s; }
@@ -61,6 +62,7 @@
         .cmd-label { font-size: 0.8rem; color: var(--muted); margin-bottom: 0.4rem; }
         .cmd-row { display: flex; align-items: center; gap: 8px; }
         .cmd-code { flex: 1; background: #000; padding: 0.6rem 1rem; border-radius: 6px; font-family: 'SF Mono','Fira Code','Cascadia Code',Consolas,monospace; font-size: 0.82rem; color: var(--text); overflow-x: auto; white-space: pre; line-height: 1.5; user-select: all; }
+        .cmd-code .hl { color: var(--yellow); font-weight: 600; }
         .copy-btn { padding: 6px 12px; border-radius: 6px; font-size: 0.75rem; cursor: pointer; border: 1px solid var(--border); background: var(--card); color: var(--muted); transition: all 0.15s; white-space: nowrap; flex-shrink: 0; }
         .copy-btn:hover { border-color: var(--accent); color: var(--accent); }
         .copy-btn.ok { border-color: var(--green); color: var(--green); }
@@ -109,23 +111,23 @@
 
             <div class="install-panel active" id="p-linux">
                 <div class="cmd-group">
-                    <div class="cmd-label">📦 curl 一键启动（无需安装、无需密码）</div>
+                    <div class="cmd-label">📦 curl 一键启动（替换 <span class="hl">密码</span> 为你的密码）</div>
                     <div class="cmd-row">
-                        <div class="cmd-code" data-tpl="curl -sL {{HTTP}}{{H}}/install.sh | sh -s -- {{WS}}{{H}}"></div>
+                        <div class="cmd-code" data-tpl="curl -sL {{HTTP}}{{H}}/install.sh | sh -s -- {{WS}}{{H}} -p <自定义密码>"></div>
                         <button class="copy-btn" onclick="cp(this)">复制</button>
                     </div>
                 </div>
                 <div class="cmd-group">
                     <div class="cmd-label">wget 版</div>
                     <div class="cmd-row">
-                        <div class="cmd-code" data-tpl="wget -qO- {{HTTP}}{{H}}/install.sh | sh -s -- {{WS}}{{H}}"></div>
+                        <div class="cmd-code" data-tpl="wget -qO- {{HTTP}}{{H}}/install.sh | sh -s -- {{WS}}{{H}} -p <自定义密码>"></div>
                         <button class="copy-btn" onclick="cp(this)">复制</button>
                     </div>
                 </div>
                 <div class="cmd-group">
-                    <div class="cmd-label">⚙️ 指定密码</div>
+                    <div class="cmd-label">🔓 开放模式（无密码，仅限内网）</div>
                     <div class="cmd-row">
-                        <div class="cmd-code" data-tpl="curl -sL {{HTTP}}{{H}}/install.sh | sh -s -- {{WS}}{{H}} -i my-device -p secret"></div>
+                        <div class="cmd-code" data-tpl="curl -sL {{HTTP}}{{H}}/install.sh | sh -s -- {{WS}}{{H}}"></div>
                         <button class="copy-btn" onclick="cp(this)">复制</button>
                     </div>
                 </div>
@@ -133,16 +135,16 @@
 
             <div class="install-panel" id="p-win">
                 <div class="cmd-group">
-                    <div class="cmd-label">📦 PowerShell 一键启动（无需安装、无需密码）</div>
+                    <div class="cmd-label">📦 PowerShell 一键启动（替换 <span class="hl">密码</span> 为你的密码）</div>
                     <div class="cmd-row">
-                        <div class="cmd-code" data-tpl='powershell -Command "iwr -useb {{HTTP}}{{H}}/install.ps1 | iex; RDev {{WS}}{{H}}"'></div>
+                        <div class="cmd-code" data-tpl='powershell -Command "iwr -useb {{HTTP}}{{H}}/install.ps1 | iex; RDev {{WS}}{{H}} -Password <自定义密码>"'></div>
                         <button class="copy-btn" onclick="cp(this)">复制</button>
                     </div>
                 </div>
                 <div class="cmd-group">
-                    <div class="cmd-label">⚙️ 指定密码</div>
+                    <div class="cmd-label">🔓 开放模式（无密码，仅限内网）</div>
                     <div class="cmd-row">
-                        <div class="cmd-code" data-tpl='powershell -Command "iwr -useb {{HTTP}}{{H}}/install.ps1 | iex; RDev {{WS}}{{H}} -Id my-pc -Password secret"'></div>
+                        <div class="cmd-code" data-tpl='powershell -Command "iwr -useb {{HTTP}}{{H}}/install.ps1 | iex; RDev {{WS}}{{H}}"'></div>
                         <button class="copy-btn" onclick="cp(this)">复制</button>
                     </div>
                 </div>
@@ -150,16 +152,16 @@
 
             <div class="install-panel" id="p-win7">
                 <div class="cmd-group">
-                    <div class="cmd-label">📦 PowerShell 2.0（Win7/8）</div>
+                    <div class="cmd-label">📦 PowerShell 2.0（替换 <span class="hl">密码</span> 为你的密码）</div>
                     <div class="cmd-row">
-                        <div class="cmd-code" data-tpl='powershell -Command "$wc=New-Object Net.WebClient; $wc.DownloadString('{{HTTP}}{{H}}/install.ps1') | iex; RDev {{WS}}{{H}}"'></div>
+                        <div class="cmd-code" data-tpl='powershell -Command "$wc=New-Object Net.WebClient; $wc.DownloadString('{{HTTP}}{{H}}/install.ps1') | iex; RDev {{WS}}{{H}} -Password <自定义密码>"'></div>
                         <button class="copy-btn" onclick="cp(this)">复制</button>
                     </div>
                 </div>
                 <div class="cmd-group">
-                    <div class="cmd-label">⚙️ 指定密码</div>
+                    <div class="cmd-label">🔓 开放模式（无密码，仅限内网）</div>
                     <div class="cmd-row">
-                        <div class="cmd-code" data-tpl='powershell -Command "$wc=New-Object Net.WebClient; $wc.DownloadString('{{HTTP}}{{H}}/install.ps1') | iex; RDev {{WS}}{{H}} -Id my-pc -Password secret"'></div>
+                        <div class="cmd-code" data-tpl='powershell -Command "$wc=New-Object Net.WebClient; $wc.DownloadString('{{HTTP}}{{H}}/install.ps1') | iex; RDev {{WS}}{{H}}"'></div>
                         <button class="copy-btn" onclick="cp(this)">复制</button>
                     </div>
                 </div>
@@ -255,7 +257,7 @@
                     <td style="font-weight:600">${esc(d.id)}</td>
                     <td style="color:var(--muted)">${ago(d.connectedAt)}</td>
                     <td>${d.sessions}</td><td>${d.forwards}</td>
-                    <td>${d.hasPassword?'<span class="badge green">密码</span>':''}${!d.hasPassword?'<span class="badge accent">开放</span>':''}</td>
+                    <td>${d.hasPassword?'<span class="badge green">密码</span>':'<span class="badge yellow">开放</span>'}</td>
                     <td><a href="/terminal.html?device=${encodeURIComponent(d.id)}" class="term-btn">▶ Terminal</a></td>
                 </tr>`).join('');
             } catch(e) {}

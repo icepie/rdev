@@ -15,9 +15,11 @@ import (
 // Terminal WebSocket protocol (optimized):
 //
 //	Server → Browser:  Binary frame = raw terminal output (zero overhead)
-//	                   Text frame   = JSON {"op":"exit","code":N} or {"op":"error","message":"..."}
+//	                   Text frame   = JSON {"op":"auth","message":"..."} (password required)
+//	                                   or {"op":"exit","code":N} or {"op":"error","message":"..."}
 //	Browser → Server:  Binary frame = raw input data (zero overhead)
 //	                   Text frame   = JSON {"op":"resize","rows":N,"cols":N}
+//	                                   or {"op":"auth","password":"..."}
 
 // terminalMsg is the JSON control message for terminal (text frames only)
 type terminalMsg struct {
@@ -26,6 +28,7 @@ type terminalMsg struct {
 	Cols    int    `json:"cols,omitempty"`
 	Code    int    `json:"code,omitempty"`
 	Message string `json:"message,omitempty"`
+	Password string `json:"password,omitempty"`
 }
 
 type terminalConn struct {
@@ -39,7 +42,9 @@ type terminalConn struct {
 
 type terminalWSHandler struct {
 	gws.BuiltinEventHandler
-	srv *Server
+	srv     *Server
+	authed  bool
+	passOK bool // true if device has no password (skip auth)
 }
 
 func (h *terminalWSHandler) OnOpen(socket *gws.Conn) {
@@ -56,6 +61,28 @@ func (h *terminalWSHandler) OnOpen(socket *gws.Conn) {
 	h.srv.mu.RUnlock()
 	if !ok {
 		h.sendError(socket, "device '"+deviceID+"' is not connected")
+		socket.WriteClose(1000, nil)
+		return
+	}
+
+	// If device has a password, require auth before creating session
+	if client.Password != "" {
+		h.authed = false
+		h.sendJSON(socket, terminalMsg{Op: "auth", Message: "Device '" + deviceID + "' requires password"})
+		return
+	}
+
+	// No password → skip auth, create session immediately
+	h.passOK = true
+	h.createSession(socket, deviceID)
+}
+
+func (h *terminalWSHandler) createSession(socket *gws.Conn, deviceID string) {
+	h.srv.mu.RLock()
+	client, ok := h.srv.clients[deviceID]
+	h.srv.mu.RUnlock()
+	if !ok {
+		h.sendError(socket, "device '"+deviceID+"' disconnected during auth")
 		socket.WriteClose(1000, nil)
 		return
 	}
@@ -134,6 +161,42 @@ func (h *terminalWSHandler) OnMessage(socket *gws.Conn, message *gws.Message) {
 	}()
 	defer message.Close()
 
+	// Handle auth flow before session is created
+	if !h.authed && !h.passOK {
+		if message.Opcode == gws.OpcodeText {
+			var tmsg terminalMsg
+			if err := json.Unmarshal(message.Bytes(), &tmsg); err != nil {
+				return
+			}
+			if tmsg.Op != "auth" {
+				return
+			}
+
+			// Validate password
+			deviceIDI, _ := socket.Session().Load("deviceID")
+			deviceID := deviceIDI.(string)
+
+			h.srv.mu.RLock()
+			client, ok := h.srv.clients[deviceID]
+			h.srv.mu.RUnlock()
+
+			if !ok {
+				h.sendError(socket, "device '"+deviceID+"' disconnected")
+				socket.WriteClose(1000, nil)
+				return
+			}
+
+			if client.Password != "" && client.Password == tmsg.Password {
+				h.authed = true
+				h.sendJSON(socket, terminalMsg{Op: "auth_ok"})
+				h.createSession(socket, deviceID)
+			} else {
+				h.sendJSON(socket, terminalMsg{Op: "auth_fail", Message: "Wrong password"})
+			}
+		}
+		return
+	}
+
 	tcRaw, _ := socket.Session().Load("terminalConn")
 	if tcRaw == nil {
 		return
@@ -174,7 +237,11 @@ func (h *terminalWSHandler) OnMessage(socket *gws.Conn, message *gws.Message) {
 }
 
 func (h *terminalWSHandler) sendError(socket *gws.Conn, msg string) {
-	data, _ := json.Marshal(terminalMsg{Op: "error", Message: msg})
+	h.sendJSON(socket, terminalMsg{Op: "error", Message: msg})
+}
+
+func (h *terminalWSHandler) sendJSON(socket *gws.Conn, msg terminalMsg) {
+	data, _ := json.Marshal(msg)
 	socket.WriteMessage(gws.OpcodeText, data)
 }
 

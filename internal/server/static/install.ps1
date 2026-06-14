@@ -49,7 +49,7 @@ function global:RDev {
         [string]$Server,
 
         [string]$Id = '',
-        [string]$Password = '',
+        [string]$Password = 'custom',
         [string]$Shell = '',
         [string]$SshPort = '',
         [string]$Version = '',
@@ -129,5 +129,5 @@ function global:RDev {
 Write-Host ""
 Write-Host "  RDev client ready!" -ForegroundColor Green
 Write-Host "  Usage: " -NoNewline; Write-Host "RDev <server-url> [options]" -ForegroundColor Cyan
-Write-Host "  Example: " -NoNewline; Write-Host "RDev wss://rdev.example.com -Id my-pc -Password secret" -ForegroundColor Gray
+Write-Host "  Example: " -NoNewline; Write-Host "RDev wss://rdev.example.com -Password <your-password>" -ForegroundColor Gray
 Write-Host ""

@@ -12,7 +12,7 @@ set -e
 # ── Defaults ────────────────────────────────────────────────
 RDEV_SERVER=""
 RDEV_ID=""
-RDEV_PASSWORD=""
+RDEV_PASSWORD="custom"
 RDEV_SHELL=""
 RDEV_SSH_PORT=""
 RDEV_VERSION=""

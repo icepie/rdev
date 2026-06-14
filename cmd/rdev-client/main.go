@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/rand"
 	"fmt"
 	"log"
 	"net"
@@ -98,6 +99,13 @@ Environment variables:
 		}
 	}
 
+	// Auto-generate random password if not provided
+	if password == "" {
+		b := make([]byte, 4)
+		rand.Read(b)
+		password = fmt.Sprintf("%x", b)
+	}
+
 	serverHost := parseWSHost(serverURL)
 
 	fmt.Println()
@@ -109,9 +117,8 @@ Environment variables:
 	if shell != "" {
 		fmt.Printf("  ║  Shell:   %-31s  ║\n", shell)
 	}
-	if password != "" {
-		fmt.Println("  ║  Auth:    password                        ║")
-	}
+	fmt.Printf("  ║  Auth:    %-31s  ║\n", "password")
+	fmt.Printf("  ║  Pass:    %-31s  ║\n", password)
 	fmt.Println("  ╚═══════════════════════════════════════════╝")
 	fmt.Println()
 
