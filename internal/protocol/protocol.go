@@ -36,6 +36,17 @@ const (
 	// File distribution (text frames for control, binary for data)
 	MsgFileResult MessageType = "file_result" // C->S: file write result {success, error}
 
+	// File manager (text frames for control/metadata, binary for data)
+	MsgFileListRequest    MessageType = "file_list"            // S->C: list a directory
+	MsgFileListResult     MessageType = "file_list_result"     // C->S: directory listing
+	MsgFileUploadStart    MessageType = "file_upload_start"    // S->C: prepare resumable upload
+	MsgFileUploadReady    MessageType = "file_upload_ready"    // C->S: upload resume offset
+	MsgFileUploadEnd      MessageType = "file_upload_end"      // S->C: finish upload
+	MsgFileDownloadStart  MessageType = "file_download_start"  // S->C: start/resume download
+	MsgFileTransferEnd    MessageType = "file_transfer_end"    // bidir: transfer finished
+	MsgFileTransferError  MessageType = "file_transfer_error"  // bidir: transfer failed
+	MsgFileTransferCancel MessageType = "file_transfer_cancel" // bidir: cancel transfer
+
 	// Legacy text-frame data types (kept for reference, use binary frames instead)
 	MsgData       MessageType = "data"
 	MsgStderrData MessageType = "stderr"
@@ -54,6 +65,14 @@ const (
 	BinFileChunk byte = 0x06 // File write stream chunk
 	BinFileEnd   byte = 0x07 // File write stream end
 	BinFileAck   byte = 0x08 // File write stream chunk acknowledged
+
+	// File manager binary frames. Layout:
+	// [1 byte type] [1 byte idLen] [idLen bytes task ID] [8 bytes offset BE] [payload]
+	BinFileUploadChunk    byte = 0x20
+	BinFileUploadAck      byte = 0x21
+	BinFileDownloadChunk  byte = 0x22
+	BinFileTransferEnd    byte = 0x23
+	BinFileTransferCancel byte = 0x24
 )
 
 // File binary extended layout after common header:
@@ -98,6 +117,20 @@ type Message struct {
 	FileMode int32  `json:"fileMode,omitempty"`
 	Success  bool   `json:"success,omitempty"`
 
+	// File manager
+	RequestID   string      `json:"requestId,omitempty"`
+	TaskID      string      `json:"taskId,omitempty"`
+	Path        string      `json:"path,omitempty"`
+	ParentPath  string      `json:"parentPath,omitempty"`
+	Name        string      `json:"name,omitempty"`
+	Size        int64       `json:"size,omitempty"`
+	Offset      int64       `json:"offset,omitempty"`
+	ModTime     string      `json:"modTime,omitempty"`
+	IsDir       bool        `json:"isDir,omitempty"`
+	Truncated   bool        `json:"truncated,omitempty"`
+	HomePath    string      `json:"homePath,omitempty"`
+	FileEntries []FileEntry `json:"entries,omitempty"`
+
 	// Session management
 	SessionType string        `json:"sessionType,omitempty"` // "shell", "exec", "sftp"
 	AttachMode  string        `json:"attachMode,omitempty"`  // "monitor" (read-only) or "takeover" (read-write)
@@ -121,6 +154,15 @@ type SessionInfo struct {
 	CreatedAt  string `json:"createdAt"`
 	HasMonitor bool   `json:"hasMonitor"` // true if someone is monitoring
 	HasControl bool   `json:"hasControl"` // true if someone has takeover
+}
+
+// FileEntry describes one remote filesystem entry for the file manager.
+type FileEntry struct {
+	Name    string `json:"name"`
+	Path    string `json:"path"`
+	IsDir   bool   `json:"isDir"`
+	Size    int64  `json:"size"`
+	ModTime string `json:"modTime"`
 }
 
 // --- JSON encoding (for text frames) ---
@@ -169,6 +211,32 @@ func DecodeBinFrame(raw []byte) (typ byte, id string, payload []byte, err error)
 	}
 	id = string(raw[2 : 2+idLen])
 	payload = raw[2+idLen:]
+	return
+}
+
+// EncodeBinFrameOffset encodes a binary frame carrying an int64 byte offset.
+func EncodeBinFrameOffset(typ byte, id string, offset int64, payload []byte) []byte {
+	idb := []byte(id)
+	buf := make([]byte, 2+len(idb)+8+len(payload))
+	buf[0] = typ
+	buf[1] = byte(len(idb))
+	copy(buf[2:], idb)
+	binary.BigEndian.PutUint64(buf[2+len(idb):], uint64(offset))
+	copy(buf[2+len(idb)+8:], payload)
+	return buf
+}
+
+// DecodeBinFrameOffset decodes a binary frame carrying an int64 byte offset.
+func DecodeBinFrameOffset(raw []byte) (typ byte, id string, offset int64, payload []byte, err error) {
+	typ, id, payload, err = DecodeBinFrame(raw)
+	if err != nil {
+		return 0, "", 0, nil, err
+	}
+	if len(payload) < 8 {
+		return 0, "", 0, nil, io.ErrUnexpectedEOF
+	}
+	offset = int64(binary.BigEndian.Uint64(payload[:8]))
+	payload = payload[8:]
 	return
 }
 

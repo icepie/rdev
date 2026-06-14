@@ -136,14 +136,14 @@ for M in $MIRRORS; do
     [ -z "$M" ] && continue
     echo "  Trying ${M}..." >&2
     if dl "https://${M}/${GH_URL}" "$TMPFILE" 2>/dev/null && [ -s "$TMPFILE" ]; then
-        OK=1; echo "  ✓ via ${M}" >&2; break
+        OK=1; echo "  ok via ${M}" >&2; break
     fi
     rm -f "$TMPFILE" 2>/dev/null
 done
 
 if [ "$OK" = "0" ]; then
     echo "  Trying github.com..." >&2
-    if dl "$GH_URL" "$TMPFILE"; then OK=1; echo "  ✓ via github.com" >&2; fi
+    if dl "$GH_URL" "$TMPFILE"; then OK=1; echo "  ok via github.com" >&2; fi
 fi
 
 if [ "$OK" = "0" ] || [ ! -s "$TMPFILE" ]; then

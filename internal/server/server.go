@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -74,6 +75,13 @@ func (c *ClientConn) SendFileChunk(id string, data []byte) error {
 
 func (c *ClientConn) SendFileEnd(id string) error {
 	frame := protocol.EncodeBinFrame(protocol.BinFileEnd, id, nil)
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	return c.Conn.WriteMessage(gws.OpcodeBinary, frame)
+}
+
+func (c *ClientConn) SendBinaryOffset(typ byte, id string, offset int64, data []byte) error {
+	frame := protocol.EncodeBinFrameOffset(typ, id, offset, data)
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
 	return c.Conn.WriteMessage(gws.OpcodeBinary, frame)
@@ -274,15 +282,17 @@ func (f *ProxyForward) CloseOutput() {
 
 // Server manages WebSocket clients and SSH proxy
 type Server struct {
-	clients     map[string]*ClientConn
-	mu          sync.RWMutex
-	sessions    map[string]*ProxySession
-	sessMu      sync.RWMutex
-	forwards    map[string]*ProxyForward
-	fwdMu       sync.RWMutex
-	fileResults map[string]chan *protocol.Message
-	fileMu      sync.RWMutex
-	upgrader    *gws.Upgrader
+	clients      map[string]*ClientConn
+	mu           sync.RWMutex
+	sessions     map[string]*ProxySession
+	sessMu       sync.RWMutex
+	forwards     map[string]*ProxyForward
+	fwdMu        sync.RWMutex
+	fileResults  map[string]chan *protocol.Message
+	fileRequests map[string]*fileSocket
+	fileTasks    map[string]*fileTaskRoute
+	fileMu       sync.RWMutex
+	upgrader     *gws.Upgrader
 
 	// Public config (set by main) for API/UI
 	SSHPort          string // e.g. "2222"
@@ -300,6 +310,8 @@ func NewServer() *Server {
 		sessions:         make(map[string]*ProxySession),
 		forwards:         make(map[string]*ProxyForward),
 		fileResults:      make(map[string]chan *protocol.Message),
+		fileRequests:     make(map[string]*fileSocket),
+		fileTasks:        make(map[string]*fileTaskRoute),
 		MaxSessions:      256,
 		MaxForwards:      1024,
 		BatchConcurrency: runtime.GOMAXPROCS(0) * 8,
@@ -410,8 +422,11 @@ func (h *wsHandler) handleRegister(socket *gws.Conn, msg *protocol.Message) {
 		return
 	}
 
+	h.srv.mu.Lock()
+	clientID := h.srv.allocateClientIDLocked(msg.ClientID)
+
 	client := &ClientConn{
-		ID:          msg.ClientID,
+		ID:          clientID,
 		Conn:        socket,
 		ConnectedAt: time.Now(),
 		Password:    msg.Password,
@@ -419,23 +434,33 @@ func (h *wsHandler) handleRegister(socket *gws.Conn, msg *protocol.Message) {
 		Forwards:    make(map[string]*ProxyForward),
 	}
 
-	socket.Session().Store("clientID", msg.ClientID)
-
-	h.srv.mu.Lock()
-	if old, ok := h.srv.clients[msg.ClientID]; ok {
-		old.Conn.WriteClose(1000, []byte("replaced by new connection"))
-		closeClientResources(h.srv, old)
-	}
-	h.srv.clients[msg.ClientID] = client
+	socket.Session().Store("clientID", clientID)
+	h.srv.clients[clientID] = client
 	h.srv.mu.Unlock()
 
-	log.Printf("client registered: %s", msg.ClientID)
+	if clientID != msg.ClientID {
+		log.Printf("client registered: %s (requested %s)", clientID, msg.ClientID)
+	} else {
+		log.Printf("client registered: %s", clientID)
+	}
 	client.Send(&protocol.Message{
 		Type:     protocol.MsgRegister,
-		ClientID: msg.ClientID,
+		ClientID: clientID,
 		SSHPort:  h.srv.SSHPort,
 		HTTPHost: h.srv.HTTPHost,
 	})
+}
+
+func (s *Server) allocateClientIDLocked(base string) string {
+	if _, ok := s.clients[base]; !ok {
+		return base
+	}
+	for n := 2; ; n++ {
+		candidate := base + "-" + strconv.Itoa(n)
+		if _, ok := s.clients[candidate]; !ok {
+			return candidate
+		}
+	}
 }
 
 func sendBytes(ch chan []byte, data []byte, label string) {
@@ -448,6 +473,9 @@ func sendBytes(ch chan []byte, data []byte, label string) {
 
 // handleBinaryMessage processes binary data frames from device clients
 func (h *wsHandler) handleBinaryMessage(socket *gws.Conn, raw []byte) {
+	if h.srv.handleFileManagerBinary(raw) {
+		return
+	}
 	typ, id, payload, err := protocol.DecodeBinFrame(raw)
 	if err != nil {
 		return
@@ -531,6 +559,8 @@ func (s *Server) handleClientMessage(client *ClientConn, msg *protocol.Message) 
 	// File distribution
 	case protocol.MsgFileResult:
 		s.handleFileResult(msg)
+	case protocol.MsgFileListResult, protocol.MsgFileUploadReady, protocol.MsgFileDownloadStart, protocol.MsgFileTransferEnd, protocol.MsgFileTransferError:
+		s.handleFileManagerMessage(msg)
 	}
 }
 

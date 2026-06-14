@@ -2,8 +2,9 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
+    <script src="/boot.js"></script>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>RDev - Session Manager</title>
+    <title data-i18n="title.sessions">RDev - Session Manager</title>
     <link rel="stylesheet" href="/vendor/xterm.css">
     <style>
         :root { color-scheme: dark; }
@@ -36,7 +37,6 @@
         .gh-link { font-size: 0.85rem; color: var(--muted); text-decoration: none; }
         .gh-link:hover { color: var(--accent); }
         .lang-switch { display:inline-flex; align-items:center; gap:6px; color:var(--muted); font-size:0.78rem; }
-        .lang-switch select { background:var(--bg); color:var(--text); border:1px solid var(--border); border-radius:6px; padding:4px 6px; }
         .nav { display: flex; gap: 6px; }
         .nav a { padding: 4px 10px; border-radius: 6px; font-size: 0.78rem; text-decoration: none; border: 1px solid var(--border); color: var(--muted); transition: all .15s; }
         .nav a:hover { color: var(--accent); border-color: var(--accent); }
@@ -124,6 +124,7 @@
             <a href="/" data-auth-link data-i18n="nav.dashboard">Dashboard</a>
             <a href="/terminal.html" data-auth-link data-i18n="nav.terminal">Terminal</a>
             <a href="/batch.html" data-auth-link data-i18n="nav.batch">Batch</a>
+            <a href="/files.html" data-auth-link data-i18n="nav.files">Files</a>
             <a href="/sessions.html" data-auth-link data-i18n="nav.sessions">Sessions</a>
         </div>
     </div>
@@ -143,7 +144,7 @@
         <div class="attach-panel" id="attach-panel" style="display:none">
             <div class="attach-header">
                 <span class="info" id="attach-info"></span>
-                <span class="mode-badge" id="mode-badge">⌨ Writable</span>
+                <span class="mode-badge" id="mode-badge"><span data-i18n="sessions.writable">Writable</span></span>
                 <div class="spacer"></div>
                 <button class="btn danger" id="btn-detach"><span data-icon="close"></span><span data-i18n="sessions.detach">断开</span></button>
             </div>
@@ -257,8 +258,8 @@
         el.innerHTML = filtered.map(s => {
             const active = s.id === activeId ? 'active' : '';
             const typeClass = s.type === 'shell' ? 'shell' : s.type === 'sftp' ? 'sftp' : 'exec';
-            const cmdText = s.type === 'shell' ? '(interactive shell)' : s.type === 'sftp' ? '(SFTP session)' : s.command || '(no command)';
-            const obsTag = s.observers > 0 ? `<span class="obs">👁 ${s.observers}</span>` : '';
+            const cmdText = s.type === 'shell' ? t('sessions.interactiveShell') : s.type === 'sftp' ? t('sessions.sftpSession') : s.command || t('sessions.noCommand');
+            const obsTag = s.observers > 0 ? `<span class="obs">${icon('monitor')} ${s.observers}</span>` : '';
             return `<div class="sess-item ${active}" data-id="${s.id}">
                 <div class="row1">
                     <span class="stype ${typeClass}">${s.type.toUpperCase()}</span>
@@ -267,7 +268,7 @@
                 </div>
                 <div class="cmd">${esc(cmdText)}</div>
                 <div class="meta">
-                    <span>${s.pty ? s.term || 'xterm' : 'pipe'} ${s.cols}×${s.rows}</span>
+                    <span>${s.pty ? s.term || 'xterm' : t('sessions.pipe')} ${s.cols}×${s.rows}</span>
                     <span>${timeAgo(s.createdAt)}</span>
                     ${obsTag}
                 </div>
@@ -304,7 +305,7 @@
         document.getElementById('no-select').style.display = 'none';
         document.getElementById('attach-panel').style.display = 'flex';
 
-        document.getElementById('attach-info').innerHTML = `<b>${esc(sess.clientId)}</b> · ${sess.type.toUpperCase()} · ${esc(sess.command || '(shell)')}`;
+        document.getElementById('attach-info').innerHTML = `<b>${esc(sess.clientId)}</b> · ${sess.type.toUpperCase()} · ${esc(sess.command || t('sessions.shell'))}`;
         // Create terminal
         const area = document.getElementById('terminal-area');
         area.innerHTML = '';
@@ -335,7 +336,7 @@
 
         // Connect WebSocket
         const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-        ws = new WebSocket(`${proto}//${location.host}${authURL('/session?session=' + encodeURIComponent(sessionID))}`);
+        ws = RDevUI.socket(`${proto}//${location.host}${authURL('/session?session=' + encodeURIComponent(sessionID))}`);
         ws.binaryType = 'arraybuffer';
 
         ws.onmessage = (evt) => {
@@ -363,10 +364,10 @@
                 if (input) { input.value = ''; input.focus(); }
             } else if (msg.op === 'exit') {
                 removeAuthOverlay();
-                term.write('\r\n\x1b[33m[Session exited with code ' + msg.code + ']\x1b[0m\r\n');
+                term.write('\r\n\x1b[33m[' + t('sessions.exitCode', {code: msg.code}) + ']\x1b[0m\r\n');
             } else if (msg.op === 'error') {
                 removeAuthOverlay();
-                term.write('\r\n\x1b[31m[Error: ' + msg.message + ']\x1b[0m\r\n');
+                term.write('\r\n\x1b[31m[' + t('sessions.error', {message: msg.message}) + ']\x1b[0m\r\n');
             }
         };
 

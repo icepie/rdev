@@ -2,8 +2,9 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
+    <script src="/boot.js"></script>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>RDev - Remote Debug Server</title>
+    <title data-i18n="title.index">RDev - Remote Debug Server</title>
     <style>
         :root { color-scheme: dark; }
         :root[data-theme="dark"] {
@@ -28,14 +29,9 @@
         .gh-link { font-size: 0.9rem; color: var(--muted); text-decoration: none; display: flex; align-items: center; gap: 4px; }
         .gh-link:hover { color: var(--accent); }
         .lang-switch { display:inline-flex; align-items:center; gap:6px; color:var(--muted); font-size:0.78rem; }
-        .lang-switch select { background:var(--card); color:var(--text); border:1px solid var(--border); border-radius:6px; padding:4px 6px; }
         .header-btns { display: flex; gap: 0.5rem; flex-wrap: wrap; }
         .btn { display: inline-flex; align-items: center; gap: 6px; padding: 8px 16px; border-radius: 8px; font-size: 0.85rem; font-weight: 500; cursor: pointer; border: 1px solid var(--border); background: var(--card); color: var(--text); text-decoration: none; transition: all 0.15s; }
         .btn:hover { border-color: var(--accent); color: var(--accent); }
-        .ws-status { display: inline-flex; align-items: center; gap: 6px; padding: 4px 12px; border-radius: 6px; font-size: 0.78rem; }
-        .ws-dot { width: 7px; height: 7px; border-radius: 50%; }
-        .ws-dot.ok { background: var(--green); box-shadow: 0 0 6px var(--green); }
-        .ws-dot.err { background: var(--red); }
         .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1rem; margin-bottom: 2rem; }
         .stat-card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 1.2rem; }
         .stat-card .label { font-size: 0.75rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
@@ -71,7 +67,13 @@
         .cmd-label { font-size: 0.8rem; color: var(--muted); margin-bottom: 0.4rem; }
         .cmd-row { display: flex; align-items: center; gap: 8px; }
         .cmd-code { flex: 1; background: #000; padding: 0.6rem 1rem; border-radius: 6px; font-family: 'SF Mono','Fira Code','Cascadia Code',Consolas,monospace; font-size: 0.82rem; color: var(--text); overflow-x: auto; white-space: pre; line-height: 1.5; user-select: all; }
-        .cmd-code .hl { color: var(--yellow); font-weight: 600; }
+        .cmd-code .cmd { color: var(--accent); font-weight: 700; }
+        .cmd-code .url { color: var(--green); }
+        .cmd-code .flag { color: var(--yellow); }
+        .cmd-code .pipe { color: var(--muted); font-weight: 700; }
+        .cmd-code .placeholder { color: var(--red); font-weight: 600; }
+        .cmd-code .var { color: var(--accent); }
+        .cmd-code .quote { color: var(--yellow); }
         .copy-btn { padding: 6px 12px; border-radius: 6px; font-size: 0.75rem; cursor: pointer; border: 1px solid var(--border); background: var(--card); color: var(--muted); transition: all 0.15s; white-space: nowrap; flex-shrink: 0; }
         .copy-btn:hover { border-color: var(--accent); color: var(--accent); }
         .copy-btn.ok { border-color: var(--green); color: var(--green); }
@@ -84,7 +86,6 @@
             header { align-items: stretch; margin-bottom: 1rem; }
             header h1 { font-size: 1.45rem; }
             .header-right, .header-btns { width: 100%; }
-            .header-btns { display: grid; grid-template-columns: repeat(3, 1fr); }
             .btn { justify-content: center; padding: 9px 10px; }
             .gh-link { display: none; }
             .stats { grid-template-columns: repeat(2, 1fr); gap: 0.7rem; margin-bottom: 1rem; }
@@ -108,17 +109,17 @@
     <div class="container">
         <header>
             <div>
-                <h1><span>RDev</span> Remote Debug</h1>
+                <h1><span>RDev</span> <span data-i18n="index.heading">Remote Debug</span></h1>
                 <p data-i18n="index.subtitle">SSH 远程调试已连接设备 · Shell / SCP / SFTP / 端口转发 / 免密</p>
             </div>
             <div class="header-right">
                 <a class="gh-link" href="https://github.com/icepie/rdev" target="_blank" title="GitHub"><span class="icon-inline"><span data-icon="github"></span>GitHub</span></a>
                 <div id="lang-slot"></div>
-                <div id="ws-indicator" class="ws-status" style="display:none"><span class="ws-dot err"></span><span style="color:var(--muted)">WS</span></div>
                 <div class="header-btns">
-                    <a href="/terminal.html" data-auth-link class="btn"><span class="icon-inline"><span data-icon="terminal"></span>Terminal</span></a>
-                    <a href="/batch.html" data-auth-link class="btn"><span class="icon-inline"><span data-icon="package"></span>Batch</span></a>
-                    <a href="/sessions.html" data-auth-link class="btn"><span class="icon-inline"><span data-icon="sessions"></span>Sessions</span></a>
+                    <a href="/terminal.html" data-auth-link class="btn"><span class="icon-inline"><span data-icon="terminal"></span><span data-i18n="index.navTerminal">Terminal</span></span></a>
+                    <a href="/batch.html" data-auth-link class="btn"><span class="icon-inline"><span data-icon="package"></span><span data-i18n="index.navBatch">Batch</span></span></a>
+                    <a href="/files.html" data-auth-link class="btn"><span class="icon-inline"><span data-icon="files"></span><span data-i18n="index.navFiles">Files</span></span></a>
+                    <a href="/sessions.html" data-auth-link class="btn"><span class="icon-inline"><span data-icon="sessions"></span><span data-i18n="index.navSessions">Sessions</span></span></a>
                 </div>
             </div>
         </header>
@@ -138,23 +139,23 @@
         <div class="install">
             <h3 class="icon-inline"><span data-icon="rocket"></span><span data-i18n="index.installTitle">一键启动客户端</span></h3>
             <div class="install-tabs">
-                <div class="install-tab active" onclick="sw(this,'linux')">Linux / macOS</div>
-                <div class="install-tab" onclick="sw(this,'win')">Windows</div>
-                <div class="install-tab" onclick="sw(this,'win7')">Win 7/8</div>
+                <div class="install-tab active" onclick="sw(this,'linux')" data-i18n="index.tabLinux">Linux / macOS</div>
+                <div class="install-tab" onclick="sw(this,'win')" data-i18n="index.tabWindows">Windows</div>
+                <div class="install-tab" onclick="sw(this,'win7')" data-i18n="index.tabWinLegacy">Win 7/8</div>
             </div>
 
             <div class="install-panel active" id="p-linux">
                 <div class="cmd-group">
                     <div class="cmd-label icon-inline"><span data-icon="package"></span><span data-i18n="index.curlLabel">curl 一键启动（替换 {password} 为你的密码）</span></div>
                     <div class="cmd-row">
-                        <div class="cmd-code" data-tpl="curl -sL {{HTTP}}{{H}}/install.sh | sh -s -- {{WS}}{{H}} -p <自定义密码>"></div>
+                        <div class="cmd-code" data-tpl="curl -sL {{HTTP}}{{H}}/install.sh | sh -s -- {{WS}}{{H}} -p {{PW}}"></div>
                         <button class="copy-btn" onclick="cp(this)"><span data-i18n="common.copy">复制</span></button>
                     </div>
                 </div>
                 <div class="cmd-group">
                     <div class="cmd-label" data-i18n="index.wgetLabel">wget 版</div>
                     <div class="cmd-row">
-                        <div class="cmd-code" data-tpl="wget -qO- {{HTTP}}{{H}}/install.sh | sh -s -- {{WS}}{{H}} -p <自定义密码>"></div>
+                        <div class="cmd-code" data-tpl="wget -qO- {{HTTP}}{{H}}/install.sh | sh -s -- {{WS}}{{H}} -p {{PW}}"></div>
                         <button class="copy-btn" onclick="cp(this)"><span data-i18n="common.copy">复制</span></button>
                     </div>
                 </div>
@@ -171,7 +172,7 @@
                 <div class="cmd-group">
                     <div class="cmd-label icon-inline"><span data-icon="package"></span><span data-i18n="index.psLabel">PowerShell 一键启动（替换 {password} 为你的密码）</span></div>
                     <div class="cmd-row">
-                        <div class="cmd-code" data-tpl='powershell -Command "iwr -useb {{HTTP}}{{H}}/install.ps1 | iex; RDev {{WS}}{{H}} -Password <自定义密码>"'></div>
+                        <div class="cmd-code" data-tpl='powershell -Command "iwr -useb {{HTTP}}{{H}}/install.ps1 | iex; RDev {{WS}}{{H}} -Password {{PW}}"'></div>
                         <button class="copy-btn" onclick="cp(this)"><span data-i18n="common.copy">复制</span></button>
                     </div>
                 </div>
@@ -193,7 +194,7 @@
                     </div>
                 </div>
                 <div class="cmd-group">
-                    <div class="cmd-label" data-i18n="index.win7Step2">2. 粘贴以下命令（替换 <span class="hl">密码</span>）</div>
+                    <div class="cmd-label" data-i18n="index.win7Step2">2. 粘贴以下命令（替换 {password}）</div>
                     <div class="cmd-row">
                         <div class="cmd-code" id="c-w7-pw"></div>
                         <button class="copy-btn" onclick="cp(this)"><span data-i18n="common.copy">复制</span></button>
@@ -239,7 +240,14 @@
     const adminToken = new URLSearchParams(location.search).get('token') || localStorage.getItem('rdevAdminToken') || '';
     if (adminToken) localStorage.setItem('rdevAdminToken', adminToken);
     function authURL(path) { return adminToken ? path + (path.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(adminToken) : path; }
-    function authFetch(path, init) { return fetch(authURL(path), init).then(r => { if (r.status === 401) { const token = prompt(t('common.adminTokenRequired')); if (token) { localStorage.setItem('rdevAdminToken', token); location.search = 'token=' + encodeURIComponent(token); } } return r; }); }
+    async function authFetch(path, init) {
+        const r = await fetch(authURL(path), init);
+        if (r.status === 401) {
+            const token = await RDevUI.prompt({ title: t('common.adminTokenRequired'), message: t('common.adminTokenRequired'), type: 'password' });
+            if (token) { localStorage.setItem('rdevAdminToken', token); location.search = 'token=' + encodeURIComponent(token); }
+        }
+        return r;
+    }
         document.querySelectorAll('[data-auth-link]').forEach(a => a.href = authURL(a.getAttribute('href')));
         const H = location.host;
         const isHTTPS = location.protocol === 'https:';
@@ -248,20 +256,41 @@
         let SP = '2222';
 
         function render() {
+            const passwordPlaceholder = t('index.passwordPlaceholder');
             document.querySelectorAll('.cmd-code[data-tpl]').forEach(el => {
-                el.textContent = el.dataset.tpl
+                setCmdCode(el, el.dataset.tpl
                     .replace(/\{\{WS\}\}/g, WS).replace(/\{\{HTTP\}\}/g, HTTP)
-                    .replace(/\{\{H\}\}/g, H).replace(/\{\{SP\}\}/g, SP);
+                    .replace(/\{\{H\}\}/g, H).replace(/\{\{SP\}\}/g, SP)
+                    .replace(/\{\{PW\}\}/g, passwordPlaceholder));
             });
             // Win7/8 PS2.0 commands (nested quotes break data-tpl, render via JS)
             const el = id => document.getElementById(id);
-            if (el('c-w7-pw'))   el('c-w7-pw').textContent   = `[Net.ServicePointManager]::SecurityProtocol=[Enum]::ToObject([Net.SecurityProtocolType],3072); $wc=New-Object Net.WebClient; $wc.DownloadString('${HTTP}${H}/install.ps1') | iex; RDev ${WS}${H} -Password <自定义密码>`;
-            if (el('c-w7-open')) el('c-w7-open').textContent  = `[Net.ServicePointManager]::SecurityProtocol=[Enum]::ToObject([Net.SecurityProtocolType],3072); $wc=New-Object Net.WebClient; $wc.DownloadString('${HTTP}${H}/install.ps1') | iex; RDev ${WS}${H}`;
+            if (el('c-w7-pw'))   setCmdCode(el('c-w7-pw'), `[Net.ServicePointManager]::SecurityProtocol=[Enum]::ToObject([Net.SecurityProtocolType],3072); $wc=New-Object Net.WebClient; $wc.DownloadString('${HTTP}${H}/install.ps1') | iex; RDev ${WS}${H} -Password ${passwordPlaceholder}`);
+            if (el('c-w7-open')) setCmdCode(el('c-w7-open'), `[Net.ServicePointManager]::SecurityProtocol=[Enum]::ToObject([Net.SecurityProtocolType],3072); $wc=New-Object Net.WebClient; $wc.DownloadString('${HTTP}${H}/install.ps1') | iex; RDev ${WS}${H}`);
             document.querySelectorAll('.hint code[id]').forEach(el => {
                 el.innerHTML = el.innerHTML
                     .replace(/\{\{H\}\}/g, '<span class="h1">' + H + '</span>')
                     .replace(/\{\{SP\}\}/g, '<span class="h3">' + SP + '</span>');
             });
+        }
+
+        function setCmdCode(el, text) {
+            el.dataset.copy = text;
+            el.innerHTML = highlightCommand(text);
+        }
+
+        function highlightCommand(text) {
+            return esc(text).replace(/(&lt;[^&]+&gt;)|(\b(?:自定义密码|your-password)\b)|(https?:\/\/[^\s'"|]+|wss?:\/\/[^\s'"|]+)|(\$[A-Za-z_]\w*)|(\|)|("(?:[^"]*)")|('(?:[^']*)')|(^|[\s;])(--?[A-Za-z][\w-]*|-[A-Za-z]\b)|(^|[\s;|])([A-Za-z][\w.-]*)(?=\s|$)/g,
+                (m, bracketPlaceholder, plainPlaceholder, url, variable, pipe, dquote, squote, flagPrefix, flag, cmdPrefix, cmd) => {
+                    if (bracketPlaceholder || plainPlaceholder) return '<span class="placeholder">' + (bracketPlaceholder || plainPlaceholder) + '</span>';
+                    if (url) return '<span class="url">' + url + '</span>';
+                    if (variable) return '<span class="var">' + variable + '</span>';
+                    if (pipe) return '<span class="pipe">|</span>';
+                    if (dquote || squote) return '<span class="quote">' + (dquote || squote) + '</span>';
+                    if (flag) return flagPrefix + '<span class="flag">' + flag + '</span>';
+                    if (cmd) return cmdPrefix + '<span class="cmd">' + cmd + '</span>';
+                    return m;
+                });
         }
 
         authFetch('/api/config').then(r=>r.json()).then(cfg => {
@@ -279,26 +308,10 @@
 
         function cp(btn) {
             const code = btn.closest('.cmd-row').querySelector('.cmd-code');
-            navigator.clipboard.writeText(code.textContent.trim()).then(() => {
-                btn.textContent = '✓'; btn.classList.add('ok');
+            navigator.clipboard.writeText((code.dataset.copy || code.textContent).trim()).then(() => {
+                btn.innerHTML = icon('check'); btn.classList.add('ok');
                 setTimeout(() => { btn.innerHTML = '<span data-i18n="common.copy">' + t('common.copy') + '</span>'; btn.classList.remove('ok'); }, 1500);
             });
-        }
-
-        // ── WS online indicator ──
-        let wsPing = null, wsOk = false;
-        function startWSIndicator() {
-            const proto = isHTTPS ? 'wss:' : 'ws:';
-            wsPing = new WebSocket(`${proto}//${H}${authURL('/api/clients')}`, ['json']);
-            wsPing.onopen = () => { wsOk = true; updateWSIndicator(); };
-            wsPing.onerror = () => { wsOk = false; updateWSIndicator(); };
-            wsPing.onclose = () => { wsOk = false; updateWSIndicator(); };
-        }
-        function updateWSIndicator() {
-            const el = document.getElementById('ws-indicator');
-            el.style.display = 'inline-flex';
-            const dot = el.querySelector('.ws-dot');
-            dot.className = 'ws-dot ' + (wsOk ? 'ok' : 'err');
         }
 
         async function refresh() {
@@ -315,7 +328,7 @@
                     <td style="color:var(--muted)">${ago(d.connectedAt)}</td>
                     <td>${d.sessions}</td><td>${d.forwards}</td>
                     <td>${d.hasPassword?'<span class="badge green">' + t('common.password') + '</span>':'<span class="badge yellow">' + t('common.open') + '</span>'}</td>
-                    <td><a href="/terminal.html?device=${encodeURIComponent(d.id)}" class="term-btn">${icon('play')} Terminal</a></td>
+                    <td><a href="/terminal.html?device=${encodeURIComponent(d.id)}" class="term-btn">${icon('play')} ${t('index.navTerminal')}</a></td>
                 </tr>`).join('');
             } catch(e) {}
         }
@@ -324,7 +337,6 @@
             if(s<60)return t('common.justNow'); if(s<3600)return t('common.minutesAgo', {n: Math.floor(s/60)});
             if(s<86400)return t('common.hoursAgo', {n: Math.floor(s/3600)}); return t('common.daysAgo', {n: Math.floor(s/86400)}); }
         refresh(); setInterval(refresh, 3000);
-        startWSIndicator();
     </script>
 </body>
 </html>

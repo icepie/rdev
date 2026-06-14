@@ -2,8 +2,9 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
+    <script src="/boot.js"></script>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>RDev Terminal</title>
+    <title data-i18n="title.terminal">RDev Terminal</title>
     <link rel="stylesheet" href="/vendor/xterm.css">
     <style>
         :root { color-scheme: dark; }
@@ -28,15 +29,13 @@
         .toolbar { display: flex; align-items: center; padding: 6px 12px; background: var(--card); border-bottom: 1px solid var(--border); gap: 10px; flex-shrink: 0; }
         .toolbar .logo { font-size: 0.85rem; font-weight: 600; color: var(--accent); white-space: nowrap; }
         .toolbar .logo span { color: var(--muted); font-weight: 400; }
-        .device-select { padding: 4px 8px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg); color: var(--text); font-size: 0.82rem; outline: none; min-width: 120px; }
-        .device-select:focus { border-color: var(--accent); }
+        .device-select { min-width: 150px; max-width: 280px; }
         .new-tab-btn { padding: 4px 12px; border-radius: 6px; border: 1px solid var(--border); background: transparent; color: var(--muted); font-size: 0.8rem; cursor: pointer; transition: all .15s; white-space: nowrap; }
         .new-tab-btn:hover { border-color: var(--accent); color: var(--accent); }
         .spacer { flex: 1; }
         .gh-link { font-size: 0.85rem; color: var(--muted); text-decoration: none; }
         .gh-link:hover { color: var(--accent); }
         .lang-switch { display:inline-flex; align-items:center; gap:6px; color:var(--muted); font-size:0.78rem; }
-        .lang-switch select { background:var(--bg); color:var(--text); border:1px solid var(--border); border-radius:6px; padding:4px 6px; }
         .nav { display: flex; gap: 6px; }
         .nav a { padding: 4px 10px; border-radius: 6px; font-size: 0.78rem; text-decoration: none; border: 1px solid var(--border); color: var(--muted); transition: all .15s; }
         .nav a:hover { color: var(--accent); border-color: var(--accent); }
@@ -70,7 +69,7 @@
         @media (max-width: 720px) {
             .toolbar { flex-wrap: wrap; gap: 6px; padding: 6px 8px; }
             .toolbar .logo { width: 100%; }
-            .device-select { flex: 1; min-width: 0; }
+            .device-select { flex: 1; min-width: 0; max-width: none; }
             .new-tab-btn { padding: 5px 10px; }
             .gh-link { display: none; }
             .nav { width: 100%; overflow-x: auto; padding-bottom: 2px; }
@@ -86,7 +85,7 @@
 <body>
     <div class="toolbar">
         <div class="logo">RDev <span data-i18n="nav.terminal">Terminal</span></div>
-        <select id="device-select" class="device-select"><option value="" data-i18n="terminal.devicePlaceholder">-- device --</option></select>
+        <div id="device-select" class="device-select"></div>
         <button class="new-tab-btn" id="new-tab-btn" data-i18n="terminal.newTab">+ New Tab</button>
         <div class="spacer"></div>
         <a class="gh-link" href="https://github.com/icepie/rdev" target="_blank" title="GitHub"><span class="icon-inline"><span data-icon="github"></span>GitHub</span></a>
@@ -95,6 +94,7 @@
             <a href="/" data-auth-link data-i18n="nav.dashboard">Dashboard</a>
             <a href="/sessions.html" data-auth-link data-i18n="nav.sessions">Sessions</a>
             <a href="/batch.html" data-auth-link data-i18n="nav.batch">Batch</a>
+            <a href="/files.html" data-auth-link data-i18n="nav.files">Files</a>
         </div>
     </div>
     <div class="tab-bar" id="tab-bar"></div>
@@ -120,7 +120,14 @@
     const adminToken = new URLSearchParams(location.search).get('token') || localStorage.getItem('rdevAdminToken') || '';
     if (adminToken) localStorage.setItem('rdevAdminToken', adminToken);
     function authURL(path) { return adminToken ? path + (path.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(adminToken) : path; }
-    function authFetch(path, init) { return fetch(authURL(path), init).then(r => { if (r.status === 401) { const token = prompt(t('common.adminTokenRequired')); if (token) { localStorage.setItem('rdevAdminToken', token); location.search = 'token=' + encodeURIComponent(token); } } return r; }); }
+    async function authFetch(path, init) {
+        const r = await fetch(authURL(path), init);
+        if (r.status === 401) {
+            const token = await RDevUI.prompt({ title: t('common.adminTokenRequired'), message: t('common.adminTokenRequired'), type: 'password' });
+            if (token) { localStorage.setItem('rdevAdminToken', token); location.search = 'token=' + encodeURIComponent(token); }
+        }
+        return r;
+    }
     const FitAddon = window.FitAddon;
     const WebLinksAddon = window.WebLinksAddon;
     const WebglAddon = window.AddonWebgl?.WebglAddon;
@@ -128,6 +135,7 @@
     document.querySelectorAll('[data-auth-link]').forEach(a => a.href = authURL(a.getAttribute('href')));
 
     let tabs = [], activeTabId = null, tabCounter = 0;
+    RDevUI.setSelectOptions(document.getElementById('device-select'), [{ value: '', label: t('terminal.devicePlaceholder') }], '');
     function activeTab() { return tabs.find(t => t.id === activeTabId); }
     function sendTerminalData(tab, data) {
         if (tab && tab.ws && tab.ws.readyState === WebSocket.OPEN && !tab.needAuth) {
@@ -243,7 +251,7 @@
         tab.status = 'connecting'; tab.needAuth = false; tab.term.reset(); renderTabs();
 
         const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-        tab.ws = new WebSocket(`${proto}//${location.host}${authURL('/terminal?device=' + encodeURIComponent(tab.deviceId))}`);
+        tab.ws = RDevUI.socket(`${proto}//${location.host}${authURL('/terminal?device=' + encodeURIComponent(tab.deviceId))}`);
         tab.ws.binaryType = 'arraybuffer';
 
         tab.ws.onopen = () => {
@@ -279,12 +287,12 @@
                 if (input) { input.value = ''; input.focus(); }
             } else if (msg.op === 'exit') {
                 removeAuthOverlay(tab);
-                tab.term.write('\r\n\x1b[33m[Process exited with code ' + msg.code + ']\x1b[0m\r\n');
+                tab.term.write('\r\n\x1b[33m[' + t('terminal.exitCode', {code: msg.code}) + ']\x1b[0m\r\n');
                 tab.status = 'disconnected'; renderTabs();
                 tab.ws.close(); tab.ws = null;
             } else if (msg.op === 'error') {
                 removeAuthOverlay(tab);
-                tab.term.write('\r\n\x1b[31m[Error: ' + msg.message + ']\x1b[0m\r\n');
+                tab.term.write('\r\n\x1b[31m[' + t('terminal.error', {message: msg.message}) + ']\x1b[0m\r\n');
                 tab.status = 'disconnected'; renderTabs();
             }
         };
@@ -293,7 +301,7 @@
             removeAuthOverlay(tab);
             if (tab.status !== 'disconnected') {
                 tab.status = 'disconnected';
-                tab.term.write('\r\n\x1b[31m[Connection closed]\x1b[0m\r\n');
+                tab.term.write('\r\n\x1b[31m[' + t('terminal.closed') + ']\x1b[0m\r\n');
                 renderTabs();
             }
         };
@@ -362,9 +370,8 @@
             const r = await authFetch('/api/devices'); devices = await r.json();
             const sel = document.getElementById('device-select');
             const cur = sel.value;
-            sel.innerHTML = '<option value="">' + t('terminal.devicePlaceholder') + '</option>';
-            devices.forEach(d => { const opt = document.createElement('option'); opt.value = d.id; opt.textContent = d.id + (d.hasPassword ? ' 🔒' : ''); sel.appendChild(opt); });
-            if (cur && devices.find(d => d.id === cur)) sel.value = cur;
+            const options = [{ value: '', label: t('terminal.devicePlaceholder') }].concat(devices.map(d => ({ value: d.id, html: esc(d.id) + (d.hasPassword ? icon('lock') : '') })));
+            RDevUI.setSelectOptions(sel, options, cur && devices.find(d => d.id === cur) ? cur : '');
         } catch(e) {}
     }
 

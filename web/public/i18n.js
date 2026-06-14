@@ -9,7 +9,13 @@
       'nav.terminal': 'Terminal',
       'nav.batch': 'Batch',
       'nav.sessions': 'Sessions',
+      'nav.files': 'Files',
       'lang.label': 'Language',
+      'title.index': 'RDev - Remote Debug Server',
+      'title.terminal': 'RDev Terminal',
+      'title.batch': 'RDev - Batch',
+      'title.sessions': 'RDev - Session Manager',
+      'title.files': 'RDev Files',
       'common.copy': 'Copy',
       'common.copied': 'Copied',
       'common.connect': 'Connect',
@@ -20,11 +26,20 @@
       'common.online': 'Online',
       'common.password': 'Password',
       'common.open': 'Open',
+      'common.error': 'Error',
+      'common.failed': 'failed',
+      'common.ok': 'OK',
+      'common.cancel': 'Cancel',
       'common.justNow': 'just now',
       'common.minutesAgo': '{n} min ago',
       'common.hoursAgo': '{n} h ago',
       'common.daysAgo': '{n} d ago',
+      'index.heading': 'Remote Debug',
       'index.subtitle': 'SSH remote debugging for connected devices · Shell / SCP / SFTP / Port Forwarding / Key auth',
+      'index.navTerminal': 'Terminal',
+      'index.navBatch': 'Batch',
+      'index.navFiles': 'Files',
+      'index.navSessions': 'Sessions',
       'index.onlineDevices': 'Online devices',
       'index.activeSessions': 'Active sessions',
       'index.portForwards': 'Port forwards',
@@ -37,6 +52,10 @@
       'index.auth': 'Auth',
       'index.waitingDevices': 'Waiting for devices...',
       'index.installTitle': 'One-click client start',
+      'index.tabLinux': 'Linux / macOS',
+      'index.tabWindows': 'Windows',
+      'index.tabWinLegacy': 'Win 7/8',
+      'index.passwordPlaceholder': 'your-password',
       'index.curlLabel': 'Start with curl (replace {password} with your password)',
       'index.wgetLabel': 'wget version',
       'index.openMode': 'Open mode (no password, LAN only)',
@@ -55,15 +74,26 @@
       'terminal.authTitle': 'Device authentication',
       'terminal.authDesc': '{id} requires password verification',
       'terminal.passwordPlaceholder': 'Enter password',
+      'terminal.error': 'Error: {message}',
+      'terminal.closed': 'Connection closed',
+      'terminal.exitCode': 'Process exited with code {code}',
       'sessions.title': 'Session Manager',
       'sessions.active': 'Active sessions',
       'sessions.searchPlaceholder': 'Search device ID / session ID / command...',
-      'sessions.detach': '✕ Detach',
+      'sessions.detach': 'Detach',
       'sessions.emptyHint': 'Select a session on the left to attach',
       'sessions.noActive': 'No active sessions',
       'sessions.authTitle': 'Session authentication',
       'sessions.authDesc': '{id} requires device password',
       'sessions.disconnected': '[Disconnected]',
+      'sessions.writable': 'Writable',
+      'sessions.interactiveShell': '(interactive shell)',
+      'sessions.sftpSession': '(SFTP session)',
+      'sessions.noCommand': '(no command)',
+      'sessions.shell': '(shell)',
+      'sessions.pipe': 'pipe',
+      'sessions.exitCode': 'Session exited with code {code}',
+      'sessions.error': 'Error: {message}',
       'batch.devices': 'Devices',
       'batch.selectAll': 'Select all',
       'batch.commandTab': 'Batch Command',
@@ -71,12 +101,45 @@
       'batch.dropHint': 'Click or drag file here',
       'batch.distribute': 'Distribute',
       'batch.commandPlaceholder': 'Command to run on selected devices...',
+      'batch.destPlaceholder': 'Destination path',
       'batch.run': 'Run',
       'batch.noSelection': 'Select at least one device',
       'batch.noCommand': 'Enter a command',
       'batch.passwordRequired': 'Password required for {ids}',
       'batch.wrongPassword': 'Wrong password for {id}',
-      'batch.uploading': 'uploading...'
+      'batch.running': 'running...',
+      'batch.uploading': 'uploading...',
+      'batch.exitCode': 'exit {code}',
+      'batch.authRequired': 'auth required',
+      'files.title': 'Files',
+      'files.devices': 'Device',
+      'files.path': 'Path',
+      'files.up': 'Up',
+      'files.refresh': 'Refresh',
+      'files.upload': 'Upload',
+      'files.dropHint': 'Drop files here or choose files',
+      'files.tasks': 'File Tasks',
+      'files.empty': 'Select a device to browse files',
+      'files.name': 'Name',
+      'files.size': 'Size',
+      'files.modified': 'Modified',
+      'files.actions': 'Actions',
+      'files.download': 'Download',
+      'files.pause': 'Pause',
+      'files.resume': 'Resume',
+      'files.cancel': 'Cancel',
+      'files.clear': 'Clear',
+      'files.authRequired': 'Password required for {id}',
+      'files.reselect': 'Reselect file to resume upload',
+      'files.truncated': 'Directory truncated',
+      'files.noTasks': 'No file tasks',
+      'files.emptyDir': 'No files',
+      'files.status.running': 'running',
+      'files.status.completed': 'completed',
+      'files.status.failed': 'failed',
+      'files.status.paused': 'paused',
+      'files.status.queued': 'queued',
+      'files.status.canceled': 'canceled'
     },
     zh: {
       'theme.toggle': '主题',
@@ -87,7 +150,13 @@
       'nav.terminal': '终端',
       'nav.batch': '批量',
       'nav.sessions': '会话',
+      'nav.files': '文件',
       'lang.label': '语言',
+      'title.index': 'RDev - 远程调试服务',
+      'title.terminal': 'RDev 终端',
+      'title.batch': 'RDev - 批量操作',
+      'title.sessions': 'RDev - 会话管理',
+      'title.files': 'RDev 文件',
       'common.copy': '复制',
       'common.copied': '已复制',
       'common.connect': '连接',
@@ -98,11 +167,20 @@
       'common.online': '在线',
       'common.password': '密码',
       'common.open': '开放',
+      'common.error': '错误',
+      'common.failed': '失败',
+      'common.ok': '成功',
+      'common.cancel': '取消',
       'common.justNow': '刚刚',
       'common.minutesAgo': '{n} 分钟前',
       'common.hoursAgo': '{n} 小时前',
       'common.daysAgo': '{n} 天前',
+      'index.heading': '远程调试',
       'index.subtitle': 'SSH 远程调试已连接设备 · Shell / SCP / SFTP / 端口转发 / 免密',
+      'index.navTerminal': '终端',
+      'index.navBatch': '批量',
+      'index.navFiles': '文件',
+      'index.navSessions': '会话',
       'index.onlineDevices': '在线设备',
       'index.activeSessions': '活跃会话',
       'index.portForwards': '端口转发',
@@ -115,6 +193,10 @@
       'index.auth': '认证',
       'index.waitingDevices': '等待设备连接...',
       'index.installTitle': '一键启动客户端',
+      'index.tabLinux': 'Linux / macOS',
+      'index.tabWindows': 'Windows',
+      'index.tabWinLegacy': 'Win 7/8',
+      'index.passwordPlaceholder': '自定义密码',
       'index.curlLabel': 'curl 一键启动（替换 {password} 为你的密码）',
       'index.wgetLabel': 'wget 版',
       'index.openMode': '开放模式（无密码，仅限内网）',
@@ -133,15 +215,26 @@
       'terminal.authTitle': '设备认证',
       'terminal.authDesc': '{id} 需要密码验证',
       'terminal.passwordPlaceholder': '输入密码',
+      'terminal.error': '错误：{message}',
+      'terminal.closed': '连接已关闭',
+      'terminal.exitCode': '进程退出，代码 {code}',
       'sessions.title': '会话管理',
       'sessions.active': '活跃会话',
       'sessions.searchPlaceholder': '搜索设备ID / 会话ID / 命令...',
-      'sessions.detach': '✕ 断开',
+      'sessions.detach': '断开',
       'sessions.emptyHint': '选择左侧会话以附加',
       'sessions.noActive': '无活跃会话',
       'sessions.authTitle': '会话认证',
       'sessions.authDesc': '{id} 需要设备密码',
       'sessions.disconnected': '[已断开]',
+      'sessions.writable': '可写',
+      'sessions.interactiveShell': '（交互式 Shell）',
+      'sessions.sftpSession': '（SFTP 会话）',
+      'sessions.noCommand': '（无命令）',
+      'sessions.shell': '（Shell）',
+      'sessions.pipe': '管道',
+      'sessions.exitCode': '会话退出，代码 {code}',
+      'sessions.error': '错误：{message}',
       'batch.devices': '设备',
       'batch.selectAll': '全选',
       'batch.commandTab': '批量命令',
@@ -149,12 +242,45 @@
       'batch.dropHint': '点击或拖拽文件到这里',
       'batch.distribute': '分发',
       'batch.commandPlaceholder': '在所选设备上运行的命令...',
+      'batch.destPlaceholder': '目标路径',
       'batch.run': '执行',
       'batch.noSelection': '请至少选择一个设备',
       'batch.noCommand': '请输入命令',
       'batch.passwordRequired': '{ids} 需要密码',
       'batch.wrongPassword': '{id} 密码错误',
-      'batch.uploading': '上传中...'
+      'batch.running': '执行中...',
+      'batch.uploading': '上传中...',
+      'batch.exitCode': '退出 {code}',
+      'batch.authRequired': '需要认证',
+      'files.title': '文件',
+      'files.devices': '设备',
+      'files.path': '路径',
+      'files.up': '上级',
+      'files.refresh': '刷新',
+      'files.upload': '上传',
+      'files.dropHint': '拖拽文件到这里，或选择文件',
+      'files.tasks': '文件任务',
+      'files.empty': '选择设备后浏览文件',
+      'files.name': '名称',
+      'files.size': '大小',
+      'files.modified': '修改时间',
+      'files.actions': '操作',
+      'files.download': '下载',
+      'files.pause': '暂停',
+      'files.resume': '继续',
+      'files.cancel': '取消',
+      'files.clear': '清除',
+      'files.authRequired': '{id} 需要密码',
+      'files.reselect': '重新选择文件后继续上传',
+      'files.truncated': '目录已截断',
+      'files.noTasks': '暂无文件任务',
+      'files.emptyDir': '暂无文件',
+      'files.status.running': '进行中',
+      'files.status.completed': '已完成',
+      'files.status.failed': '失败',
+      'files.status.paused': '已暂停',
+      'files.status.queued': '排队中',
+      'files.status.canceled': '已取消'
     }
   };
 
@@ -162,6 +288,7 @@
   const browserLang = (navigator.language || 'en').toLowerCase().startsWith('zh') ? 'zh' : 'en';
   let currentLang = localStorage.getItem('rdevLang') || browserLang;
   if (!supported.includes(currentLang)) currentLang = 'en';
+  document.documentElement.lang = currentLang === 'zh' ? 'zh-CN' : 'en';
 
   function format(template, vars) {
     return String(template).replace(/\{(\w+)\}/g, (_, key) => vars && vars[key] !== undefined ? vars[key] : '');
@@ -187,18 +314,35 @@
     scope.querySelectorAll('[data-i18n-title]').forEach(el => { el.title = t(el.dataset.i18nTitle); });
     scope.querySelectorAll('[data-i18n-placeholder]').forEach(el => { el.placeholder = t(el.dataset.i18nPlaceholder); });
     scope.querySelectorAll('[data-i18n-html]').forEach(el => { el.innerHTML = t(el.dataset.i18nHtml); });
-    scope.querySelectorAll('[data-lang-select]').forEach(el => { el.value = currentLang; });
+    scope.querySelectorAll('[data-lang-select]').forEach(el => {
+      if (window.RDevUI && RDevUI.setSelectOptions) {
+        RDevUI.setSelectOptions(el, languageOptions(), currentLang);
+      } else {
+        el.dataset.value = currentLang;
+      }
+    });
+  }
+
+  function languageOptions() {
+    return [
+      { value: 'en', label: 'EN' },
+      { value: 'zh', label: '中文' }
+    ];
   }
 
   function langSelector() {
-    return '<label class="lang-switch"><span data-i18n="lang.label">Language</span><select data-lang-select aria-label="Language"><option value="en">EN</option><option value="zh">中文</option></select></label>';
+    return '<label class="lang-switch"><span data-i18n="lang.label">Language</span><span data-lang-select data-value="' + currentLang + '"></span></label>';
   }
 
   document.addEventListener('change', event => {
     const select = event.target.closest && event.target.closest('[data-lang-select]');
-    if (select) setLang(select.value);
+    if (select) setLang(select.value || select.dataset.value);
   });
-  document.addEventListener('DOMContentLoaded', () => applyI18n());
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', () => applyI18n());
+  } else {
+    applyI18n();
+  }
 
   window.RDevI18n = { t, setLang, apply: applyI18n, langSelector, get lang() { return currentLang; } };
   window.t = t;

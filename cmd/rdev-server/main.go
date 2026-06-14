@@ -138,6 +138,7 @@ Examples:
 	mux.HandleFunc("/terminal", srv.HandleTerminalWS)
 	mux.HandleFunc("/session", srv.HandleSessionAttachWS)
 	mux.HandleFunc("/batch", srv.HandleBatchWS)
+	mux.HandleFunc("/files", srv.HandleFilesWS)
 	mux.HandleFunc("/api/clients", srv.HandleAPI)
 	mux.HandleFunc("/api/sessions", srv.HandleSessionsAPI)
 	mux.HandleFunc("/api/devices", srv.HandleTerminalAPI)

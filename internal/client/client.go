@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -166,6 +167,15 @@ type fileStream struct {
 	mode os.FileMode
 }
 
+type managedUpload struct {
+	path      string
+	partPath  string
+	file      *os.File
+	size      int64
+	offset    int64
+	startedAt time.Time
+}
+
 // Client is the rdev client that connects to the server
 type Client struct {
 	serverURL   string
@@ -177,6 +187,8 @@ type Client struct {
 	sessions    map[string]*clientSession
 	forwards    map[string]net.Conn
 	fileStreams map[string]*fileStream
+	uploads     map[string]*managedUpload
+	downloads   map[string]chan struct{}
 	mu          sync.Mutex
 	done        chan struct{}
 
@@ -198,6 +210,8 @@ func NewClient(serverURL, clientID, password, shell string) *Client {
 		sessions:    make(map[string]*clientSession),
 		forwards:    make(map[string]net.Conn),
 		fileStreams: make(map[string]*fileStream),
+		uploads:     make(map[string]*managedUpload),
+		downloads:   make(map[string]chan struct{}),
 		done:        make(chan struct{}, 1),
 	}
 }
@@ -233,6 +247,14 @@ func (h *wsEventHandler) OnClose(socket *gws.Conn, err error) {
 	for fid, tcpConn := range h.client.forwards {
 		tcpConn.Close()
 		delete(h.client.forwards, fid)
+	}
+	for tid, upload := range h.client.uploads {
+		upload.file.Close()
+		delete(h.client.uploads, tid)
+	}
+	for tid, cancel := range h.client.downloads {
+		close(cancel)
+		delete(h.client.downloads, tid)
 	}
 	h.client.conn = nil
 	h.client.mu.Unlock()
@@ -279,6 +301,13 @@ func (h *wsEventHandler) handleBinaryMessage(raw []byte) {
 		h.client.handleBinFileChunk(id, payload)
 	case protocol.BinFileEnd:
 		h.client.handleBinFileEnd(id)
+	case protocol.BinFileUploadChunk:
+		_, taskID, offset, data, err := protocol.DecodeBinFrameOffset(raw)
+		if err == nil {
+			h.client.handleManagedUploadChunk(taskID, offset, data)
+		}
+	case protocol.BinFileTransferCancel:
+		h.client.handleManagedTransferCancel(id)
 	}
 }
 
@@ -354,6 +383,9 @@ func (c *Client) connect() error {
 func (c *Client) handleMessage(msg *protocol.Message) {
 	switch msg.Type {
 	case protocol.MsgRegister:
+		if msg.ClientID != "" {
+			c.clientID = msg.ClientID
+		}
 		c.sshPort = msg.SSHPort
 		c.httpHost = msg.HTTPHost
 		if c.OnConnect != nil {
@@ -373,7 +405,310 @@ func (c *Client) handleMessage(msg *protocol.Message) {
 		c.handleTCPConnect(msg)
 	case protocol.MsgTCPClose:
 		c.handleTCPClose(msg)
+	case protocol.MsgFileListRequest:
+		go c.handleFileListRequest(msg)
+	case protocol.MsgFileUploadStart:
+		go c.handleManagedUploadStart(msg)
+	case protocol.MsgFileUploadEnd:
+		go c.handleManagedUploadEnd(msg)
+	case protocol.MsgFileDownloadStart:
+		go c.handleManagedDownloadStart(msg)
+	case protocol.MsgFileTransferCancel:
+		c.handleManagedTransferCancel(msg.TaskID)
 	}
+}
+
+func (c *Client) sendBinaryOffset(typ byte, id string, offset int64, data []byte) error {
+	frame := protocol.EncodeBinFrameOffset(typ, id, offset, data)
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	if c.conn == nil {
+		return fmt.Errorf("not connected")
+	}
+	return c.conn.WriteMessage(gws.OpcodeBinary, frame)
+}
+
+func (c *Client) sendFileTransferError(taskID, path, errText string) {
+	c.send(&protocol.Message{Type: protocol.MsgFileTransferError, TaskID: taskID, Path: path, Error: errText})
+}
+
+func defaultFilePath(path string) string {
+	if path != "" {
+		return path
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		return home
+	}
+	if cwd, err := os.Getwd(); err == nil && cwd != "" {
+		return cwd
+	}
+	return "."
+}
+
+func fileParent(path string) string {
+	clean := filepath.Clean(defaultFilePath(path))
+	parent := filepath.Dir(clean)
+	if parent == "." && filepath.IsAbs(clean) {
+		return clean
+	}
+	return parent
+}
+
+func (c *Client) handleFileListRequest(msg *protocol.Message) {
+	path := defaultFilePath(msg.Path)
+	entries, truncated, err := listFileEntries(path, 2000)
+	if err != nil {
+		c.send(&protocol.Message{Type: protocol.MsgFileListResult, RequestID: msg.RequestID, Path: path, Error: err.Error()})
+		return
+	}
+	home, _ := os.UserHomeDir()
+	c.send(&protocol.Message{
+		Type:        protocol.MsgFileListResult,
+		RequestID:   msg.RequestID,
+		Path:        filepath.Clean(path),
+		ParentPath:  fileParent(path),
+		HomePath:    home,
+		FileEntries: entries,
+		Truncated:   truncated,
+	})
+}
+
+func listFileEntries(path string, limit int) ([]protocol.FileEntry, bool, error) {
+	infos, err := os.ReadDir(path)
+	if err != nil {
+		return nil, false, err
+	}
+	sort.Slice(infos, func(i, j int) bool {
+		if infos[i].IsDir() != infos[j].IsDir() {
+			return infos[i].IsDir()
+		}
+		return strings.ToLower(infos[i].Name()) < strings.ToLower(infos[j].Name())
+	})
+	truncated := false
+	if limit > 0 && len(infos) > limit {
+		infos = infos[:limit]
+		truncated = true
+	}
+	entries := make([]protocol.FileEntry, 0, len(infos))
+	for _, ent := range infos {
+		info, err := ent.Info()
+		if err != nil {
+			continue
+		}
+		entries = append(entries, protocol.FileEntry{
+			Name:    ent.Name(),
+			Path:    filepath.Join(path, ent.Name()),
+			IsDir:   ent.IsDir(),
+			Size:    info.Size(),
+			ModTime: info.ModTime().Format(time.RFC3339),
+		})
+	}
+	return entries, truncated, nil
+}
+
+func safeJoinFile(dir, name string) string {
+	if name == "" {
+		return filepath.Clean(dir)
+	}
+	if filepath.IsAbs(name) {
+		return filepath.Clean(name)
+	}
+	return filepath.Join(defaultFilePath(dir), filepath.Base(name))
+}
+
+func (c *Client) handleManagedUploadStart(msg *protocol.Message) {
+	taskID := msg.TaskID
+	if taskID == "" {
+		return
+	}
+	target := msg.Path
+	if target == "" {
+		target = safeJoinFile(msg.ParentPath, msg.Name)
+	}
+	if target == "" {
+		c.sendFileTransferError(taskID, "", "missing target path")
+		return
+	}
+	partPath := target + ".rdevpart"
+	if err := os.MkdirAll(filepath.Dir(partPath), 0755); err != nil {
+		c.sendFileTransferError(taskID, target, fmt.Sprintf("mkdir error: %v", err))
+		return
+	}
+	f, err := os.OpenFile(partPath, os.O_CREATE|os.O_RDWR, 0644)
+	if err != nil {
+		c.sendFileTransferError(taskID, target, err.Error())
+		return
+	}
+	st, err := f.Stat()
+	if err != nil {
+		f.Close()
+		c.sendFileTransferError(taskID, target, err.Error())
+		return
+	}
+	offset := st.Size()
+	if msg.Size >= 0 && offset > msg.Size {
+		if err := f.Truncate(0); err != nil {
+			f.Close()
+			c.sendFileTransferError(taskID, target, err.Error())
+			return
+		}
+		offset = 0
+	}
+	if _, err := f.Seek(offset, io.SeekStart); err != nil {
+		f.Close()
+		c.sendFileTransferError(taskID, target, err.Error())
+		return
+	}
+	c.mu.Lock()
+	if old := c.uploads[taskID]; old != nil {
+		old.file.Close()
+	}
+	c.uploads[taskID] = &managedUpload{path: target, partPath: partPath, file: f, size: msg.Size, offset: offset, startedAt: time.Now()}
+	c.mu.Unlock()
+	c.send(&protocol.Message{Type: protocol.MsgFileUploadReady, TaskID: taskID, Path: target, Offset: offset, Size: msg.Size})
+}
+
+func (c *Client) handleManagedUploadChunk(taskID string, offset int64, data []byte) {
+	c.mu.Lock()
+	up := c.uploads[taskID]
+	c.mu.Unlock()
+	if up == nil {
+		c.sendFileTransferError(taskID, "", "upload not found")
+		return
+	}
+	if offset != up.offset {
+		c.sendFileTransferError(taskID, up.path, fmt.Sprintf("unexpected offset %d, want %d", offset, up.offset))
+		return
+	}
+	n, err := up.file.Write(data)
+	if err != nil {
+		c.sendFileTransferError(taskID, up.path, err.Error())
+		return
+	}
+	up.offset += int64(n)
+	c.sendBinaryOffset(protocol.BinFileUploadAck, taskID, up.offset, nil)
+}
+
+func (c *Client) handleManagedUploadEnd(msg *protocol.Message) {
+	taskID := msg.TaskID
+	c.mu.Lock()
+	up := c.uploads[taskID]
+	delete(c.uploads, taskID)
+	c.mu.Unlock()
+	if up == nil {
+		c.sendFileTransferError(taskID, msg.Path, "upload not found")
+		return
+	}
+	if err := up.file.Sync(); err != nil {
+		up.file.Close()
+		c.sendFileTransferError(taskID, up.path, err.Error())
+		return
+	}
+	if err := up.file.Close(); err != nil {
+		c.sendFileTransferError(taskID, up.path, err.Error())
+		return
+	}
+	if up.size >= 0 && up.offset != up.size {
+		c.sendFileTransferError(taskID, up.path, fmt.Sprintf("size mismatch: wrote %d of %d", up.offset, up.size))
+		return
+	}
+	if err := os.Rename(up.partPath, up.path); err != nil {
+		c.sendFileTransferError(taskID, up.path, err.Error())
+		return
+	}
+	c.send(&protocol.Message{Type: protocol.MsgFileTransferEnd, TaskID: taskID, Path: up.path, Size: up.offset, Success: true})
+}
+
+func (c *Client) handleManagedDownloadStart(msg *protocol.Message) {
+	taskID := msg.TaskID
+	path := msg.Path
+	if taskID == "" || path == "" {
+		return
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		c.sendFileTransferError(taskID, path, err.Error())
+		return
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil {
+		c.sendFileTransferError(taskID, path, err.Error())
+		return
+	}
+	if st.IsDir() {
+		c.sendFileTransferError(taskID, path, "cannot download directory")
+		return
+	}
+	offset := msg.Offset
+	if offset < 0 || offset > st.Size() {
+		offset = 0
+	}
+	if _, err := f.Seek(offset, io.SeekStart); err != nil {
+		c.sendFileTransferError(taskID, path, err.Error())
+		return
+	}
+	cancel := make(chan struct{})
+	c.mu.Lock()
+	if old := c.downloads[taskID]; old != nil {
+		close(old)
+	}
+	c.downloads[taskID] = cancel
+	c.mu.Unlock()
+	defer func() {
+		c.mu.Lock()
+		if c.downloads[taskID] == cancel {
+			delete(c.downloads, taskID)
+		}
+		c.mu.Unlock()
+	}()
+	c.send(&protocol.Message{Type: protocol.MsgFileDownloadStart, TaskID: taskID, Path: path, Name: filepath.Base(path), Size: st.Size(), Offset: offset, ModTime: st.ModTime().Format(time.RFC3339)})
+	buf := make([]byte, 512*1024)
+	cur := offset
+	for {
+		select {
+		case <-cancel:
+			return
+		default:
+		}
+		n, readErr := f.Read(buf)
+		if n > 0 {
+			select {
+			case <-cancel:
+				return
+			default:
+			}
+			if err := c.sendBinaryOffset(protocol.BinFileDownloadChunk, taskID, cur, buf[:n]); err != nil {
+				return
+			}
+			cur += int64(n)
+		}
+		if readErr == io.EOF {
+			c.sendBinaryOffset(protocol.BinFileTransferEnd, taskID, cur, nil)
+			c.send(&protocol.Message{Type: protocol.MsgFileTransferEnd, TaskID: taskID, Path: path, Size: st.Size(), Offset: cur, Success: true})
+			return
+		}
+		if readErr != nil {
+			c.sendFileTransferError(taskID, path, readErr.Error())
+			return
+		}
+	}
+}
+
+func (c *Client) handleManagedTransferCancel(taskID string) {
+	if taskID == "" {
+		return
+	}
+	c.mu.Lock()
+	if up := c.uploads[taskID]; up != nil {
+		up.file.Close()
+		delete(c.uploads, taskID)
+	}
+	if cancel := c.downloads[taskID]; cancel != nil {
+		close(cancel)
+		delete(c.downloads, taskID)
+	}
+	c.mu.Unlock()
 }
 
 func (c *Client) handleBinData(sessionID string, data []byte) {
@@ -917,6 +1252,9 @@ func (c *Client) cleanup() {
 
 // SSHPort returns the server's SSH port (received on register).
 func (c *Client) SSHPort() string { return c.sshPort }
+
+// ClientID returns the server-assigned client ID.
+func (c *Client) ClientID() string { return c.clientID }
 
 // HTTPHost returns the server's HTTP host:port (received on register).
 func (c *Client) HTTPHost() string { return c.httpHost }

@@ -134,17 +134,21 @@ Environment variables:
 		if sshPort == "" {
 			sshPort = "2222" // fallback
 		}
+		assignedID := cli.ClientID()
+		if assignedID == "" {
+			assignedID = clientID
+		}
 
 		fmt.Println("  ── How to Connect ─────────────────────────────")
-		fmt.Printf("  SSH:      ssh %s@%s -p %s\n", clientID, serverHost, sshPort)
+		fmt.Printf("  SSH:      ssh %s@%s -p %s\n", assignedID, serverHost, sshPort)
 		if password != "" {
 			fmt.Printf("  Password: %s\n", password)
-			fmt.Printf("            sshpass -p '%s' ssh %s@%s -p %s\n", password, clientID, serverHost, sshPort)
+			fmt.Printf("            sshpass -p '%s' ssh %s@%s -p %s\n", password, assignedID, serverHost, sshPort)
 		} else {
 			fmt.Println("  Password: <none> (open mode)")
 		}
-		fmt.Printf("  SFTP:     sftp -P %s %s@%s\n", sshPort, clientID, serverHost)
-		fmt.Printf("  SCP:      scp -P %s file %s@%s:~/\n", sshPort, clientID, serverHost)
+		fmt.Printf("  SFTP:     sftp -P %s %s@%s\n", sshPort, assignedID, serverHost)
+		fmt.Printf("  SCP:      scp -P %s file %s@%s:~/\n", sshPort, assignedID, serverHost)
 		fmt.Printf("  Dashboard: http://%s\n", serverHost)
 		fmt.Println("  ────────────────────────────────────────────────")
 		fmt.Println()

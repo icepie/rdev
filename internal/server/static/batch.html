@@ -2,8 +2,9 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
+    <script src="/boot.js"></script>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>RDev - Batch</title>
+    <title data-i18n="title.batch">RDev - Batch</title>
     <style>
         :root { color-scheme: dark; }
         :root[data-theme="dark"] {
@@ -25,7 +26,6 @@
         header h1 span { color: var(--accent); }
         .nav { display: flex; gap: 8px; }
         .lang-switch { display:inline-flex; align-items:center; gap:6px; color:var(--muted); font-size:0.78rem; }
-        .lang-switch select { background:var(--card); color:var(--text); border:1px solid var(--border); border-radius:6px; padding:4px 6px; }
         .nav a { padding: 6px 14px; border-radius: 7px; font-size: 0.85rem; text-decoration: none; border: 1px solid var(--border); color: var(--muted); transition: all .15s; }
         .nav a:hover, .nav a.active { border-color: var(--accent); color: var(--accent); }
 
@@ -110,6 +110,7 @@
                 <a href="/" data-auth-link data-i18n="nav.dashboard">Dashboard</a>
                 <a href="/terminal.html" data-auth-link data-i18n="nav.terminal">Terminal</a>
                 <a href="/sessions.html" data-auth-link data-i18n="nav.sessions">Sessions</a>
+                <a href="/files.html" data-auth-link data-i18n="nav.files">Files</a>
                 <a href="/batch.html" data-auth-link class="active" data-i18n="nav.batch">Batch</a>
             </div>
         </header>
@@ -129,7 +130,7 @@
 
         <div class="tab-panel active" id="panel-exec">
             <div class="exec-row">
-                <input type="text" class="exec-input" id="exec-cmd" placeholder="e.g. uname -a &amp;&amp; uptime" spellcheck="false" autocomplete="off">
+                <input type="text" class="exec-input" id="exec-cmd" data-i18n-placeholder="batch.commandPlaceholder" placeholder="Command to run on selected devices..." spellcheck="false" autocomplete="off">
                 <button class="exec-btn" id="exec-run" data-i18n="batch.run">Run</button>
             </div>
             <div class="results" id="exec-results"></div>
@@ -143,8 +144,8 @@
             </div>
             <input type="file" id="file-input" style="display:none">
             <div class="path-row">
-                <span style="color:var(--muted);font-size:0.85rem">→</span>
-                <input type="text" class="path-input" id="dest-path" placeholder="/tmp/file.txt" spellcheck="false" autocomplete="off">
+                <span data-icon="upload" style="color:var(--muted);font-size:0.85rem"></span>
+                <input type="text" class="path-input" id="dest-path" data-i18n-placeholder="batch.destPlaceholder" placeholder="Destination path" spellcheck="false" autocomplete="off">
                 <button class="upload-btn" id="upload-run" data-i18n="batch.distribute">Distribute</button>
             </div>
             <div class="results" id="upload-results"></div>
@@ -163,7 +164,14 @@
     const adminToken = new URLSearchParams(location.search).get('token') || localStorage.getItem('rdevAdminToken') || '';
     if (adminToken) localStorage.setItem('rdevAdminToken', adminToken);
     function authURL(path) { return adminToken ? path + (path.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(adminToken) : path; }
-    function authFetch(path, init) { return fetch(authURL(path), init).then(r => { if (r.status === 401) { const token = prompt(t('common.adminTokenRequired')); if (token) { localStorage.setItem('rdevAdminToken', token); location.search = 'token=' + encodeURIComponent(token); } } return r; }); }
+    async function authFetch(path, init) {
+        const r = await fetch(authURL(path), init);
+        if (r.status === 401) {
+            const token = await RDevUI.prompt({ title: t('common.adminTokenRequired'), message: t('common.adminTokenRequired'), type: 'password' });
+            if (token) { localStorage.setItem('rdevAdminToken', token); location.search = 'token=' + encodeURIComponent(token); }
+        }
+        return r;
+    }
     document.querySelectorAll('[data-auth-link]').forEach(a => a.href = authURL(a.getAttribute('href')));
 
     // ---- Device list ----
@@ -192,7 +200,7 @@
             return `<div class="device-item ${sel}" data-id="${esc(d.id)}">
                 <input type="checkbox" ${sel ? 'checked' : ''}>
                 <span class="dot"></span>
-                <span>${esc(d.id)}${d.hasPassword ? ' 🔒' : ''}</span>
+                <span class="icon-inline">${esc(d.id)}${d.hasPassword ? icon('lock') : ''}</span>
             </div>`;
         }).join('');
 
@@ -225,7 +233,7 @@
 
     function openBatchWS() {
         const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-        return new WebSocket(`${proto}//${location.host}/batch`);
+        return RDevUI.socket(`${proto}//${location.host}/batch`);
     }
 
     function authDevice(ws, device, password) {
@@ -248,12 +256,12 @@
     async function authorizeSelectedDevices(ws) {
         const locked = selectedDeviceObjects().filter(d => d.hasPassword);
         if (!locked.length) return true;
-        const password = prompt(t('batch.passwordRequired', {ids: locked.map(d => d.id).join(', ')}));
+        const password = await RDevUI.prompt({ title: t('common.password'), message: t('batch.passwordRequired', {ids: locked.map(d => d.id).join(', ')}), type: 'password' });
         if (password === null) return false;
         for (const device of locked) {
             const ok = await authDevice(ws, device, password);
             if (!ok) {
-                alert(t('batch.wrongPassword', {id: device.id}));
+                await RDevUI.alert({ title: t('common.error'), message: t('batch.wrongPassword', {id: device.id}) });
                 return false;
             }
         }
@@ -293,7 +301,7 @@
         results.innerHTML = deviceList.map(id => `<div class="result-card" id="result-${esc(id)}">
             <div class="result-header">
                 <span class="device">${esc(id)}</span>
-                <span class="exit running">running...</span>
+                <span class="exit running">${t('batch.running')}</span>
             </div>
             <div class="result-body" id="output-${esc(id)}"></div>
         </div>`).join('');
@@ -320,7 +328,7 @@
                     if (card) {
                         const badge = card.querySelector('.exit');
                         badge.className = 'exit ' + (msg.code === 0 ? 'ok' : 'fail');
-                        badge.textContent = msg.code === 0 ? 'exit 0' : `exit ${msg.code}`;
+                        badge.textContent = t('batch.exitCode', {code: msg.code});
                     }
                     const allDone = deviceList.every(id => {
                         const c = document.getElementById('result-' + id);
@@ -330,14 +338,14 @@
                 } else if (msg.op === 'error' || msg.op === 'auth_required') {
                     if (msg.deviceId) {
                         const el = document.getElementById('output-' + msg.deviceId);
-                        if (el) el.textContent += '\n[Error: ' + msg.message + ']';
+                        if (el) el.textContent += '\n[' + t('common.error') + ': ' + msg.message + ']';
                         const card = document.getElementById('result-' + msg.deviceId);
                         if (card) {
                             const badge = card.querySelector('.exit');
-                            if (badge && badge.classList.contains('running')) { badge.className = 'exit fail'; badge.textContent = msg.op === 'auth_required' ? 'auth required' : 'error'; }
+                            if (badge && badge.classList.contains('running')) { badge.className = 'exit fail'; badge.textContent = msg.op === 'auth_required' ? t('batch.authRequired') : t('common.error'); }
                         }
                     } else {
-                        results.innerHTML += `<div style="color:var(--red);font-size:0.85rem;padding:8px">Error: ${esc(msg.message)}</div>`;
+                        results.innerHTML += `<div style="color:var(--red);font-size:0.85rem;padding:8px">${t('common.error')}: ${esc(msg.message)}</div>`;
                     }
                 }
             }
@@ -435,14 +443,14 @@
                 if (card) {
                     const badge = card.querySelector('.exit');
                     badge.className = 'exit ' + (msg.success ? 'ok' : 'fail');
-                    badge.textContent = msg.success ? '✓ OK' : '✗ ' + (msg.message || 'failed');
+                    badge.textContent = msg.success ? t('common.ok') : (msg.message || t('common.failed'));
                 }
             } else if ((msg.op === 'error' || msg.op === 'auth_required') && msg.deviceId) {
                 const card = document.getElementById('upload-result-' + msg.deviceId);
                 if (card) {
                     const badge = card.querySelector('.exit');
                     badge.className = 'exit fail';
-                    badge.textContent = '✗ ' + (msg.message || (msg.op === 'auth_required' ? 'auth required' : 'error'));
+                    badge.textContent = msg.message || (msg.op === 'auth_required' ? t('batch.authRequired') : t('common.error'));
                 }
             }
             const allDone = deviceList.every(id => {
