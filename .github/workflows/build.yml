@@ -106,19 +106,20 @@ jobs:
             -o go-win7.zip \
             "https://github.com/XTLS/go-win7/releases/download/${GO_WIN7_VERSION}/go-for-win7-linux-amd64.zip"
           mkdir -p /home/runner/go-win7
+          # Zip root contains bin/ src/ directly (no go/ subdirectory)
           unzip -q go-win7.zip -d /home/runner/go-win7
-          # Verify the go binary exists
-          test -x /home/runner/go-win7/go/bin/go
-          /home/runner/go-win7/go/bin/go version
+          # Verify
+          test -x /home/runner/go-win7/bin/go
+          /home/runner/go-win7/bin/go version
 
       - name: Build windows/amd64
         env:
           GOOS: windows
           GOARCH: amd64
           CGO_ENABLED: 0
-          GOROOT: /home/runner/go-win7/go
+          GOROOT: /home/runner/go-win7
         run: |
-          export PATH="/home/runner/go-win7/go/bin:$PATH"
+          export PATH="/home/runner/go-win7/bin:$PATH"
           go build -ldflags "-s -w" -o rdev-server-windows-amd64.exe ./cmd/rdev-server
           go build -ldflags "-s -w" -o rdev-client-windows-amd64.exe ./cmd/rdev-client
 
@@ -127,9 +128,9 @@ jobs:
           GOOS: windows
           GOARCH: arm64
           CGO_ENABLED: 0
-          GOROOT: /home/runner/go-win7/go
+          GOROOT: /home/runner/go-win7
         run: |
-          export PATH="/home/runner/go-win7/go/bin:$PATH"
+          export PATH="/home/runner/go-win7/bin:$PATH"
           go build -ldflags "-s -w" -o rdev-server-windows-arm64.exe ./cmd/rdev-server
           go build -ldflags "-s -w" -o rdev-client-windows-arm64.exe ./cmd/rdev-client
 
