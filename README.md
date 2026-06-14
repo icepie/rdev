@@ -27,7 +27,7 @@
 | 密码认证 | 客户端启动时指定密码 |
 | -L 端口转发 | 访问设备侧网络的服务 |
 | -R 端口转发 | 暴露调试者本地服务到服务端 |
-| Web UI | 实时查看已连接设备列表 |
+| Web UI | 实时查看已连接设备列表，支持 Web Terminal/Sessions 内联图片预览 (Sixel / iTerm2 inline image) |
 | 自动重连 | 客户端断开后自动重连 |
 | 指定 Shell | `--shell /bin/bash` 或 `$RDEV_SHELL` |
 | 跨平台 | Unix (creack/pty) / Windows (ConPty) / 其他 (pipe) |
@@ -89,6 +89,29 @@ ssh -L 8080:localhost:80 my-device@your-server -p 2222
 # 远程端口转发 (暴露本地 3000 端口到服务端)
 ssh -R 3000:localhost:3000 my-device@your-server -p 2222
 ```
+
+## Web 终端图片预览
+
+Web Terminal 和 Sessions 支持 Sixel 与 iTerm2 inline image，可用于 `yazi`、`chafa`、`img2sixel` 等工具的图片预览。Web Terminal 会设置：
+
+```bash
+echo "$TERM $COLORTERM $TERM_PROGRAM $RDEV_IMAGE_PROTOCOLS"
+# xterm-256color truecolor RDev sixel,iterm2
+```
+
+可用以下命令快速测试：
+
+```bash
+# Sixel：推荐优先测试
+chafa -f sixels image.png
+img2sixel image.png
+
+# iTerm2 inline image：无需额外工具，测试 1x1 PNG
+printf '\033]1337;File=inline=1;width=10px;height=10px:%s\a\n' \
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII='
+```
+
+`yazi` 建议先配置为 `sixel` 或 `iterm2` 预览协议。Kitty graphics 的 inline/path 模式暂未桥接；不要把 Web 终端声明为 `xterm-kitty`，否则部分程序可能走浏览器暂不能读取的远端文件路径模式。
 
 ## Windows 兼容性
 

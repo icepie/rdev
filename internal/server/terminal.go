@@ -98,6 +98,11 @@ func (h *terminalWSHandler) createSession(socket *gws.Conn, deviceID string) {
 		Term:      "xterm-256color",
 		Rows:      24,
 		Cols:      80,
+		Env: []string{
+			"COLORTERM=truecolor",
+			"TERM_PROGRAM=RDev",
+			"RDEV_IMAGE_PROTOCOLS=sixel,iterm2",
+		},
 	}); err != nil {
 		h.sendError(socket, "failed to reach device")
 		socket.WriteClose(1000, nil)
