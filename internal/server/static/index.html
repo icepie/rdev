@@ -152,7 +152,11 @@
 
             <div class="install-panel" id="p-win7">
                 <div class="cmd-group">
-                    <div class="cmd-label">1️⃣ 先打开 PowerShell：开始菜单 → 附件 → Windows PowerShell</div>
+                    <div class="cmd-label">1️⃣ 在 cmd 中启动 PowerShell</div>
+                    <div class="cmd-row">
+                        <div class="cmd-code" data-tpl="%SystemRoot%&#92;system32&#92;WindowsPowerShell&#92;v1.0&#92;powershell.exe"></div>
+                        <button class="copy-btn" onclick="cp(this)">复制</button>
+                    </div>
                 </div>
                 <div class="cmd-group">
                     <div class="cmd-label">2️⃣ 粘贴以下命令（替换 <span class="hl">密码</span>）</div>
