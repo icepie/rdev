@@ -147,7 +147,8 @@ func (s *SSHServer) loadAuthorizedKeys(path string) {
 
 func (s *SSHServer) handlePublicKey(ctx ssh.Context, key ssh.PublicKey) bool {
 	clientID := ctx.User()
-	if _, ok := s.srv.GetClient(clientID); !ok {
+	client, ok := s.srv.GetClient(clientID)
+	if !ok {
 		return false
 	}
 	s.authKeysMu.RLock()
@@ -158,14 +159,24 @@ func (s *SSHServer) handlePublicKey(ctx ssh.Context, key ssh.PublicKey) bool {
 			return true
 		}
 	}
+	// No authorized_keys match: allow if client has no password (open mode)
+	if client.Password == "" {
+		log.Printf("ssh auth: %s accepted (no auth required)", clientID)
+		return true
+	}
 	return false
 }
 
 func (s *SSHServer) handlePassword(ctx ssh.Context, pass string) bool {
 	clientID := ctx.User()
 	client, ok := s.srv.GetClient(clientID)
-	if !ok || client.Password == "" {
+	if !ok {
 		return false
+	}
+	// Open mode: no password set, any password works
+	if client.Password == "" {
+		log.Printf("ssh auth: %s accepted (no auth required)", clientID)
+		return true
 	}
 	if client.Password == pass {
 		log.Printf("ssh auth: %s authenticated via password", clientID)
