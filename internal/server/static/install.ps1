@@ -94,7 +94,7 @@ function global:RDev {
 
     Write-Host "  Downloading rdev-client (windows/$Arch)..." -ForegroundColor Cyan
 
-    if ($Mirror -eq 'auto') {
+    if ($Mirror -eq 'auto' -and $Tag -ne 'latest') {
         foreach ($M in $script:Mirrors) {
             Write-Host "  Trying $M..." -ForegroundColor DarkGray
             if (Dl "https://$M/$GH_URL" $OutPath) {
@@ -102,7 +102,7 @@ function global:RDev {
                 if ($f -and $f.Length -gt 0) { $OK = $true; Write-Host "  OK via $M" -ForegroundColor Green; break }
             }
         }
-    } elseif ($Mirror -ne 'none' -and $Mirror -ne '') {
+    } elseif ($Mirror -ne 'none' -and $Mirror -ne '' -and $Tag -ne 'latest') {
         Write-Host "  Trying $Mirror..." -ForegroundColor DarkGray
         if (Dl "https://$Mirror/$GH_URL" $OutPath) {
             $f = Get-Item $OutPath -EA SilentlyContinue

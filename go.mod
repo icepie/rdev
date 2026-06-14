@@ -8,6 +8,7 @@ require (
 	github.com/lxzan/gws v1.9.1
 	github.com/pkg/sftp v1.13.10
 	golang.org/x/crypto v0.53.0
+	golang.org/x/text v0.38.0
 )
 
 require (

@@ -21,6 +21,7 @@ import (
 	gossh "golang.org/x/crypto/ssh"
 	"rdev/internal/protocol"
 	"rdev/internal/ptyutil"
+	"rdev/internal/wincompat"
 )
 
 // convertModes converts protocol modes (map[uint8]uint32) to ssh.TerminalModes.
@@ -624,11 +625,11 @@ func (c *Client) startShellExecSession(msg *protocol.Message) (*clientSession, e
 	stdoutW.Close()
 	stderrW.Close()
 
-	sess.stdinPipe = stdinW
+	sess.stdinPipe = wincompat.EncodeInput(stdinW)
 
 	// For non-interactive commands, close stdin immediately so the shell doesn't hang
 	if msg.Command != "" {
-		stdinW.Close()
+		sess.stdinPipe.Close()
 		sess.stdinPipe = nil
 	}
 	sess.cmdWaitFn = func() (int, error) {
@@ -649,7 +650,7 @@ func (c *Client) startShellExecSession(msg *protocol.Message) (*clientSession, e
 		defer ioWg.Done()
 		defer stdoutR.Close()
 		cw := newCoalescingWriter(c, msg.SessionID, protocol.BinData)
-		io.Copy(cw, stdoutR)
+		io.Copy(cw, wincompat.DecodeOutput(stdoutR))
 		cw.flush()
 	}()
 
@@ -658,7 +659,7 @@ func (c *Client) startShellExecSession(msg *protocol.Message) (*clientSession, e
 		defer ioWg.Done()
 		defer stderrR.Close()
 		cw := newCoalescingWriter(c, msg.SessionID, protocol.BinStderr)
-		io.Copy(cw, stderrR)
+		io.Copy(cw, wincompat.DecodeOutput(stderrR))
 		cw.flush()
 	}()
 
