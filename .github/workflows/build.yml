@@ -157,10 +157,11 @@ jobs:
           GOROOT: /home/runner/go-win7
         run: |
           export PATH="/home/runner/go-win7/bin:$PATH"
+          mkdir -p dist/windows-amd64
           go build -ldflags "-s -w" -o rdev-server-raw ./cmd/rdev-server
-          upx --best rdev-server-raw -o rdev-server.exe || cp rdev-server-raw rdev-server.exe
+          upx --best rdev-server-raw -o dist/windows-amd64/rdev-server.exe || cp rdev-server-raw dist/windows-amd64/rdev-server.exe
           go build -ldflags "-s -w" -o rdev-client-raw ./cmd/rdev-client
-          upx --best rdev-client-raw -o rdev-client.exe || cp rdev-client-raw rdev-client.exe
+          upx --best rdev-client-raw -o dist/windows-amd64/rdev-client.exe || cp rdev-client-raw dist/windows-amd64/rdev-client.exe
 
       - name: Build & compress windows/arm64
         env:
@@ -170,26 +171,27 @@ jobs:
           GOROOT: /home/runner/go-win7
         run: |
           export PATH="/home/runner/go-win7/bin:$PATH"
+          mkdir -p dist/windows-arm64
           go build -ldflags "-s -w" -o rdev-server-raw ./cmd/rdev-server
-          upx --best rdev-server-raw -o rdev-server.exe || cp rdev-server-raw rdev-server.exe
+          upx --best rdev-server-raw -o dist/windows-arm64/rdev-server.exe || cp rdev-server-raw dist/windows-arm64/rdev-server.exe
           go build -ldflags "-s -w" -o rdev-client-raw ./cmd/rdev-client
-          upx --best rdev-client-raw -o rdev-client.exe || cp rdev-client-raw rdev-client.exe
+          upx --best rdev-client-raw -o dist/windows-arm64/rdev-client.exe || cp rdev-client-raw dist/windows-arm64/rdev-client.exe
 
       - name: Upload windows/amd64
         uses: actions/upload-artifact@v4
         with:
           name: rdev-windows-amd64
           path: |
-            rdev-server.exe
-            rdev-client.exe
+            dist/windows-amd64/rdev-server.exe
+            dist/windows-amd64/rdev-client.exe
 
       - name: Upload windows/arm64
         uses: actions/upload-artifact@v4
         with:
           name: rdev-windows-arm64
           path: |
-            rdev-server.exe
-            rdev-client.exe
+            dist/windows-arm64/rdev-server.exe
+            dist/windows-arm64/rdev-client.exe
 
   # ── Release (only on v* tags) ────────────────────────────────
   release:
