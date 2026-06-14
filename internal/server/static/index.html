@@ -255,7 +255,7 @@
                     <td style="font-weight:600">${esc(d.id)}</td>
                     <td style="color:var(--muted)">${ago(d.connectedAt)}</td>
                     <td>${d.sessions}</td><td>${d.forwards}</td>
-                    <td>${d.hasPassword?'<span class="badge green">密码</span>':''}<span class="badge accent">公钥</span></td>
+                    <td>${d.hasPassword?'<span class="badge green">密码</span>':''}${!d.hasPassword?'<span class="badge accent">开放</span>':''}</td>
                     <td><a href="/terminal.html?device=${encodeURIComponent(d.id)}" class="term-btn">▶ Terminal</a></td>
                 </tr>`).join('');
             } catch(e) {}
