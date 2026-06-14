@@ -9,18 +9,24 @@
 set -e
 
 # ── Defaults ────────────────────────────────────────────────
-RDEV_VERSION=""
 RDEV_SERVER=""
 RDEV_ID=""
 RDEV_PASSWORD=""
 RDEV_SHELL=""
 RDEV_SSH_PORT=""
+RDEV_VERSION=""
 RDEV_INSTALL_DIR="/usr/local/bin"
 RDEV_REPO="icepie/rdev"
-RDEV_BASE_URL="https://github.com/${RDEV_REPO}/releases"
+RDEV_MIRROR="auto"
+
+# GitHub download mirrors (tried in order, fallback to direct)
+MIRRORS="
+ghgo.xyz
+gh-proxy.com
+ghfast.top
+"
 
 # ── Parse arguments ─────────────────────────────────────────
-# First non-flag argument is the server URL (for pipe usage)
 while [ $# -gt 0 ]; do
     case "$1" in
         -s|--server)   RDEV_SERVER="$2"; shift 2 ;;
@@ -30,6 +36,8 @@ while [ $# -gt 0 ]; do
         --ssh-port)    RDEV_SSH_PORT="$2"; shift 2 ;;
         -v|--version)  RDEV_VERSION="$2"; shift 2 ;;
         -d|--dir)      RDEV_INSTALL_DIR="$2"; shift 2 ;;
+        --mirror)      RDEV_MIRROR="$2"; shift 2 ;;
+        --no-mirror)   RDEV_MIRROR="none"; shift ;;
         -h|--help)
             echo "Usage: sh install.sh [SERVER_URL] [options]"
             echo ""
@@ -41,6 +49,8 @@ while [ $# -gt 0 ]; do
             echo "  --ssh-port PORT      Server SSH port (for hint display, default: 2222)"
             echo "  -v, --version VER    Client version to download (default: latest)"
             echo "  -d, --dir DIR        Install directory (default: /usr/local/bin)"
+            echo "  --mirror HOST        Download mirror (default: auto, try CN mirrors first)"
+            echo "  --no-mirror          Skip mirrors, use github.com directly"
             echo ""
             echo "Examples:"
             echo "  sh install.sh ws://192.168.1.100:8080 -i my-pc -p secret"
@@ -100,21 +110,24 @@ fi
 download() {
     # $1 = URL, $2 = output file
     case "$DL_TOOL" in
-        curl)          curl -fsSL "$1" -o "$2" ;;
-        wget)          wget -qO "$2" "$1" ;;
+        curl)          curl -fsSL --connect-timeout 10 --max-time 120 "$1" -o "$2" ;;
+        wget)          wget -q --timeout=120 -O "$2" "$1" ;;
         fetch)         fetch -o "$2" "$1" ;;
         busybox_wget)  busybox wget -O "$2" "$1" ;;
     esac
 }
 
-# ── Determine version & URL ────────────────────────────────
+# ── Determine version & binary name ────────────────────────
 if [ -n "$RDEV_VERSION" ]; then
     TAG="v${RDEV_VERSION}"
 else
-    # Get latest tag via GitHub API (fallback to 'latest' redirect)
     TAG=""
-    if command -v curl >/dev/null 2>&1; then
-        TAG="$(curl -fsSL "https://api.github.com/repos/${RDEV_REPO}/releases/latest" 2>/dev/null | grep '"tag_name"' | head -1 | sed 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')"
+    # Get latest tag via GitHub API
+    if [ "$DL_TOOL" = "curl" ]; then
+        TAG="$(curl -fsSL --connect-timeout 5 --max-time 15 \
+            "https://api.github.com/repos/${RDEV_REPO}/releases/latest" 2>/dev/null \
+            | grep '"tag_name"' | head -1 \
+            | sed 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')"
     fi
     if [ -z "$TAG" ]; then
         TAG="latest"
@@ -126,23 +139,56 @@ if [ "$OS" = "windows" ]; then
     BINARY="${BINARY}.exe"
 fi
 
+# Build the direct GitHub URL
 if [ "$TAG" = "latest" ]; then
-    DL_URL="${RDEV_BASE_URL}/latest/download/${BINARY}"
+    GITHUB_URL="https://github.com/${RDEV_REPO}/releases/latest/download/${BINARY}"
 else
-    DL_URL="${RDEV_BASE_URL}/download/${TAG}/${BINARY}"
+    GITHUB_URL="https://github.com/${RDEV_REPO}/releases/download/${TAG}/${BINARY}"
 fi
 
-# ── Download ────────────────────────────────────────────────
-# Use a temp directory that works everywhere
+# ── Download (mirror → github fallback) ─────────────────────
 TMPDIR="${TMPDIR:-/tmp}"
 TMPFILE="${TMPDIR}/rdev-client-download-$$"
 
 echo "  Downloading rdev-client (${OS}/${ARCH})..."
-download "$DL_URL" "$TMPFILE"
 
-# Verify download succeeded
-if [ ! -s "$TMPFILE" ]; then
-    echo "Error: download failed or empty file" >&2
+DL_OK=0
+
+# Try mirrors first (if enabled)
+if [ "$RDEV_MIRROR" = "auto" ]; then
+    for M in $MIRRORS; do
+        [ -z "$M" ] && continue
+        MIRROR_URL="https://${M}/${GITHUB_URL}"
+        echo "  Trying mirror: ${M}..." >&2
+        if download "$MIRROR_URL" "$TMPFILE" 2>/dev/null && [ -s "$TMPFILE" ]; then
+            DL_OK=1
+            echo "  ✓ Downloaded via ${M}" >&2
+            break
+        fi
+        rm -f "$TMPFILE" 2>/dev/null
+    done
+elif [ "$RDEV_MIRROR" != "none" ] && [ -n "$RDEV_MIRROR" ]; then
+    # Specific mirror
+    MIRROR_URL="https://${RDEV_MIRROR}/${GITHUB_URL}"
+    echo "  Trying mirror: ${RDEV_MIRROR}..." >&2
+    if download "$MIRROR_URL" "$TMPFILE" 2>/dev/null && [ -s "$TMPFILE" ]; then
+        DL_OK=1
+        echo "  ✓ Downloaded via ${RDEV_MIRROR}" >&2
+    fi
+    rm -f "$TMPFILE" 2>/dev/null
+fi
+
+# Fallback to direct GitHub
+if [ "$DL_OK" = "0" ]; then
+    echo "  Trying github.com directly..." >&2
+    if download "$GITHUB_URL" "$TMPFILE"; then
+        DL_OK=1
+        echo "  ✓ Downloaded from github.com" >&2
+    fi
+fi
+
+if [ "$DL_OK" = "0" ] || [ ! -s "$TMPFILE" ]; then
+    echo "Error: download failed" >&2
     rm -f "$TMPFILE" 2>/dev/null
     exit 1
 fi

@@ -7,7 +7,7 @@
 #     .\install.ps1 -Server ws://SERVER:PORT -Id my-pc -Password secret
 #
 #   One-liner (PS 3.0+):
-#     $u='http://SERVER:PORT/install.ps1';iwr $u -OutFile $env:TEMP\rdev.ps1;& $env:TEMP\rdev.ps1 -Server ws://SERVER:PORT -Id my-pc
+#     $u='http://SERVER:PORT/install.ps1';iwr $u -OutFile $env:TEMP\rdev.ps1;& $env:TEMP\rdev.ps1 -Server ws://SERVER:PORT
 #
 #   One-liner (PS 2.0 / Win7):
 #     $wc=New-Object Net.WebClient;$wc.DownloadFile('http://SERVER:PORT/install.ps1',"$env:TEMP\rdev.ps1");& "$env:TEMP\rdev.ps1" -Server ws://SERVER:PORT
@@ -22,7 +22,8 @@ param(
     [string]$SshPort = '',
     [string]$Version = '',
     [string]$InstallDir = '',
-    [string]$Repo = 'icepie/rdev'
+    [string]$Repo = 'icepie/rdev',
+    [string]$Mirror = 'auto'
 )
 
 # ── Compat: TLS 1.2 for GitHub ─────────────────────────────
@@ -52,6 +53,8 @@ if (-not $Server) {
     Write-Host "  -SshPort   Server SSH port (for hint display)" -ForegroundColor Gray
     Write-Host "  -Version   Client version to download" -ForegroundColor Gray
     Write-Host "  -InstallDir Install directory" -ForegroundColor Gray
+    Write-Host "  -Mirror    Download mirror (default: auto, try CN mirrors first)" -ForegroundColor Gray
+    Write-Host "  -Mirror none  Skip mirrors, use github.com directly" -ForegroundColor Gray
     Write-Host ""
     Write-Host "Examples:" -ForegroundColor White
     Write-Host "  .\install.ps1 ws://192.168.1.100:8080 -Id my-pc -Password secret" -ForegroundColor Gray
@@ -90,9 +93,9 @@ if ($Version) {
 }
 
 if ($Tag -eq 'latest') {
-    $DL_URL = "$BaseURL/latest/download/$Binary"
+    $GITHUB_URL = "$BaseURL/latest/download/$Binary"
 } else {
-    $DL_URL = "$BaseURL/download/$Tag/$Binary"
+    $GITHUB_URL = "$BaseURL/download/$Tag/$Binary"
 }
 
 # ── Determine install path ─────────────────────────────────
@@ -104,25 +107,61 @@ if (-not (Test-Path $InstallDir)) {
 }
 $InstallPath = Join-Path $InstallDir 'rdev-client.exe'
 
-# ── Download ────────────────────────────────────────────────
-Write-Host "  Downloading rdev-client (windows/$Arch)..." -ForegroundColor Cyan
-
-try {
+# ── Download helper ─────────────────────────────────────────
+function Download-File([string]$Url, [string]$Out) {
     try {
-        # PS 3.0+
-        Invoke-WebRequest -Uri $DL_URL -OutFile $InstallPath -ErrorAction Stop
-    } catch {
-        # PS 2.0 fallback
-        $wc = New-Object Net.WebClient
-        $wc.DownloadFile($DL_URL, $InstallPath)
-    }
-} catch {
-    Write-Error "Download failed: $_"
-    exit 1
+        try {
+            # PS 3.0+
+            Invoke-WebRequest -Uri $Url -OutFile $Out -ErrorAction Stop
+        } catch {
+            # PS 2.0 fallback
+            $wc = New-Object Net.WebClient
+            $wc.DownloadFile($Url, $Out)
+        }
+        return $true
+    } catch { return $false }
 }
 
-if (-not (Test-Path $InstallPath) -or (Get-Item $InstallPath).Length -eq 0) {
-    Write-Error "Downloaded file is empty or missing"
+# ── Download (mirror → github fallback) ─────────────────────
+$Mirrors = @('ghgo.xyz', 'gh-proxy.com', 'ghfast.top')
+$DL_OK = $false
+
+Write-Host "  Downloading rdev-client (windows/$Arch)..." -ForegroundColor Cyan
+
+# Try mirrors first
+if ($Mirror -eq 'auto') {
+    foreach ($M in $Mirrors) {
+        $mirrorUrl = "https://$M/$GITHUB_URL"
+        Write-Host "  Trying mirror: $M..." -ForegroundColor DarkGray
+        if (Download-File $mirrorUrl $InstallPath) {
+            $f = Get-Item $InstallPath -ErrorAction SilentlyContinue
+            if ($f -and $f.Length -gt 0) {
+                $DL_OK = $true
+                Write-Host "  OK via $M" -ForegroundColor Green
+                break
+            }
+        }
+    }
+} elseif ($Mirror -ne 'none' -and $Mirror -ne '') {
+    $mirrorUrl = "https://$Mirror/$GITHUB_URL"
+    Write-Host "  Trying mirror: $Mirror..." -ForegroundColor DarkGray
+    if (Download-File $mirrorUrl $InstallPath) {
+        $f = Get-Item $InstallPath -ErrorAction SilentlyContinue
+        if ($f -and $f.Length -gt 0) { $DL_OK = $true; Write-Host "  OK via $Mirror" -ForegroundColor Green }
+    }
+}
+
+# Fallback to direct GitHub
+if (-not $DL_OK) {
+    Write-Host "  Trying github.com directly..." -ForegroundColor DarkGray
+    if (Download-File $GITHUB_URL $InstallPath) {
+        $f = Get-Item $InstallPath -ErrorAction SilentlyContinue
+        if ($f -and $f.Length -gt 0) { $DL_OK = $true; Write-Host "  OK via github.com" -ForegroundColor Green }
+    }
+}
+
+if (-not $DL_OK) {
+    Write-Error "Download failed"
     exit 1
 }
 
@@ -136,16 +175,16 @@ if ($env:PATH -notlike "*$pathDir*") {
 }
 
 # ── Build launch arguments ─────────────────────────────────
-$Args = @("-s", $Server)
-if ($Id)       { $Args += @("-i", $Id) }
-if ($Password)  { $Args += @("-p", $Password) }
-if ($Shell)     { $Args += @("-S", $Shell) }
-if ($SshPort)   { $Args += @("--ssh-port", $SshPort) }
+$LaunchArgs = @("-s", $Server)
+if ($Id)       { $LaunchArgs += @("-i", $Id) }
+if ($Password)  { $LaunchArgs += @("-p", $Password) }
+if ($Shell)     { $LaunchArgs += @("-S", $Shell) }
+if ($SshPort)   { $LaunchArgs += @("--ssh-port", $SshPort) }
 
 # ── Launch ──────────────────────────────────────────────────
 Write-Host ""
 Write-Host "  Starting rdev-client..." -ForegroundColor Cyan
-Write-Host "  $InstallPath $($Args -join ' ')" -ForegroundColor Gray
+Write-Host "  $InstallPath $($LaunchArgs -join ' ')" -ForegroundColor Gray
 Write-Host ""
 
-& $InstallPath @Args
+& $InstallPath @LaunchArgs
