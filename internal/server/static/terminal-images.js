@@ -71,9 +71,44 @@
     return new Uint8Array(await new Response(stream).arrayBuffer());
   }
 
+  function rawPixelSize(params, bytes, channels) {
+    let width = parseInt(params.s || params.c || '', 10);
+    let height = parseInt(params.v || params.r || '', 10);
+    if (width > 0 && height > 0) return { width, height };
+    if (width > 0) return { width, height: Math.max(1, Math.floor(bytes.length / channels / width)) };
+    if (height > 0) return { width: Math.max(1, Math.floor(bytes.length / channels / height)), height };
+    const pixels = Math.max(1, Math.floor(bytes.length / channels));
+    width = Math.max(1, Math.round(Math.sqrt(pixels)));
+    height = Math.max(1, Math.ceil(pixels / width));
+    return { width, height };
+  }
+
+  function rawPixelsToPNG(params, bytes) {
+    const channels = params.f === '24' ? 3 : params.f === '32' ? 4 : 0;
+    if (!channels) return null;
+    const size = rawPixelSize(params, bytes, channels);
+    const canvas = document.createElement('canvas');
+    canvas.width = size.width;
+    canvas.height = size.height;
+    const ctx = canvas.getContext('2d');
+    const image = ctx.createImageData(size.width, size.height);
+    const pixels = size.width * size.height;
+    for (let i = 0, j = 0; i < pixels; i++, j += channels) {
+      const out = i * 4;
+      image.data[out] = bytes[j] || 0;
+      image.data[out + 1] = bytes[j + 1] || 0;
+      image.data[out + 2] = bytes[j + 2] || 0;
+      image.data[out + 3] = channels === 4 ? (bytes[j + 3] ?? 255) : 255;
+    }
+    ctx.putImageData(image, 0, 0);
+    return canvas.toDataURL('image/png');
+  }
+
   async function payloadToDataURL(params, payload) {
     let bytes = base64ToBytes(payload);
     if (params.o === 'z') bytes = await inflateZlib(bytes);
+    const rawPNG = rawPixelsToPNG(params, bytes);
+    if (rawPNG) return rawPNG;
     return 'data:' + mimeFor(params) + ';base64,' + bytesToBase64(bytes);
   }
 
