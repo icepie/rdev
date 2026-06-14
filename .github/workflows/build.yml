@@ -84,18 +84,11 @@ jobs:
             rdev-server${{ matrix.ext }}
             rdev-client${{ matrix.ext }}
 
-  # ── Windows builds using go-win7 (Win 7/8/8.1/10/11) ────────
+  # ── Windows build using go-win7 (single job, both archs) ─────
   build-windows:
-    name: Build windows/${{ matrix.goarch }} (go-win7)
+    name: Build windows (go-win7)
     needs: test
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        include:
-          - goarch: amd64
-            ext: ".exe"
-          - goarch: arm64
-            ext: ".exe"
     steps:
       - uses: actions/checkout@v4
 
@@ -109,38 +102,52 @@ jobs:
       - name: Download go-win7
         if: steps.cache-go-win7.outputs.cache-hit != 'true'
         run: |
-          curl -fSL --retry 3 --retry-delay 5 \
+          curl -fSL --retry 5 --retry-delay 10 --connect-timeout 30 --max-time 300 \
             -o go-win7.zip \
-            "https://github.com/XTLS/go-win7/releases/download/${{ env.GO_WIN7_VERSION }}/go-for-win7-linux-amd64.zip"
-          mkdir -p $HOME/go-win7
-          unzip -q go-win7.zip -d $HOME/go-win7
-          ls $HOME/go-win7/go/bin/
+            "https://github.com/XTLS/go-win7/releases/download/${GO_WIN7_VERSION}/go-for-win7-linux-amd64.zip"
+          mkdir -p /home/runner/go-win7
+          unzip -q go-win7.zip -d /home/runner/go-win7
+          # Verify the go binary exists
+          test -x /home/runner/go-win7/go/bin/go
+          /home/runner/go-win7/go/bin/go version
 
-      - name: Build server
+      - name: Build windows/amd64
         env:
           GOOS: windows
-          GOARCH: ${{ matrix.goarch }}
+          GOARCH: amd64
           CGO_ENABLED: 0
-          PATH: /home/runner/go-win7/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
           GOROOT: /home/runner/go-win7/go
-        run: go build -ldflags "-s -w" -o rdev-server${{ matrix.ext }} ./cmd/rdev-server
+        run: |
+          export PATH="/home/runner/go-win7/go/bin:$PATH"
+          go build -ldflags "-s -w" -o rdev-server-windows-amd64.exe ./cmd/rdev-server
+          go build -ldflags "-s -w" -o rdev-client-windows-amd64.exe ./cmd/rdev-client
 
-      - name: Build client
+      - name: Build windows/arm64
         env:
           GOOS: windows
-          GOARCH: ${{ matrix.goarch }}
+          GOARCH: arm64
           CGO_ENABLED: 0
-          PATH: /home/runner/go-win7/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
           GOROOT: /home/runner/go-win7/go
-        run: go build -ldflags "-s -w" -o rdev-client${{ matrix.ext }} ./cmd/rdev-client
+        run: |
+          export PATH="/home/runner/go-win7/go/bin:$PATH"
+          go build -ldflags "-s -w" -o rdev-server-windows-arm64.exe ./cmd/rdev-server
+          go build -ldflags "-s -w" -o rdev-client-windows-arm64.exe ./cmd/rdev-client
 
-      - name: Upload artifacts
+      - name: Upload windows/amd64
         uses: actions/upload-artifact@v4
         with:
-          name: rdev-windows-${{ matrix.goarch }}
+          name: rdev-windows-amd64
           path: |
-            rdev-server${{ matrix.ext }}
-            rdev-client${{ matrix.ext }}
+            rdev-server-windows-amd64.exe
+            rdev-client-windows-amd64.exe
+
+      - name: Upload windows/arm64
+        uses: actions/upload-artifact@v4
+        with:
+          name: rdev-windows-arm64
+          path: |
+            rdev-server-windows-arm64.exe
+            rdev-client-windows-arm64.exe
 
   # ── Release (only on v* tags) ────────────────────────────────
   release:
