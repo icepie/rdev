@@ -13,11 +13,6 @@ import (
 	"rdev/internal/server"
 )
 
-var (
-	guiMode    bool
-	guiEnabled bool // compiled-in flag
-)
-
 func main() {
 	var (
 		httpAddr         = ":8080"
@@ -66,8 +61,6 @@ func main() {
 				fmt.Sscanf(os.Args[i+1], "%d", &batchConcurrency)
 				i++
 			}
-		case "--gui", "-g":
-			guiMode = true
 		case "--help":
 			fmt.Print(`Usage: rdev-server [options]
 
@@ -79,19 +72,15 @@ Options:
   --max-sessions     Max concurrent sessions per device (default 256)
   --max-forwards     Max concurrent TCP forwards per device (default 1024)
   --batch-concurrency Max concurrent batch operations (default GOMAXPROCS*8)
-  --gui, -g   Start with system tray GUI (auto-opens browser dashboard)
 
 Features:
   - SSH shell/exec/sftp/scp access to connected devices
   - Public key (authorized_keys) and password authentication
   - Local port forwarding (-L) and remote port forwarding (-R)
   - Web terminal, batch commands, file distribution
-  - System tray GUI mode (--gui)
 
 Examples:
   rdev-server
-  rdev-server --gui
-  rdev-server --ssh :2200 --http :80 --gui
   rdev-server --data /etc/rdev
 `)
 			os.Exit(0)
@@ -170,15 +159,7 @@ Examples:
 	if adminToken != "" {
 		fmt.Println("  ║  WebAuth: enabled                              ║")
 	}
-	if guiMode && guiEnabled {
-		fmt.Println("  ║  Mode:   GUI (system tray)                    ║")
-	}
 	fmt.Println("  ╚════════════════════════════════════════════════╝")
-
-	// Start GUI mode if requested
-	if guiMode {
-		startGUI(httpAddr, srv)
-	}
 
 	// Start HTTP listener before printing info, so we know it's bound
 	httpListener, err := net.Listen("tcp", httpAddr)

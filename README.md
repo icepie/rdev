@@ -32,7 +32,6 @@
 | 指定 Shell | `--shell /bin/bash` 或 `$RDEV_SHELL` |
 | 跨平台 | Unix (creack/pty) / Windows (ConPty) / 其他 (pipe) |
 | Terminal Modes | SSH pty-req modes 完整转发 (ECHO, ONLCR, etc.) |
-| GUI 模式 | `--gui` 系统托盘 + 自动打开浏览器 Dashboard |
 
 ## 快速开始
 
@@ -47,9 +46,6 @@
 
 # 数据目录 (host key, authorized_keys)
 ./rdev-server --data /etc/rdev
-
-# GUI 模式 — 系统托盘图标 + 自动打开浏览器
-./rdev-server --gui
 ```
 
 ### 启动客户端
@@ -103,72 +99,10 @@ make build
 # 交叉编译 (无 CGO)
 make cross
 
-# 带 GUI 支持的构建 (需要 CGO + GTK3 dev headers)
-make gui
-
 # 手动构建
-CGO_ENABLED=0 go build -o rdev-server ./cmd/rdev-server  # 无 GUI
-CGO_ENABLED=1 go build -o rdev-server-gui ./cmd/rdev-server  # 带 GUI
+CGO_ENABLED=0 go build -o rdev-server ./cmd/rdev-server
 
 # 交叉编译客户端
 CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -o rdev-client.exe ./cmd/rdev-client
 CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o rdev-client-arm64 ./cmd/rdev-client
 ```
-
-### GUI 模式说明
-
-`--gui` 标志启动系统托盘 + 自动打开浏览器 Dashboard。
-
-| 桌面环境 | 托盘图标 | 说明 |
-|----------|----------|------|
-| GNOME/KDE/Cinnamon | ✅ 开箱即用 | 原生 StatusNotifierWatcher |
-| i3/Sway | ⚠️ 需安装 `status-notifier-watcher` | 或使用 polybar/dunst |
-| Windows/macOS | ✅ 开箱即用 | 原生系统托盘 |
-| 无 CGO 构建 | 浏览器自动打开 | 降级为仅打开浏览器 |
-
-无 CGO 构建时 `--gui` 仍可用 — 自动打开浏览器，但无系统托盘图标。
-
-## 目录结构
-
-```
-rdev/
-├── cmd/
-│   ├── rdev-server/main.go     # 服务端入口
-│   └── rdev-client/main.go     # 客户端入口
-├── internal/
-│   ├── protocol/protocol.go    # WebSocket 协议消息定义
-│   ├── ptyutil/                # 跨平台 PTY (基于 go-pty)
-│   │   └── pty.go              # Unix: creack/pty + SSH modes, Windows: ConPty
-│   ├── server/
-│   │   ├── server.go           # WebSocket 服务 + 客户端管理
-│   │   ├── ssh.go              # SSH 服务 + Session + -L转发
-│   │   ├── forward.go          # -R 端口转发处理
-│   │   └── static/index.html  # Web UI
-│   └── client/
-│       └── client.go           # 客户端: Shell/Exec/SFTP/转发
-└── go.mod
-```
-
-## 协议
-
-WebSocket 消息使用 JSON 编码，二进制数据用 base64:
-
-| 消息类型 | 方向 | 说明 |
-|----------|------|------|
-| register | C→S | 注册设备 ID + 密码 |
-| new_session | S→C | 创建 Shell/Exec/SFTP 会话 |
-| data | 双向 | stdout 数据 (base64) |
-| stderr | 双向 | stderr 数据 (base64) |
-| stdin_close | S→C | 远端关闭 stdin (EOF) |
-| close | 双向 | 关闭会话 |
-| resize | S→C | 终端大小变更 |
-| exit_code | C→S | 命令退出码 |
-| tcp_connect | S→C | 端口转发: 连接目标 |
-| tcp_open | C→S | 端口转发: 连接成功 |
-| tcp_fail | C→S | 端口转发: 连接失败 |
-| tcp_data | 双向 | 端口转发: TCP 数据 |
-| tcp_close | 双向 | 端口转发: 关闭连接 |
-
-## License
-
-MIT

@@ -1,4 +1,4 @@
-.PHONY: all build clean cross server client gui web web-install test vet fmt
+.PHONY: all build clean cross server client web web-install test vet fmt
 
 BINS = rdev-server rdev-client
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
@@ -20,14 +20,6 @@ server: web
 
 client:
 	go build -ldflags "$(LDFLAGS)" -o rdev-client ./cmd/rdev-client
-
-# Build server with full GUI support (system tray + auto-open browser)
-# Requires CGO + GTK3 dev headers on Linux
-# On GNOME/KDE/Cinnamon: tray icon works out of the box
-# On i3/Sway: may need status-notifier-watcher
-# On Windows/macOS: native tray support, no extra deps
-gui: web server
-	go build -ldflags "$(LDFLAGS)" -tags cgo -o rdev-server-gui ./cmd/rdev-server
 
 clean:
 	rm -f $(BINS) $(BINS)-*
