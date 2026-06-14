@@ -5,9 +5,11 @@ go 1.25.0
 require (
 	github.com/aymanbagabas/go-pty v0.2.3
 	github.com/gliderlabs/ssh v0.3.8
+	github.com/iamacarpet/go-winpty v1.0.4
 	github.com/lxzan/gws v1.9.1
 	github.com/pkg/sftp v1.13.10
 	golang.org/x/crypto v0.53.0
+	golang.org/x/sys v0.46.0
 	golang.org/x/text v0.38.0
 )
 
@@ -17,7 +19,6 @@ require (
 	github.com/klauspost/compress v1.18.6 // indirect
 	github.com/kr/fs v0.1.0 // indirect
 	github.com/u-root/u-root v0.16.0 // indirect
-	golang.org/x/sys v0.46.0 // indirect
 )
 
 replace github.com/gliderlabs/ssh => ./internal/sshlib

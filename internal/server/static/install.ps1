@@ -27,6 +27,70 @@ $script:Mirrors = @(
 )
 $script:Repo = 'icepie/rdev'
 
+# -- WinPTY fallback for legacy Windows -----------------------
+$script:WinPTYVersion = '0.4.3'
+$script:WinPTYAsset = "winpty-$script:WinPTYVersion-msvc2015.zip"
+$script:WinPTYRepo = 'rprichard/winpty'
+$script:WinPTYDir = Join-Path $env:TEMP 'rdev-winpty'
+
+function Get-WindowsMajorVersion {
+    try { return [int]([Environment]::OSVersion.Version.Major) } catch { return 0 }
+}
+
+function Expand-ZipLegacy([string]$Zip, [string]$Dest) {
+    if (Test-Path $Dest) { Remove-Item -Recurse -Force $Dest -EA SilentlyContinue }
+    New-Item -ItemType Directory -Force -Path $Dest | Out-Null
+    try {
+        Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction Stop
+        [System.IO.Compression.ZipFile]::ExtractToDirectory($Zip, $Dest)
+        return $true
+    } catch {
+        try {
+            $sh = New-Object -ComObject Shell.Application
+            $zipNs = $sh.NameSpace($Zip)
+            $dstNs = $sh.NameSpace($Dest)
+            if ($zipNs -and $dstNs) { $dstNs.CopyHere($zipNs.Items(), 0x14); Start-Sleep -Seconds 2; return $true }
+        } catch {}
+    }
+    return $false
+}
+
+function Install-WinPTYIfLegacy([string]$Arch, [string]$Mirror) {
+    if ((Get-WindowsMajorVersion) -ge 10) { return '' }
+    $Dll = Join-Path $script:WinPTYDir 'winpty.dll'
+    $Agent = Join-Path $script:WinPTYDir 'winpty-agent.exe'
+    if ((Test-Path $Dll) -and (Test-Path $Agent)) { return $script:WinPTYDir }
+
+    Write-Host "  Legacy Windows detected, preparing WinPTY..." -ForegroundColor Cyan
+    $Tmp = Join-Path $env:TEMP $script:WinPTYAsset
+    $Base = "https://github.com/$script:WinPTYRepo/releases/download/$script:WinPTYVersion/$script:WinPTYAsset"
+    $OK = $false
+    if ($Mirror -eq 'auto') {
+        foreach ($M in $script:Mirrors) {
+            Write-Host "  Trying WinPTY via $M..." -ForegroundColor DarkGray
+            if (Dl "https://$M/$Base" $Tmp) { $f = Get-Item $Tmp -EA SilentlyContinue; if ($f -and $f.Length -gt 0) { $OK = $true; break } }
+        }
+    } elseif ($Mirror -ne 'none' -and $Mirror -ne '') {
+        Write-Host "  Trying WinPTY via $Mirror..." -ForegroundColor DarkGray
+        if (Dl "https://$Mirror/$Base" $Tmp) { $f = Get-Item $Tmp -EA SilentlyContinue; if ($f -and $f.Length -gt 0) { $OK = $true } }
+    }
+    if (-not $OK) {
+        Write-Host "  Trying WinPTY via github.com..." -ForegroundColor DarkGray
+        if (Dl $Base $Tmp) { $f = Get-Item $Tmp -EA SilentlyContinue; if ($f -and $f.Length -gt 0) { $OK = $true } }
+    }
+    if (-not $OK) { Write-Warning "WinPTY download failed; falling back to pipe shell"; return '' }
+
+    $Extract = Join-Path $env:TEMP 'rdev-winpty-extract'
+    if (-not (Expand-ZipLegacy $Tmp $Extract)) { Write-Warning "WinPTY unzip failed; falling back to pipe shell"; return '' }
+    $SrcArch = if ($Arch -eq 'arm64') { 'x64' } elseif ($Arch -eq 'amd64') { 'x64' } else { 'ia32' }
+    $Src = Join-Path $Extract (Join-Path $SrcArch 'bin')
+    New-Item -ItemType Directory -Force -Path $script:WinPTYDir | Out-Null
+    Copy-Item (Join-Path $Src 'winpty.dll') $script:WinPTYDir -Force
+    Copy-Item (Join-Path $Src 'winpty-agent.exe') $script:WinPTYDir -Force
+    Write-Host "  OK WinPTY ready" -ForegroundColor Green
+    return $script:WinPTYDir
+}
+
 function global:RDev {
     <#
     .SYNOPSIS
@@ -120,12 +184,16 @@ function global:RDev {
 
     if (-not $OK) { Write-Error "Download failed"; return }
 
+    $WinPTYDir = Install-WinPTYIfLegacy $Arch $Mirror
+
     # ── Run ──────────────────────────────────────────────────
     $A = @("-s", $Server)
     if ($Id)       { $A += @("-i", $Id) }
     if ($Password)  { $A += @("-p", $Password) }
     if ($Shell)     { $A += @("-S", $Shell) }
     if ($SshPort)   { $A += @("--ssh-port", $SshPort) }
+
+    if ($WinPTYDir) { $env:RDEV_WINPTY_DIR = $WinPTYDir }
 
     Write-Host ""
     Write-Host "  Starting rdev-client..." -ForegroundColor Cyan

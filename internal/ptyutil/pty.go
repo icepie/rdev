@@ -4,6 +4,7 @@
 package ptyutil
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"runtime"
@@ -12,11 +13,22 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
+var errWinPTYUnsupported = errors.New("winpty unsupported on this platform")
+
+type ptyBackend interface {
+	Read([]byte) (int, error)
+	Write([]byte) (int, error)
+	Resize(rows, cols uint16) error
+	Close() error
+	Wait() (int, error)
+}
+
 // Process represents a running process attached to a PTY.
 type Process struct {
-	pty  pty.Pty
-	cmd  *pty.Cmd
-	term string
+	legacy ptyBackend
+	pty    pty.Pty
+	cmd    *pty.Cmd
+	term   string
 }
 
 // Config for creating a PTY process
@@ -44,13 +56,18 @@ func shellFlag(shell string) string {
 func Start(cfg *Config) (proc *Process, err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			proc = nil
-			err = fmt.Errorf("pty panic: %v", r)
+			proc, err = startWinPTY(cfg)
+			if err != nil {
+				err = fmt.Errorf("pty panic: %v; winpty fallback: %w", r, err)
+			}
 		}
 	}()
 
 	pseudo, err := pty.New()
 	if err != nil {
+		if proc, winptyErr := startWinPTY(cfg); winptyErr == nil {
+			return proc, nil
+		}
 		return nil, fmt.Errorf("pty new: %w", err)
 	}
 
@@ -110,26 +127,41 @@ func Start(cfg *Config) (proc *Process, err error) {
 
 // Read from the PTY (stdout)
 func (p *Process) Read(b []byte) (int, error) {
+	if p.legacy != nil {
+		return p.legacy.Read(b)
+	}
 	return p.pty.Read(b)
 }
 
 // Write to the PTY (stdin)
 func (p *Process) Write(b []byte) (int, error) {
+	if p.legacy != nil {
+		return p.legacy.Write(b)
+	}
 	return p.pty.Write(b)
 }
 
 // Resize the terminal window
 func (p *Process) Resize(rows, cols uint16) error {
+	if p.legacy != nil {
+		return p.legacy.Resize(rows, cols)
+	}
 	return p.pty.Resize(int(cols), int(rows))
 }
 
 // Close the PTY. Does NOT wait for the process.
 func (p *Process) Close() error {
+	if p.legacy != nil {
+		return p.legacy.Close()
+	}
 	return p.pty.Close()
 }
 
 // Wait waits for the process to exit and returns the exit code.
 func (p *Process) Wait() (int, error) {
+	if p.legacy != nil {
+		return p.legacy.Wait()
+	}
 	err := p.cmd.Wait()
 	if err == nil {
 		return 0, nil
