@@ -21,30 +21,22 @@ func EncodeInput(w io.Writer) io.WriteCloser {
 }
 
 type crlfWriter struct {
-	w       io.WriteCloser
-	pending bool
+	w      io.WriteCloser
+	skipLF bool
 }
 
 func (w *crlfWriter) Write(p []byte) (int, error) {
 	var out bytes.Buffer
 	for _, b := range p {
-		if w.pending {
+		if w.skipLF {
+			w.skipLF = false
 			if b == '\n' {
-				out.WriteByte('\n')
-			} else {
-				out.WriteByte('\n')
-				if b == '\r' {
-					out.WriteByte('\r')
-				} else {
-					out.WriteByte(b)
-				}
+				continue
 			}
-			w.pending = false
-			continue
 		}
 		if b == '\r' {
-			out.WriteByte('\r')
-			w.pending = true
+			out.Write([]byte{'\r', '\n'})
+			w.skipLF = true
 			continue
 		}
 		out.WriteByte(b)
@@ -58,9 +50,5 @@ func (w *crlfWriter) Write(p []byte) (int, error) {
 }
 
 func (w *crlfWriter) Close() error {
-	if w.pending {
-		_, _ = w.w.Write([]byte{'\n'})
-		w.pending = false
-	}
 	return w.w.Close()
 }

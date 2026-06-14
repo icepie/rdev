@@ -47,15 +47,21 @@ type coalescingWriter struct {
 	typ       byte // BinData or BinStderr
 	buf       bytes.Buffer
 	timer     *time.Timer
+	interval  time.Duration
 	mu        sync.Mutex
 }
 
 func newCoalescingWriter(client *Client, sessionID string, typ byte) *coalescingWriter {
+	return newCoalescingWriterWithInterval(client, sessionID, typ, 5*time.Millisecond)
+}
+
+func newCoalescingWriterWithInterval(client *Client, sessionID string, typ byte, interval time.Duration) *coalescingWriter {
 	return &coalescingWriter{
 		client:    client,
 		sessionID: sessionID,
 		typ:       typ,
 		buf:       *bytes.NewBuffer(make([]byte, 0, 8192)),
+		interval:  interval,
 	}
 }
 
@@ -80,7 +86,7 @@ func (w *coalescingWriter) Write(p []byte) (int, error) {
 		w.mu.Unlock()
 		w.client.sendBinary(w.typ, w.sessionID, data)
 	} else if w.timer == nil {
-		w.timer = time.AfterFunc(5*time.Millisecond, w.flush)
+		w.timer = time.AfterFunc(w.interval, w.flush)
 		w.mu.Unlock()
 	} else {
 		w.mu.Unlock()
@@ -545,8 +551,11 @@ func (c *Client) startShellExecSession(msg *protocol.Message) (*clientSession, e
 		} else {
 			sess.ptyProc = proc
 
-			// Read PTY output -> coalesced binary send to server
-			cw := newCoalescingWriter(c, msg.SessionID, protocol.BinData)
+			// Read PTY output -> coalesced binary send to server.
+			// WinPTY on legacy Windows emits many tiny chunks; a slightly longer
+			// output-only aggregation window keeps SSH input responsive while
+			// avoiding WebSocket frame storms during screen redraws.
+			cw := newCoalescingWriterWithInterval(c, msg.SessionID, protocol.BinData, 16*time.Millisecond)
 			go func() {
 				io.Copy(cw, proc)
 				cw.flush()
