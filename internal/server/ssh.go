@@ -42,7 +42,7 @@ func NewSSHServer(srv *Server, addr, hostKeyPath, authorizedKeysPath string) (*S
 	}
 	s.hostKey = signer
 	s.loadAuthorizedKeys(authorizedKeysPath)
-	s.fwdHandler = &ForwardedTCPHandler{}
+	s.fwdHandler = &ForwardedTCPHandler{srv: srv}
 
 	sshServer := &ssh.Server{
 		Addr:                       addr,
@@ -373,33 +373,17 @@ func (s *SSHServer) handleDirectTCPIP(srv *ssh.Server, conn *gossh.ServerConn, n
 		return
 	}
 
-	// Accept the SSH channel
-	ch, reqs, err := newChan.Accept()
-	if err != nil {
-		return
-	}
-	go gossh.DiscardRequests(reqs)
-
 	forwardID := generateID()
 	dest := net.JoinHostPort(d.DestAddr, strconv.FormatUint(uint64(d.DestPort), 10))
 	log.Printf("ssh fwd -L: %s -> %s (forwardID=%s)", clientID, dest, forwardID)
-
-	// Send connect request to client device
-	client.Send(&protocol.Message{
-		Type:      protocol.MsgTCPConnect,
-		ClientID:  clientID,
-		ForwardID: forwardID,
-		Host:      d.DestAddr,
-		Port:      int(d.DestPort),
-	})
 
 	fwd := &ProxyForward{
 		ID:       forwardID,
 		ClientID: clientID,
 		WriteCh:  make(chan []byte, 16384),
 		CloseCh:  make(chan struct{}, 1),
+		OpenCh:   make(chan struct{}),
 		Done:     make(chan struct{}),
-		CloseSSH: func() { ch.Close() },
 	}
 	if !s.srv.RegisterForward(fwd, client) {
 		newChan.Reject(gossh.ResourceShortage, "too many active forwards")
@@ -411,6 +395,42 @@ func (s *SSHServer) handleDirectTCPIP(srv *ssh.Server, conn *gossh.ServerConn, n
 		delete(client.Forwards, forwardID)
 		client.mu.Unlock()
 	}()
+
+	// Send connect request to client device before accepting the SSH channel,
+	// so early SSH payload cannot outrun the device-side TCP connection.
+	if err := client.Send(&protocol.Message{
+		Type:      protocol.MsgTCPConnect,
+		ClientID:  clientID,
+		ForwardID: forwardID,
+		Host:      d.DestAddr,
+		Port:      int(d.DestPort),
+	}); err != nil {
+		newChan.Reject(gossh.ConnectionFailed, "failed to reach client device")
+		return
+	}
+
+	select {
+	case <-fwd.OpenCh:
+		if msg := fwd.FailError(); msg != "" {
+			newChan.Reject(gossh.ConnectionFailed, msg)
+			return
+		}
+	case <-time.After(10 * time.Second):
+		newChan.Reject(gossh.ConnectionFailed, "device TCP connect timeout")
+		client.Send(&protocol.Message{Type: protocol.MsgTCPClose, ForwardID: forwardID})
+		return
+	case <-ctx.Done():
+		client.Send(&protocol.Message{Type: protocol.MsgTCPClose, ForwardID: forwardID})
+		return
+	}
+
+	ch, reqs, err := newChan.Accept()
+	if err != nil {
+		client.Send(&protocol.Message{Type: protocol.MsgTCPClose, ForwardID: forwardID})
+		return
+	}
+	fwd.CloseSSH = func() { ch.Close() }
+	go gossh.DiscardRequests(reqs)
 
 	var once sync.Once
 	cleanup := func() { once.Do(func() { close(fwd.Done) }) }

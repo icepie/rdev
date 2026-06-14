@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -186,6 +187,8 @@ type Client struct {
 	writeMu     sync.Mutex
 	sessions    map[string]*clientSession
 	forwards    map[string]net.Conn
+	forwardOpen map[string]chan struct{}
+	listeners   map[string]net.Listener
 	fileStreams map[string]*fileStream
 	uploads     map[string]*managedUpload
 	downloads   map[string]chan struct{}
@@ -209,6 +212,8 @@ func NewClient(serverURL, clientID, password, shell string) *Client {
 		shell:       shell,
 		sessions:    make(map[string]*clientSession),
 		forwards:    make(map[string]net.Conn),
+		forwardOpen: make(map[string]chan struct{}),
+		listeners:   make(map[string]net.Listener),
 		fileStreams: make(map[string]*fileStream),
 		uploads:     make(map[string]*managedUpload),
 		downloads:   make(map[string]chan struct{}),
@@ -403,6 +408,10 @@ func (c *Client) handleMessage(msg *protocol.Message) {
 	// TCP forwarding control
 	case protocol.MsgTCPConnect:
 		c.handleTCPConnect(msg)
+	case protocol.MsgTCPOpen:
+		c.handleTCPOpen(msg)
+	case protocol.MsgTCPListen:
+		c.handleTCPListen(msg)
 	case protocol.MsgTCPClose:
 		c.handleTCPClose(msg)
 	case protocol.MsgFileListRequest:
@@ -1179,17 +1188,131 @@ func (c *Client) handleTCPConnect(msg *protocol.Message) {
 	log.Printf("forward: connected to %s (id=%s)", addr, msg.ForwardID)
 }
 
+func (c *Client) handleTCPListen(msg *protocol.Message) {
+	addr := net.JoinHostPort(msg.Host, fmt.Sprintf("%d", msg.Port))
+	log.Printf("forward listen: %s (listenID=%s)", addr, msg.ListenID)
+
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		c.send(&protocol.Message{Type: protocol.MsgTCPListenOK, ListenID: msg.ListenID, Error: err.Error()})
+		return
+	}
+	_, portText, _ := net.SplitHostPort(ln.Addr().String())
+	port, _ := strconv.Atoi(portText)
+
+	c.mu.Lock()
+	if old := c.listeners[msg.ListenID]; old != nil {
+		old.Close()
+	}
+	c.listeners[msg.ListenID] = ln
+	c.mu.Unlock()
+	c.send(&protocol.Message{Type: protocol.MsgTCPListenOK, ListenID: msg.ListenID, Port: port})
+
+	go func() {
+		defer func() {
+			c.mu.Lock()
+			if c.listeners[msg.ListenID] == ln {
+				delete(c.listeners, msg.ListenID)
+			}
+			c.mu.Unlock()
+		}()
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			forwardID := generateClientForwardID()
+			openCh := make(chan struct{})
+			c.mu.Lock()
+			c.forwards[forwardID] = conn
+			c.forwardOpen[forwardID] = openCh
+			c.mu.Unlock()
+			c.send(&protocol.Message{
+				Type:       protocol.MsgTCPAccept,
+				ListenID:   msg.ListenID,
+				ForwardID:  forwardID,
+				SourceAddr: conn.RemoteAddr().String(),
+			})
+			go func() {
+				select {
+				case <-openCh:
+					c.readTCPForward(forwardID, conn)
+				case <-time.After(10 * time.Second):
+					c.handleTCPClose(&protocol.Message{ForwardID: forwardID})
+				}
+			}()
+		}
+	}()
+}
+
+func (c *Client) handleTCPOpen(msg *protocol.Message) {
+	c.mu.Lock()
+	openCh := c.forwardOpen[msg.ForwardID]
+	delete(c.forwardOpen, msg.ForwardID)
+	c.mu.Unlock()
+	if openCh != nil {
+		safeCloseForwardOpen(openCh)
+	}
+}
+
+func (c *Client) readTCPForward(forwardID string, conn net.Conn) {
+	buf := make([]byte, 32*1024)
+	for {
+		n, err := conn.Read(buf)
+		if n > 0 {
+			c.sendBinary(protocol.BinTCPData, forwardID, buf[:n])
+		}
+		if err != nil {
+			c.send(&protocol.Message{Type: protocol.MsgTCPClose, ForwardID: forwardID})
+			c.mu.Lock()
+			if c.forwards[forwardID] == conn {
+				delete(c.forwards, forwardID)
+			}
+			delete(c.forwardOpen, forwardID)
+			c.mu.Unlock()
+			return
+		}
+	}
+}
+
 func (c *Client) handleTCPClose(msg *protocol.Message) {
+	if msg.ListenID != "" {
+		c.mu.Lock()
+		ln, ok := c.listeners[msg.ListenID]
+		if ok {
+			delete(c.listeners, msg.ListenID)
+		}
+		c.mu.Unlock()
+		if ok {
+			ln.Close()
+			log.Printf("forward listen: closed %s", msg.ListenID)
+		}
+		return
+	}
 	c.mu.Lock()
 	conn, ok := c.forwards[msg.ForwardID]
 	if ok {
 		delete(c.forwards, msg.ForwardID)
 	}
+	openCh := c.forwardOpen[msg.ForwardID]
+	delete(c.forwardOpen, msg.ForwardID)
 	c.mu.Unlock()
+	if openCh != nil {
+		safeCloseForwardOpen(openCh)
+	}
 	if ok {
 		conn.Close()
 		log.Printf("forward: closed %s", msg.ForwardID)
 	}
+}
+
+func safeCloseForwardOpen(ch chan struct{}) {
+	defer func() { recover() }()
+	close(ch)
+}
+
+func generateClientForwardID() string {
+	return fmt.Sprintf("cf-%d-%d", time.Now().UnixNano(), os.Getpid())
 }
 
 // --- WebSocket send helpers ---

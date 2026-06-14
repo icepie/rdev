@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io/fs"
 	"log"
+	"net"
 	"net/http"
 	"runtime"
 	"sort"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/lxzan/gws"
+	gossh "golang.org/x/crypto/ssh"
 	"rdev/internal/protocol"
 )
 
@@ -266,10 +268,34 @@ type ProxyForward struct {
 	ClientID   string
 	WriteCh    chan []byte
 	CloseCh    chan struct{}
+	OpenCh     chan struct{}
 	Done       chan struct{}
 	closeOnce  sync.Once
 	outputOnce sync.Once
+	openOnce   sync.Once
+	failMu     sync.Mutex
+	failErr    string
 	CloseSSH   func()
+}
+
+func (f *ProxyForward) SignalOpen() {
+	if f.OpenCh == nil {
+		return
+	}
+	f.openOnce.Do(func() { close(f.OpenCh) })
+}
+
+func (f *ProxyForward) SignalFail(errText string) {
+	f.failMu.Lock()
+	f.failErr = errText
+	f.failMu.Unlock()
+	f.SignalOpen()
+}
+
+func (f *ProxyForward) FailError() string {
+	f.failMu.Lock()
+	defer f.failMu.Unlock()
+	return f.failErr
 }
 
 func (f *ProxyForward) SignalClose() {
@@ -280,6 +306,41 @@ func (f *ProxyForward) CloseOutput() {
 	f.outputOnce.Do(func() { close(f.WriteCh) })
 }
 
+type ReverseForward struct {
+	ID       string
+	ClientID string
+	BindAddr string
+	BindPort uint32
+	SSHConn  *gossh.ServerConn
+	OpenCh   chan struct{}
+	Cancel   func()
+
+	mu      sync.Mutex
+	port    uint32
+	errText string
+	once    sync.Once
+}
+
+func (f *ReverseForward) SignalOpen(port uint32) {
+	f.mu.Lock()
+	f.port = port
+	f.mu.Unlock()
+	f.once.Do(func() { close(f.OpenCh) })
+}
+
+func (f *ReverseForward) SignalFail(errText string) {
+	f.mu.Lock()
+	f.errText = errText
+	f.mu.Unlock()
+	f.once.Do(func() { close(f.OpenCh) })
+}
+
+func (f *ReverseForward) Result() (uint32, string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.port, f.errText
+}
+
 // Server manages WebSocket clients and SSH proxy
 type Server struct {
 	clients      map[string]*ClientConn
@@ -288,6 +349,8 @@ type Server struct {
 	sessMu       sync.RWMutex
 	forwards     map[string]*ProxyForward
 	fwdMu        sync.RWMutex
+	revForwards  map[string]*ReverseForward
+	revMu        sync.RWMutex
 	fileResults  map[string]chan *protocol.Message
 	fileRequests map[string]*fileSocket
 	fileTasks    map[string]*fileTaskRoute
@@ -309,6 +372,7 @@ func NewServer() *Server {
 		clients:          make(map[string]*ClientConn),
 		sessions:         make(map[string]*ProxySession),
 		forwards:         make(map[string]*ProxyForward),
+		revForwards:      make(map[string]*ReverseForward),
 		fileResults:      make(map[string]chan *protocol.Message),
 		fileRequests:     make(map[string]*fileSocket),
 		fileTasks:        make(map[string]*fileTaskRoute),
@@ -349,6 +413,20 @@ func closeClientResources(s *Server, client *ClientConn) {
 		s.fwdMu.Lock()
 		delete(s.forwards, fid)
 		s.fwdMu.Unlock()
+	}
+	var cancels []func()
+	s.revMu.Lock()
+	for id, fwd := range s.revForwards {
+		if fwd.ClientID == client.ID {
+			if fwd.Cancel != nil {
+				cancels = append(cancels, fwd.Cancel)
+			}
+			delete(s.revForwards, id)
+		}
+	}
+	s.revMu.Unlock()
+	for _, cancel := range cancels {
+		cancel()
 	}
 }
 
@@ -542,11 +620,18 @@ func (s *Server) handleClientMessage(client *ClientConn, msg *protocol.Message) 
 	// TCP forwarding control
 	case protocol.MsgTCPOpen:
 		// Connection succeeded on client device
+		fwd := s.getForward(msg.ForwardID)
+		if fwd != nil {
+			fwd.SignalOpen()
+		}
 
 	case protocol.MsgTCPFail:
 		fwd := s.getForward(msg.ForwardID)
-		if fwd != nil && fwd.CloseSSH != nil {
-			fwd.CloseSSH()
+		if fwd != nil {
+			fwd.SignalFail(msg.Error)
+			if fwd.CloseSSH != nil {
+				fwd.CloseSSH()
+			}
 		}
 		s.removeForward(msg.ForwardID)
 
@@ -554,6 +639,22 @@ func (s *Server) handleClientMessage(client *ClientConn, msg *protocol.Message) 
 		fwd := s.getForward(msg.ForwardID)
 		if fwd != nil {
 			fwd.SignalClose()
+		}
+
+	case protocol.MsgTCPListenOK:
+		fwd := s.getReverseForward(msg.ListenID)
+		if fwd != nil {
+			if msg.Error != "" {
+				fwd.SignalFail(msg.Error)
+			} else {
+				fwd.SignalOpen(uint32(msg.Port))
+			}
+		}
+
+	case protocol.MsgTCPAccept:
+		fwd := s.getReverseForward(msg.ListenID)
+		if fwd != nil {
+			go s.openReverseForwardChannel(fwd, client, msg)
 		}
 
 	// File distribution
@@ -631,6 +732,112 @@ func (s *Server) removeForward(id string) {
 	s.fwdMu.Lock()
 	delete(s.forwards, id)
 	s.fwdMu.Unlock()
+}
+
+func (s *Server) RegisterReverseForward(fwd *ReverseForward) {
+	s.revMu.Lock()
+	s.revForwards[fwd.ID] = fwd
+	s.revMu.Unlock()
+}
+
+func (s *Server) getReverseForward(id string) *ReverseForward {
+	s.revMu.RLock()
+	defer s.revMu.RUnlock()
+	return s.revForwards[id]
+}
+
+func (s *Server) removeReverseForward(id string) {
+	s.revMu.Lock()
+	delete(s.revForwards, id)
+	s.revMu.Unlock()
+}
+
+func (s *Server) openReverseForwardChannel(rev *ReverseForward, client *ClientConn, msg *protocol.Message) {
+	if rev.SSHConn == nil {
+		return
+	}
+	originHost, originPort := splitHostPort(msg.SourceAddr)
+	payload := gossh.Marshal(&remoteForwardChannelData{
+		DestAddr:   rev.BindAddr,
+		DestPort:   rev.BindPort,
+		OriginAddr: originHost,
+		OriginPort: uint32(originPort),
+	})
+	ch, reqs, err := rev.SSHConn.OpenChannel("forwarded-tcpip", payload)
+	if err != nil {
+		log.Printf("ssh fwd -R(device): open channel failed: %v", err)
+		client.Send(&protocol.Message{Type: protocol.MsgTCPClose, ForwardID: msg.ForwardID})
+		return
+	}
+	go gossh.DiscardRequests(reqs)
+
+	proxy := &ProxyForward{
+		ID:       msg.ForwardID,
+		ClientID: rev.ClientID,
+		WriteCh:  make(chan []byte, 16384),
+		CloseCh:  make(chan struct{}, 1),
+		OpenCh:   make(chan struct{}),
+		Done:     make(chan struct{}),
+		CloseSSH: func() { ch.Close() },
+	}
+	proxy.SignalOpen()
+	if !s.RegisterForward(proxy, client) {
+		ch.Close()
+		client.Send(&protocol.Message{Type: protocol.MsgTCPClose, ForwardID: msg.ForwardID})
+		return
+	}
+	client.Send(&protocol.Message{Type: protocol.MsgTCPOpen, ForwardID: msg.ForwardID})
+	defer func() {
+		s.removeForward(msg.ForwardID)
+		client.mu.Lock()
+		delete(client.Forwards, msg.ForwardID)
+		client.mu.Unlock()
+	}()
+
+	var once sync.Once
+	cleanup := func() { once.Do(func() { close(proxy.Done) }) }
+
+	go func() {
+		buf := make([]byte, 32*1024)
+		for {
+			n, err := ch.Read(buf)
+			if n > 0 {
+				client.SendBinary(protocol.BinTCPData, msg.ForwardID, buf[:n])
+			}
+			if err != nil {
+				client.Send(&protocol.Message{Type: protocol.MsgTCPClose, ForwardID: msg.ForwardID})
+				cleanup()
+				return
+			}
+		}
+	}()
+
+	go func() {
+		for data := range proxy.WriteCh {
+			if _, err := ch.Write(data); err != nil {
+				cleanup()
+				return
+			}
+		}
+		ch.Close()
+		cleanup()
+	}()
+
+	go func() {
+		<-proxy.CloseCh
+		proxy.CloseOutput()
+	}()
+
+	<-proxy.Done
+}
+
+func splitHostPort(addr string) (string, int) {
+	host, portText, err := net.SplitHostPort(addr)
+	if err != nil {
+		return addr, 0
+	}
+	port, _ := strconv.Atoi(portText)
+	return host, port
 }
 
 // File distribution
