@@ -217,6 +217,8 @@
         area.appendChild(overlay);
         const input = document.getElementById('session-auth-pw');
         const button = document.getElementById('session-auth-btn');
+        const savedPassword = RDevUI.getDevicePassword(session.clientId);
+        if (savedPassword) input.value = savedPassword;
         const submit = () => {
             if (!ws || ws.readyState !== WebSocket.OPEN || !input.value) return;
             button.disabled = true;
@@ -225,7 +227,7 @@
         };
         button.addEventListener('click', submit);
         input.addEventListener('keydown', e => { if (e.key === 'Enter') submit(); });
-        setTimeout(() => input.focus(), 50);
+        setTimeout(() => { input.focus(); if (savedPassword) submit(); }, 50);
     }
 
     function removeAuthOverlay() {
@@ -351,11 +353,14 @@
                 needAuth = true;
                 showAuthOverlay(sess);
             } else if (msg.op === 'auth_ok') {
+                const input = document.getElementById('session-auth-pw');
+                if (input && input.value) RDevUI.rememberDevicePassword(sess.clientId, input.value);
                 needAuth = false;
                 removeAuthOverlay();
                 term.focus();
                 try { fitAddon.fit(); } catch(e) {}
             } else if (msg.op === 'auth_fail') {
+                RDevUI.forgetDevicePassword(sess.clientId);
                 const err = document.getElementById('session-auth-err');
                 const btn = document.getElementById('session-auth-btn');
                 const input = document.getElementById('session-auth-pw');

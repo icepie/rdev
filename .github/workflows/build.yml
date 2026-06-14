@@ -26,9 +26,18 @@ jobs:
 
       - uses: oven-sh/setup-bun@v2
 
-      - name: Build web UI
+      - name: Install web dependencies
         run: |
           bun install --frozen-lockfile
+
+      - name: Typecheck web UI
+        run: bun run typecheck
+
+      - name: Test web UI
+        run: bun run test:web
+
+      - name: Build web UI
+        run: |
           bun run build
 
       - name: Vet

@@ -13,7 +13,6 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -246,12 +245,13 @@ func (s *SSHServer) handleSession(sess ssh.Session) {
 	// Request PTY on the device only for interactive shell sessions
 	wantPty := isPty && subsystem == ""
 
+	command := sess.RawCommand()
 	newSessionMsg := &protocol.Message{
 		Type:      protocol.MsgNewSession,
 		ClientID:  clientID,
 		SessionID: sessionID,
 		Subsystem: subsystem,
-		Command:   strings.Join(sess.Command(), " "),
+		Command:   command,
 		Pty:       wantPty,
 		Env:       sess.Environ(),
 		Term:      ptyReq.Term,
@@ -271,7 +271,7 @@ func (s *SSHServer) handleSession(sess ssh.Session) {
 		CloseSSH: func() { sess.Close() },
 		ExitSSH:  func(code int) { sess.Exit(code) },
 	}
-	proxySess.SetSessionMeta(wantPty, ptyReq.Term, strings.Join(sess.Command(), " "), subsystem, ptyReq.Window.Height, ptyReq.Window.Width)
+	proxySess.SetSessionMeta(wantPty, ptyReq.Term, command, subsystem, ptyReq.Window.Height, ptyReq.Window.Width)
 
 	if !s.srv.RegisterSession(proxySess, client) {
 		fmt.Fprintf(sess, "rdev: too many active sessions on device\n")

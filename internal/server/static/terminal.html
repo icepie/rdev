@@ -215,7 +215,7 @@
             <div class="auth-box">
                 <h3 class="icon-inline">${icon('lock')}${t('terminal.authTitle')}</h3>
                 <p>${t('terminal.authDesc', {id: esc(tab.deviceId)})}</p>
-                <input type="password" id="auth-pw-${tab.id}" placeholder="${t('terminal.passwordPlaceholder')}" autofocus>
+                <input type="password" id="auth-pw-${tab.id}" placeholder="${t('terminal.passwordPlaceholder')}" autocomplete="current-password" autofocus>
                 <button class="auth-btn" id="auth-btn-${tab.id}">${t('common.connect')}</button>
                 <div class="auth-err" id="auth-err-${tab.id}"></div>
             </div>`;
@@ -224,6 +224,8 @@
         const input = document.getElementById('auth-pw-' + tab.id);
         const btn = document.getElementById('auth-btn-' + tab.id);
         const err = document.getElementById('auth-err-' + tab.id);
+        const savedPassword = RDevUI.getDevicePassword(tab.deviceId);
+        if (savedPassword) input.value = savedPassword;
 
         const submit = () => {
             const pw = input.value;
@@ -237,7 +239,7 @@
 
         btn.addEventListener('click', submit);
         input.addEventListener('keydown', (e) => { if (e.key === 'Enter') submit(); });
-        setTimeout(() => input.focus(), 50);
+        setTimeout(() => { input.focus(); if (savedPassword) submit(); }, 50);
     }
 
     function removeAuthOverlay(tab) {
@@ -273,12 +275,15 @@
                 tab.status = 'authing'; renderTabs();
                 showAuthOverlay(tab);
             } else if (msg.op === 'auth_ok') {
+                const input = document.getElementById('auth-pw-' + tab.id);
+                if (input && input.value) RDevUI.rememberDevicePassword(tab.deviceId, input.value);
                 removeAuthOverlay(tab);
                 tab.needAuth = false;
                 tab.status = 'connected'; tab.term.focus(); renderTabs();
                 try { tab.fitAddon.fit(); } catch(e) {}
                 doResize(tab);
             } else if (msg.op === 'auth_fail') {
+                RDevUI.forgetDevicePassword(tab.deviceId);
                 const err = document.getElementById('auth-err-' + tab.id);
                 if (err) err.textContent = msg.message || t('common.passwordWrong');
                 const btn = document.getElementById('auth-btn-' + tab.id);

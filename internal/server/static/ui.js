@@ -123,6 +123,16 @@
         white-space: nowrap;
         line-height: 1;
       }
+      .container,
+      .page {
+        width: min(100%, 1440px);
+      }
+      @media (min-width: 1280px) {
+        .container,
+        .page {
+          max-width: 1440px !important;
+        }
+      }
       .toolbar > #lang-slot,
       header > #lang-slot {
         flex: 0 0 auto;
@@ -574,6 +584,31 @@
     return modal('alert', options);
   }
 
+  function passwordKey(deviceId) {
+    return 'rdevDevicePassword:' + encodeURIComponent(String(deviceId || ''));
+  }
+
+  function getDevicePassword(deviceId) {
+    if (!deviceId) return '';
+    return localStorage.getItem(passwordKey(deviceId)) || '';
+  }
+
+  function rememberDevicePassword(deviceId, password) {
+    if (!deviceId || !password) return;
+    localStorage.setItem(passwordKey(deviceId), password);
+  }
+
+  function forgetDevicePassword(deviceId) {
+    if (!deviceId) return;
+    localStorage.removeItem(passwordKey(deviceId));
+  }
+
+  async function requestDevicePassword(deviceId, message) {
+    const saved = getDevicePassword(deviceId);
+    if (saved) return saved;
+    return prompt({ title: window.t ? t('common.password') : 'Password', message, type: 'password' });
+  }
+
   let workerBridge;
   let socketSeq = 0;
   const workerSockets = new Map();
@@ -678,6 +713,6 @@
   injectIconStyles();
   window.addEventListener('rdev:langchange', () => applyTheme());
 
-  window.RDevUI = { icon, themeButton, applyTheme, enhanceSelect, setSelectOptions, prompt, alert, socket };
+  window.RDevUI = { icon, themeButton, applyTheme, enhanceSelect, setSelectOptions, prompt, alert, socket, getDevicePassword, rememberDevicePassword, forgetDevicePassword, requestDevicePassword };
   window.icon = icon;
 })();

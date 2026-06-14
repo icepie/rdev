@@ -20,7 +20,7 @@
         }
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
-        .container { max-width: 1040px; margin: 0 auto; padding: 2rem; }
+        .container { max-width: 1440px; margin: 0 auto; padding: 2rem; }
         header { margin-bottom: 2rem; display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 1rem; }
         header h1 { font-size: 1.8rem; font-weight: 700; letter-spacing: -0.02em; }
         header h1 span { color: var(--accent); }
@@ -52,7 +52,8 @@
         .badge.yellow { background: rgba(250,204,21,0.15); color: var(--yellow); }
         .empty { text-align: center; padding: 3rem; color: var(--muted); }
         .empty .icon { font-size: 3rem; margin-bottom: 1rem; opacity: 0.3; }
-        .term-btn { display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px; border-radius: 6px; font-size: 0.8rem; cursor: pointer; border: 1px solid rgba(34,211,238,0.3); background: rgba(34,211,238,0.08); color: var(--accent); text-decoration: none; transition: all 0.15s; }
+        .row-actions { display: flex; align-items: center; justify-content: flex-end; gap: 6px; flex-wrap: wrap; }
+        .term-btn { display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px; border-radius: 6px; font-size: 0.8rem; cursor: pointer; border: 1px solid rgba(34,211,238,0.3); background: rgba(34,211,238,0.08); color: var(--accent); text-decoration: none; transition: all 0.15s; white-space: nowrap; }
         .term-btn:hover { background: rgba(34,211,238,0.18); border-color: var(--accent); }
         .install { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 1.5rem; margin-top: 2rem; }
         .install h3 { font-size: 1rem; color: var(--accent); margin-bottom: 1rem; }
@@ -96,7 +97,8 @@
             tbody tr { background: var(--card); border: 1px solid var(--border); border-radius: 12px; margin-bottom: 0.75rem; padding: 0.7rem; }
             tbody td { border: 0; padding: 0.35rem 0; word-break: break-word; }
             tbody td:nth-child(2) { font-size: 1rem; font-weight: 600; }
-            .term-btn { width: 100%; justify-content: center; padding: 8px 10px; margin-top: 0.3rem; }
+            .row-actions { justify-content: stretch; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: 0.3rem; }
+            .term-btn { width: 100%; justify-content: center; padding: 8px 10px; }
             .install, .hint { padding: 1rem; margin-top: 1rem; }
             .install-tabs { overflow-x: auto; }
             .install-tab { flex: 0 0 auto; }
@@ -132,7 +134,7 @@
         </div>
 
         <table>
-            <thead><tr><th data-i18n="index.status">状态</th><th data-i18n="index.deviceId">设备 ID</th><th data-i18n="index.connectedAt">连接时间</th><th data-i18n="index.sessions">会话</th><th data-i18n="index.forwards">转发</th><th data-i18n="index.auth">认证</th><th></th></tr></thead>
+            <thead><tr><th data-i18n="index.status">状态</th><th data-i18n="index.deviceId">设备 ID</th><th data-i18n="index.connectedAt">连接时间</th><th data-i18n="index.sessions">会话</th><th data-i18n="index.forwards">转发</th><th data-i18n="index.auth">认证</th><th data-i18n="files.actions">Actions</th></tr></thead>
             <tbody id="tbody"><tr><td colspan="7" class="empty"><div class="empty-icon" data-icon="radio"></div><span data-i18n="index.waitingDevices">等待设备连接...</span></td></tr></tbody>
         </table>
 
@@ -220,6 +222,11 @@
             <code id="h-lfwd"><span class="h1">ssh</span> -L 8080:localhost:80 &lt;deviceID&gt;@{{H}} -p {{SP}}</code>
             <code><span class="h3"><span data-i18n="index.remoteForwardComment"># -R 暴露本地服务到服务器</span></span></code>
             <code id="h-rfwd"><span class="h1">ssh</span> -R 3000:localhost:3000 &lt;deviceID&gt;@{{H}} -p {{SP}}</code>
+            <h3 style="margin-top:0.8rem" class="icon-inline"><span data-icon="github"></span><span data-i18n="index.gitTitle">Git over SSH</span></h3>
+            <code><span class="h3"><span data-i18n="index.gitCloneComment"># 从设备克隆仓库</span></span></code>
+            <code id="h-git-clone"><span class="h1">git</span> clone ssh://&lt;deviceID&gt;@{{H}}:{{SP}}/home/user/repo.git</code>
+            <code><span class="h3"><span data-i18n="index.gitPushComment"># 推送到设备上的 bare 仓库</span></span></code>
+            <code id="h-git-push"><span class="h1">git</span> remote add device ssh://&lt;deviceID&gt;@{{H}}:{{SP}}/home/user/repo.git</code>
             <h3 style="margin-top:0.8rem" class="icon-inline"><span data-icon="key"></span><span data-i18n="index.keyAuthTitle">免密登录</span></h3>
             <code><span class="h2"><span data-i18n="index.keyAuthComment"># 将公钥加入服务端 ~/.rdev/authorized_keys</span></span></code>
             <code>cat ~/.ssh/id_ed25519.pub &gt;&gt; ~/.rdev/authorized_keys</code>
@@ -328,7 +335,10 @@
                     <td style="color:var(--muted)">${ago(d.connectedAt)}</td>
                     <td>${d.sessions}</td><td>${d.forwards}</td>
                     <td>${d.hasPassword?'<span class="badge green">' + t('common.password') + '</span>':'<span class="badge yellow">' + t('common.open') + '</span>'}</td>
-                    <td><a href="/terminal.html?device=${encodeURIComponent(d.id)}" class="term-btn">${icon('play')} ${t('index.navTerminal')}</a></td>
+                    <td><div class="row-actions">
+                        <a href="/terminal.html?device=${encodeURIComponent(d.id)}" class="term-btn">${icon('terminal')} ${t('index.navTerminal')}</a>
+                        <a href="/files.html?device=${encodeURIComponent(d.id)}" class="term-btn">${icon('files')} ${t('index.navFiles')}</a>
+                    </div></td>
                 </tr>`).join('');
             } catch(e) {}
         }

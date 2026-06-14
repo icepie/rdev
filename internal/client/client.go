@@ -927,6 +927,12 @@ func (c *Client) startShellExecSession(msg *protocol.Message) (*clientSession, e
 		}
 	}
 
+	if msg.Command != "" {
+		if gitCmd, ok := parseGitSmartSSHCommand(msg.Command); ok && !hasSystemGitCommand(gitCmd.Name) {
+			return c.startGitFallbackSession(sess, gitCmd)
+		}
+	}
+
 	// Exec mode (non-PTY, or PTY fallback)
 	shell := c.shell
 	if shell == "" {
@@ -989,8 +995,9 @@ func (c *Client) startShellExecSession(msg *protocol.Message) (*clientSession, e
 
 	sess.stdinPipe = wincompat.EncodeInput(stdinW)
 
-	// For non-interactive commands, close stdin immediately so the shell doesn't hang
-	if msg.Command != "" {
+	// Most non-interactive exec commands do not consume stdin. Git smart SSH
+	// commands do: upload-pack/receive-pack exchange pack data over stdin/stdout.
+	if msg.Command != "" && !isGitSmartSSHCommand(msg.Command) {
 		sess.stdinPipe.Close()
 		sess.stdinPipe = nil
 	}
@@ -1036,6 +1043,11 @@ func (c *Client) startShellExecSession(msg *protocol.Message) (*clientSession, e
 	log.Printf("session %s: exec started (cmd=%q)", msg.SessionID, msg.Command)
 
 	return sess, nil
+}
+
+func isGitSmartSSHCommand(command string) bool {
+	_, ok := parseGitSmartSSHCommand(command)
+	return ok
 }
 
 func (c *Client) startSFTPSession(sessionID string) (*clientSession, error) {

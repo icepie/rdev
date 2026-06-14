@@ -20,7 +20,7 @@
         }
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
-        .page { max-width: 1240px; margin: 0 auto; padding: 1.2rem; display: flex; flex-direction: column; gap: 1rem; }
+        .page { max-width: 1440px; margin: 0 auto; padding: 1.2rem; display: flex; flex-direction: column; gap: 1rem; }
         header { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
         h1 { font-size: 1.35rem; color: var(--accent); }
         h1 span { color: var(--text); font-weight: 400; }
@@ -30,6 +30,7 @@
         .nav a:hover, .nav a.active { color: var(--accent); border-color: var(--accent); }
         .toolbar, .tasks { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 0.8rem; }
         .toolbar { display: grid; grid-template-columns: minmax(160px, 220px) 1fr auto auto auto; gap: 0.7rem; align-items: center; }
+        .files-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(320px, 400px); gap: 1rem; align-items: start; }
         input { width: 100%; border: 1px solid var(--border); border-radius: 7px; background: var(--bg); color: var(--text); padding: 8px 10px; outline: none; font-size: 0.9rem; }
         input:focus { border-color: var(--accent); }
         button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; border: 1px solid var(--border); border-radius: 7px; background: var(--bg); color: var(--text); padding: 8px 12px; cursor: pointer; font-size: 0.85rem; min-height: 36px; white-space: nowrap; }
@@ -39,7 +40,7 @@
         .primary:hover:not(:disabled) { color: var(--bg); opacity: 0.9; }
         .drop { border: 2px dashed var(--border); border-radius: 8px; padding: 0.75rem; color: var(--muted); display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 54px; }
         .drop.drag { border-color: var(--accent); color: var(--accent); background: rgba(34,211,238,0.05); }
-        .browser { background: var(--card); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; min-height: 42vh; }
+        .browser { background: var(--card); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; min-height: 58vh; }
         table { width: 100%; border-collapse: collapse; }
         th, td { text-align: left; padding: 0.65rem 0.8rem; border-bottom: 1px solid var(--border); font-size: 0.86rem; }
         th { color: var(--muted); font-size: 0.74rem; text-transform: uppercase; letter-spacing: 0.04em; }
@@ -50,8 +51,8 @@
         .muted { color: var(--muted); }
         .empty { padding: 3rem 1rem; color: var(--muted); text-align: center; }
         .tasks h2 { font-size: 1rem; margin-bottom: 0.7rem; display: flex; align-items: center; gap: 6px; }
-        .task-list { display: grid; gap: 0.65rem; }
-        .task { border: 1px solid var(--border); border-radius: 8px; padding: 0.7rem; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0.7rem; align-items: center; }
+        .task-list { display: grid; gap: 0.65rem; max-height: calc(100vh - 220px); overflow: auto; padding-right: 2px; }
+        .task { border: 1px solid var(--border); border-radius: 8px; padding: 0.7rem; display: grid; grid-template-columns: 1fr; gap: 0.7rem; align-items: center; }
         .task-main { min-width: 0; }
         .task-title { display: flex; gap: 8px; align-items: center; min-width: 0; }
         .task-title strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -59,7 +60,7 @@
         .progress { height: 7px; background: var(--bg); border-radius: 999px; overflow: hidden; margin-top: 0.55rem; border: 1px solid var(--border); }
         .progress > div { height: 100%; width: 0; background: var(--accent); transition: width 0.2s linear; }
         .task-stats { color: var(--muted); font-size: 0.76rem; margin-top: 0.35rem; }
-        .task-actions { display: flex; gap: 6px; }
+        .task-actions { display: flex; gap: 6px; flex-wrap: wrap; }
         .badge { padding: 2px 7px; border-radius: 6px; font-size: 0.72rem; }
         .running { color: var(--accent); background: rgba(34,211,238,0.12); }
         .completed { color: var(--green); background: rgba(74,222,128,0.12); }
@@ -69,10 +70,10 @@
         @media (max-width: 820px) {
             .page { padding: 0.8rem; }
             .toolbar { grid-template-columns: 1fr; }
+            .files-layout { grid-template-columns: 1fr; }
             .browser { overflow-x: auto; }
             table { min-width: 680px; }
-            .task { grid-template-columns: 1fr; }
-            .task-actions { flex-wrap: wrap; }
+            .task-list { max-height: none; overflow: visible; }
             .nav { width: 100%; }
         }
     </style>
@@ -103,17 +104,19 @@
         <div class="drop" id="drop-zone"><span data-icon="upload"></span><span data-i18n="files.dropHint">Drop files here or choose files</span></div>
         <input type="file" id="file-input" multiple>
 
-        <section class="browser">
-            <table>
-                <thead><tr><th data-i18n="files.name">Name</th><th data-i18n="files.size">Size</th><th data-i18n="files.modified">Modified</th><th data-i18n="files.actions">Actions</th></tr></thead>
-                <tbody id="file-list"><tr><td colspan="4" class="empty" data-i18n="files.empty">Select a device to browse files</td></tr></tbody>
-            </table>
-        </section>
+        <div class="files-layout">
+            <section class="browser">
+                <table>
+                    <thead><tr><th data-i18n="files.name">Name</th><th data-i18n="files.size">Size</th><th data-i18n="files.modified">Modified</th><th data-i18n="files.actions">Actions</th></tr></thead>
+                    <tbody id="file-list"><tr><td colspan="4" class="empty" data-i18n="files.empty">Select a device to browse files</td></tr></tbody>
+                </table>
+            </section>
 
-        <section class="tasks">
-            <h2><span data-icon="files"></span><span data-i18n="files.tasks">File Tasks</span></h2>
-            <div class="task-list" id="task-list"></div>
-        </section>
+            <section class="tasks">
+                <h2><span data-icon="files"></span><span data-i18n="files.tasks">File Tasks</span></h2>
+                <div class="task-list" id="task-list"></div>
+            </section>
+        </div>
     </div>
 
     <script src="/i18n.js"></script>
@@ -140,7 +143,8 @@
     const CHUNK = 512 * 1024;
     const enc = new TextEncoder();
     const dec = new TextDecoder();
-    let ws, devices = [], currentPath = '', parentPath = '', activeDevice = '', authPending = null, authResult = null;
+    let ws, devices = [], currentPath = '', parentPath = '', activeDevice = '', authPending = null, authResult = null, initialDeviceLoaded = false;
+    const sendQueue = [];
     RDevUI.setSelectOptions(document.getElementById('device-select'), [{ value: '', label: t('terminal.devicePlaceholder') }], '');
     const tasks = new Map(JSON.parse(localStorage.getItem('rdevFileTasks') || '[]').map(t => [t.id, t]));
     const filesByTask = new Map();
@@ -193,10 +197,17 @@
         const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
         ws = RDevUI.socket(`${proto}//${location.host}${authURL('/files')}`);
         ws.binaryType = 'arraybuffer';
+        ws.onopen = () => {
+            while (sendQueue.length && ws && ws.readyState === WebSocket.OPEN) ws.send(sendQueue.shift());
+        };
         ws.onmessage = evt => evt.data instanceof ArrayBuffer ? onBinary(evt.data) : onText(JSON.parse(evt.data));
         ws.onclose = () => setTimeout(connectWS, 1500);
     }
-    function send(msg) { if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg)); }
+    function send(msg) {
+        const payload = JSON.stringify(msg);
+        if (ws && ws.readyState === WebSocket.OPEN) ws.send(payload);
+        else sendQueue.push(payload);
+    }
     function encodeFrame(typ, taskId, offset, payload) {
         const idb = enc.encode(taskId), data = payload ? new Uint8Array(payload) : new Uint8Array(0);
         const buf = new ArrayBuffer(2 + idb.length + 8 + data.length), out = new Uint8Array(buf), view = new DataView(buf);
@@ -212,13 +223,13 @@
     async function ensureAuth(deviceId) {
         const dev = devices.find(d => d.id === deviceId);
         if (!dev || !dev.hasPassword) return true;
-        const pw = await RDevUI.prompt({ title: t('common.password'), message: t('files.authRequired', { id: deviceId }), type: 'password' });
+        const pw = await RDevUI.requestDevicePassword(deviceId, t('files.authRequired', { id: deviceId }));
         if (!pw) return false;
         authPending = deviceId; authResult = null;
         send({ op: 'auth', deviceId, password: pw });
         return new Promise(resolve => {
             const timer = setInterval(() => {
-                if (authPending !== deviceId) { clearInterval(timer); resolve(authResult === true); }
+                if (authPending !== deviceId) { clearInterval(timer); if (authResult === true) RDevUI.rememberDevicePassword(deviceId, pw); resolve(authResult === true); }
             }, 80);
             setTimeout(() => { clearInterval(timer); resolve(false); }, 30000);
         });
@@ -226,7 +237,7 @@
 
     function onText(msg) {
         if (msg.op === 'auth_ok') { authResult = true; authPending = null; return; }
-        if (msg.op === 'auth_fail' || msg.op === 'auth_required') { authResult = false; authPending = null; RDevUI.alert({ title: t('common.error'), message: msg.message || t('common.passwordWrong') }); return; }
+        if (msg.op === 'auth_fail' || msg.op === 'auth_required') { if (authPending) RDevUI.forgetDevicePassword(authPending); authResult = false; authPending = null; RDevUI.alert({ title: t('common.error'), message: msg.message || t('common.passwordWrong') }); return; }
         if (msg.op === 'list_result') {
             if (msg.error) { renderFiles([], msg.error); return; }
             currentPath = msg.path || currentPath; parentPath = msg.parent || currentPath;
@@ -285,8 +296,11 @@
     async function loadDevices() {
         const r = await authFetch('/api/devices'); devices = await r.json();
         const sel = document.getElementById('device-select'), cur = sel.value;
+        const preselect = new URLSearchParams(location.search).get('device');
+        const next = cur && devices.find(d => d.id === cur) ? cur : (preselect && devices.find(d => d.id === preselect) ? preselect : '');
         const options = [{ value: '', label: t('terminal.devicePlaceholder') }].concat(devices.map(d => ({ value: d.id, html: esc(d.id) + (d.hasPassword ? icon('lock') : '') })));
-        RDevUI.setSelectOptions(sel, options, cur && devices.find(d => d.id === cur) ? cur : '');
+        RDevUI.setSelectOptions(sel, options, next);
+        if (!initialDeviceLoaded && next) { initialDeviceLoaded = true; activeDevice = next; list(currentPath || ''); }
     }
 
     function startUpload(file) {
