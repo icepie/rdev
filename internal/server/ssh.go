@@ -46,10 +46,11 @@ func NewSSHServer(srv *Server, addr, hostKeyPath, authorizedKeysPath string) (*S
 	s.fwdHandler = &ForwardedTCPHandler{}
 
 	sshServer := &ssh.Server{
-		Addr:             addr,
-		Handler:          s.handleSession,
-		PublicKeyHandler: s.handlePublicKey,
-		PasswordHandler:  s.handlePassword,
+		Addr:                    addr,
+		Handler:                 s.handleSession,
+		PublicKeyHandler:        s.handlePublicKey,
+		PasswordHandler:         s.handlePassword,
+		KeyboardInteractiveHandler: s.handleKeyboardInteractive,
 		SubsystemHandlers: map[string]ssh.SubsystemHandler{
 			"sftp": s.handleSession,
 		},
@@ -180,6 +181,29 @@ func (s *SSHServer) handlePassword(ctx ssh.Context, pass string) bool {
 	}
 	if client.Password == pass {
 		log.Printf("ssh auth: %s authenticated via password", clientID)
+		return true
+	}
+	return false
+}
+
+func (s *SSHServer) handleKeyboardInteractive(ctx ssh.Context, challenger gossh.KeyboardInteractiveChallenge) bool {
+	clientID := ctx.User()
+	client, ok := s.srv.GetClient(clientID)
+	if !ok {
+		return false
+	}
+	// Open mode: no challenge, auto-accept
+	if client.Password == "" {
+		log.Printf("ssh auth: %s accepted via keyboard-interactive (no auth required)", clientID)
+		return true
+	}
+	// Password-protected: challenge the user
+	answers, err := challenger("RDev Authentication", "", []string{"Password: "}, []bool{false})
+	if err != nil || len(answers) == 0 {
+		return false
+	}
+	if answers[0] == client.Password {
+		log.Printf("ssh auth: %s authenticated via keyboard-interactive", clientID)
 		return true
 	}
 	return false
