@@ -158,9 +158,9 @@ jobs:
         run: |
           export PATH="/home/runner/go-win7/bin:$PATH"
           go build -ldflags "-s -w" -o rdev-server-raw ./cmd/rdev-server
-          upx --best rdev-server-raw -o rdev-server-windows-amd64.exe || cp rdev-server-raw rdev-server-windows-amd64.exe
+          upx --best rdev-server-raw -o rdev-server.exe || cp rdev-server-raw rdev-server.exe
           go build -ldflags "-s -w" -o rdev-client-raw ./cmd/rdev-client
-          upx --best rdev-client-raw -o rdev-client-windows-amd64.exe || cp rdev-client-raw rdev-client-windows-amd64.exe
+          upx --best rdev-client-raw -o rdev-client.exe || cp rdev-client-raw rdev-client.exe
 
       - name: Build & compress windows/arm64
         env:
@@ -171,25 +171,25 @@ jobs:
         run: |
           export PATH="/home/runner/go-win7/bin:$PATH"
           go build -ldflags "-s -w" -o rdev-server-raw ./cmd/rdev-server
-          upx --best rdev-server-raw -o rdev-server-windows-arm64.exe || cp rdev-server-raw rdev-server-windows-arm64.exe
+          upx --best rdev-server-raw -o rdev-server.exe || cp rdev-server-raw rdev-server.exe
           go build -ldflags "-s -w" -o rdev-client-raw ./cmd/rdev-client
-          upx --best rdev-client-raw -o rdev-client-windows-arm64.exe || cp rdev-client-raw rdev-client-windows-arm64.exe
+          upx --best rdev-client-raw -o rdev-client.exe || cp rdev-client-raw rdev-client.exe
 
       - name: Upload windows/amd64
         uses: actions/upload-artifact@v4
         with:
           name: rdev-windows-amd64
           path: |
-            rdev-server-windows-amd64.exe
-            rdev-client-windows-amd64.exe
+            rdev-server.exe
+            rdev-client.exe
 
       - name: Upload windows/arm64
         uses: actions/upload-artifact@v4
         with:
           name: rdev-windows-arm64
           path: |
-            rdev-server-windows-arm64.exe
-            rdev-client-windows-arm64.exe
+            rdev-server.exe
+            rdev-client.exe
 
   # ── Release (only on v* tags) ────────────────────────────────
   release:
