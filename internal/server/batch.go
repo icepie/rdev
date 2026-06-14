@@ -10,6 +10,7 @@ import (
 	"log"
 	"net/http"
 	"runtime"
+	"sort"
 	"sync"
 	"time"
 
@@ -603,6 +604,13 @@ func (s *Server) HandleBatchDevicesAPI(w http.ResponseWriter, r *http.Request) {
 			HasPassword: c.Password != "",
 		})
 	}
+
+	sort.Slice(devices, func(i, j int) bool {
+		if devices[i].ID != devices[j].ID {
+			return devices[i].ID < devices[j].ID
+		}
+		return devices[i].ConnectedAt < devices[j].ConnectedAt
+	})
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(devices)

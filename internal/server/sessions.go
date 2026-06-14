@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 	"runtime"
+	"sort"
 	"sync"
 	"time"
 
@@ -55,6 +56,16 @@ func (s *Server) HandleSessionsAPI(w http.ResponseWriter, r *http.Request) {
 			Observers: sess.ObserverCount(),
 		})
 	}
+
+	sort.Slice(sessions, func(i, j int) bool {
+		if sessions[i].ClientID != sessions[j].ClientID {
+			return sessions[i].ClientID < sessions[j].ClientID
+		}
+		if sessions[i].CreatedAt != sessions[j].CreatedAt {
+			return sessions[i].CreatedAt < sessions[j].CreatedAt
+		}
+		return sessions[i].ID < sessions[j].ID
+	})
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(sessions)

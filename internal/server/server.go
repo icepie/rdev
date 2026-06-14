@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -681,6 +682,13 @@ func (s *Server) HandleAPI(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	sort.Slice(clients, func(i, j int) bool {
+		if clients[i].ID != clients[j].ID {
+			return clients[i].ID < clients[j].ID
+		}
+		return clients[i].ConnectedAt < clients[j].ConnectedAt
+	})
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(clients)
 }
@@ -717,6 +725,13 @@ func (s *Server) HandleTerminalAPI(w http.ResponseWriter, r *http.Request) {
 			HasPassword: c.Password != "",
 		})
 	}
+
+	sort.Slice(devices, func(i, j int) bool {
+		if devices[i].ID != devices[j].ID {
+			return devices[i].ID < devices[j].ID
+		}
+		return devices[i].ConnectedAt < devices[j].ConnectedAt
+	})
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(devices)
