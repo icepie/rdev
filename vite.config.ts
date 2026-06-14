@@ -12,7 +12,8 @@ export default defineConfig({
       input: {
         index: resolve(__dirname, 'web/index.html'),
         terminal: resolve(__dirname, 'web/terminal.html'),
-        batch: resolve(__dirname, 'web/batch.html')
+        batch: resolve(__dirname, 'web/batch.html'),
+        sessions: resolve(__dirname, 'web/sessions.html')
       }
     }
   }

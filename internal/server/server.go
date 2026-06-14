@@ -93,6 +93,31 @@ type ProxySession struct {
 	exitMu     sync.Mutex
 	CloseSSH   func()
 	ExitSSH    func(code int)
+
+	// Session management metadata
+	createdAt time.Time
+	pty       bool
+	term      string
+	rows      int
+	cols      int
+	command   string // original command (empty for shell)
+	subsystem string // "", "sftp"
+
+	// Observers for session attach.
+	obsMu     sync.RWMutex
+	observers map[string]*sessionObserver // id -> observer
+}
+
+type sessionObserver struct {
+	id       string
+	writeCh  chan []byte // copy of session output -> observer
+	stderrCh chan []byte // copy of session stderr -> observer
+	done     chan struct{}
+	once     sync.Once
+}
+
+func (o *sessionObserver) close() {
+	o.once.Do(func() { close(o.done) })
 }
 
 func (s *ProxySession) SignalClose() {
@@ -136,6 +161,94 @@ func (s *ProxySession) WaitExitCode(timeout time.Duration) int {
 	case <-time.After(timeout):
 		return -1
 	}
+}
+
+// --- Observer (session attach) support ---
+
+// AddObserver registers an observer that receives a copy of all session output.
+func (s *ProxySession) AddObserver(id string) (writeCh, stderrCh <-chan []byte, done <-chan struct{}) {
+	s.obsMu.Lock()
+	defer s.obsMu.Unlock()
+	if s.observers == nil {
+		s.observers = make(map[string]*sessionObserver)
+	}
+	obs := &sessionObserver{
+		id:       id,
+		writeCh:  make(chan []byte, 4096),
+		stderrCh: make(chan []byte, 1024),
+		done:     make(chan struct{}),
+	}
+	s.observers[id] = obs
+	return obs.writeCh, obs.stderrCh, obs.done
+}
+
+// RemoveObserver unregisters an observer.
+func (s *ProxySession) RemoveObserver(id string) {
+	s.obsMu.Lock()
+	defer s.obsMu.Unlock()
+	if obs, ok := s.observers[id]; ok {
+		obs.close()
+		close(obs.writeCh)
+		close(obs.stderrCh)
+		delete(s.observers, id)
+	}
+}
+
+// BroadcastOutput sends session output to all observers.
+func (s *ProxySession) BroadcastOutput(data []byte) {
+	s.obsMu.RLock()
+	defer s.obsMu.RUnlock()
+	for _, obs := range s.observers {
+		select {
+		case obs.writeCh <- data:
+		default:
+			// drop if observer is slow
+		}
+	}
+}
+
+// BroadcastStderr sends session stderr to all observers.
+func (s *ProxySession) BroadcastStderr(data []byte) {
+	s.obsMu.RLock()
+	defer s.obsMu.RUnlock()
+	for _, obs := range s.observers {
+		select {
+		case obs.stderrCh <- data:
+		default:
+		}
+	}
+}
+
+// NotifyObserversClose signals all observers that the session is closing.
+func (s *ProxySession) NotifyObserversClose() {
+	s.obsMu.RLock()
+	defer s.obsMu.RUnlock()
+	for _, obs := range s.observers {
+		obs.close()
+	}
+}
+
+// ObserverCount returns the number of observers.
+func (s *ProxySession) ObserverCount() int {
+	s.obsMu.RLock()
+	defer s.obsMu.RUnlock()
+	return len(s.observers)
+}
+
+// SetSessionMeta stores session creation metadata.
+func (s *ProxySession) SetSessionMeta(pty bool, term, command, subsystem string, rows, cols int) {
+	s.pty = pty
+	s.term = term
+	s.command = command
+	s.subsystem = subsystem
+	s.rows = rows
+	s.cols = cols
+	s.createdAt = time.Now()
+}
+
+// SessionMeta returns session metadata for API listing.
+func (s *ProxySession) SessionMeta() (pty bool, term, command, subsystem string, rows, cols int, createdAt time.Time) {
+	return s.pty, s.term, s.command, s.subsystem, s.rows, s.cols, s.createdAt
 }
 
 // ProxyForward represents a proxied TCP connection (port forwarding)
@@ -355,12 +468,14 @@ func (h *wsHandler) handleBinaryMessage(socket *gws.Conn, raw []byte) {
 		sess := h.srv.getSession(id)
 		if sess != nil && len(data) > 0 {
 			sendBytes(sess.WriteCh, data, "session stdout")
+			sess.BroadcastOutput(data) // notify observers
 		}
 
 	case protocol.BinStderr:
 		sess := h.srv.getSession(id)
 		if sess != nil && len(data) > 0 {
 			sendBytes(sess.StderrCh, data, "session stderr")
+			sess.BroadcastStderr(data) // notify observers
 		}
 
 	case protocol.BinTCPData:

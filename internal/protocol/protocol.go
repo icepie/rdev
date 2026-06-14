@@ -29,6 +29,10 @@ const (
 	MsgTCPListenOK MessageType = "tcp_listen_ok" // C->S: listener started
 	MsgTCPAccept   MessageType = "tcp_accept"    // C->S: new connection on listener
 
+	// Session management (S<->Browser)
+	MsgSessionList   MessageType = "session_list"   // S->Browser: list active sessions
+	MsgSessionAttach MessageType = "session_attach" // Browser->S: attach to a session
+
 	// File distribution (text frames for control, binary for data)
 	MsgFileResult MessageType = "file_result" // C->S: file write result {success, error}
 
@@ -94,9 +98,29 @@ type Message struct {
 	FileMode int32  `json:"fileMode,omitempty"`
 	Success  bool   `json:"success,omitempty"`
 
+	// Session management
+	SessionType string        `json:"sessionType,omitempty"` // "shell", "exec", "sftp"
+	AttachMode  string        `json:"attachMode,omitempty"`  // "monitor" (read-only) or "takeover" (read-write)
+	Sessions    []SessionInfo `json:"sessions,omitempty"`
+
 	// Legacy fields (text frames)
 	Data   string `json:"data,omitempty"`
 	Stderr string `json:"stderr,omitempty"`
+}
+
+// SessionInfo describes an active session for the management API.
+type SessionInfo struct {
+	ID         string `json:"id"`
+	ClientID   string `json:"clientId"`
+	Type       string `json:"type"`    // "shell", "exec", "sftp"
+	Command    string `json:"command"` // for exec
+	Pty        bool   `json:"pty"`
+	Term       string `json:"term"`
+	Rows       int    `json:"rows"`
+	Cols       int    `json:"cols"`
+	CreatedAt  string `json:"createdAt"`
+	HasMonitor bool   `json:"hasMonitor"` // true if someone is monitoring
+	HasControl bool   `json:"hasControl"` // true if someone has takeover
 }
 
 // --- JSON encoding (for text frames) ---

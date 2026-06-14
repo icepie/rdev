@@ -271,6 +271,7 @@ func (s *SSHServer) handleSession(sess ssh.Session) {
 		CloseSSH: func() { sess.Close() },
 		ExitSSH:  func(code int) { sess.Exit(code) },
 	}
+	proxySess.SetSessionMeta(wantPty, ptyReq.Term, strings.Join(sess.Command(), " "), subsystem, ptyReq.Window.Height, ptyReq.Window.Width)
 
 	if !s.srv.RegisterSession(proxySess, client) {
 		fmt.Fprintf(sess, "rdev: too many active sessions on device\n")
@@ -348,10 +349,12 @@ func (s *SSHServer) handleSession(sess ssh.Session) {
 	// When client device says Close, drain channels and exit
 	go func() {
 		<-proxySess.CloseCh
+		proxySess.NotifyObserversClose()
 		proxySess.CloseOutput()
 	}()
 
 	<-proxySess.Done
+	proxySess.NotifyObserversClose() // ensure observers are notified on any exit path
 }
 
 // --- Port forwarding: -L (local/direct-tcpip) ---

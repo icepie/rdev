@@ -115,6 +115,7 @@ func (h *terminalWSHandler) createSession(socket *gws.Conn, deviceID string) {
 		CloseSSH: func() {},
 		ExitSSH:  func(code int) {},
 	}
+	proxySess.SetSessionMeta(true, "xterm-256color", "", "", 24, 80)
 
 	if !h.srv.RegisterSession(proxySess, client) {
 		h.sendError(socket, "too many active sessions on device")
@@ -275,6 +276,7 @@ func (tc *terminalConn) pumpOutput() {
 			tc.writeMessage(gws.OpcodeBinary, data)
 
 		case <-tc.sess.CloseCh:
+			tc.sess.NotifyObserversClose()
 			tc.sess.CloseOutput()
 			tc.sendExit(tc.sess.WaitExitCode(500 * time.Millisecond))
 			return

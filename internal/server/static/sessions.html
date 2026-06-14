@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RDev - Session Manager</title>
+    <link rel="stylesheet" href="/vendor/xterm.css">
+    <style>
+        :root {
+            --bg: #0f1117; --card: #1a1d27; --border: #2a2d3a;
+            --text: #e4e4e7; --muted: #71717a; --accent: #22d3ee;
+            --green: #4ade80; --red: #f87171; --yellow: #facc15;
+            --purple: #c084fc;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); height: 100vh; display: flex; flex-direction: column; }
+
+        /* ── Top toolbar ── */
+        .toolbar { display: flex; align-items: center; padding: 6px 12px; background: var(--card); border-bottom: 1px solid var(--border); gap: 10px; flex-shrink: 0; }
+        .toolbar .logo { font-size: 0.85rem; font-weight: 600; color: var(--accent); white-space: nowrap; }
+        .toolbar .logo span { color: var(--muted); font-weight: 400; }
+        .spacer { flex: 1; }
+        .gh-link { font-size: 0.85rem; color: var(--muted); text-decoration: none; }
+        .gh-link:hover { color: var(--accent); }
+        .nav { display: flex; gap: 6px; }
+        .nav a { padding: 4px 10px; border-radius: 6px; font-size: 0.78rem; text-decoration: none; border: 1px solid var(--border); color: var(--muted); transition: all .15s; }
+        .nav a:hover { color: var(--accent); border-color: var(--accent); }
+
+        /* ── Split layout: left list, right terminal ── */
+        .split { flex: 1; display: flex; overflow: hidden; }
+
+        /* ── Session list panel ── */
+        .list-panel { width: 360px; min-width: 260px; background: var(--card); border-right: 1px solid var(--border); display: flex; flex-direction: column; flex-shrink: 0; }
+        .list-header { padding: 12px 14px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 8px; }
+        .list-header h2 { font-size: 0.9rem; font-weight: 600; }
+        .list-header .count { font-size: 0.75rem; color: var(--muted); background: var(--bg); padding: 2px 8px; border-radius: 10px; }
+        .list-search { padding: 8px 14px; border-bottom: 1px solid var(--border); }
+        .list-search input { width: 100%; padding: 6px 10px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg); color: var(--text); font-size: 0.82rem; outline: none; }
+        .list-search input:focus { border-color: var(--accent); }
+        .list-scroll { flex: 1; overflow-y: auto; }
+        .sess-item { padding: 10px 14px; border-bottom: 1px solid var(--border); cursor: pointer; transition: background .1s; }
+        .sess-item:hover { background: rgba(255,255,255,0.03); }
+        .sess-item.active { background: rgba(34,211,238,0.06); border-left: 3px solid var(--accent); }
+        .sess-item .row1 { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+        .sess-item .sid { font-size: 0.72rem; color: var(--muted); font-family: monospace; }
+        .sess-item .stype { font-size: 0.72rem; padding: 1px 6px; border-radius: 4px; font-weight: 500; }
+        .stype.shell { background: rgba(74,222,128,0.15); color: var(--green); }
+        .stype.exec { background: rgba(34,211,238,0.15); color: var(--accent); }
+        .stype.sftp { background: rgba(192,132,252,0.15); color: var(--purple); }
+        .sess-item .device { font-size: 0.82rem; font-weight: 500; }
+        .sess-item .cmd { font-size: 0.75rem; color: var(--muted); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 2px; }
+        .sess-item .meta { font-size: 0.7rem; color: var(--muted); margin-top: 4px; display: flex; gap: 10px; flex-wrap: wrap; }
+        .sess-item .meta .obs { color: var(--yellow); }
+        .sess-item .meta .tk { color: var(--red); }
+        .empty-list { text-align: center; padding: 3rem 1rem; color: var(--muted); }
+        .empty-list .icon { font-size: 2.5rem; margin-bottom: 0.8rem; opacity: 0.3; }
+
+        /* ── Attach panel ── */
+        .attach-panel { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+        .attach-header { display: flex; align-items: center; padding: 8px 12px; background: var(--card); border-bottom: 1px solid var(--border); gap: 10px; flex-shrink: 0; }
+        .attach-header .info { font-size: 0.8rem; color: var(--muted); white-space: nowrap; }
+        .attach-header .info b { color: var(--text); }
+        .mode-badge { font-size: 0.72rem; padding: 2px 8px; border-radius: 4px; font-weight: 600; background: rgba(74,222,128,0.15); color: var(--green); }
+        .btn { display: inline-flex; align-items: center; gap: 4px; padding: 5px 12px; border-radius: 6px; font-size: 0.78rem; cursor: pointer; border: 1px solid var(--border); background: var(--bg); color: var(--text); transition: all .15s; white-space: nowrap; }
+        .btn:hover { border-color: var(--accent); color: var(--accent); }
+        .btn.danger { border-color: rgba(248,113,113,0.3); color: var(--red); }
+        .btn.danger:hover { background: rgba(248,113,113,0.1); }
+        .terminal-area { flex: 1; position: relative; overflow: hidden; padding: 4px; }
+        .terminal-area .xterm { height: 100%; }
+
+        /* ── Placeholder when no session selected ── */
+        .no-select { flex: 1; display: flex; align-items: center; justify-content: center; color: var(--muted); }
+        .no-select .icon { font-size: 4rem; opacity: 0.2; margin-bottom: 1rem; text-align: center; }
+        .no-select .hint { font-size: 0.9rem; text-align: center; }
+    </style>
+</head>
+<body>
+    <div class="toolbar">
+        <div class="logo">RDev <span>Session Manager</span></div>
+        <div class="spacer"></div>
+        <a class="gh-link" href="https://github.com/icepie/rdev" target="_blank">⭐ GitHub</a>
+        <div class="nav">
+            <a href="/" data-auth-link>Dashboard</a>
+            <a href="/terminal.html" data-auth-link>Terminal</a>
+            <a href="/batch.html" data-auth-link>Batch</a>
+            <a href="/sessions.html" data-auth-link>Sessions</a>
+        </div>
+    </div>
+
+    <div class="split">
+        <div class="list-panel">
+            <div class="list-header">
+                <h2>📡 活跃会话</h2>
+                <span class="count" id="sess-count">0</span>
+            </div>
+            <div class="list-search">
+                <input type="text" id="search" placeholder="搜索设备ID / 会话ID / 命令...">
+            </div>
+            <div class="list-scroll" id="sess-list"></div>
+        </div>
+
+        <div class="attach-panel" id="attach-panel" style="display:none">
+            <div class="attach-header">
+                <span class="info" id="attach-info"></span>
+                <span class="mode-badge" id="mode-badge">⌨ Writable</span>
+                <div class="spacer"></div>
+                <button class="btn danger" id="btn-detach">✕ 断开</button>
+            </div>
+            <div class="terminal-area" id="terminal-area"></div>
+        </div>
+
+        <div class="no-select" id="no-select">
+            <div>
+                <div class="icon">📡</div>
+                <div class="hint">选择左侧会话以监控或接管</div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/vendor/xterm.js"></script>
+    <script src="/vendor/xterm-addon-fit.js"></script>
+    <script src="/vendor/xterm-addon-web-links.js"></script>
+    <script src="/vendor/addon-webgl.js"></script>
+    <script>
+    const adminToken = new URLSearchParams(location.search).get('token') || localStorage.getItem('rdevAdminToken') || '';
+    if (adminToken) localStorage.setItem('rdevAdminToken', adminToken);
+    function authURL(path) { return adminToken ? path + (path.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(adminToken) : path; }
+    function authFetch(path, init) { return fetch(authURL(path), init); }
+    document.querySelectorAll('[data-auth-link]').forEach(a => a.href = authURL(a.getAttribute('href')));
+
+    const FitAddon = window.FitAddon;
+    const WebLinksAddon = window.WebLinksAddon;
+    const WebglAddon = window.AddonWebgl?.WebglAddon;
+
+    let sessions = [], activeId = null, term = null, fitAddon = null, ws = null;
+
+    function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+    // ── Session list ──
+    async function loadSessions() {
+        try {
+            const r = await authFetch('/api/sessions');
+            sessions = await r.json();
+            document.getElementById('sess-count').textContent = sessions.length;
+            renderList();
+        } catch(e) { console.error('loadSessions', e); }
+    }
+
+    function renderList() {
+        const q = document.getElementById('search').value.toLowerCase();
+        const filtered = sessions.filter(s =>
+            !q || s.clientId.toLowerCase().includes(q) || s.id.toLowerCase().includes(q) || (s.command||'').toLowerCase().includes(q)
+        );
+        const el = document.getElementById('sess-list');
+        if (!filtered.length) {
+            el.innerHTML = '<div class="empty-list"><div class="icon">📭</div>无活跃会话</div>';
+            return;
+        }
+        el.innerHTML = filtered.map(s => {
+            const active = s.id === activeId ? 'active' : '';
+            const typeClass = s.type === 'shell' ? 'shell' : s.type === 'sftp' ? 'sftp' : 'exec';
+            const cmdText = s.type === 'shell' ? '(interactive shell)' : s.type === 'sftp' ? '(SFTP session)' : s.command || '(no command)';
+            const obsTag = s.observers > 0 ? `<span class="obs">👁 ${s.observers}</span>` : '';
+            return `<div class="sess-item ${active}" data-id="${s.id}">
+                <div class="row1">
+                    <span class="stype ${typeClass}">${s.type.toUpperCase()}</span>
+                    <span class="device">${esc(s.clientId)}</span>
+                    <span class="sid">${s.id.slice(0,8)}…</span>
+                </div>
+                <div class="cmd">${esc(cmdText)}</div>
+                <div class="meta">
+                    <span>${s.pty ? s.term || 'xterm' : 'pipe'} ${s.cols}×${s.rows}</span>
+                    <span>${timeAgo(s.createdAt)}</span>
+                    ${obsTag}
+                </div>
+            </div>`;
+        }).join('');
+        el.querySelectorAll('.sess-item').forEach(item => {
+            item.addEventListener('click', () => attachSession(item.dataset.id));
+        });
+    }
+
+    function timeAgo(iso) {
+        if (!iso) return '';
+        const d = new Date(iso), s = Math.floor((Date.now()-d)/1000);
+        if (s < 60) return '刚刚';
+        if (s < 3600) return Math.floor(s/60) + '分钟前';
+        if (s < 86400) return Math.floor(s/3600) + '小时前';
+        return Math.floor(s/86400) + '天前';
+    }
+
+    document.getElementById('search').addEventListener('input', renderList);
+
+    // ── Attach to session ──
+    function attachSession(sessionID) {
+        if (activeId === sessionID && ws) return;
+        detachSession();
+
+        activeId = sessionID;
+        renderList();
+
+        const sess = sessions.find(s => s.id === sessionID);
+        if (!sess) return;
+
+        document.getElementById('no-select').style.display = 'none';
+        document.getElementById('attach-panel').style.display = 'flex';
+
+        document.getElementById('attach-info').innerHTML = `<b>${esc(sess.clientId)}</b> · ${sess.type.toUpperCase()} · ${esc(sess.command || '(shell)')}`;
+        // Create terminal
+        const area = document.getElementById('terminal-area');
+        area.innerHTML = '';
+
+        term = new Terminal({
+            cursorBlink: true, fontSize: 14,
+            fontFamily: "'SF Mono','Fira Code','Cascadia Code',Menlo,Monaco,monospace",
+            theme: {
+                background: '#0f1117', foreground: '#e4e4e7',
+                cursor: '#22d3ee', cursorAccent: '#0f1117',
+                selectionBackground: 'rgba(34,211,238,0.25)',
+                black: '#1a1d27', red: '#f87171', green: '#4ade80', yellow: '#facc15',
+                blue: '#60a5fa', magenta: '#c084fc', cyan: '#22d3ee', white: '#e4e4e7',
+                brightBlack: '#3f3f46', brightRed: '#fca5a5', brightGreen: '#86efac',
+                brightYellow: '#fde68a', brightBlue: '#93c5fd', brightMagenta: '#d8b4fe',
+                brightCyan: '#67e8f9', brightWhite: '#f4f4f5',
+            },
+            allowProposedApi: true,
+        });
+
+        fitAddon = new FitAddon.FitAddon();
+        term.loadAddon(fitAddon);
+        term.loadAddon(new WebLinksAddon.WebLinksAddon());
+        term.open(area);
+        try { const webgl = new WebglAddon(); webgl.onContextLoss(() => webgl.dispose()); term.loadAddon(webgl); } catch(e) {}
+        try { fitAddon.fit(); } catch(e) {}
+
+        // Connect WebSocket
+        const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+        ws = new WebSocket(`${proto}//${location.host}${authURL('/session?session=' + encodeURIComponent(sessionID))}`);
+        ws.binaryType = 'arraybuffer';
+
+        ws.onmessage = (evt) => {
+            if (evt.data instanceof ArrayBuffer) {
+                term.write(new Uint8Array(evt.data));
+                return;
+            }
+            const msg = JSON.parse(evt.data);
+            if (msg.op === 'exit') {
+                term.write('\r\n\x1b[33m[Session exited with code ' + msg.code + ']\x1b[0m\r\n');
+            } else if (msg.op === 'error') {
+                term.write('\r\n\x1b[31m[Error: ' + msg.message + ']\x1b[0m\r\n');
+            }
+        };
+
+        ws.onclose = () => {
+            if (activeId === sessionID) {
+                term.write('\r\n\x1b[31m[Disconnected]\x1b[0m\r\n');
+            }
+        };
+
+        term.onData(data => {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(new TextEncoder().encode(data));
+            }
+        });
+
+        term.onResize(({ cols, rows }) => {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ op: 'resize', rows, cols }));
+            }
+        });
+    }
+
+    function detachSession() {
+        if (ws) { ws.close(); ws = null; }
+        if (term) { term.dispose(); term = null; }
+        activeId = null;
+        document.getElementById('attach-panel').style.display = 'none';
+        document.getElementById('no-select').style.display = 'flex';
+        renderList();
+    }
+
+    document.getElementById('btn-detach').addEventListener('click', detachSession);
+
+
+    // ── Resize handling ──
+    let resizeTimer;
+    window.addEventListener('resize', () => {
+        clearTimeout(resizeTimer);
+        resizeTimer = setTimeout(() => { if (fitAddon) try { fitAddon.fit(); } catch(e) {} }, 100);
+    });
+
+    // ── Auto-refresh session list ──
+    loadSessions();
+    setInterval(loadSessions, 3000);
+    </script>
+</body>
+</html>
