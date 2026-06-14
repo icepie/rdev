@@ -145,7 +145,7 @@
 
     async function loadDevices() {
         try {
-            const r = await authFetch('/api/devices');
+            const r = await fetch('/api/batch/devices');
             devices = await r.json();
             renderDevices();
         } catch(e) {}
@@ -162,7 +162,7 @@
             return `<div class="device-item ${sel}" data-id="${esc(d.id)}">
                 <input type="checkbox" ${sel ? 'checked' : ''}>
                 <span class="dot"></span>
-                <span>${esc(d.id)}</span>
+                <span>${esc(d.id)}${d.hasPassword ? ' 🔒' : ''}</span>
             </div>`;
         }).join('');
 
@@ -191,8 +191,45 @@
     }
 
     function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+    function selectedDeviceObjects() { return [...selectedDevices].map(id => devices.find(d => d.id === id)).filter(Boolean); }
 
-    // Decode binary frame: [1 byte type] [1 byte idLen] [idLen bytes devId] [payload]
+    function openBatchWS() {
+        const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+        return new WebSocket(`${proto}//${location.host}/batch`);
+    }
+
+    function authDevice(ws, device, password) {
+        if (!device.hasPassword) return Promise.resolve(true);
+        return new Promise(resolve => {
+            const onMessage = (evt) => {
+                if (evt.data instanceof ArrayBuffer) return;
+                let msg;
+                try { msg = JSON.parse(evt.data); } catch { return; }
+                if ((msg.op === 'auth_ok' || msg.op === 'auth_fail') && msg.deviceId === device.id) {
+                    ws.removeEventListener('message', onMessage);
+                    resolve(msg.op === 'auth_ok');
+                }
+            };
+            ws.addEventListener('message', onMessage);
+            ws.send(JSON.stringify({ op: 'auth', deviceId: device.id, password }));
+        });
+    }
+
+    async function authorizeSelectedDevices(ws) {
+        const locked = selectedDeviceObjects().filter(d => d.hasPassword);
+        if (!locked.length) return true;
+        const password = prompt(`Password required for ${locked.map(d => d.id).join(', ')}`);
+        if (password === null) return false;
+        for (const device of locked) {
+            const ok = await authDevice(ws, device, password);
+            if (!ok) {
+                alert(`Wrong password for ${device.id}`);
+                return false;
+            }
+        }
+        return true;
+    }
+
     function decodeBinFrame(buf) {
         const view = new DataView(buf);
         const typ = view.getUint8(0);
@@ -231,11 +268,11 @@
             <div class="result-body" id="output-${esc(id)}"></div>
         </div>`).join('');
 
-        const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const ws = new WebSocket(`${proto}//${location.host}${authURL('/batch')}`);
+        const ws = openBatchWS();
         ws.binaryType = 'arraybuffer'; // for binary output frames
 
-        ws.onopen = () => {
+        ws.onopen = async () => {
+            if (!(await authorizeSelectedDevices(ws))) { ws.close(); return; }
             ws.send(JSON.stringify({ op: 'exec', devices: deviceList, command: cmd }));
         };
 
@@ -260,14 +297,14 @@
                         return c && !c.querySelector('.exit.running');
                     });
                     if (allDone) ws.close();
-                } else if (msg.op === 'error') {
+                } else if (msg.op === 'error' || msg.op === 'auth_required') {
                     if (msg.deviceId) {
                         const el = document.getElementById('output-' + msg.deviceId);
                         if (el) el.textContent += '\n[Error: ' + msg.message + ']';
                         const card = document.getElementById('result-' + msg.deviceId);
                         if (card) {
                             const badge = card.querySelector('.exit');
-                            if (badge && badge.classList.contains('running')) { badge.className = 'exit fail'; badge.textContent = 'error'; }
+                            if (badge && badge.classList.contains('running')) { badge.className = 'exit fail'; badge.textContent = msg.op === 'auth_required' ? 'auth required' : 'error'; }
                         }
                     } else {
                         results.innerHTML += `<div style="color:var(--red);font-size:0.85rem;padding:8px">Error: ${esc(msg.message)}</div>`;
@@ -341,12 +378,12 @@
             <div class="result-body" id="upload-output-${esc(id)}">${esc(destPath)}</div>
         </div>`).join('');
 
-        const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const ws = new WebSocket(`${proto}//${location.host}${authURL('/batch')}`);
+        const ws = openBatchWS();
         ws.binaryType = 'arraybuffer';
         const uploadId = `upload-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 
         ws.onopen = async () => {
+            if (!(await authorizeSelectedDevices(ws))) { ws.close(); return; }
             ws.send(encodeFileStart(uploadId, { devices: deviceList, path: destPath, mode: 420 }, 420));
             for (let offset = 0; offset < uploadedFile.size; offset += 512 * 1024) {
                 const chunk = await uploadedFile.slice(offset, offset + 512 * 1024).arrayBuffer();
@@ -370,12 +407,12 @@
                     badge.className = 'exit ' + (msg.success ? 'ok' : 'fail');
                     badge.textContent = msg.success ? '✓ OK' : '✗ ' + (msg.message || 'failed');
                 }
-            } else if (msg.op === 'error' && msg.deviceId) {
+            } else if ((msg.op === 'error' || msg.op === 'auth_required') && msg.deviceId) {
                 const card = document.getElementById('upload-result-' + msg.deviceId);
                 if (card) {
                     const badge = card.querySelector('.exit');
                     badge.className = 'exit fail';
-                    badge.textContent = '✗ ' + (msg.message || 'error');
+                    badge.textContent = '✗ ' + (msg.message || (msg.op === 'auth_required' ? 'auth required' : 'error'));
                 }
             }
             const allDone = deviceList.every(id => {

@@ -1,6 +1,9 @@
 package server
 
 import (
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -21,18 +24,19 @@ import (
 //	                   Text frame  = JSON {op:"exec_exit"|"upload_result"|"error", deviceId, ...}
 
 type batchMsg struct {
-	Op      string   `json:"op"`
-	Devices []string `json:"devices,omitempty"`
-	Command string   `json:"command,omitempty"`
-	Path    string   `json:"path,omitempty"`
-	Data    string   `json:"data,omitempty"` // base64 for upload
-	Mode    int32    `json:"mode,omitempty"`
+	Op       string   `json:"op"`
+	Devices  []string `json:"devices,omitempty"`
+	Command  string   `json:"command,omitempty"`
+	Path     string   `json:"path,omitempty"`
+	Data     string   `json:"data,omitempty"` // base64 for upload
+	Mode     int32    `json:"mode,omitempty"`
+	DeviceID string   `json:"deviceId,omitempty"`
+	Password string   `json:"password,omitempty"`
 
 	// Response fields (text frames)
-	DeviceID string `json:"deviceId,omitempty"`
-	Code     int    `json:"code"`
-	Success  bool   `json:"success,omitempty"`
-	Message  string `json:"message,omitempty"`
+	Code    int    `json:"code"`
+	Success bool   `json:"success,omitempty"`
+	Message string `json:"message,omitempty"`
 }
 
 // Batch binary output frame: [1 byte: 0x01] [1 byte: devIdLen] [devId] [raw output]
@@ -50,9 +54,12 @@ type batchUploadMeta struct {
 }
 
 type batchSocket struct {
-	conn    *gws.Conn
-	mu      sync.Mutex
-	uploads map[string]*batchUpload
+	conn       *gws.Conn
+	mu         sync.Mutex
+	authMu     sync.RWMutex
+	authorized map[string]string
+	authFails  map[string]int
+	uploads    map[string]*batchUpload
 }
 
 type batchUpload struct {
@@ -90,7 +97,12 @@ func (s *batchSocket) sendUploadAck(uploadID string) {
 }
 
 func (h *batchWSHandler) OnOpen(socket *gws.Conn) {
-	socket.Session().Store("batchSocket", &batchSocket{conn: socket, uploads: make(map[string]*batchUpload)})
+	socket.Session().Store("batchSocket", &batchSocket{
+		conn:       socket,
+		authorized: make(map[string]string),
+		authFails:  make(map[string]int),
+		uploads:    make(map[string]*batchUpload),
+	})
 }
 func (h *batchWSHandler) OnClose(socket *gws.Conn, err error) {}
 
@@ -124,11 +136,52 @@ func (h *batchWSHandler) OnMessage(socket *gws.Conn, message *gws.Message) {
 	}
 
 	switch bmsg.Op {
+	case "auth":
+		h.handleBatchAuth(bs, bmsg)
 	case "exec":
 		go h.handleBatchExec(bs, bmsg)
 	case "upload":
 		go h.handleBatchUpload(bs, bmsg)
 	}
+}
+
+func (h *batchWSHandler) handleBatchAuth(socket *batchSocket, msg batchMsg) {
+	if msg.DeviceID == "" {
+		socket.WriteText(batchMsg{Op: "auth_fail", Message: "missing device"})
+		return
+	}
+	h.srv.mu.RLock()
+	client, ok := h.srv.clients[msg.DeviceID]
+	h.srv.mu.RUnlock()
+	if !ok {
+		socket.WriteText(batchMsg{Op: "auth_fail", DeviceID: msg.DeviceID, Message: "device not connected"})
+		return
+	}
+	if client.Password == "" || constantTimeEqual(client.Password, msg.Password) {
+		socket.authMu.Lock()
+		socket.authorized[msg.DeviceID] = passwordFingerprint(client.Password)
+		delete(socket.authFails, msg.DeviceID)
+		socket.authMu.Unlock()
+		socket.WriteText(batchMsg{Op: "auth_ok", DeviceID: msg.DeviceID})
+		return
+	}
+	socket.authMu.Lock()
+	socket.authFails[msg.DeviceID]++
+	failures := socket.authFails[msg.DeviceID]
+	socket.authMu.Unlock()
+	if failures > 3 {
+		time.Sleep(time.Duration(failures-3) * 300 * time.Millisecond)
+	}
+	socket.WriteText(batchMsg{Op: "auth_fail", DeviceID: msg.DeviceID, Message: "wrong password"})
+}
+
+func constantTimeEqual(a, b string) bool {
+	return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
+}
+
+func passwordFingerprint(password string) string {
+	sum := sha256.Sum256([]byte(password))
+	return hex.EncodeToString(sum[:])
 }
 
 func (h *batchWSHandler) handleBinaryMessage(socket *batchSocket, raw []byte) {
@@ -219,6 +272,10 @@ func (h *batchWSHandler) handleBatchExec(socket *batchSocket, bmsg batchMsg) {
 		socket.WriteText(batchMsg{Op: "error", Message: "missing command or devices"})
 		return
 	}
+	devices := h.authorizedDevices(socket, bmsg.Devices)
+	if len(devices) == 0 {
+		return
+	}
 
 	var wg sync.WaitGroup
 	limit := h.srv.BatchConcurrency
@@ -226,7 +283,7 @@ func (h *batchWSHandler) handleBatchExec(socket *batchSocket, bmsg batchMsg) {
 		limit = runtime.GOMAXPROCS(0) * 8
 	}
 	sem := make(chan struct{}, limit)
-	for _, deviceID := range bmsg.Devices {
+	for _, deviceID := range devices {
 		h.srv.mu.RLock()
 		client, ok := h.srv.clients[deviceID]
 		h.srv.mu.RUnlock()
@@ -260,6 +317,7 @@ func (h *batchWSHandler) execOnDevice(socket *batchSocket, client *ClientConn, d
 		CloseSSH: func() {},
 		ExitSSH:  func(code int) {},
 	}
+	proxySess.SetSessionMeta(false, "", command, "", 0, 0)
 	if !h.srv.RegisterSession(proxySess, client) {
 		socket.WriteText(batchMsg{Op: "error", DeviceID: deviceID, Message: "too many active sessions"})
 		return
@@ -300,6 +358,7 @@ func (h *batchWSHandler) execOnDevice(socket *batchSocket, client *ClientConn, d
 				socket.WriteOutput(deviceID, data)
 
 			case <-proxySess.CloseCh:
+				proxySess.NotifyObserversClose()
 				proxySess.CloseOutput()
 				socket.WriteText(batchMsg{
 					Op:       "exec_exit",
@@ -317,16 +376,24 @@ func (h *batchWSHandler) handleBatchUpload(socket *batchSocket, bmsg batchMsg) {
 		socket.WriteText(batchMsg{Op: "error", Message: "missing path, data or devices"})
 		return
 	}
+	devices := h.authorizedDevices(socket, bmsg.Devices)
+	if len(devices) == 0 {
+		return
+	}
 
 	rawData, err := protocol.DecodeData(bmsg.Data)
 	if err != nil {
 		socket.WriteText(batchMsg{Op: "error", Message: "invalid base64 data"})
 		return
 	}
-	h.handleBatchUploadBytes(socket, bmsg.Devices, bmsg.Path, bmsg.Mode, rawData)
+	h.handleBatchUploadBytes(socket, devices, bmsg.Path, bmsg.Mode, rawData)
 }
 
 func (h *batchWSHandler) handleBatchUploadBytes(socket *batchSocket, devices []string, path string, mode int32, rawData []byte) {
+	devices = h.authorizedDevices(socket, devices)
+	if len(devices) == 0 {
+		return
+	}
 	var wg sync.WaitGroup
 	limit := h.srv.BatchConcurrency
 	if limit <= 0 {
@@ -369,6 +436,10 @@ func (h *batchWSHandler) uploadToDevice(socket *batchSocket, client *ClientConn,
 }
 
 func (h *batchWSHandler) startStreamUpload(socket *batchSocket, uploadID string, devices []string, path string, mode int32) {
+	devices = h.authorizedDevices(socket, devices)
+	if len(devices) == 0 {
+		return
+	}
 	limit := h.srv.BatchConcurrency
 	if limit <= 0 {
 		limit = runtime.GOMAXPROCS(0) * 8
@@ -447,6 +518,35 @@ func (h *batchWSHandler) waitUploadResult(socket *batchSocket, resultCh <-chan *
 	}
 }
 
+func (h *batchWSHandler) authorizedDevices(socket *batchSocket, devices []string) []string {
+	allowed := make([]string, 0, len(devices))
+	for _, deviceID := range devices {
+		h.srv.mu.RLock()
+		client, ok := h.srv.clients[deviceID]
+		h.srv.mu.RUnlock()
+		if !ok {
+			socket.WriteText(batchMsg{Op: "error", DeviceID: deviceID, Message: "device not connected"})
+			continue
+		}
+		if h.isDeviceAuthorized(socket, client) {
+			allowed = append(allowed, deviceID)
+			continue
+		}
+		socket.WriteText(batchMsg{Op: "auth_required", DeviceID: deviceID, Message: "device password required"})
+	}
+	return allowed
+}
+
+func (h *batchWSHandler) isDeviceAuthorized(socket *batchSocket, client *ClientConn) bool {
+	if client.Password == "" {
+		return true
+	}
+	socket.authMu.RLock()
+	fingerprint, ok := socket.authorized[client.ID]
+	socket.authMu.RUnlock()
+	return ok && constantTimeEqual(fingerprint, passwordFingerprint(client.Password))
+}
+
 // HandleFileUpload handles HTTP file upload, returns base64-encoded content
 func (s *Server) HandleFileUpload(w http.ResponseWriter, r *http.Request) {
 	if !s.requireAuth(w, r) {
@@ -482,11 +582,34 @@ func (s *Server) HandleFileUpload(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// HandleBatchDevicesAPI returns device metadata for the Batch page.
+// This endpoint is intentionally not protected by the admin token; Batch actions
+// enforce each target device's own password before executing or writing files.
+func (s *Server) HandleBatchDevicesAPI(w http.ResponseWriter, r *http.Request) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	type deviceInfo struct {
+		ID          string `json:"id"`
+		ConnectedAt string `json:"connectedAt"`
+		HasPassword bool   `json:"hasPassword"`
+	}
+
+	devices := make([]deviceInfo, 0, len(s.clients))
+	for _, c := range s.clients {
+		devices = append(devices, deviceInfo{
+			ID:          c.ID,
+			ConnectedAt: c.ConnectedAt.Format(time.RFC3339),
+			HasPassword: c.Password != "",
+		})
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(devices)
+}
+
 // HandleBatchWS handles browser batch WebSocket connections
 func (s *Server) HandleBatchWS(w http.ResponseWriter, r *http.Request) {
-	if !s.requireAuth(w, r) {
-		return
-	}
 	upgrader := gws.NewUpgrader(&batchWSHandler{srv: s}, &gws.ServerOption{
 		ReadMaxPayloadSize: 100 * 1024 * 1024,
 		ParallelGolimit:    runtime.GOMAXPROCS(0),
