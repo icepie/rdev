@@ -1,13 +1,394 @@
-<!doctype html>
-<html lang="en">
+<!DOCTYPE html>
+<html lang="zh-CN">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>RDev Batch</title>
-  <script type="module" crossorigin src="/assets/batch-DTzKKGsf.js"></script>
-  <link rel="modulepreload" crossorigin href="/assets/decorate-BSIJnHrU.js">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RDev - Batch</title>
+    <style>
+        :root {
+            --bg: #0f1117;
+            --card: #1a1d27;
+            --border: #2a2d3a;
+            --text: #e4e4e7;
+            --muted: #71717a;
+            --accent: #22d3ee;
+            --green: #4ade80;
+            --red: #f87171;
+            --yellow: #facc15;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+        .container { max-width: 1100px; margin: 0 auto; padding: 1.5rem; }
+        header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; }
+        header h1 { font-size: 1.5rem; font-weight: 700; }
+        header h1 span { color: var(--accent); }
+        .nav { display: flex; gap: 8px; }
+        .nav a { padding: 6px 14px; border-radius: 7px; font-size: 0.85rem; text-decoration: none; border: 1px solid var(--border); color: var(--muted); transition: all .15s; }
+        .nav a:hover, .nav a.active { border-color: var(--accent); color: var(--accent); }
+
+        /* Device selector */
+        .device-panel { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 1rem; margin-bottom: 1rem; }
+        .device-panel h3 { font-size: 0.85rem; color: var(--accent); margin-bottom: 0.6rem; }
+        .device-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 6px; }
+        .device-item { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: 6px; cursor: pointer; font-size: 0.85rem; border: 1px solid transparent; transition: all .15s; }
+        .device-item:hover { background: rgba(255,255,255,0.03); }
+        .device-item.selected { border-color: var(--accent); background: rgba(34,211,238,0.06); }
+        .device-item input { accent-color: var(--accent); }
+        .device-item .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); box-shadow: 0 0 5px var(--green); flex-shrink: 0; }
+        .device-item.offline .dot { background: var(--red); box-shadow: none; }
+        .select-all { font-size: 0.8rem; color: var(--muted); cursor: pointer; margin-bottom: 6px; }
+        .select-all:hover { color: var(--accent); }
+
+        /* Tabs */
+        .tabs { display: flex; gap: 2px; margin-bottom: 1rem; }
+        .tab { padding: 8px 18px; border-radius: 8px 8px 0 0; font-size: 0.85rem; cursor: pointer; border: 1px solid var(--border); border-bottom: none; background: var(--card); color: var(--muted); transition: all .15s; }
+        .tab:hover { color: var(--text); }
+        .tab.active { color: var(--accent); border-color: var(--accent); background: var(--bg); position: relative; top: 1px; }
+        .tab-panel { display: none; background: var(--card); border: 1px solid var(--border); border-radius: 0 10px 10px 10px; padding: 1.2rem; }
+        .tab-panel.active { display: block; }
+
+        /* Exec */
+        .exec-row { display: flex; gap: 10px; margin-bottom: 0.8rem; }
+        .exec-input { flex: 1; padding: 10px 14px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg); color: var(--text); font-size: 0.9rem; font-family: 'SF Mono','Fira Code',monospace; outline: none; }
+        .exec-input:focus { border-color: var(--accent); }
+        .exec-btn { padding: 10px 22px; border-radius: 8px; border: none; background: var(--accent); color: var(--bg); font-weight: 600; font-size: 0.9rem; cursor: pointer; transition: opacity .15s; }
+        .exec-btn:hover { opacity: 0.85; }
+        .exec-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+
+        /* Upload */
+        .upload-zone { border: 2px dashed var(--border); border-radius: 10px; padding: 2rem; text-align: center; cursor: pointer; transition: all .15s; margin-bottom: 1rem; }
+        .upload-zone:hover, .upload-zone.dragover { border-color: var(--accent); background: rgba(34,211,238,0.04); }
+        .upload-zone .icon { font-size: 2rem; margin-bottom: 0.5rem; opacity: 0.4; }
+        .upload-zone .hint { color: var(--muted); font-size: 0.85rem; }
+        .upload-zone .filename { color: var(--accent); font-weight: 600; font-size: 0.9rem; margin-top: 0.3rem; }
+        .path-row { display: flex; gap: 10px; margin-bottom: 1rem; align-items: center; }
+        .path-input { flex: 1; padding: 8px 12px; border-radius: 7px; border: 1px solid var(--border); background: var(--bg); color: var(--text); font-size: 0.85rem; font-family: 'SF Mono','Fira Code',monospace; outline: none; }
+        .path-input:focus { border-color: var(--accent); }
+        .upload-btn { padding: 10px 22px; border-radius: 8px; border: none; background: var(--accent); color: var(--bg); font-weight: 600; font-size: 0.9rem; cursor: pointer; }
+        .upload-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+
+        /* Results */
+        .results { margin-top: 1rem; }
+        .result-card { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; margin-bottom: 8px; overflow: hidden; }
+        .result-header { display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; border-bottom: 1px solid var(--border); font-size: 0.8rem; }
+        .result-header .device { font-weight: 600; color: var(--text); }
+        .result-header .exit { padding: 2px 8px; border-radius: 5px; font-size: 0.75rem; }
+        .result-header .exit.ok { background: rgba(74,222,128,0.12); color: var(--green); }
+        .result-header .exit.fail { background: rgba(248,113,113,0.12); color: var(--red); }
+        .result-header .exit.running { background: rgba(34,211,238,0.12); color: var(--accent); }
+        .result-body { padding: 8px 12px; font-family: 'SF Mono','Fira Code',monospace; font-size: 0.8rem; color: var(--muted); white-space: pre-wrap; max-height: 200px; overflow-y: auto; line-height: 1.5; }
+        .empty { text-align: center; color: var(--muted); padding: 2rem; font-size: 0.85rem; }
+    </style>
 </head>
 <body>
-  <rdev-batch></rdev-batch>
+    <div class="container">
+        <header>
+            <h1><span>RDev</span> Batch</h1>
+            <div class="nav">
+                <a href="/" data-auth-link>Dashboard</a>
+                <a href="/terminal.html" data-auth-link>Terminal</a>
+                <a href="/batch.html" data-auth-link class="active">Batch</a>
+            </div>
+        </header>
+
+        <!-- Device selector -->
+        <div class="device-panel">
+            <h3>📡 Target Devices</h3>
+            <div class="select-all" id="select-all">Select all</div>
+            <div class="device-grid" id="device-grid"></div>
+        </div>
+
+        <!-- Tab panels: Exec / Upload -->
+        <div class="tabs">
+            <div class="tab active" data-tab="exec">⚡ Batch Command</div>
+            <div class="tab" data-tab="upload">📁 File Distribution</div>
+        </div>
+
+        <div class="tab-panel active" id="panel-exec">
+            <div class="exec-row">
+                <input type="text" class="exec-input" id="exec-cmd" placeholder="e.g. uname -a &amp;&amp; uptime" spellcheck="false" autocomplete="off">
+                <button class="exec-btn" id="exec-run">Run</button>
+            </div>
+            <div class="results" id="exec-results"></div>
+        </div>
+
+        <div class="tab-panel" id="panel-upload">
+            <div class="upload-zone" id="drop-zone">
+                <div class="icon">📂</div>
+                <div class="hint">Click or drag file here</div>
+                <div class="filename" id="upload-name"></div>
+            </div>
+            <input type="file" id="file-input" style="display:none">
+            <div class="path-row">
+                <span style="color:var(--muted);font-size:0.85rem">→</span>
+                <input type="text" class="path-input" id="dest-path" placeholder="/tmp/file.txt" spellcheck="false" autocomplete="off">
+                <button class="upload-btn" id="upload-run">Distribute</button>
+            </div>
+            <div class="results" id="upload-results"></div>
+        </div>
+    </div>
+
+    <script>
+
+    const adminToken = new URLSearchParams(location.search).get('token') || localStorage.getItem('rdevAdminToken') || '';
+    if (adminToken) localStorage.setItem('rdevAdminToken', adminToken);
+    function authURL(path) { return adminToken ? path + (path.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(adminToken) : path; }
+    function authFetch(path, init) { return fetch(authURL(path), init).then(r => { if (r.status === 401) { const t = prompt('Admin token required'); if (t) { localStorage.setItem('rdevAdminToken', t); location.search = 'token=' + encodeURIComponent(t); } } return r; }); }
+    document.querySelectorAll('[data-auth-link]').forEach(a => a.href = authURL(a.getAttribute('href')));
+
+    // ---- Device list ----
+    let devices = [];
+    let selectedDevices = new Set();
+    let uploadedFile = null;
+    let uploadedName = '';
+    const uploadAcks = new Map();
+
+    async function loadDevices() {
+        try {
+            const r = await authFetch('/api/devices');
+            devices = await r.json();
+            renderDevices();
+        } catch(e) {}
+    }
+
+    function renderDevices() {
+        const grid = document.getElementById('device-grid');
+        if (!devices.length) {
+            grid.innerHTML = '<div style="color:var(--muted);font-size:0.85rem">No devices connected</div>';
+            return;
+        }
+        grid.innerHTML = devices.map(d => {
+            const sel = selectedDevices.has(d.id) ? 'selected' : '';
+            return `<div class="device-item ${sel}" data-id="${esc(d.id)}">
+                <input type="checkbox" ${sel ? 'checked' : ''}>
+                <span class="dot"></span>
+                <span>${esc(d.id)}</span>
+            </div>`;
+        }).join('');
+
+        grid.querySelectorAll('.device-item').forEach(el => {
+            el.addEventListener('click', () => {
+                const id = el.dataset.id;
+                if (selectedDevices.has(id)) selectedDevices.delete(id);
+                else selectedDevices.add(id);
+                renderDevices();
+                updateButtons();
+            });
+        });
+        updateButtons();
+    }
+
+    document.getElementById('select-all').addEventListener('click', () => {
+        if (selectedDevices.size === devices.length) selectedDevices.clear();
+        else devices.forEach(d => selectedDevices.add(d.id));
+        renderDevices();
+    });
+
+    function updateButtons() {
+        const hasDevices = selectedDevices.size > 0;
+        document.getElementById('exec-run').disabled = !hasDevices;
+        document.getElementById('upload-run').disabled = !hasDevices || !uploadedFile;
+    }
+
+    function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+    // Decode binary frame: [1 byte type] [1 byte idLen] [idLen bytes devId] [payload]
+    function decodeBinFrame(buf) {
+        const view = new DataView(buf);
+        const typ = view.getUint8(0);
+        const idLen = view.getUint8(1);
+        const devId = new TextDecoder().decode(new Uint8Array(buf, 2, idLen));
+        const payload = new Uint8Array(buf, 2 + idLen);
+        return { typ, devId, payload };
+    }
+
+    // ---- Tabs ----
+    document.querySelectorAll('.tab').forEach(tab => {
+        tab.addEventListener('click', () => {
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+            tab.classList.add('active');
+            document.getElementById('panel-' + tab.dataset.tab).classList.add('active');
+        });
+    });
+
+    // ---- Batch Exec ----
+    document.getElementById('exec-run').addEventListener('click', runBatchExec);
+    document.getElementById('exec-cmd').addEventListener('keydown', e => { if (e.key === 'Enter') runBatchExec(); });
+
+    function runBatchExec() {
+        const cmd = document.getElementById('exec-cmd').value.trim();
+        if (!cmd || !selectedDevices.size) return;
+
+        const results = document.getElementById('exec-results');
+        // Create result cards
+        const deviceList = [...selectedDevices];
+        results.innerHTML = deviceList.map(id => `<div class="result-card" id="result-${esc(id)}">
+            <div class="result-header">
+                <span class="device">${esc(id)}</span>
+                <span class="exit running">running...</span>
+            </div>
+            <div class="result-body" id="output-${esc(id)}"></div>
+        </div>`).join('');
+
+        const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const ws = new WebSocket(`${proto}//${location.host}${authURL('/batch')}`);
+        ws.binaryType = 'arraybuffer'; // for binary output frames
+
+        ws.onopen = () => {
+            ws.send(JSON.stringify({ op: 'exec', devices: deviceList, command: cmd }));
+        };
+
+        ws.onmessage = (evt) => {
+            if (evt.data instanceof ArrayBuffer) {
+                // Binary frame = exec output [0x01] [devIdLen] [devId] [raw output]
+                const { devId, payload } = decodeBinFrame(evt.data);
+                const el = document.getElementById('output-' + devId);
+                if (el) el.textContent += new TextDecoder().decode(payload);
+            } else {
+                // Text frame = JSON control
+                const msg = JSON.parse(evt.data);
+                if (msg.deviceId && msg.op === 'exec_exit') {
+                    const card = document.getElementById('result-' + msg.deviceId);
+                    if (card) {
+                        const badge = card.querySelector('.exit');
+                        badge.className = 'exit ' + (msg.code === 0 ? 'ok' : 'fail');
+                        badge.textContent = msg.code === 0 ? 'exit 0' : `exit ${msg.code}`;
+                    }
+                    const allDone = deviceList.every(id => {
+                        const c = document.getElementById('result-' + id);
+                        return c && !c.querySelector('.exit.running');
+                    });
+                    if (allDone) ws.close();
+                } else if (msg.op === 'error') {
+                    if (msg.deviceId) {
+                        const el = document.getElementById('output-' + msg.deviceId);
+                        if (el) el.textContent += '\n[Error: ' + msg.message + ']';
+                        const card = document.getElementById('result-' + msg.deviceId);
+                        if (card) {
+                            const badge = card.querySelector('.exit');
+                            if (badge && badge.classList.contains('running')) { badge.className = 'exit fail'; badge.textContent = 'error'; }
+                        }
+                    } else {
+                        results.innerHTML += `<div style="color:var(--red);font-size:0.85rem;padding:8px">Error: ${esc(msg.message)}</div>`;
+                    }
+                }
+            }
+        };
+
+        ws.onerror = () => {};
+        ws.onclose = () => {};
+    }
+
+    // ---- File Upload ----
+    const dropZone = document.getElementById('drop-zone');
+    const fileInput = document.getElementById('file-input');
+
+    dropZone.addEventListener('click', () => fileInput.click());
+    dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('dragover'); });
+    dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+    dropZone.addEventListener('drop', e => {
+        e.preventDefault(); dropZone.classList.remove('dragover');
+        if (e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
+    });
+    fileInput.addEventListener('change', () => { if (fileInput.files.length) handleFile(fileInput.files[0]); });
+
+    function handleFile(file) {
+        uploadedName = file.name;
+        document.getElementById('upload-name').textContent = file.name + ' (' + (file.size/1024).toFixed(1) + ' KB)';
+        if (!document.getElementById('dest-path').value) {
+            document.getElementById('dest-path').value = '/tmp/' + file.name;
+        }
+
+        uploadedFile = file;
+        updateButtons();
+    }
+
+    document.getElementById('upload-run').addEventListener('click', runBatchUpload);
+
+    function encodeFileStart(id, meta, mode) {
+        const enc = new TextEncoder();
+        const idBytes = enc.encode(id);
+        const metaBytes = enc.encode(JSON.stringify(meta));
+        const buf = new ArrayBuffer(2 + idBytes.length + 2 + metaBytes.length + 4);
+        const view = new DataView(buf); let pos = 0;
+        view.setUint8(pos++, 0x05); view.setUint8(pos++, idBytes.length);
+        new Uint8Array(buf, pos, idBytes.length).set(idBytes); pos += idBytes.length;
+        view.setUint16(pos, metaBytes.length); pos += 2;
+        new Uint8Array(buf, pos, metaBytes.length).set(metaBytes); pos += metaBytes.length;
+        view.setUint32(pos, mode);
+        return buf;
+    }
+    function encodeChunk(id, data) {
+        const idBytes = new TextEncoder().encode(id), chunk = new Uint8Array(data);
+        const buf = new ArrayBuffer(2 + idBytes.length + chunk.length), out = new Uint8Array(buf);
+        out[0] = 0x06; out[1] = idBytes.length; out.set(idBytes, 2); out.set(chunk, 2 + idBytes.length);
+        return buf;
+    }
+    function encodeEnd(id) {
+        const idBytes = new TextEncoder().encode(id), buf = new ArrayBuffer(2 + idBytes.length), out = new Uint8Array(buf);
+        out[0] = 0x07; out[1] = idBytes.length; out.set(idBytes, 2); return buf;
+    }
+
+    function runBatchUpload() {
+        if (!uploadedFile || !selectedDevices.size) return;
+        const destPath = document.getElementById('dest-path').value.trim();
+        if (!destPath) return;
+        const deviceList = [...selectedDevices];
+        const results = document.getElementById('upload-results');
+        results.innerHTML = deviceList.map(id => `<div class="result-card" id="upload-result-${esc(id)}">
+            <div class="result-header"><span class="device">${esc(id)}</span><span class="exit running">uploading...</span></div>
+            <div class="result-body" id="upload-output-${esc(id)}">${esc(destPath)}</div>
+        </div>`).join('');
+
+        const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const ws = new WebSocket(`${proto}//${location.host}${authURL('/batch')}`);
+        ws.binaryType = 'arraybuffer';
+        const uploadId = `upload-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+
+        ws.onopen = async () => {
+            ws.send(encodeFileStart(uploadId, { devices: deviceList, path: destPath, mode: 420 }, 420));
+            for (let offset = 0; offset < uploadedFile.size; offset += 512 * 1024) {
+                const chunk = await uploadedFile.slice(offset, offset + 512 * 1024).arrayBuffer();
+                ws.send(encodeChunk(uploadId, chunk));
+                await new Promise(resolve => uploadAcks.set(uploadId, resolve));
+            }
+            ws.send(encodeEnd(uploadId));
+        };
+
+        ws.onmessage = (evt) => {
+            if (evt.data instanceof ArrayBuffer) {
+                const { typ, devId } = decodeBinFrame(evt.data);
+                if (typ === 0x08 && uploadAcks.has(devId)) { uploadAcks.get(devId)(); uploadAcks.delete(devId); }
+                return;
+            }
+            const msg = JSON.parse(evt.data);
+            if (msg.deviceId && msg.op === 'upload_result') {
+                const card = document.getElementById('upload-result-' + msg.deviceId);
+                if (card) {
+                    const badge = card.querySelector('.exit');
+                    badge.className = 'exit ' + (msg.success ? 'ok' : 'fail');
+                    badge.textContent = msg.success ? '✓ OK' : '✗ ' + (msg.message || 'failed');
+                }
+            } else if (msg.op === 'error' && msg.deviceId) {
+                const card = document.getElementById('upload-result-' + msg.deviceId);
+                if (card) {
+                    const badge = card.querySelector('.exit');
+                    badge.className = 'exit fail';
+                    badge.textContent = '✗ ' + (msg.message || 'error');
+                }
+            }
+            const allDone = deviceList.every(id => {
+                const c = document.getElementById('upload-result-' + id);
+                return c && !c.querySelector('.exit.running');
+            });
+            if (allDone) ws.close();
+        };
+    }
+
+    // ---- Init ----
+    loadDevices();
+    setInterval(loadDevices, 5000);
+    </script>
 </body>
 </html>

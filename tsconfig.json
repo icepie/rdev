@@ -4,8 +4,14 @@
     "useDefineForClassFields": false,
     "experimentalDecorators": true,
     "module": "ESNext",
-    "lib": ["ES2022", "DOM", "DOM.Iterable"],
-    "types": ["vite/client"],
+    "lib": [
+      "ES2022",
+      "DOM",
+      "DOM.Iterable"
+    ],
+    "types": [
+      "vite/client"
+    ],
     "skipLibCheck": true,
     "moduleResolution": "Bundler",
     "allowImportingTsExtensions": true,
@@ -14,5 +20,7 @@
     "noEmit": true,
     "strict": true
   },
-  "include": ["web/src"]
+  "include": [
+    "vite.config.ts"
+  ]
 }

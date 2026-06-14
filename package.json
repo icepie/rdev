@@ -8,10 +8,8 @@
     "build": "vite build",
     "typecheck": "tsc --noEmit"
   },
-  "dependencies": {
-    "lit": "latest"
-  },
   "devDependencies": {
+    "@types/node": "^25.9.3",
     "@vitejs/plugin-basic-ssl": "latest",
     "typescript": "latest",
     "vite": "latest"
