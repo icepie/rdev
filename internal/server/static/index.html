@@ -200,8 +200,8 @@
             });
             // Win7/8 PS2.0 commands (nested quotes break data-tpl, render via JS)
             const el = id => document.getElementById(id);
-            if (el('c-w7-pw'))   el('c-w7-pw').textContent   = `powershell -Command "$wc=New-Object Net.WebClient; $wc.DownloadString('${HTTP}${H}/install.ps1') | iex; RDev ${WS}${H} -Password <自定义密码>"`;
-            if (el('c-w7-open')) el('c-w7-open').textContent  = `powershell -Command "$wc=New-Object Net.WebClient; $wc.DownloadString('${HTTP}${H}/install.ps1') | iex; RDev ${WS}${H}"`;
+            if (el('c-w7-pw'))   el('c-w7-pw').textContent   = `%SystemRoot%\system32\WindowsPowerShell\v1.0\powershell.exe -Command "$wc=New-Object Net.WebClient; $wc.DownloadString('${HTTP}${H}/install.ps1') | iex; RDev ${WS}${H} -Password <自定义密码>"`;
+            if (el('c-w7-open')) el('c-w7-open').textContent  = `%SystemRoot%\system32\WindowsPowerShell\v1.0\powershell.exe -Command "$wc=New-Object Net.WebClient; $wc.DownloadString('${HTTP}${H}/install.ps1') | iex; RDev ${WS}${H}"`;
             document.querySelectorAll('.hint code[id]').forEach(el => {
                 el.innerHTML = el.innerHTML
                     .replace(/\{\{H\}\}/g, '<span class="h1">' + H + '</span>')
