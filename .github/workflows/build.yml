@@ -11,7 +11,6 @@ permissions:
   contents: write
 
 env:
-  # go-win7 patched Go version (for Windows 7/8 support)
   GO_WIN7_VERSION: 'patched-1.26.4'
 
 jobs:
@@ -36,7 +35,7 @@ jobs:
           CGO_ENABLED=0 go build -o /dev/null ./cmd/rdev-server
           CGO_ENABLED=0 go build -o /dev/null ./cmd/rdev-client
 
-  # ── Standard builds (linux, darwin) using official Go ──────────────
+  # ── Standard builds (linux, darwin) ───────────────────────────
   build:
     name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
     needs: test
@@ -85,7 +84,7 @@ jobs:
             rdev-server${{ matrix.ext }}
             rdev-client${{ matrix.ext }}
 
-  # ── Windows builds using go-win7 (supports Win 7/8/8.1/10/11) ────
+  # ── Windows builds using go-win7 (Win 7/8/8.1/10/11) ────────
   build-windows:
     name: Build windows/${{ matrix.goarch }} (go-win7)
     needs: test
@@ -100,12 +99,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Cache go-win7
+        id: cache-go-win7
+        uses: actions/cache@v4
+        with:
+          path: /home/runner/go-win7
+          key: go-win7-${{ env.GO_WIN7_VERSION }}
+
       - name: Download go-win7
+        if: steps.cache-go-win7.outputs.cache-hit != 'true'
         run: |
-          curl -sL -o go-win7.zip \
+          curl -fSL --retry 3 --retry-delay 5 \
+            -o go-win7.zip \
             "https://github.com/XTLS/go-win7/releases/download/${{ env.GO_WIN7_VERSION }}/go-for-win7-linux-amd64.zip"
+          mkdir -p $HOME/go-win7
           unzip -q go-win7.zip -d $HOME/go-win7
-          # The zip contains a "go" directory
           ls $HOME/go-win7/go/bin/
 
       - name: Build server
@@ -113,20 +121,18 @@ jobs:
           GOOS: windows
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: 0
-        run: |
-          export PATH="$HOME/go-win7/go/bin:$PATH"
-          export GOROOT="$HOME/go-win7/go"
-          go build -ldflags "-s -w" -o rdev-server${{ matrix.ext }} ./cmd/rdev-server
+          PATH: /home/runner/go-win7/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+          GOROOT: /home/runner/go-win7/go
+        run: go build -ldflags "-s -w" -o rdev-server${{ matrix.ext }} ./cmd/rdev-server
 
       - name: Build client
         env:
           GOOS: windows
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: 0
-        run: |
-          export PATH="$HOME/go-win7/go/bin:$PATH"
-          export GOROOT="$HOME/go-win7/go"
-          go build -ldflags "-s -w" -o rdev-client${{ matrix.ext }} ./cmd/rdev-client
+          PATH: /home/runner/go-win7/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+          GOROOT: /home/runner/go-win7/go
+        run: go build -ldflags "-s -w" -o rdev-client${{ matrix.ext }} ./cmd/rdev-client
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -136,7 +142,7 @@ jobs:
             rdev-server${{ matrix.ext }}
             rdev-client${{ matrix.ext }}
 
-  # ── Release (only on v* tags) ─────────────────────────────────────
+  # ── Release (only on v* tags) ────────────────────────────────
   release:
     name: Release
     needs: [build, build-windows]
@@ -158,7 +164,6 @@ jobs:
                 base=$(basename "$f")
                 name="${base%.*}"
                 ext="${base##*.}"
-                # Handle files without extension (linux/darwin)
                 if [ "$ext" = "$base" ]; then ext=""; else ext=".$ext"; fi
                 mv "$f" "${name}-${os_arch}${ext}"
               done
