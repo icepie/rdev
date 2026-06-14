@@ -111,21 +111,21 @@
                 <div class="cmd-group">
                     <div class="cmd-label">📦 curl 一键启动（无需安装、无需密码）</div>
                     <div class="cmd-row">
-                        <div class="cmd-code" data-tpl="curl -sL {{HTTP}}/{{H}}/install.sh | sh -s -- {{WS}}//{{H}}"></div>
+                        <div class="cmd-code" data-tpl="curl -sL {{HTTP}}{{H}}/install.sh | sh -s -- {{WS}}{{H}}"></div>
                         <button class="copy-btn" onclick="cp(this)">复制</button>
                     </div>
                 </div>
                 <div class="cmd-group">
                     <div class="cmd-label">wget 版</div>
                     <div class="cmd-row">
-                        <div class="cmd-code" data-tpl="wget -qO- {{HTTP}}/{{H}}/install.sh | sh -s -- {{WS}}//{{H}}"></div>
+                        <div class="cmd-code" data-tpl="wget -qO- {{HTTP}}{{H}}/install.sh | sh -s -- {{WS}}{{H}}"></div>
                         <button class="copy-btn" onclick="cp(this)">复制</button>
                     </div>
                 </div>
                 <div class="cmd-group">
                     <div class="cmd-label">⚙️ 指定密码</div>
                     <div class="cmd-row">
-                        <div class="cmd-code" data-tpl="curl -sL {{HTTP}}/{{H}}/install.sh | sh -s -- {{WS}}//{{H}} -i my-device -p secret"></div>
+                        <div class="cmd-code" data-tpl="curl -sL {{HTTP}}{{H}}/install.sh | sh -s -- {{WS}}{{H}} -i my-device -p secret"></div>
                         <button class="copy-btn" onclick="cp(this)">复制</button>
                     </div>
                 </div>
@@ -135,14 +135,14 @@
                 <div class="cmd-group">
                     <div class="cmd-label">📦 PowerShell 一键启动（无需安装、无需密码）</div>
                     <div class="cmd-row">
-                        <div class="cmd-code" data-tpl='powershell -Command "iwr -useb {{HTTP}}/{{H}}/install.ps1 | iex; RDev {{WS}}//{{H}}"'></div>
+                        <div class="cmd-code" data-tpl='powershell -Command "iwr -useb {{HTTP}}{{H}}/install.ps1 | iex; RDev {{WS}}{{H}}"'></div>
                         <button class="copy-btn" onclick="cp(this)">复制</button>
                     </div>
                 </div>
                 <div class="cmd-group">
                     <div class="cmd-label">⚙️ 指定密码</div>
                     <div class="cmd-row">
-                        <div class="cmd-code" data-tpl='powershell -Command "iwr -useb {{HTTP}}/{{H}}/install.ps1 | iex; RDev {{WS}}//{{H}} -Id my-pc -Password secret"'></div>
+                        <div class="cmd-code" data-tpl='powershell -Command "iwr -useb {{HTTP}}{{H}}/install.ps1 | iex; RDev {{WS}}{{H}} -Id my-pc -Password secret"'></div>
                         <button class="copy-btn" onclick="cp(this)">复制</button>
                     </div>
                 </div>
@@ -152,14 +152,14 @@
                 <div class="cmd-group">
                     <div class="cmd-label">📦 PowerShell 2.0（Win7/8）</div>
                     <div class="cmd-row">
-                        <div class="cmd-code" data-tpl='powershell -Command "$wc=New-Object Net.WebClient; $wc.DownloadString('{{HTTP}}//{{H}}/install.ps1') | iex; RDev {{WS}}//{{H}}"'></div>
+                        <div class="cmd-code" data-tpl='powershell -Command "$wc=New-Object Net.WebClient; $wc.DownloadString('{{HTTP}}{{H}}/install.ps1') | iex; RDev {{WS}}{{H}}"'></div>
                         <button class="copy-btn" onclick="cp(this)">复制</button>
                     </div>
                 </div>
                 <div class="cmd-group">
                     <div class="cmd-label">⚙️ 指定密码</div>
                     <div class="cmd-row">
-                        <div class="cmd-code" data-tpl='powershell -Command "$wc=New-Object Net.WebClient; $wc.DownloadString('{{HTTP}}//{{H}}/install.ps1') | iex; RDev {{WS}}//{{H}} -Id my-pc -Password secret"'></div>
+                        <div class="cmd-code" data-tpl='powershell -Command "$wc=New-Object Net.WebClient; $wc.DownloadString('{{HTTP}}{{H}}/install.ps1') | iex; RDev {{WS}}{{H}} -Id my-pc -Password secret"'></div>
                         <button class="copy-btn" onclick="cp(this)">复制</button>
                     </div>
                 </div>
