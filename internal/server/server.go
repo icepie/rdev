@@ -265,7 +265,12 @@ func (h *wsHandler) handleRegister(socket *gws.Conn, msg *protocol.Message) {
 	h.srv.mu.Unlock()
 
 	log.Printf("client registered: %s", msg.ClientID)
-	client.Send(&protocol.Message{Type: protocol.MsgRegister, ClientID: msg.ClientID})
+	client.Send(&protocol.Message{
+		Type:     protocol.MsgRegister,
+		ClientID: msg.ClientID,
+		SSHPort:  h.srv.SSHPort,
+		HTTPHost: h.srv.HTTPHost,
+	})
 }
 
 // handleBinaryMessage processes binary data frames from device clients

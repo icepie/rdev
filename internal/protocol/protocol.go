@@ -71,6 +71,10 @@ type Message struct {
 	// Auth
 	Password string `json:"password,omitempty"`
 
+	// Server info (S->C in MsgRegister response)
+	SSHPort  string `json:"sshPort,omitempty"`  // e.g. "8422"
+	HTTPHost string `json:"httpHost,omitempty"` // e.g. "1.2.3.4:8080"
+
 	// Exit
 	ExitCode int `json:"exitCode,omitempty"`
 

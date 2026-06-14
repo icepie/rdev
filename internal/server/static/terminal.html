@@ -24,6 +24,8 @@
         .nav { display: flex; gap: 6px; }
         .nav a { padding: 4px 10px; border-radius: 6px; font-size: 0.78rem; text-decoration: none; border: 1px solid var(--border); color: var(--muted); transition: all .15s; }
         .nav a:hover { color: var(--accent); border-color: var(--accent); }
+        .gh-link { font-size: 0.85rem; color: var(--muted); text-decoration: none; }
+        .gh-link:hover { color: var(--accent); }
         .tab-bar { display: flex; background: var(--card); border-bottom: 1px solid var(--border); flex-shrink: 0; padding: 0 12px; overflow-x: auto; }
         .tab-item { display: flex; align-items: center; gap: 6px; padding: 6px 14px; font-size: 0.82rem; cursor: pointer; border-right: 1px solid var(--border); color: var(--muted); transition: all .1s; white-space: nowrap; position: relative; }
         .tab-item:hover { color: var(--text); background: rgba(255,255,255,0.02); }
@@ -45,6 +47,7 @@
         <select id="device-select" class="device-select"><option value="">-- device --</option></select>
         <button class="new-tab-btn" id="new-tab-btn">+ New Tab</button>
         <div class="spacer"></div>
+        <a class="gh-link" href="https://github.com/icepie/rdev" target="_blank" title="GitHub">⭐ GitHub</a>
         <div class="nav">
             <a href="/">Dashboard</a>
             <a href="/batch.html">Batch</a>
@@ -56,9 +59,11 @@
     <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/xterm-addon-web-links@0.9.0/lib/xterm-addon-web-links.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-webgl@0.18.0/lib/addon-webgl.js"></script>
     <script>
     const FitAddon = window.FitAddon;
     const WebLinksAddon = window.WebLinksAddon;
+    const WebglAddon = window.AddonWebgl?.WebglAddon;
 
     let tabs = [], activeTabId = null, tabCounter = 0;
 
@@ -90,6 +95,16 @@
         pane.id = 'pane-' + id;
         document.getElementById('terminal-panes').appendChild(pane);
         term.open(pane);
+
+        // Try GPU (WebGL) renderer, fallback gracefully
+        if (WebglAddon) {
+            try {
+                const webgl = new WebglAddon();
+                webgl.onContextLoss(() => { webgl.dispose(); });
+                term.loadAddon(webgl);
+            } catch(e) { /* fallback to canvas is automatic */ }
+        }
+
         fitAddon.fit();
 
         const tab = { id, deviceId: deviceID, ws: null, term, fitAddon, status: 'disconnected' };
@@ -105,7 +120,7 @@
 
         const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
         tab.ws = new WebSocket(`${proto}//${location.host}/terminal?device=${encodeURIComponent(tab.deviceId)}`);
-        tab.ws.binaryType = 'arraybuffer'; // critical for binary frames
+        tab.ws.binaryType = 'arraybuffer';
 
         tab.ws.onopen = () => {
             tab.status = 'connected'; tab.term.focus();
@@ -115,10 +130,8 @@
 
         tab.ws.onmessage = (evt) => {
             if (evt.data instanceof ArrayBuffer) {
-                // Binary frame = raw terminal output (zero overhead, no base64)
                 tab.term.write(new Uint8Array(evt.data));
             } else {
-                // Text frame = JSON control message
                 const msg = JSON.parse(evt.data);
                 if (msg.op === 'exit') {
                     tab.term.write('\r\n\x1b[33m[Process exited with code ' + msg.code + ']\x1b[0m\r\n');
@@ -140,17 +153,15 @@
         };
         tab.ws.onerror = () => { tab.status = 'disconnected'; renderTabs(); };
 
-        // Send input as binary frame (raw bytes, no base64)
         tab.term.onData(data => {
             if (tab.ws && tab.ws.readyState === WebSocket.OPEN) {
-                tab.ws.send(new TextEncoder().encode(data)); // binary frame
+                tab.ws.send(new TextEncoder().encode(data));
             }
         });
 
-        // Resize as text JSON
         tab.term.onResize(({ cols, rows }) => {
             if (tab.ws && tab.ws.readyState === WebSocket.OPEN) {
-                tab.ws.send(JSON.stringify({ op: 'resize', rows, cols })); // text frame
+                tab.ws.send(JSON.stringify({ op: 'resize', rows, cols }));
             }
         });
     }
@@ -199,7 +210,6 @@
         });
     }
 
-    // Device list
     let devices = [];
     async function loadDevices() {
         try {

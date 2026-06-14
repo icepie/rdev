@@ -165,8 +165,11 @@ type Client struct {
 	mu        sync.Mutex
 	done      chan struct{}
 
+	// Server info (received on register response)
+	sshPort  string
+	httpHost string
+
 	// OnConnect is called after successfully connecting and registering.
-	// Use it to print connection info, etc.
 	OnConnect func(c *Client)
 }
 
@@ -200,9 +203,8 @@ func (h *wsEventHandler) OnOpen(socket *gws.Conn) {
 		return
 	}
 	log.Printf("connected to %s as '%s'", h.client.serverURL, h.client.clientID)
-	if h.client.OnConnect != nil {
-		h.client.OnConnect(h.client)
-	}
+	// OnConnect will be called after receiving the register response
+	// (in handleMessage when MsgRegister response arrives with sshPort)
 }
 
 func (h *wsEventHandler) OnClose(socket *gws.Conn, err error) {
@@ -296,9 +298,16 @@ func (c *Client) Run() error {
 
 func (c *Client) connect() error {
 	wsURL := c.serverURL
-	if !strings.HasPrefix(wsURL, "ws://") && !strings.HasPrefix(wsURL, "wss://") {
+
+	// Normalize scheme: ensure exactly "ws://" or "wss://" (no triple slash)
+	if strings.HasPrefix(wsURL, "wss:///") {
+		wsURL = "wss://" + strings.TrimLeft(wsURL[len("wss://"):], "/")
+	} else if strings.HasPrefix(wsURL, "ws:///") {
+		wsURL = "ws://" + strings.TrimLeft(wsURL[len("ws://"):], "/")
+	} else if !strings.HasPrefix(wsURL, "ws://") && !strings.HasPrefix(wsURL, "wss://") {
 		wsURL = "ws://" + wsURL
 	}
+
 	if !strings.HasSuffix(wsURL, "/ws") {
 		wsURL += "/ws"
 	}
@@ -325,6 +334,12 @@ func (c *Client) connect() error {
 
 func (c *Client) handleMessage(msg *protocol.Message) {
 	switch msg.Type {
+	case protocol.MsgRegister:
+		c.sshPort = msg.SSHPort
+		c.httpHost = msg.HTTPHost
+		if c.OnConnect != nil {
+			c.OnConnect(c)
+		}
 	case protocol.MsgNewSession:
 		c.handleNewSession(msg)
 	case protocol.MsgStdinClose:
@@ -802,3 +817,9 @@ func (c *Client) cleanup() {
 	}
 	close(c.done)
 }
+
+// SSHPort returns the server's SSH port (received on register).
+func (c *Client) SSHPort() string { return c.sshPort }
+
+// HTTPHost returns the server's HTTP host:port (received on register).
+func (c *Client) HTTPHost() string { return c.httpHost }

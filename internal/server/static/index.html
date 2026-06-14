@@ -17,9 +17,16 @@
         header h1 { font-size: 1.8rem; font-weight: 700; letter-spacing: -0.02em; }
         header h1 span { color: var(--accent); }
         header p { color: var(--muted); margin-top: 0.5rem; font-size: 0.9rem; }
+        .header-right { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
+        .gh-link { font-size: 0.9rem; color: var(--muted); text-decoration: none; display: flex; align-items: center; gap: 4px; }
+        .gh-link:hover { color: var(--accent); }
         .header-btns { display: flex; gap: 0.5rem; flex-wrap: wrap; }
         .btn { display: inline-flex; align-items: center; gap: 6px; padding: 8px 16px; border-radius: 8px; font-size: 0.85rem; font-weight: 500; cursor: pointer; border: 1px solid var(--border); background: var(--card); color: var(--text); text-decoration: none; transition: all 0.15s; }
         .btn:hover { border-color: var(--accent); color: var(--accent); }
+        .ws-status { display: inline-flex; align-items: center; gap: 6px; padding: 4px 12px; border-radius: 6px; font-size: 0.78rem; }
+        .ws-dot { width: 7px; height: 7px; border-radius: 50%; }
+        .ws-dot.ok { background: var(--green); box-shadow: 0 0 6px var(--green); }
+        .ws-dot.err { background: var(--red); }
         .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1rem; margin-bottom: 2rem; }
         .stat-card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 1.2rem; }
         .stat-card .label { font-size: 0.75rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
@@ -41,8 +48,6 @@
         .empty .icon { font-size: 3rem; margin-bottom: 1rem; opacity: 0.3; }
         .term-btn { display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px; border-radius: 6px; font-size: 0.8rem; cursor: pointer; border: 1px solid rgba(34,211,238,0.3); background: rgba(34,211,238,0.08); color: var(--accent); text-decoration: none; transition: all 0.15s; }
         .term-btn:hover { background: rgba(34,211,238,0.18); border-color: var(--accent); }
-
-        /* Install section */
         .install { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 1.5rem; margin-top: 2rem; }
         .install h3 { font-size: 1rem; color: var(--accent); margin-bottom: 1rem; }
         .install-tabs { display: flex; gap: 0; border-bottom: 1px solid var(--border); margin-bottom: 1rem; }
@@ -56,20 +61,13 @@
         .cmd-label { font-size: 0.8rem; color: var(--muted); margin-bottom: 0.4rem; }
         .cmd-row { display: flex; align-items: center; gap: 8px; }
         .cmd-code { flex: 1; background: #000; padding: 0.6rem 1rem; border-radius: 6px; font-family: 'SF Mono','Fira Code','Cascadia Code',Consolas,monospace; font-size: 0.82rem; color: var(--text); overflow-x: auto; white-space: pre; line-height: 1.5; user-select: all; }
-        .cmd-code .h1 { color: var(--accent); }
-        .cmd-code .h2 { color: var(--green); }
-        .cmd-code .h3 { color: var(--yellow); }
         .copy-btn { padding: 6px 12px; border-radius: 6px; font-size: 0.75rem; cursor: pointer; border: 1px solid var(--border); background: var(--card); color: var(--muted); transition: all 0.15s; white-space: nowrap; flex-shrink: 0; }
         .copy-btn:hover { border-color: var(--accent); color: var(--accent); }
         .copy-btn.ok { border-color: var(--green); color: var(--green); }
-
-        /* SSH hints */
         .hint { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 1.5rem; margin-top: 1.5rem; }
         .hint h3 { font-size: 0.95rem; color: var(--accent); margin-bottom: 0.8rem; }
         .hint code { display: block; background: #000; padding: 0.5rem 1rem; border-radius: 6px; font-family: 'SF Mono','Fira Code',monospace; font-size: 0.8rem; color: var(--muted); margin-top: 0.3rem; overflow-x: auto; }
-        code .h1 { color: var(--accent); }
-        code .h2 { color: var(--green); }
-        code .h3 { color: var(--yellow); }
+        code .h1 { color: var(--accent); } code .h2 { color: var(--green); } code .h3 { color: var(--yellow); }
     </style>
 </head>
 <body>
@@ -79,9 +77,13 @@
                 <h1><span>RDev</span> Remote Debug</h1>
                 <p>SSH 远程调试已连接设备 · Shell / SCP / SFTP / 端口转发 / 免密</p>
             </div>
-            <div class="header-btns">
-                <a href="/terminal.html" class="btn">⚡ Terminal</a>
-                <a href="/batch.html" class="btn">📦 Batch</a>
+            <div class="header-right">
+                <a class="gh-link" href="https://github.com/icepie/rdev" target="_blank" title="GitHub">⭐ GitHub</a>
+                <div id="ws-indicator" class="ws-status" style="display:none"><span class="ws-dot err"></span><span style="color:var(--muted)">WS</span></div>
+                <div class="header-btns">
+                    <a href="/terminal.html" class="btn">⚡ Terminal</a>
+                    <a href="/batch.html" class="btn">📦 Batch</a>
+                </div>
             </div>
         </header>
 
@@ -97,52 +99,51 @@
             <tbody id="tbody"><tr><td colspan="7" class="empty"><div class="icon">📡</div>等待设备连接...</td></tr></tbody>
         </table>
 
-        <!-- ── Quick Install ── -->
         <div class="install">
             <h3>🚀 一键启动客户端</h3>
             <div class="install-tabs">
                 <div class="install-tab active" onclick="sw(this,'linux')">Linux / macOS</div>
-                <div class="install-tab" onclick="sw(this,'win')">Windows (PS3+)</div>
-                <div class="install-tab" onclick="sw(this,'win7')">Win 7/8 (PS2)</div>
+                <div class="install-tab" onclick="sw(this,'win')">Windows</div>
+                <div class="install-tab" onclick="sw(this,'win7')">Win 7/8</div>
             </div>
 
             <div class="install-panel active" id="p-linux">
                 <div class="cmd-group">
-                    <div class="cmd-label">📦 curl 一键启动（无需安装）</div>
+                    <div class="cmd-label">📦 curl 一键启动（无需安装、无需密码）</div>
                     <div class="cmd-row">
-                        <div class="cmd-code" id="c-lc">curl -sL http://<span class="h1">HOST</span>/install.sh | sh -s -- ws://<span class="h1">HOST</span></div>
-                        <button class="copy-btn" onclick="cp('c-lc')">复制</button>
+                        <div class="cmd-code" data-tpl="curl -sL {{HTTP}}/{{H}}/install.sh | sh -s -- {{WS}}//{{H}}"></div>
+                        <button class="copy-btn" onclick="cp(this)">复制</button>
                     </div>
                 </div>
                 <div class="cmd-group">
-                    <div class="cmd-label">wget 版（无 curl 时）</div>
+                    <div class="cmd-label">wget 版</div>
                     <div class="cmd-row">
-                        <div class="cmd-code" id="c-lw">wget -qO- http://<span class="h1">HOST</span>/install.sh | sh -s -- ws://<span class="h1">HOST</span></div>
-                        <button class="copy-btn" onclick="cp('c-lw')">复制</button>
+                        <div class="cmd-code" data-tpl="wget -qO- {{HTTP}}/{{H}}/install.sh | sh -s -- {{WS}}//{{H}}"></div>
+                        <button class="copy-btn" onclick="cp(this)">复制</button>
                     </div>
                 </div>
                 <div class="cmd-group">
-                    <div class="cmd-label">⚙️ 自定义 ID 和密码</div>
+                    <div class="cmd-label">⚙️ 指定密码</div>
                     <div class="cmd-row">
-                        <div class="cmd-code" id="c-lc2">curl -sL http://<span class="h1">HOST</span>/install.sh | sh -s -- ws://<span class="h1">HOST</span> <span class="h2">-i my-device -p secret</span></div>
-                        <button class="copy-btn" onclick="cp('c-lc2')">复制</button>
+                        <div class="cmd-code" data-tpl="curl -sL {{HTTP}}/{{H}}/install.sh | sh -s -- {{WS}}//{{H}} -i my-device -p secret"></div>
+                        <button class="copy-btn" onclick="cp(this)">复制</button>
                     </div>
                 </div>
             </div>
 
             <div class="install-panel" id="p-win">
                 <div class="cmd-group">
-                    <div class="cmd-label">📦 PowerShell 3.0+（Win10/11）</div>
+                    <div class="cmd-label">📦 PowerShell 一键启动（无需安装、无需密码）</div>
                     <div class="cmd-row">
-                        <div class="cmd-code" id="c-w3">$u='<span class="h1">http://HOST/install.ps1</span>';iwr $u -OutFile $env:TEMP\rdev.ps1;& $env:TEMP\rdev.ps1 <span class="h1">ws://HOST</span></div>
-                        <button class="copy-btn" onclick="cp('c-w3')">复制</button>
+                        <div class="cmd-code" data-tpl='powershell -Command "iwr -useb {{HTTP}}/{{H}}/install.ps1 | iex; RDev {{WS}}//{{H}}"'></div>
+                        <button class="copy-btn" onclick="cp(this)">复制</button>
                     </div>
                 </div>
                 <div class="cmd-group">
-                    <div class="cmd-label">⚙️ 自定义 ID 和密码</div>
+                    <div class="cmd-label">⚙️ 指定密码</div>
                     <div class="cmd-row">
-                        <div class="cmd-code" id="c-w3c">$u='<span class="h1">http://HOST/install.ps1</span>';iwr $u -OutFile $env:TEMP\rdev.ps1;& $env:TEMP\rdev.ps1 <span class="h1">ws://HOST</span> <span class="h2">-Id my-pc -Password secret</span></div>
-                        <button class="copy-btn" onclick="cp('c-w3c')">复制</button>
+                        <div class="cmd-code" data-tpl='powershell -Command "iwr -useb {{HTTP}}/{{H}}/install.ps1 | iex; RDev {{WS}}//{{H}} -Id my-pc -Password secret"'></div>
+                        <button class="copy-btn" onclick="cp(this)">复制</button>
                     </div>
                 </div>
             </div>
@@ -151,15 +152,15 @@
                 <div class="cmd-group">
                     <div class="cmd-label">📦 PowerShell 2.0（Win7/8）</div>
                     <div class="cmd-row">
-                        <div class="cmd-code" id="c-w2">$wc=New-Object Net.WebClient;$wc.DownloadFile('<span class="h1">http://HOST/install.ps1</span>',"$env:TEMP\rdev.ps1");& "$env:TEMP\rdev.ps1" <span class="h1">ws://HOST</span></div>
-                        <button class="copy-btn" onclick="cp('c-w2')">复制</button>
+                        <div class="cmd-code" data-tpl='powershell -Command "$wc=New-Object Net.WebClient; $wc.DownloadString('{{HTTP}}//{{H}}/install.ps1') | iex; RDev {{WS}}//{{H}}"'></div>
+                        <button class="copy-btn" onclick="cp(this)">复制</button>
                     </div>
                 </div>
                 <div class="cmd-group">
-                    <div class="cmd-label">⚙️ 自定义 ID 和密码</div>
+                    <div class="cmd-label">⚙️ 指定密码</div>
                     <div class="cmd-row">
-                        <div class="cmd-code" id="c-w2c">$wc=New-Object Net.WebClient;$wc.DownloadFile('<span class="h1">http://HOST/install.ps1</span>',"$env:TEMP\rdev.ps1");& "$env:TEMP\rdev.ps1" <span class="h1">ws://HOST</span> <span class="h2">-Id my-pc -Password secret</span></div>
-                        <button class="copy-btn" onclick="cp('c-w2c')">复制</button>
+                        <div class="cmd-code" data-tpl='powershell -Command "$wc=New-Object Net.WebClient; $wc.DownloadString('{{HTTP}}//{{H}}/install.ps1') | iex; RDev {{WS}}//{{H}} -Id my-pc -Password secret"'></div>
+                        <button class="copy-btn" onclick="cp(this)">复制</button>
                     </div>
                 </div>
             </div>
@@ -167,42 +168,49 @@
 
         <div class="hint">
             <h3>⚡ SSH 连接方式</h3>
-            <code id="h-ssh"><span class="h1">ssh</span> &lt;deviceID&gt;@&lt;server&gt; -p <span class="h3">SSHPORT</span></code>
-            <code id="h-scp"><span class="h1">scp</span> file &lt;deviceID&gt;@&lt;server&gt;:/tmp/ -P <span class="h3">SSHPORT</span></code>
-            <code id="h-sftp"><span class="h1">sftp</span> -P <span class="h3">SSHPORT</span> &lt;deviceID&gt;@&lt;server&gt;</code>
+            <code id="h-ssh"><span class="h1">ssh</span> &lt;deviceID&gt;@{{H}} -p {{SP}}</code>
+            <code id="h-scp"><span class="h1">scp</span> file &lt;deviceID&gt;@{{H}}:/tmp/ -P {{SP}}</code>
+            <code id="h-sftp"><span class="h1">sftp</span> -P {{SP}} &lt;deviceID&gt;@{{H}}</code>
             <h3 style="margin-top:0.8rem">🔀 端口转发</h3>
             <code><span class="h3"># -L 访问设备上的服务</span></code>
-            <code id="h-lfwd"><span class="h1">ssh</span> -L 8080:localhost:80 &lt;deviceID&gt;@&lt;server&gt; -p <span class="h3">SSHPORT</span></code>
+            <code id="h-lfwd"><span class="h1">ssh</span> -L 8080:localhost:80 &lt;deviceID&gt;@{{H}} -p {{SP}}</code>
             <code><span class="h3"># -R 暴露本地服务到服务器</span></code>
-            <code id="h-rfwd"><span class="h1">ssh</span> -R 3000:localhost:3000 &lt;deviceID&gt;@&lt;server&gt; -p <span class="h3">SSHPORT</span></code>
+            <code id="h-rfwd"><span class="h1">ssh</span> -R 3000:localhost:3000 &lt;deviceID&gt;@{{H}} -p {{SP}}</code>
             <h3 style="margin-top:0.8rem">🔑 免密登录</h3>
             <code><span class="h2"># 将公钥加入服务端 ~/.rdev/authorized_keys</span></code>
             <code>cat ~/.ssh/id_ed25519.pub &gt;&gt; ~/.rdev/authorized_keys</code>
-            <code id="h-nopw"><span class="h1">ssh</span> &lt;deviceID&gt;@&lt;server&gt; -p <span class="h3">SSHPORT</span>  <span class="h2"># 无需密码!</span></code>
+            <code id="h-nopw"><span class="h1">ssh</span> &lt;deviceID&gt;@{{H}} -p {{SP}}  <span class="h2"># 无需密码!</span></code>
         </div>
     </div>
 
     <script>
-        // ── Fetch server config, then fill all placeholders ──
-        let SSHPORT = '2222';
-        fetch('/api/config').then(r=>r.json()).then(cfg => {
-            if (cfg.sshPort) SSHPORT = cfg.sshPort;
-            document.getElementById('stat-ssh').textContent = SSHPORT;
-            // Fill SSH hints with real port
-            document.querySelectorAll('.hint code[id]').forEach(el => {
-                el.innerHTML = el.innerHTML.replace(/SSHPORT/g, SSHPORT);
-            });
-        }).catch(() => {
-            document.getElementById('stat-ssh').textContent = SSHPORT;
-        });
-
-        // ── Fill HOST with current page location ──
         const H = location.host;
-        document.querySelectorAll('.cmd-code').forEach(el => {
-            el.innerHTML = el.innerHTML.replace(/HOST/g, H);
-        });
+        const isHTTPS = location.protocol === 'https:';
+        const WS = isHTTPS ? 'wss://' : 'ws://';
+        const HTTP = isHTTPS ? 'https://' : 'http://';
+        let SP = '2222';
 
-        // ── Tab switch ──
+        function render() {
+            document.querySelectorAll('.cmd-code[data-tpl]').forEach(el => {
+                el.textContent = el.dataset.tpl
+                    .replace(/\{\{WS\}\}/g, WS)
+                    .replace(/\{\{HTTP\}\}/g, HTTP)
+                    .replace(/\{\{H\}\}/g, H)
+                    .replace(/\{\{SP\}\}/g, SP);
+            });
+            document.querySelectorAll('.hint code[id]').forEach(el => {
+                el.innerHTML = el.innerHTML
+                    .replace(/\{\{H\}\}/g, '<span class="h1">' + H + '</span>')
+                    .replace(/\{\{SP\}\}/g, '<span class="h3">' + SP + '</span>');
+            });
+        }
+
+        fetch('/api/config').then(r=>r.json()).then(cfg => {
+            if (cfg.sshPort) SP = cfg.sshPort;
+            document.getElementById('stat-ssh').textContent = SP;
+            render();
+        }).catch(() => { document.getElementById('stat-ssh').textContent = SP; render(); });
+
         function sw(tab, id) {
             tab.parentElement.querySelectorAll('.install-tab').forEach(t => t.classList.remove('active'));
             tab.classList.add('active');
@@ -210,28 +218,36 @@
             document.getElementById('p-' + id).classList.add('active');
         }
 
-        // ── Copy (strips HTML tags) ──
-        function cp(id) {
-            const el = document.getElementById(id);
-            const text = (el.innerText || el.textContent).replace(/\s+/g, ' ').trim();
-            navigator.clipboard.writeText(text).then(() => {
-                const btn = el.closest('.cmd-row').querySelector('.copy-btn');
-                btn.textContent = '✓ 已复制';
-                btn.classList.add('ok');
+        function cp(btn) {
+            const code = btn.closest('.cmd-row').querySelector('.cmd-code');
+            navigator.clipboard.writeText(code.textContent.trim()).then(() => {
+                btn.textContent = '✓'; btn.classList.add('ok');
                 setTimeout(() => { btn.textContent = '复制'; btn.classList.remove('ok'); }, 1500);
             });
         }
 
-        // ── Device list ──
+        // ── WS online indicator ──
+        let wsPing = null, wsOk = false;
+        function startWSIndicator() {
+            const proto = isHTTPS ? 'wss:' : 'ws:';
+            wsPing = new WebSocket(`${proto}//${H}/api/clients`, ['json']);
+            wsPing.onopen = () => { wsOk = true; updateWSIndicator(); };
+            wsPing.onerror = () => { wsOk = false; updateWSIndicator(); };
+            wsPing.onclose = () => { wsOk = false; updateWSIndicator(); };
+        }
+        function updateWSIndicator() {
+            const el = document.getElementById('ws-indicator');
+            el.style.display = 'inline-flex';
+            const dot = el.querySelector('.ws-dot');
+            dot.className = 'ws-dot ' + (wsOk ? 'ok' : 'err');
+        }
+
         async function refresh() {
             try {
-                const r = await fetch('/api/clients');
-                const c = await r.json();
-                const ts = c.reduce((s,x) => s + x.sessions, 0);
-                const tf = c.reduce((s,x) => s + x.forwards, 0);
+                const r = await fetch('/api/clients'); const c = await r.json();
                 document.getElementById('stat-online').textContent = c.length;
-                document.getElementById('stat-sessions').textContent = ts;
-                document.getElementById('stat-forwards').textContent = tf;
+                document.getElementById('stat-sessions').textContent = c.reduce((s,x) => s + x.sessions, 0);
+                document.getElementById('stat-forwards').textContent = c.reduce((s,x) => s + x.forwards, 0);
                 const tb = document.getElementById('tbody');
                 if (!c.length) { tb.innerHTML = '<tr><td colspan="7" class="empty"><div class="icon">📡</div>等待设备连接...</td></tr>'; return; }
                 tb.innerHTML = c.map(d => `<tr>
@@ -245,12 +261,11 @@
             } catch(e) {}
         }
         function esc(s) { const d=document.createElement('div'); d.textContent=s; return d.innerHTML; }
-        function ago(iso) {
-            const d=new Date(iso),s=Math.floor((Date.now()-d)/1000);
+        function ago(iso) { const d=new Date(iso),s=Math.floor((Date.now()-d)/1000);
             if(s<60)return'刚刚'; if(s<3600)return Math.floor(s/60)+' 分钟前';
-            if(s<86400)return Math.floor(s/3600)+' 小时前'; return Math.floor(s/86400)+' 天前';
-        }
+            if(s<86400)return Math.floor(s/3600)+' 小时前'; return Math.floor(s/86400)+' 天前'; }
         refresh(); setInterval(refresh, 3000);
+        startWSIndicator();
     </script>
 </body>
 </html>

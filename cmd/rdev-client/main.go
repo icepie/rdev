@@ -16,7 +16,6 @@ func main() {
 		clientID  string
 		password  string
 		shell     string
-		sshPort   string
 	)
 
 	for i := 1; i < len(os.Args); i++ {
@@ -41,11 +40,6 @@ func main() {
 				shell = os.Args[i+1]
 				i++
 			}
-		case "--ssh-port":
-			if i+1 < len(os.Args) {
-				sshPort = os.Args[i+1]
-				i++
-			}
 		case "--help":
 			fmt.Print(`Usage: rdev-client -s <server-url> [options]
 
@@ -54,23 +48,22 @@ Options:
   --id, -i        Client/Device ID (default: hostname)
   --password, -p  Password for SSH auth (optional, enables password login)
   --shell, -S     Shell to use (default: $SHELL or /bin/sh or cmd.exe)
-  --ssh-port      Server SSH port (for connection hint display, default: 2222)
+
+SSH port is auto-detected from server — no need to specify manually.
 
 Examples:
   rdev-client -s ws://1.2.3.4:8080 -i mydevice -p secret123
-  rdev-client -s ws://1.2.3.4:8080 -i mydevice --shell /bin/bash --ssh-port 2200
+  rdev-client -s wss://rdev.example.com -i rpi4 --shell /usr/bin/fish
 
 Environment variables:
-  RDEV_SHELL     Shell to use (overrides --shell flag)
-  RDEV_SERVER    Server URL (overrides --server flag)
-  RDEV_ID        Client ID (overrides --id flag)
-  RDEV_SSH_PORT  Server SSH port (overrides --ssh-port flag)
+  RDEV_SHELL    Shell to use (overrides --shell flag)
+  RDEV_SERVER   Server URL (overrides --server flag)
+  RDEV_ID       Client ID (overrides --id flag)
 `)
 			os.Exit(0)
 		}
 	}
 
-	// Environment variable overrides
 	if serverURL == "" {
 		serverURL = os.Getenv("RDEV_SERVER")
 	}
@@ -80,9 +73,6 @@ Environment variables:
 	if shell == "" {
 		shell = os.Getenv("RDEV_SHELL")
 	}
-	if sshPort == "" {
-		sshPort = os.Getenv("RDEV_SSH_PORT")
-	}
 	if serverURL == "" {
 		fmt.Println("Error: --server is required")
 		fmt.Println("Usage: rdev-client -s <server-url> [options]")
@@ -90,7 +80,12 @@ Environment variables:
 		os.Exit(1)
 	}
 
-	if !strings.HasPrefix(serverURL, "ws://") && !strings.HasPrefix(serverURL, "wss://") {
+	// Normalize: ensure exactly "ws://" or "wss://" (fix triple-slash from shell quoting)
+	if strings.HasPrefix(serverURL, "wss:///") {
+		serverURL = "wss://" + strings.TrimLeft(serverURL[len("wss://"):], "/")
+	} else if strings.HasPrefix(serverURL, "ws:///") {
+		serverURL = "ws://" + strings.TrimLeft(serverURL[len("ws://"):], "/")
+	} else if !strings.HasPrefix(serverURL, "ws://") && !strings.HasPrefix(serverURL, "wss://") {
 		serverURL = "ws://" + serverURL
 	}
 
@@ -101,10 +96,6 @@ Environment variables:
 		} else {
 			clientID = hostname
 		}
-	}
-
-	if sshPort == "" {
-		sshPort = "2222"
 	}
 
 	serverHost := parseWSHost(serverURL)
@@ -130,9 +121,14 @@ Environment variables:
 	connectPrinted := false
 	c.OnConnect = func(cli *client.Client) {
 		if connectPrinted {
-			return // only print once (suppress on reconnect)
+			return
 		}
 		connectPrinted = true
+
+		sshPort := cli.SSHPort()
+		if sshPort == "" {
+			sshPort = "2222" // fallback
+		}
 
 		fmt.Println("  ── How to Connect ─────────────────────────────")
 		fmt.Printf("  SSH:      ssh %s@%s -p %s\n", clientID, serverHost, sshPort)
