@@ -1,6 +1,6 @@
 (function () {
   const sprite = {
-    github: '<path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.9a3.4 3.4 0 0 0-.9-2.6c3-.3 6.1-1.5 6.1-6.8A5.3 5.3 0 0 0 20 5.1 4.9 4.9 0 0 0 19.9 2S18.7 1.7 16 3.4a13.4 13.4 0 0 0-7 0C6.3 1.7 5.1 2 5.1 2A4.9 4.9 0 0 0 5 5.1a5.3 5.3 0 0 0-1.4 3.7c0 5.3 3.1 6.5 6.1 6.8a3.4 3.4 0 0 0-1 2.6V22"/>',
+    github: '<path fill="currentColor" stroke="none" d="M12 .5A12 12 0 0 0 8.2 23.9c.6.1.8-.2.8-.6v-2.2c-3.3.7-4-1.4-4-1.4-.5-1.4-1.3-1.8-1.3-1.8-1.1-.7.1-.7.1-.7 1.2.1 1.9 1.2 1.9 1.2 1.1 1.9 2.9 1.3 3.6 1 .1-.8.4-1.3.8-1.6-2.6-.3-5.4-1.3-5.4-5.9 0-1.3.5-2.4 1.2-3.2-.1-.3-.5-1.5.1-3.2 0 0 1-.3 3.3 1.2a11.4 11.4 0 0 1 6 0c2.3-1.5 3.3-1.2 3.3-1.2.6 1.7.2 2.9.1 3.2.8.8 1.2 1.9 1.2 3.2 0 4.6-2.8 5.6-5.4 5.9.4.4.8 1.1.8 2.2v3.2c0 .4.2.7.8.6A12 12 0 0 0 12 .5Z"/>',
     terminal: '<path d="m4 17 6-6-6-6"/><path d="M12 19h8"/>',
     package: '<path d="m16.5 9.4-9-5.2"/><path d="M21 16V8a2 2 0 0 0-1-1.7l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.7l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/>',
     sessions: '<path d="M4 7h16"/><path d="M4 12h16"/><path d="M4 17h16"/><circle cx="7" cy="7" r="1"/><circle cx="7" cy="12" r="1"/><circle cx="7" cy="17" r="1"/>',
@@ -19,8 +19,93 @@
     monitor: '<rect width="20" height="14" x="2" y="3" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/>'
   };
 
+  function injectIconStyles() {
+    if (document.getElementById('rdev-icon-styles')) return;
+    if (!document.head) {
+      document.addEventListener('DOMContentLoaded', injectIconStyles, { once: true });
+      return;
+    }
+    const style = document.createElement('style');
+    style.id = 'rdev-icon-styles';
+    style.textContent = `
+      .icon {
+        width: 1em;
+        height: 1em;
+        display: inline-block;
+        flex: 0 0 auto;
+        vertical-align: -0.14em;
+        color: currentColor;
+        overflow: visible;
+      }
+      .icon-inline {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.45em;
+        min-width: 0;
+        line-height: 1.2;
+      }
+      .icon-inline > .icon,
+      .icon-inline > [data-icon],
+      .icon-inline > span[id$="-icon"] {
+        flex: 0 0 auto;
+      }
+      .btn .icon,
+      .nav a .icon,
+      .term-btn .icon,
+      .copy-btn .icon,
+      .new-tab-btn .icon,
+      .theme-toggle .icon {
+        width: 1rem;
+        height: 1rem;
+      }
+      .theme-toggle {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 0.45rem;
+        min-height: 28px;
+        border: 1px solid var(--border);
+        background: var(--card);
+        color: var(--muted);
+        border-radius: 7px;
+        padding: 4px 8px;
+        cursor: pointer;
+        font: inherit;
+        font-size: 0.78rem;
+        line-height: 1;
+        white-space: nowrap;
+      }
+      .theme-toggle:hover {
+        color: var(--accent);
+        border-color: var(--accent);
+      }
+      .empty-icon {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        color: var(--accent);
+        line-height: 1;
+      }
+      .empty-icon .icon {
+        width: 1em;
+        height: 1em;
+        display: block;
+      }
+      .gh-link .icon,
+      h2 .icon,
+      h3 .icon,
+      .cmd-label .icon,
+      .tab .icon {
+        width: 1rem;
+        height: 1rem;
+      }
+    `;
+    document.head.appendChild(style);
+  }
+
   function icon(name, label) {
-    return '<svg class="icon icon-' + name + '" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' + (sprite[name] || '') + '</svg>' + (label ? '<span>' + label + '</span>' : '');
+    const safeName = String(name || '').replace(/[^a-zA-Z0-9_-]/g, '');
+    return '<svg class="icon icon-' + safeName + '" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' + (sprite[safeName] || '') + '</svg>' + (label ? '<span>' + label + '</span>' : '');
   }
 
   function currentTheme() {
@@ -59,6 +144,7 @@
   });
   window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => applyTheme());
   document.addEventListener('DOMContentLoaded', () => applyTheme());
+  injectIconStyles();
   window.addEventListener('rdev:langchange', () => applyTheme());
 
   window.RDevUI = { icon, themeButton, applyTheme };
