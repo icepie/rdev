@@ -64,7 +64,7 @@ func startWinPTY(cfg *Config) (*Process, error) {
 		return nil, err
 	}
 	stdout := &readCloser{Reader: wincompat.DecodeOutput(wp.StdOut), Closer: wp.StdOut}
-	return &Process{legacy: &winPTYProcess{wp: wp, stdin: wincompat.EncodeInput(wp.StdIn), stdout: stdout}, term: cfg.Term}, nil
+	return &Process{legacy: &winPTYProcess{wp: wp, stdin: wincompat.NormalizeLineEndings(wp.StdIn), stdout: stdout}, term: cfg.Term}, nil
 }
 
 func findWinPTYDir() string {

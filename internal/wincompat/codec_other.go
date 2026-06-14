@@ -6,6 +6,10 @@ import "io"
 
 func DecodeOutput(r io.Reader) io.Reader { return r }
 func EncodeInput(w io.Writer) io.WriteCloser {
+	return NormalizeLineEndings(w)
+}
+
+func NormalizeLineEndings(w io.Writer) io.WriteCloser {
 	if wc, ok := w.(io.WriteCloser); ok {
 		return wc
 	}

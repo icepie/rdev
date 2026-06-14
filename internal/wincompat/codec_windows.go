@@ -59,6 +59,19 @@ func EncodeInput(w io.Writer) io.WriteCloser {
 	return &crlfWriter{w: transform.NewWriter(w, simplifiedchinese.GB18030.NewEncoder())}
 }
 
+// NormalizeLineEndings keeps UTF-8 input intact and only adapts Enter for cmd.exe.
+func NormalizeLineEndings(w io.Writer) io.WriteCloser {
+	wc, ok := w.(io.WriteCloser)
+	if !ok {
+		wc = nopWriteCloser{Writer: w}
+	}
+	return &crlfWriter{w: wc}
+}
+
+type nopWriteCloser struct{ io.Writer }
+
+func (nopWriteCloser) Close() error { return nil }
+
 type crlfWriter struct {
 	w      io.WriteCloser
 	skipLF bool
