@@ -12,7 +12,13 @@ import (
 
 	winpty "github.com/iamacarpet/go-winpty"
 	"golang.org/x/sys/windows"
+	"rdev/internal/wincompat"
 )
+
+type readCloser struct {
+	io.Reader
+	io.Closer
+}
 
 type winPTYProcess struct {
 	wp     *winpty.WinPTY
@@ -55,7 +61,8 @@ func startWinPTY(cfg *Config) (*Process, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Process{legacy: &winPTYProcess{wp: wp, stdin: wp.StdIn, stdout: wp.StdOut}, term: cfg.Term}, nil
+	stdout := &readCloser{Reader: wincompat.DecodeOutput(wp.StdOut), Closer: wp.StdOut}
+	return &Process{legacy: &winPTYProcess{wp: wp, stdin: wincompat.EncodeInput(wp.StdIn), stdout: stdout}, term: cfg.Term}, nil
 }
 
 func findWinPTYDir() string {
