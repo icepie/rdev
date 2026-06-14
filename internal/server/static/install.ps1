@@ -136,7 +136,7 @@ function global:RDev {
 
     # ── Resolve version & URL ───────────────────────────────
     $Binary = "rdev-client-windows-$Arch.exe"
-    if ($Version) { $Tag = "v$Version" } else {
+    if ($Version) { if ($Version -like 'v*') { $Tag = $Version } else { $Tag = "v$Version" } } else {
         $Tag = 'latest'
         try {
             try { $rel = Invoke-RestMethod -Uri "https://api.github.com/repos/$script:Repo/releases/latest" -ErrorAction Stop; $Tag = $rel.tag_name }
