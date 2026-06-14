@@ -153,17 +153,25 @@ func (s *clientSession) close() {
 	})
 }
 
+type fileStream struct {
+	path string
+	file *os.File
+	mode os.FileMode
+}
+
 // Client is the rdev client that connects to the server
 type Client struct {
-	serverURL string
-	clientID  string
-	password  string
-	shell     string
-	conn      *gws.Conn
-	sessions  map[string]*clientSession
-	forwards  map[string]net.Conn
-	mu        sync.Mutex
-	done      chan struct{}
+	serverURL   string
+	clientID    string
+	password    string
+	shell       string
+	conn        *gws.Conn
+	writeMu     sync.Mutex
+	sessions    map[string]*clientSession
+	forwards    map[string]net.Conn
+	fileStreams map[string]*fileStream
+	mu          sync.Mutex
+	done        chan struct{}
 
 	// Server info (received on register response)
 	sshPort  string
@@ -176,13 +184,14 @@ type Client struct {
 // NewClient creates a new client
 func NewClient(serverURL, clientID, password, shell string) *Client {
 	return &Client{
-		serverURL: serverURL,
-		clientID:  clientID,
-		password:  password,
-		shell:     shell,
-		sessions:  make(map[string]*clientSession),
-		forwards:  make(map[string]net.Conn),
-		done:      make(chan struct{}, 1),
+		serverURL:   serverURL,
+		clientID:    clientID,
+		password:    password,
+		shell:       shell,
+		sessions:    make(map[string]*clientSession),
+		forwards:    make(map[string]net.Conn),
+		fileStreams: make(map[string]*fileStream),
+		done:        make(chan struct{}, 1),
 	}
 }
 
@@ -248,9 +257,6 @@ func (h *wsEventHandler) handleBinaryMessage(raw []byte) {
 		return
 	}
 
-	h.client.mu.Lock()
-	h.client.mu.Unlock()
-
 	switch typ {
 	case protocol.BinData:
 		h.client.handleBinData(id, payload)
@@ -260,6 +266,12 @@ func (h *wsEventHandler) handleBinaryMessage(raw []byte) {
 		h.client.handleBinTCPData(id, payload)
 	case protocol.BinFilePut:
 		h.client.handleBinFilePut(id, payload)
+	case protocol.BinFileStart:
+		h.client.handleBinFileStart(id, payload)
+	case protocol.BinFileChunk:
+		h.client.handleBinFileChunk(id, payload)
+	case protocol.BinFileEnd:
+		h.client.handleBinFileEnd(id)
 	}
 }
 
@@ -385,14 +397,74 @@ func (c *Client) handleBinTCPData(forwardID string, data []byte) {
 	conn.Write(data)
 }
 
+func (c *Client) sendFileResult(id, path string, success bool, errText string) {
+	c.send(&protocol.Message{Type: protocol.MsgFileResult, SessionID: id, FilePath: path, Success: success, Error: errText})
+}
+
+func (c *Client) handleBinFileStart(id string, payload []byte) {
+	path, mode, _, err := protocol.DecodeBinFilePut(payload)
+	if err != nil {
+		c.sendFileResult(id, "", false, fmt.Sprintf("decode error: %v", err))
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		c.sendFileResult(id, path, false, fmt.Sprintf("mkdir error: %v", err))
+		return
+	}
+	fm := os.FileMode(0644)
+	if mode > 0 {
+		fm = os.FileMode(mode)
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, fm)
+	if err != nil {
+		c.sendFileResult(id, path, false, err.Error())
+		return
+	}
+	c.mu.Lock()
+	if old := c.fileStreams[id]; old != nil {
+		old.file.Close()
+	}
+	c.fileStreams[id] = &fileStream{path: path, file: f, mode: fm}
+	c.mu.Unlock()
+}
+
+func (c *Client) handleBinFileChunk(id string, data []byte) {
+	c.mu.Lock()
+	fs := c.fileStreams[id]
+	c.mu.Unlock()
+	if fs == nil {
+		c.sendFileResult(id, "", false, "file stream not found")
+		return
+	}
+	if _, err := fs.file.Write(data); err != nil {
+		fs.file.Close()
+		c.mu.Lock()
+		delete(c.fileStreams, id)
+		c.mu.Unlock()
+		c.sendFileResult(id, fs.path, false, err.Error())
+	}
+}
+
+func (c *Client) handleBinFileEnd(id string) {
+	c.mu.Lock()
+	fs := c.fileStreams[id]
+	delete(c.fileStreams, id)
+	c.mu.Unlock()
+	if fs == nil {
+		c.sendFileResult(id, "", false, "file stream not found")
+		return
+	}
+	if err := fs.file.Close(); err != nil {
+		c.sendFileResult(id, fs.path, false, err.Error())
+		return
+	}
+	c.sendFileResult(id, fs.path, true, "")
+}
+
 func (c *Client) handleBinFilePut(id string, payload []byte) {
 	path, mode, fileData, err := protocol.DecodeBinFilePut(payload)
 	if err != nil {
-		c.send(&protocol.Message{
-			Type:      protocol.MsgFileResult,
-			SessionID: id,
-			Error:     fmt.Sprintf("decode error: %v", err),
-		})
+		c.sendFileResult(id, "", false, fmt.Sprintf("decode error: %v", err))
 		return
 	}
 
@@ -400,12 +472,7 @@ func (c *Client) handleBinFilePut(id string, payload []byte) {
 
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0755); err != nil {
-		c.send(&protocol.Message{
-			Type:      protocol.MsgFileResult,
-			SessionID: id,
-			FilePath:  path,
-			Error:     fmt.Sprintf("mkdir error: %v", err),
-		})
+		c.sendFileResult(id, path, false, fmt.Sprintf("mkdir error: %v", err))
 		return
 	}
 
@@ -414,22 +481,12 @@ func (c *Client) handleBinFilePut(id string, payload []byte) {
 		fm = os.FileMode(mode)
 	}
 	if err := os.WriteFile(path, fileData, fm); err != nil {
-		c.send(&protocol.Message{
-			Type:      protocol.MsgFileResult,
-			SessionID: id,
-			FilePath:  path,
-			Error:     err.Error(),
-		})
+		c.sendFileResult(id, path, false, err.Error())
 		return
 	}
 
 	log.Printf("file_put: wrote %d bytes to %s", len(fileData), path)
-	c.send(&protocol.Message{
-		Type:      protocol.MsgFileResult,
-		SessionID: id,
-		FilePath:  path,
-		Success:   true,
-	})
+	c.sendFileResult(id, path, true, "")
 }
 
 // --- Session handling ---
@@ -770,6 +827,8 @@ func (c *Client) send(msg *protocol.Message) error {
 	if err != nil {
 		return err
 	}
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
 	return conn.WriteMessage(gws.OpcodeText, data)
 }
 
@@ -781,6 +840,8 @@ func (c *Client) sendBinary(typ byte, id string, data []byte) error {
 		return fmt.Errorf("not connected")
 	}
 	frame := protocol.EncodeBinFrame(typ, id, data)
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
 	return conn.WriteMessage(gws.OpcodeBinary, frame)
 }
 
@@ -811,9 +872,14 @@ func (c *Client) cleanup() {
 		conn.Close()
 		delete(c.forwards, fid)
 	}
+	for id, fs := range c.fileStreams {
+		fs.file.Close()
+		delete(c.fileStreams, id)
+	}
+	conn := c.conn
 	c.mu.Unlock()
-	if c.conn != nil {
-		c.conn.WriteClose(1000, nil)
+	if conn != nil {
+		conn.WriteClose(1000, nil)
 	}
 	close(c.done)
 }

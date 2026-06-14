@@ -4,7 +4,6 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
-	"fmt"
 	"io"
 )
 
@@ -17,18 +16,18 @@ const (
 	MsgNewSession MessageType = "new_session" // S->C: create a proxied SSH session
 
 	MsgStdinClose MessageType = "stdin_close" // S->C: remote closed stdin (EOF)
-	MsgClose      MessageType = "close"      // bidir: session done, clean up
-	MsgResize     MessageType = "resize"     // S->C: terminal resize
-	MsgExitCode   MessageType = "exit_code"  // C->S: command exit code
+	MsgClose      MessageType = "close"       // bidir: session done, clean up
+	MsgResize     MessageType = "resize"      // S->C: terminal resize
+	MsgExitCode   MessageType = "exit_code"   // C->S: command exit code
 
 	// TCP port forwarding (text frames for control, binary for data)
-	MsgTCPConnect MessageType = "tcp_connect" // S->C: dial a TCP target (for -L)
-	MsgTCPOpen    MessageType = "tcp_open"    // C->S: TCP connection established
-	MsgTCPFail    MessageType = "tcp_fail"    // C->S: TCP connection failed
-	MsgTCPClose   MessageType = "tcp_close"  // bidir: close a TCP connection
-	MsgTCPListen  MessageType = "tcp_listen"  // S->C: start TCP listener (for -R via device)
+	MsgTCPConnect  MessageType = "tcp_connect"   // S->C: dial a TCP target (for -L)
+	MsgTCPOpen     MessageType = "tcp_open"      // C->S: TCP connection established
+	MsgTCPFail     MessageType = "tcp_fail"      // C->S: TCP connection failed
+	MsgTCPClose    MessageType = "tcp_close"     // bidir: close a TCP connection
+	MsgTCPListen   MessageType = "tcp_listen"    // S->C: start TCP listener (for -R via device)
 	MsgTCPListenOK MessageType = "tcp_listen_ok" // C->S: listener started
-	MsgTCPAccept  MessageType = "tcp_accept"  // C->S: new connection on listener
+	MsgTCPAccept   MessageType = "tcp_accept"    // C->S: new connection on listener
 
 	// File distribution (text frames for control, binary for data)
 	MsgFileResult MessageType = "file_result" // C->S: file write result {success, error}
@@ -43,14 +42,18 @@ const (
 // Binary frame types for high-performance data transfer (OpcodeBinary frames)
 // Layout: [1 byte type] [1 byte idLen] [idLen bytes: session/forward ID] [payload]
 const (
-	BinData    byte = 0x01 // Session data (stdin/stdout)
-	BinStderr  byte = 0x02 // Session stderr
-	BinTCPData byte = 0x03 // TCP forwarding data
-	BinFilePut byte = 0x04 // File write to device (extended header)
+	BinData      byte = 0x01 // Session data (stdin/stdout)
+	BinStderr    byte = 0x02 // Session stderr
+	BinTCPData   byte = 0x03 // TCP forwarding data
+	BinFilePut   byte = 0x04 // File write to device (single-frame payload)
+	BinFileStart byte = 0x05 // File write stream start (extended header)
+	BinFileChunk byte = 0x06 // File write stream chunk
+	BinFileEnd   byte = 0x07 // File write stream end
+	BinFileAck   byte = 0x08 // File write stream chunk acknowledged
 )
 
-// BinFilePut extended layout after common header:
-// [2 bytes pathLen BE] [pathLen bytes: path] [4 bytes mode BE] [file data]
+// File binary extended layout after common header:
+// [2 bytes pathLen BE] [pathLen bytes: path] [4 bytes mode BE] [optional file data]
 
 // Message is the WebSocket protocol message (for text/JSON frames)
 type Message struct {
@@ -88,8 +91,8 @@ type Message struct {
 
 	// File distribution
 	FilePath string `json:"filePath,omitempty"`
-	FileMode  int32  `json:"fileMode,omitempty"`
-	Success   bool   `json:"success,omitempty"`
+	FileMode int32  `json:"fileMode,omitempty"`
+	Success  bool   `json:"success,omitempty"`
 
 	// Legacy fields (text frames)
 	Data   string `json:"data,omitempty"`
@@ -145,25 +148,42 @@ func DecodeBinFrame(raw []byte) (typ byte, id string, payload []byte, err error)
 	return
 }
 
-// EncodeBinFilePut encodes a file put binary frame
+// EncodeBinFilePut encodes a single-frame file put binary frame.
 // Layout: [0x04] [1 idLen] [id] [2 pathLen BE] [path] [4 mode BE] [file data]
 func EncodeBinFilePut(id, path string, mode int32, fileData []byte) []byte {
-	idb := []byte(id)
-	pathb := []byte(path)
-	n := 2 + len(idb) + 2 + len(pathb) + 4 + len(fileData)
-	buf := make([]byte, n)
-	pos := 0
-	buf[pos] = BinFilePut; pos++
-	buf[pos] = byte(len(idb)); pos++
-	copy(buf[pos:], idb); pos += len(idb)
-	binary.BigEndian.PutUint16(buf[pos:], uint16(len(pathb))); pos += 2
-	copy(buf[pos:], pathb); pos += len(pathb)
-	binary.BigEndian.PutUint32(buf[pos:], uint32(mode)); pos += 4
+	buf, pos := encodeBinFileHeader(BinFilePut, id, path, mode, len(fileData))
 	copy(buf[pos:], fileData)
 	return buf
 }
 
-// DecodeBinFilePut decodes a file put binary frame's payload fields
+// EncodeBinFileStart encodes the first frame of a streamed file write.
+func EncodeBinFileStart(id, path string, mode int32) []byte {
+	buf, _ := encodeBinFileHeader(BinFileStart, id, path, mode, 0)
+	return buf
+}
+
+func encodeBinFileHeader(typ byte, id, path string, mode int32, extra int) ([]byte, int) {
+	idb := []byte(id)
+	pathb := []byte(path)
+	n := 2 + len(idb) + 2 + len(pathb) + 4 + extra
+	buf := make([]byte, n)
+	pos := 0
+	buf[pos] = typ
+	pos++
+	buf[pos] = byte(len(idb))
+	pos++
+	copy(buf[pos:], idb)
+	pos += len(idb)
+	binary.BigEndian.PutUint16(buf[pos:], uint16(len(pathb)))
+	pos += 2
+	copy(buf[pos:], pathb)
+	pos += len(pathb)
+	binary.BigEndian.PutUint32(buf[pos:], uint32(mode))
+	pos += 4
+	return buf, pos
+}
+
+// DecodeBinFilePut decodes a file header followed by optional data.
 func DecodeBinFilePut(payload []byte) (path string, mode int32, fileData []byte, err error) {
 	if len(payload) < 2 {
 		return "", 0, nil, io.ErrUnexpectedEOF
@@ -190,26 +210,4 @@ func MustDecodeBinFrame(raw []byte) (byte, string, []byte) {
 		panic(err)
 	}
 	return typ, id, payload
-}
-
-// Verify binary protocol roundtrip
-func init() {
-	// Quick sanity check
-	data := []byte("hello world")
-	frame := EncodeBinFrame(BinData, "session123", data)
-	typ, id, payload, err := DecodeBinFrame(frame)
-	if err != nil || typ != BinData || id != "session123" || string(payload) != "hello world" {
-		panic("binary protocol roundtrip failed")
-	}
-
-	// File put roundtrip
-	fileFrame := EncodeBinFilePut("id1", "/tmp/test.txt", 0644, []byte("file content"))
-	ftyp, fid, fpayload, ferr := DecodeBinFrame(fileFrame)
-	if ferr != nil || ftyp != BinFilePut || fid != "id1" {
-		panic("file put frame decode failed")
-	}
-	fpath, fmode, fdata, ferr2 := DecodeBinFilePut(fpayload)
-	if ferr2 != nil || fpath != "/tmp/test.txt" || fmode != 0644 || string(fdata) != "file content" {
-		panic(fmt.Sprintf("file put payload decode failed: path=%q mode=%d data=%q err=%v", fpath, fmode, string(fdata), ferr2))
-	}
 }

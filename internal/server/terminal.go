@@ -23,11 +23,11 @@ import (
 
 // terminalMsg is the JSON control message for terminal (text frames only)
 type terminalMsg struct {
-	Op      string `json:"op"`
-	Rows    int    `json:"rows,omitempty"`
-	Cols    int    `json:"cols,omitempty"`
-	Code    int    `json:"code,omitempty"`
-	Message string `json:"message,omitempty"`
+	Op       string `json:"op"`
+	Rows     int    `json:"rows,omitempty"`
+	Cols     int    `json:"cols,omitempty"`
+	Code     int    `json:"code,omitempty"`
+	Message  string `json:"message,omitempty"`
 	Password string `json:"password,omitempty"`
 }
 
@@ -35,6 +35,7 @@ type terminalConn struct {
 	deviceID  string
 	sessionID string
 	socket    *gws.Conn
+	writeMu   sync.Mutex
 	sess      *ProxySession
 	done      chan struct{}
 	once      sync.Once
@@ -42,8 +43,8 @@ type terminalConn struct {
 
 type terminalWSHandler struct {
 	gws.BuiltinEventHandler
-	srv     *Server
-	authed  bool
+	srv    *Server
+	authed bool
 	passOK bool // true if device has no password (skip auth)
 }
 
@@ -115,7 +116,11 @@ func (h *terminalWSHandler) createSession(socket *gws.Conn, deviceID string) {
 		ExitSSH:  func(code int) {},
 	}
 
-	h.srv.RegisterSession(proxySess, client)
+	if !h.srv.RegisterSession(proxySess, client) {
+		h.sendError(socket, "too many active sessions on device")
+		socket.WriteClose(1013, nil)
+		return
+	}
 
 	tc := &terminalConn{
 		deviceID:  deviceID,
@@ -245,6 +250,12 @@ func (h *terminalWSHandler) sendJSON(socket *gws.Conn, msg terminalMsg) {
 	socket.WriteMessage(gws.OpcodeText, data)
 }
 
+func (tc *terminalConn) writeMessage(opcode gws.Opcode, data []byte) {
+	tc.writeMu.Lock()
+	defer tc.writeMu.Unlock()
+	tc.socket.WriteMessage(opcode, data)
+}
+
 // pumpOutput forwards ProxySession output to browser as binary frames
 func (tc *terminalConn) pumpOutput() {
 	for {
@@ -255,17 +266,16 @@ func (tc *terminalConn) pumpOutput() {
 				return
 			}
 			// Binary frame = raw terminal output (no header needed, xterm.js handles raw bytes)
-			tc.socket.WriteMessage(gws.OpcodeBinary, data)
+			tc.writeMessage(gws.OpcodeBinary, data)
 
 		case data, ok := <-tc.sess.StderrCh:
 			if !ok {
 				return
 			}
-			tc.socket.WriteMessage(gws.OpcodeBinary, data)
+			tc.writeMessage(gws.OpcodeBinary, data)
 
 		case <-tc.sess.CloseCh:
-			close(tc.sess.WriteCh)
-			close(tc.sess.StderrCh)
+			tc.sess.CloseOutput()
 			tc.sendExit(tc.sess.WaitExitCode(500 * time.Millisecond))
 			return
 
@@ -277,7 +287,7 @@ func (tc *terminalConn) pumpOutput() {
 
 func (tc *terminalConn) sendExit(code int) {
 	msg, _ := json.Marshal(terminalMsg{Op: "exit", Code: code})
-	tc.socket.WriteMessage(gws.OpcodeText, msg)
+	tc.writeMessage(gws.OpcodeText, msg)
 }
 
 func (tc *terminalConn) close() {
@@ -286,6 +296,9 @@ func (tc *terminalConn) close() {
 
 // HandleTerminalWS handles browser terminal WebSocket connections
 func (s *Server) HandleTerminalWS(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAuth(w, r) {
+		return
+	}
 	deviceID := r.URL.Query().Get("device")
 	if deviceID == "" {
 		http.Error(w, "missing device parameter", http.StatusBadRequest)
@@ -301,7 +314,7 @@ func (s *Server) HandleTerminalWS(w http.ResponseWriter, r *http.Request) {
 		},
 		PermessageDeflate: gws.PermessageDeflate{
 			Enabled:               true,
-			ServerContextTakeover:  true,
+			ServerContextTakeover: true,
 			ClientContextTakeover: true,
 			Threshold:             128,
 		},

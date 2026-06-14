@@ -8,9 +8,12 @@
 # PS 2.0 (Win7/8):
 #   powershell -Command "$wc=New-Object Net.WebClient; $wc.DownloadString('http://SERVER/install.ps1') | iex; RDev ws://SERVER"
 
-# ── TLS compat ──────────────────────────────────────────────
-try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.ServicePointManager]::SecurityProtocol } catch {
-    try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls11 -bor [Net.ServicePointManager]::SecurityProtocol } catch {}
+# -- TLS compat ------------------------------------------------
+try {
+    # Win7/PowerShell 2.0 often defaults to SSL3/TLS1.0. Force TLS1.2 before HTTPS downloads.
+    [Net.ServicePointManager]::SecurityProtocol = [Enum]::ToObject([Net.SecurityProtocolType], 3072)
+} catch {
+    try { [Net.ServicePointManager]::SecurityProtocol = [Enum]::ToObject([Net.SecurityProtocolType], 768) } catch {}
 }
 
 # ── Mirror list ─────────────────────────────────────────────
@@ -49,7 +52,7 @@ function global:RDev {
         [string]$Server,
 
         [string]$Id = '',
-        [string]$Password = 'custom',
+        [string]$Password = '',
         [string]$Shell = '',
         [string]$SshPort = '',
         [string]$Version = '',

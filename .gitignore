@@ -6,9 +6,14 @@
 # Cross-compiled
 /rdev-server-*
 /rdev-client-*
+/rdev-server-gui
+/rdev-server-nocgo
 
 # Go
 /vendor/
+
+# Web
+node_modules/
 
 # OS
 .DS_Store

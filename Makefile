@@ -1,4 +1,4 @@
-.PHONY: all build clean cross server client gui
+.PHONY: all build clean cross server client gui web web-install test vet fmt
 
 BINS = rdev-server rdev-client
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
@@ -6,9 +6,16 @@ LDFLAGS = -s -w -X main.version=$(VERSION)
 
 all: build
 
-build: server client
+build: web server client
 
-server:
+web:
+	bun install --frozen-lockfile
+	bun run build
+
+web-install:
+	bun install
+
+server: web
 	go build -ldflags "$(LDFLAGS)" -o rdev-server ./cmd/rdev-server
 
 client:
@@ -19,7 +26,7 @@ client:
 # On GNOME/KDE/Cinnamon: tray icon works out of the box
 # On i3/Sway: may need status-notifier-watcher
 # On Windows/macOS: native tray support, no extra deps
-gui: server
+gui: web server
 	go build -ldflags "$(LDFLAGS)" -tags cgo -o rdev-server-gui ./cmd/rdev-server
 
 clean:
@@ -43,19 +50,19 @@ cross-windows: \
 	rdev-server-windows-amd64.exe \
 	rdev-client-windows-amd64.exe
 
-rdev-server-linux-%:
+rdev-server-linux-%: web
 	CGO_ENABLED=0 GOOS=linux GOARCH=$* go build -ldflags "$(LDFLAGS)" -o $@ ./cmd/rdev-server
 
 rdev-client-linux-%:
 	CGO_ENABLED=0 GOOS=linux GOARCH=$* go build -ldflags "$(LDFLAGS)" -o $@ ./cmd/rdev-client
 
-rdev-server-darwin-%:
+rdev-server-darwin-%: web
 	CGO_ENABLED=0 GOOS=darwin GOARCH=$* go build -ldflags "$(LDFLAGS)" -o $@ ./cmd/rdev-server
 
 rdev-client-darwin-%:
 	CGO_ENABLED=0 GOOS=darwin GOARCH=$* go build -ldflags "$(LDFLAGS)" -o $@ ./cmd/rdev-client
 
-rdev-server-windows-amd64.exe:
+rdev-server-windows-amd64.exe: web
 	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags "$(LDFLAGS)" -o $@ ./cmd/rdev-server
 
 rdev-client-windows-amd64.exe:

@@ -46,10 +46,10 @@ func NewSSHServer(srv *Server, addr, hostKeyPath, authorizedKeysPath string) (*S
 	s.fwdHandler = &ForwardedTCPHandler{}
 
 	sshServer := &ssh.Server{
-		Addr:                    addr,
-		Handler:                 s.handleSession,
-		PublicKeyHandler:        s.handlePublicKey,
-		PasswordHandler:         s.handlePassword,
+		Addr:                       addr,
+		Handler:                    s.handleSession,
+		PublicKeyHandler:           s.handlePublicKey,
+		PasswordHandler:            s.handlePassword,
 		KeyboardInteractiveHandler: s.handleKeyboardInteractive,
 		BannerHandler: func(ctx ssh.Context) string {
 			clientID := ctx.User()
@@ -272,7 +272,11 @@ func (s *SSHServer) handleSession(sess ssh.Session) {
 		ExitSSH:  func(code int) { sess.Exit(code) },
 	}
 
-	s.srv.RegisterSession(proxySess, client)
+	if !s.srv.RegisterSession(proxySess, client) {
+		fmt.Fprintf(sess, "rdev: too many active sessions on device\n")
+		sess.Exit(1)
+		return
+	}
 	defer func() {
 		s.srv.removeSession(sessionID)
 		client.mu.Lock()
@@ -328,7 +332,7 @@ func (s *SSHServer) handleSession(sess ssh.Session) {
 		for data := range proxySess.WriteCh {
 			sess.Write(data)
 		}
-			sess.Exit(proxySess.WaitExitCode(500 * time.Millisecond))
+		sess.Exit(proxySess.WaitExitCode(500 * time.Millisecond))
 		cleanup()
 	}()
 
@@ -344,8 +348,7 @@ func (s *SSHServer) handleSession(sess ssh.Session) {
 	// When client device says Close, drain channels and exit
 	go func() {
 		<-proxySess.CloseCh
-		close(proxySess.WriteCh)
-		close(proxySess.StderrCh)
+		proxySess.CloseOutput()
 	}()
 
 	<-proxySess.Done
@@ -395,7 +398,10 @@ func (s *SSHServer) handleDirectTCPIP(srv *ssh.Server, conn *gossh.ServerConn, n
 		Done:     make(chan struct{}),
 		CloseSSH: func() { ch.Close() },
 	}
-	s.srv.RegisterForward(fwd, client)
+	if !s.srv.RegisterForward(fwd, client) {
+		newChan.Reject(gossh.ResourceShortage, "too many active forwards")
+		return
+	}
 	defer func() {
 		s.srv.removeForward(forwardID)
 		client.mu.Lock()
@@ -437,7 +443,7 @@ func (s *SSHServer) handleDirectTCPIP(srv *ssh.Server, conn *gossh.ServerConn, n
 	// When close signal received, close the write channel
 	go func() {
 		<-fwd.CloseCh
-		close(fwd.WriteCh)
+		fwd.CloseOutput()
 	}()
 
 	<-fwd.Done

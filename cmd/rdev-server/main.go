@@ -20,9 +20,13 @@ var (
 
 func main() {
 	var (
-		httpAddr = ":8080"
-		sshAddr  = ":2222"
-		dataDir  = ""
+		httpAddr         = ":8080"
+		sshAddr          = ":2222"
+		dataDir          = ""
+		adminToken       = ""
+		maxSessions      = 0
+		maxForwards      = 0
+		batchConcurrency = 0
 	)
 
 	for i := 1; i < len(os.Args); i++ {
@@ -42,6 +46,26 @@ func main() {
 				dataDir = os.Args[i+1]
 				i++
 			}
+		case "--admin-token", "-t":
+			if i+1 < len(os.Args) {
+				adminToken = os.Args[i+1]
+				i++
+			}
+		case "--max-sessions":
+			if i+1 < len(os.Args) {
+				fmt.Sscanf(os.Args[i+1], "%d", &maxSessions)
+				i++
+			}
+		case "--max-forwards":
+			if i+1 < len(os.Args) {
+				fmt.Sscanf(os.Args[i+1], "%d", &maxForwards)
+				i++
+			}
+		case "--batch-concurrency":
+			if i+1 < len(os.Args) {
+				fmt.Sscanf(os.Args[i+1], "%d", &batchConcurrency)
+				i++
+			}
 		case "--gui", "-g":
 			guiMode = true
 		case "--help":
@@ -51,6 +75,10 @@ Options:
   --http, -h  HTTP/WS listen address (default :8080)
   --ssh, -s   SSH listen address (default :2222)
   --data, -d  Data directory for host key & authorized_keys (default ~/.rdev)
+  --admin-token, -t  Token for Web UI APIs, terminal, batch, upload (optional)
+  --max-sessions     Max concurrent sessions per device (default 256)
+  --max-forwards     Max concurrent TCP forwards per device (default 1024)
+  --batch-concurrency Max concurrent batch operations (default GOMAXPROCS*8)
   --gui, -g   Start with system tray GUI (auto-opens browser dashboard)
 
 Features:
@@ -68,6 +96,10 @@ Examples:
 `)
 			os.Exit(0)
 		}
+	}
+
+	if adminToken == "" {
+		adminToken = os.Getenv("RDEV_ADMIN_TOKEN")
 	}
 
 	if dataDir == "" {
@@ -95,6 +127,16 @@ Examples:
 	srv := server.NewServer()
 	srv.SSHPort = sshPort
 	srv.HTTPHost = outboundIP + ":" + httpPort
+	srv.AdminToken = adminToken
+	if maxSessions > 0 {
+		srv.MaxSessions = maxSessions
+	}
+	if maxForwards > 0 {
+		srv.MaxForwards = maxForwards
+	}
+	if batchConcurrency > 0 {
+		srv.BatchConcurrency = batchConcurrency
+	}
 
 	sshServer, err := server.NewSSHServer(srv, sshAddr, hostKeyPath, authorizedKeysPath)
 	if err != nil {
@@ -125,6 +167,9 @@ Examples:
 	fmt.Printf("  ║  Web:    http://%s:%s                  ║\n", outboundIP, httpPort)
 	fmt.Printf("  ║  SSH:    %s:%s                       ║\n", outboundIP, sshPort)
 	fmt.Printf("  ║  Data:   %-37s║\n", dataDir)
+	if adminToken != "" {
+		fmt.Println("  ║  WebAuth: enabled                              ║")
+	}
 	if guiMode && guiEnabled {
 		fmt.Println("  ║  Mode:   GUI (system tray)                    ║")
 	}

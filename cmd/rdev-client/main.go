@@ -1,7 +1,6 @@
 package main
 
 import (
-	"crypto/rand"
 	"fmt"
 	"log"
 	"net"
@@ -99,13 +98,6 @@ Environment variables:
 		}
 	}
 
-	// Auto-generate random password if not provided
-	if password == "" {
-		b := make([]byte, 4)
-		rand.Read(b)
-		password = fmt.Sprintf("%x", b)
-	}
-
 	serverHost := parseWSHost(serverURL)
 
 	fmt.Println()
@@ -117,8 +109,14 @@ Environment variables:
 	if shell != "" {
 		fmt.Printf("  ║  Shell:   %-31s  ║\n", shell)
 	}
-	fmt.Printf("  ║  Auth:    %-31s  ║\n", "password")
-	fmt.Printf("  ║  Pass:    %-31s  ║\n", password)
+	authMode := "open (no password)"
+	if password != "" {
+		authMode = "password"
+	}
+	fmt.Printf("  ║  Auth:    %-31s  ║\n", authMode)
+	if password != "" {
+		fmt.Printf("  ║  Pass:    %-31s  ║\n", password)
+	}
 	fmt.Println("  ╚═══════════════════════════════════════════╝")
 	fmt.Println()
 
@@ -140,7 +138,10 @@ Environment variables:
 		fmt.Println("  ── How to Connect ─────────────────────────────")
 		fmt.Printf("  SSH:      ssh %s@%s -p %s\n", clientID, serverHost, sshPort)
 		if password != "" {
-			fmt.Printf("            sshpass -p *** ssh %s@%s -p %s\n", clientID, serverHost, sshPort)
+			fmt.Printf("  Password: %s\n", password)
+			fmt.Printf("            sshpass -p '%s' ssh %s@%s -p %s\n", password, clientID, serverHost, sshPort)
+		} else {
+			fmt.Println("  Password: <none> (open mode)")
 		}
 		fmt.Printf("  SFTP:     sftp -P %s %s@%s\n", sshPort, clientID, serverHost)
 		fmt.Printf("  SCP:      scp -P %s file %s@%s:~/\n", sshPort, clientID, serverHost)

@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -25,6 +26,7 @@ type ClientConn struct {
 	Password    string
 	Sessions    map[string]*ProxySession
 	Forwards    map[string]*ProxyForward
+	writeMu     sync.Mutex
 	mu          sync.Mutex
 }
 
@@ -34,34 +36,74 @@ func (c *ClientConn) Send(msg *protocol.Message) error {
 	if err != nil {
 		return err
 	}
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
 	return c.Conn.WriteMessage(gws.OpcodeText, data)
 }
 
 // SendBinary sends a binary data frame to the client
 func (c *ClientConn) SendBinary(typ byte, id string, data []byte) error {
 	frame := protocol.EncodeBinFrame(typ, id, data)
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
 	return c.Conn.WriteMessage(gws.OpcodeBinary, frame)
 }
 
 // SendFilePut sends a file to the client device (binary frame)
 func (c *ClientConn) SendFilePut(id, path string, mode int32, fileData []byte) error {
 	frame := protocol.EncodeBinFilePut(id, path, mode, fileData)
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	return c.Conn.WriteMessage(gws.OpcodeBinary, frame)
+}
+
+func (c *ClientConn) SendFileStart(id, path string, mode int32) error {
+	frame := protocol.EncodeBinFileStart(id, path, mode)
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	return c.Conn.WriteMessage(gws.OpcodeBinary, frame)
+}
+
+func (c *ClientConn) SendFileChunk(id string, data []byte) error {
+	frame := protocol.EncodeBinFrame(protocol.BinFileChunk, id, data)
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	return c.Conn.WriteMessage(gws.OpcodeBinary, frame)
+}
+
+func (c *ClientConn) SendFileEnd(id string) error {
+	frame := protocol.EncodeBinFrame(protocol.BinFileEnd, id, nil)
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
 	return c.Conn.WriteMessage(gws.OpcodeBinary, frame)
 }
 
 // ProxySession represents a proxied SSH session (shell/exec/sftp)
 type ProxySession struct {
-	ID       string
-	ClientID string
-	WriteCh  chan []byte // client device -> SSH stdout / terminal
-	StderrCh chan []byte // client device -> SSH stderr
-	CloseCh  chan struct{}
-	Done     chan struct{}
-	exitCode int
-	exitDone chan struct{} // closed when exit code is set
-	exitMu   sync.Mutex
-	CloseSSH func()
-	ExitSSH  func(code int)
+	ID         string
+	ClientID   string
+	WriteCh    chan []byte // client device -> SSH stdout / terminal
+	StderrCh   chan []byte // client device -> SSH stderr
+	CloseCh    chan struct{}
+	Done       chan struct{}
+	closeOnce  sync.Once
+	outputOnce sync.Once
+	exitCode   int
+	exitDone   chan struct{} // closed when exit code is set
+	exitMu     sync.Mutex
+	CloseSSH   func()
+	ExitSSH    func(code int)
+}
+
+func (s *ProxySession) SignalClose() {
+	s.closeOnce.Do(func() { close(s.CloseCh) })
+}
+
+func (s *ProxySession) CloseOutput() {
+	s.outputOnce.Do(func() {
+		close(s.WriteCh)
+		close(s.StderrCh)
+	})
 }
 
 func (s *ProxySession) SetExitCode(code int) {
@@ -98,12 +140,22 @@ func (s *ProxySession) WaitExitCode(timeout time.Duration) int {
 
 // ProxyForward represents a proxied TCP connection (port forwarding)
 type ProxyForward struct {
-	ID       string
-	ClientID string
-	WriteCh  chan []byte
-	CloseCh  chan struct{}
-	Done     chan struct{}
-	CloseSSH func()
+	ID         string
+	ClientID   string
+	WriteCh    chan []byte
+	CloseCh    chan struct{}
+	Done       chan struct{}
+	closeOnce  sync.Once
+	outputOnce sync.Once
+	CloseSSH   func()
+}
+
+func (f *ProxyForward) SignalClose() {
+	f.closeOnce.Do(func() { close(f.CloseCh) })
+}
+
+func (f *ProxyForward) CloseOutput() {
+	f.outputOnce.Do(func() { close(f.WriteCh) })
 }
 
 // Server manages WebSocket clients and SSH proxy
@@ -119,24 +171,31 @@ type Server struct {
 	upgrader    *gws.Upgrader
 
 	// Public config (set by main) for API/UI
-	SSHPort  string // e.g. "2222"
-	HTTPHost string // e.g. "192.168.1.100:8080"
+	SSHPort          string // e.g. "2222"
+	HTTPHost         string // e.g. "192.168.1.100:8080"
+	AdminToken       string // optional token for web APIs and browser WebSockets
+	MaxSessions      int    // maximum concurrent sessions per device
+	MaxForwards      int    // maximum concurrent forwards per device
+	BatchConcurrency int    // maximum concurrent batch operations
 }
 
 // NewServer creates a new Server
 func NewServer() *Server {
 	s := &Server{
-		clients:     make(map[string]*ClientConn),
-		sessions:    make(map[string]*ProxySession),
-		forwards:    make(map[string]*ProxyForward),
-		fileResults: make(map[string]chan *protocol.Message),
+		clients:          make(map[string]*ClientConn),
+		sessions:         make(map[string]*ProxySession),
+		forwards:         make(map[string]*ProxyForward),
+		fileResults:      make(map[string]chan *protocol.Message),
+		MaxSessions:      256,
+		MaxForwards:      1024,
+		BatchConcurrency: runtime.GOMAXPROCS(0) * 8,
 	}
 	s.upgrader = gws.NewUpgrader(&wsHandler{srv: s}, &gws.ServerOption{
 		ReadMaxPayloadSize: 16 * 1024 * 1024,
 		ParallelGolimit:    runtime.GOMAXPROCS(0),
 		PermessageDeflate: gws.PermessageDeflate{
 			Enabled:               true,
-			ServerContextTakeover:  true,
+			ServerContextTakeover: true,
 			ClientContextTakeover: true,
 			Threshold:             256,
 		},
@@ -148,6 +207,23 @@ func NewServer() *Server {
 type wsHandler struct {
 	gws.BuiltinEventHandler
 	srv *Server
+}
+
+func closeClientResources(s *Server, client *ClientConn) {
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	for sid, sess := range client.Sessions {
+		sess.SignalClose()
+		s.sessMu.Lock()
+		delete(s.sessions, sid)
+		s.sessMu.Unlock()
+	}
+	for fid, fwd := range client.Forwards {
+		fwd.SignalClose()
+		s.fwdMu.Lock()
+		delete(s.forwards, fid)
+		s.fwdMu.Unlock()
+	}
 }
 
 func (h *wsHandler) OnOpen(socket *gws.Conn) {}
@@ -167,20 +243,7 @@ func (h *wsHandler) OnClose(socket *gws.Conn, err error) {
 	h.srv.mu.Unlock()
 
 	if ok {
-		client.mu.Lock()
-		for sid, sess := range client.Sessions {
-			close(sess.CloseCh)
-			h.srv.sessMu.Lock()
-			delete(h.srv.sessions, sid)
-			h.srv.sessMu.Unlock()
-		}
-		for fid, fwd := range client.Forwards {
-			close(fwd.CloseCh)
-			h.srv.fwdMu.Lock()
-			delete(h.srv.forwards, fid)
-			h.srv.fwdMu.Unlock()
-		}
-		client.mu.Unlock()
+		closeClientResources(h.srv, client)
 	}
 
 	log.Printf("client unregistered: %s", id)
@@ -205,7 +268,6 @@ func (h *wsHandler) OnMessage(socket *gws.Conn, message *gws.Message) {
 	if err != nil {
 		return
 	}
-
 
 	// First message must be register
 	if msg.Type == protocol.MsgRegister {
@@ -248,18 +310,7 @@ func (h *wsHandler) handleRegister(socket *gws.Conn, msg *protocol.Message) {
 	h.srv.mu.Lock()
 	if old, ok := h.srv.clients[msg.ClientID]; ok {
 		old.Conn.WriteClose(1000, []byte("replaced by new connection"))
-		for sid, sess := range old.Sessions {
-			close(sess.CloseCh)
-			h.srv.sessMu.Lock()
-			delete(h.srv.sessions, sid)
-			h.srv.sessMu.Unlock()
-		}
-		for fid, fwd := range old.Forwards {
-			close(fwd.CloseCh)
-			h.srv.fwdMu.Lock()
-			delete(h.srv.forwards, fid)
-			h.srv.fwdMu.Unlock()
-		}
+		closeClientResources(h.srv, old)
 	}
 	h.srv.clients[msg.ClientID] = client
 	h.srv.mu.Unlock()
@@ -273,6 +324,14 @@ func (h *wsHandler) handleRegister(socket *gws.Conn, msg *protocol.Message) {
 	})
 }
 
+func sendBytes(ch chan []byte, data []byte, label string) {
+	select {
+	case ch <- data:
+	case <-time.After(30 * time.Second):
+		log.Printf("dropping %s data after backpressure timeout", label)
+	}
+}
+
 // handleBinaryMessage processes binary data frames from device clients
 func (h *wsHandler) handleBinaryMessage(socket *gws.Conn, raw []byte) {
 	typ, id, payload, err := protocol.DecodeBinFrame(raw)
@@ -280,7 +339,7 @@ func (h *wsHandler) handleBinaryMessage(socket *gws.Conn, raw []byte) {
 		return
 	}
 
-	log.Printf("binary data: type=0x%02x id=%s len=%d", typ, id, len(payload))
+	// Avoid per-frame logs on hot data paths; this handler can run thousands of times per second.
 
 	clientID, _ := socket.Session().Load("clientID")
 	if clientID == nil {
@@ -295,28 +354,19 @@ func (h *wsHandler) handleBinaryMessage(socket *gws.Conn, raw []byte) {
 	case protocol.BinData:
 		sess := h.srv.getSession(id)
 		if sess != nil && len(data) > 0 {
-			select {
-			case sess.WriteCh <- data:
-			default:
-			}
+			sendBytes(sess.WriteCh, data, "session stdout")
 		}
 
 	case protocol.BinStderr:
 		sess := h.srv.getSession(id)
 		if sess != nil && len(data) > 0 {
-			select {
-			case sess.StderrCh <- data:
-			default:
-			}
+			sendBytes(sess.StderrCh, data, "session stderr")
 		}
 
 	case protocol.BinTCPData:
 		fwd := h.srv.getForward(id)
 		if fwd != nil && len(data) > 0 {
-			select {
-			case fwd.WriteCh <- data:
-			default:
-			}
+			sendBytes(fwd.WriteCh, data, "tcp forward")
 		}
 	}
 }
@@ -342,10 +392,7 @@ func (s *Server) handleClientMessage(client *ClientConn, msg *protocol.Message) 
 	case protocol.MsgClose:
 		sess := s.getSession(msg.SessionID)
 		if sess != nil {
-			select {
-			case sess.CloseCh <- struct{}{}:
-			default:
-			}
+			sess.SignalClose()
 		}
 
 	// TCP forwarding control
@@ -362,10 +409,7 @@ func (s *Server) handleClientMessage(client *ClientConn, msg *protocol.Message) 
 	case protocol.MsgTCPClose:
 		fwd := s.getForward(msg.ForwardID)
 		if fwd != nil {
-			select {
-			case fwd.CloseCh <- struct{}{}:
-			default:
-			}
+			fwd.SignalClose()
 		}
 
 	// File distribution
@@ -390,13 +434,18 @@ func (s *Server) ConnectedDeviceCount() int {
 }
 
 // Session management
-func (s *Server) RegisterSession(sess *ProxySession, client *ClientConn) {
+// RegisterSession atomically reserves a session slot for a device.
+func (s *Server) RegisterSession(sess *ProxySession, client *ClientConn) bool {
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	if s.MaxSessions > 0 && len(client.Sessions) >= s.MaxSessions {
+		return false
+	}
 	s.sessMu.Lock()
 	s.sessions[sess.ID] = sess
 	s.sessMu.Unlock()
-	client.mu.Lock()
 	client.Sessions[sess.ID] = sess
-	client.mu.Unlock()
+	return true
 }
 
 func (s *Server) getSession(id string) *ProxySession {
@@ -412,13 +461,18 @@ func (s *Server) removeSession(id string) {
 }
 
 // Forward management
-func (s *Server) RegisterForward(fwd *ProxyForward, client *ClientConn) {
+// RegisterForward atomically reserves a forward slot for a device.
+func (s *Server) RegisterForward(fwd *ProxyForward, client *ClientConn) bool {
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	if s.MaxForwards > 0 && len(client.Forwards) >= s.MaxForwards {
+		return false
+	}
 	s.fwdMu.Lock()
 	s.forwards[fwd.ID] = fwd
 	s.fwdMu.Unlock()
-	client.mu.Lock()
 	client.Forwards[fwd.ID] = fwd
-	client.mu.Unlock()
+	return true
 }
 
 func (s *Server) getForward(id string) *ProxyForward {
@@ -458,8 +512,34 @@ func (s *Server) handleFileResult(msg *protocol.Message) {
 	}
 }
 
+func (s *Server) authOK(r *http.Request) bool {
+	if s.AdminToken == "" {
+		return true
+	}
+	token := r.Header.Get("X-RDev-Token")
+	if token == "" {
+		token = r.URL.Query().Get("token")
+	}
+	if token == "" {
+		auth := r.Header.Get("Authorization")
+		token = strings.TrimPrefix(auth, "Bearer ")
+	}
+	return token == s.AdminToken
+}
+
+func (s *Server) requireAuth(w http.ResponseWriter, r *http.Request) bool {
+	if s.authOK(r) {
+		return true
+	}
+	http.Error(w, "unauthorized", http.StatusUnauthorized)
+	return false
+}
+
 // HandleAPI returns the list of connected clients as JSON
 func (s *Server) HandleAPI(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAuth(w, r) {
+		return
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -494,13 +574,17 @@ func (s *Server) HandleAPI(w http.ResponseWriter, r *http.Request) {
 func (s *Server) HandleConfigAPI(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{
-		"sshPort":  s.SSHPort,
-		"httpHost": s.HTTPHost,
+		"sshPort":      s.SSHPort,
+		"httpHost":     s.HTTPHost,
+		"authRequired": map[bool]string{true: "true", false: "false"}[s.AdminToken != ""],
 	})
 }
 
 // HandleTerminalAPI returns available devices for the terminal page
 func (s *Server) HandleTerminalAPI(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAuth(w, r) {
+		return
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
