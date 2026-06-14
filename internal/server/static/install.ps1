@@ -46,7 +46,7 @@ function global:RDev {
     .PARAMETER Mirror
     Download mirror: auto|none|host (default: auto)
     #>
-    [CmdletBinding(PositionalBinding=$false)]
+    [CmdletBinding()]
     param(
         [Parameter(Position=0, Mandatory=$true)]
         [string]$Server,
