@@ -109,6 +109,7 @@
     <script src="/vendor/xterm.js"></script>
     <script src="/vendor/xterm-addon-fit.js"></script>
     <script src="/vendor/xterm-addon-web-links.js"></script>
+    <script src="/vendor/addon-image.js"></script>
     <script src="/vendor/addon-webgl.js"></script>
     <script>
 
@@ -157,6 +158,27 @@
 
     function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
 
+    function loadTerminalImageAddon(term) {
+        if (!window.ImageAddon || !window.ImageAddon.ImageAddon) return null;
+        try {
+            const addon = new window.ImageAddon.ImageAddon({
+                sixelSupport: true,
+                iipSupport: true,
+                sixelScrolling: true,
+                pixelLimit: 8192 * 8192,
+                sixelSizeLimit: 16 * 1024 * 1024,
+                iipSizeLimit: 16 * 1024 * 1024,
+                storageLimit: 64,
+                showPlaceholder: true,
+            });
+            term.loadAddon(addon);
+            return addon;
+        } catch(e) {
+            console.warn('RDev image addon disabled:', e);
+            return null;
+        }
+    }
+
     function createTab(deviceID) {
         const id = ++tabCounter;
         const term = new Terminal({
@@ -177,6 +199,7 @@
         const fitAddon = new FitAddon.FitAddon();
         term.loadAddon(fitAddon);
         term.loadAddon(new WebLinksAddon.WebLinksAddon());
+        const imageAddon = loadTerminalImageAddon(term);
 
         const pane = document.createElement('div');
         pane.className = 'terminal-pane';
@@ -195,7 +218,7 @@
 
         fitAddon.fit();
 
-        const tab = { id, deviceId: deviceID, ws: null, term, fitAddon, status: 'disconnected', needAuth: false };
+        const tab = { id, deviceId: deviceID, ws: null, term, fitAddon, imageAddon, status: 'disconnected', needAuth: false };
         tabs.push(tab);
         prepareTerminalInput(tab);
         connectTab(tab);

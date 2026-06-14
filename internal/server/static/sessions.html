@@ -168,6 +168,7 @@
     <script src="/vendor/xterm.js"></script>
     <script src="/vendor/xterm-addon-fit.js"></script>
     <script src="/vendor/xterm-addon-web-links.js"></script>
+    <script src="/vendor/addon-image.js"></script>
     <script src="/vendor/addon-webgl.js"></script>
     <script>
     document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n.langSelector();
@@ -186,6 +187,28 @@
     const WebglAddon = window.AddonWebgl?.WebglAddon;
 
     let sessions = [], activeId = null, term = null, fitAddon = null, ws = null, needAuth = false;
+
+    function loadTerminalImageAddon(term) {
+        if (!window.ImageAddon || !window.ImageAddon.ImageAddon) return null;
+        try {
+            const addon = new window.ImageAddon.ImageAddon({
+                sixelSupport: true,
+                iipSupport: true,
+                sixelScrolling: true,
+                pixelLimit: 8192 * 8192,
+                sixelSizeLimit: 16 * 1024 * 1024,
+                iipSizeLimit: 16 * 1024 * 1024,
+                storageLimit: 64,
+                showPlaceholder: true,
+            });
+            term.loadAddon(addon);
+            return addon;
+        } catch(e) {
+            console.warn('RDev image addon disabled:', e);
+            return null;
+        }
+    }
+
     function sendAttachData(data) {
         if (ws && ws.readyState === WebSocket.OPEN && !needAuth) ws.send(new TextEncoder().encode(data));
     }
@@ -331,6 +354,7 @@
         fitAddon = new FitAddon.FitAddon();
         term.loadAddon(fitAddon);
         term.loadAddon(new WebLinksAddon.WebLinksAddon());
+        loadTerminalImageAddon(term);
         term.open(area);
         prepareTerminalInput();
         try { const webgl = new WebglAddon(); webgl.onContextLoss(() => webgl.dispose()); term.loadAddon(webgl); } catch(e) {}
