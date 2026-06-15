@@ -3,9 +3,9 @@
 package client
 
 import (
+	"errors"
 	"fmt"
 	"image"
-	"image/color"
 	"strconv"
 	"strings"
 	"syscall"
@@ -38,6 +38,8 @@ var (
 	procCreateDXGIFactory1 = dxgiDLL.NewProc("CreateDXGIFactory1")
 	procD3D11CreateDevice  = d3d11DLL.NewProc("D3D11CreateDevice")
 	procRtlGetVersion      = ntdllDLL.NewProc("RtlGetVersion")
+
+	errDXGIFrameTimeout = errors.New("DXGI frame timeout")
 )
 
 type winOSVersionInfo struct {
@@ -135,6 +137,7 @@ type dxgiDesktopCapturer struct {
 	textureWidth  uint32
 	textureHeight uint32
 	textureFormat uint32
+	lastFrame     *image.RGBA
 }
 
 func enumerateDXGISources() []protocol.DesktopSource {
@@ -328,9 +331,23 @@ func (c *dxgiDesktopCapturer) Close() error {
 }
 
 func (c *dxgiDesktopCapturer) Capture() (image.Image, error) {
-	resource, err := c.acquireFrame()
-	if err != nil {
-		return nil, err
+	deadline := time.Now().Add(2 * time.Second)
+	var resource uintptr
+	for {
+		var err error
+		resource, err = c.acquireFrame()
+		if err == nil {
+			break
+		}
+		if !errors.Is(err, errDXGIFrameTimeout) {
+			return nil, err
+		}
+		if c.lastFrame != nil {
+			return c.lastFrame, nil
+		}
+		if time.Now().After(deadline) {
+			return nil, fmt.Errorf("DXGI AcquireNextFrame timed out before the first frame")
+		}
 	}
 	defer comRelease(resource)
 	defer dxgiOutputDuplicationReleaseFrame(c.duplication)
@@ -362,33 +379,41 @@ func (c *dxgiDesktopCapturer) Capture() (image.Image, error) {
 	height := int(desc.Height)
 	img := image.NewRGBA(image.Rect(0, 0, width, height))
 	for y := 0; y < height; y++ {
-		row := unsafe.Slice((*byte)(unsafe.Pointer(mapped.Data+uintptr(y)*uintptr(mapped.RowPitch))), width*4)
+		src := unsafe.Slice((*byte)(unsafe.Pointer(mapped.Data+uintptr(y)*uintptr(mapped.RowPitch))), width*4)
+		dst := img.Pix[y*img.Stride : y*img.Stride+width*4]
+		if desc.Format == dxgiFormatB8G8R8A8 {
+			for x := 0; x < width; x++ {
+				off := x * 4
+				dst[off] = src[off+2]
+				dst[off+1] = src[off+1]
+				dst[off+2] = src[off]
+				dst[off+3] = 255
+			}
+			continue
+		}
 		for x := 0; x < width; x++ {
 			off := x * 4
-			if desc.Format == dxgiFormatB8G8R8A8 {
-				img.SetRGBA(x, y, color.RGBA{R: row[off+2], G: row[off+1], B: row[off], A: 255})
-			} else {
-				img.SetRGBA(x, y, color.RGBA{R: row[off], G: row[off+1], B: row[off+2], A: 255})
-			}
+			dst[off] = src[off]
+			dst[off+1] = src[off+1]
+			dst[off+2] = src[off+2]
+			dst[off+3] = 255
 		}
 	}
+	c.lastFrame = img
 	return img, nil
 }
 
 func (c *dxgiDesktopCapturer) acquireFrame() (uintptr, error) {
-	deadline := time.Now().Add(2 * time.Second)
-	for {
-		var frameInfo dxgiOutduplFrameInfo
-		var resource uintptr
-		hr := dxgiOutputDuplicationAcquireNextFrame(c.duplication, dxgiAcquireTimeoutMS, &frameInfo, &resource)
-		if hr == 0 && resource != 0 {
-			return resource, nil
-		}
-		if hr == dxgiErrorWaitTimeout && time.Now().Before(deadline) {
-			continue
-		}
-		return 0, fmt.Errorf("DXGI AcquireNextFrame failed: %s", formatHRESULT(hr))
+	var frameInfo dxgiOutduplFrameInfo
+	var resource uintptr
+	hr := dxgiOutputDuplicationAcquireNextFrame(c.duplication, dxgiAcquireTimeoutMS, &frameInfo, &resource)
+	if hr == 0 && resource != 0 {
+		return resource, nil
 	}
+	if hr == dxgiErrorWaitTimeout {
+		return 0, errDXGIFrameTimeout
+	}
+	return 0, fmt.Errorf("DXGI AcquireNextFrame failed: %s", formatHRESULT(hr))
 }
 
 func (c *dxgiDesktopCapturer) ensureStaging(desc d3d11Texture2DDesc) error {
