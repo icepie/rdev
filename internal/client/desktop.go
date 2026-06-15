@@ -33,6 +33,9 @@ func desktopCapabilities() *protocol.DesktopCapabilities {
 		caps.ViewOnly = false
 		caps.Input = true
 		caps.Backends = []string{"win32-gdi"}
+		if len(desktopSourcesByBackend("dxgi")) > 0 {
+			caps.Backends = append(caps.Backends, "dxgi")
+		}
 		caps.Sources = desktopSources()
 	case "linux":
 		fbSources := desktopSourcesByBackend("fbdev")

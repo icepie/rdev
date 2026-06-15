@@ -72,7 +72,8 @@ For a non-cgo default build, avoid mandatory Go bindings to FFmpeg, GStreamer, V
 
 ## Implemented capture backends
 
-- **Windows Win32/GDI**: pure Go syscall backend, compatible with Windows 7 and newer. It supports all-screen, monitor, and visible-window capture. DXGI Desktop Duplication remains a future optional backend for Windows 8+ and must not replace the GDI Win7 path.
+- **Windows Win32/GDI**: pure Go syscall backend, compatible with Windows 7 and newer. It supports all-screen, monitor, and visible-window capture.
+- **Windows DXGI Desktop Duplication**: optional pure Go/syscall backend for Windows 8+ monitor sources (`dxgi:monitor:<adapter>:<output>`). It uses `dxgi.dll`/`d3d11.dll` at runtime and does not replace the Win7-compatible GDI path; unsupported systems or failures fall back to GDI by source choice rather than by default.
 - **Linux X11**: pure Go X11 protocol backend using XGB. It supports root/all-screen, RANDR monitor sources, visible EWMH window sources, and XTEST input.
 - **Linux framebuffer (`fbdev`)**: pure Go root/KMS-console fallback using `/dev/fb0` or `/dev/fb/0` with `FBIOGET_*` ioctls and read-only `mmap`. It is view-only, requires framebuffer permissions/root, and works only when the kernel exposes a readable framebuffer.
 - **Linux DRM/KMS scanout**: pure Go/no-cgo probe and linear scanout mmap fallback using `/dev/dri/card*`, KMS resources, active CRTC framebuffer metadata, `GETFB2`, and PRIME dma-buf export. It exposes `drm:<card>:screen:all` and `drm:<card>:connector:<id>` sources when active outputs are visible. This is view-only and best-effort: many accelerated GPU paths expose non-mappable or non-linear scanout buffers, so the backend reports a clear error instead of returning black frames. Full accelerated KMS capture needs an optional native EGL/GBM/DRM-PRIME path.
@@ -94,7 +95,7 @@ The release target remains: `CGO_ENABLED=0`, no required external process, and g
 
 | Platform | Screen capture default | Input control default | Notes |
 | --- | --- | --- | --- |
-| Windows | Pure Go Win32/GDI syscall first; enumerates all screens, monitors, and visible windows; DXGI Desktop Duplication later | Pure Go Win32 syscall (`SetCursorPos`, `mouse_event`, `keybd_event`) | Best fit for `CGO_ENABLED=0` and no external process. GDI window capture reads the visible screen region of the selected window; GPU/PrintWindow backends can be added later as optional paths. |
+| Windows | Pure Go Win32/GDI syscall first; enumerates all screens, monitors, visible windows, and optional DXGI monitor sources on Windows 8+ | Pure Go Win32 syscall (`SetCursorPos`, `mouse_event`, `keybd_event`) | GDI remains the default and preserves Win7 compatibility. DXGI Desktop Duplication is an optional monitor-source backend loaded through `dxgi.dll`/`d3d11.dll` at runtime. |
 | Linux X11 | Pure Go X11 protocol first; enumerates all screens, RANDR monitors, EWMH client windows, DRM/KMS scanout sources, and fbdev fallback sources; XShm later | Pure Go XTest protocol | Current implementation supports capture and input when X11/XTEST are available. DRM/KMS and fbdev are view-only fallbacks and may fail clearly when the driver exposes non-mappable buffers or a blank framebuffer. |
 | Linux Wayland | Capability detection first; pure Go portal/PipeWire backend later | Usually unavailable without compositor-approved portal or privileged input path | Hard because of Wayland security policy, not because of Go. Start as unsupported/limited unless portal backend exists. |
 | macOS | Capability detection first; pure Go CoreGraphics/Objective-C runtime bridge later | Quartz event injection later | Hardest without cgo or external processes. Requires Screen Recording and Accessibility permissions. |

@@ -118,6 +118,7 @@ func desktopSources() []protocol.DesktopSource {
 	for _, monitor := range enumerateWindowsMonitors() {
 		sources = append(sources, monitor.source)
 	}
+	sources = append(sources, enumerateDXGISources()...)
 	for _, window := range enumerateWindowsWindows(80) {
 		sources = append(sources, window.source)
 	}
@@ -125,6 +126,10 @@ func desktopSources() []protocol.DesktopSource {
 }
 
 func newDesktopCapturer(source string) (desktopCapturer, error) {
+	if strings.HasPrefix(source, "dxgi:") {
+		return newDXGICapturer(source)
+	}
+
 	desktop, _, _ := procOpenInputDesktop.Call(0, 0, desktopReadObjects|desktopWriteObjects)
 	if desktop != 0 {
 		procSetThreadDesktop.Call(desktop)
