@@ -36,24 +36,44 @@ func desktopCapabilities() *protocol.DesktopCapabilities {
 		caps.Sources = desktopSources()
 	case "linux":
 		fbSources := desktopSourcesByBackend("fbdev")
+		drmSources := desktopSourcesByBackend("drm-kms")
 		if os.Getenv("DISPLAY") != "" {
 			caps.DisplayServer = "x11"
 			caps.Supported = true
 			caps.ViewOnly = false
 			caps.Input = true
 			caps.Backends = []string{"x11"}
+			if len(drmSources) > 0 {
+				caps.Backends = append(caps.Backends, "drm-kms")
+			}
 			caps.Sources = desktopSources()
 		} else if os.Getenv("WAYLAND_DISPLAY") != "" {
 			caps.DisplayServer = "wayland"
 			caps.Backends = []string{"wayland-portal"}
 			caps.Reason = "Wayland capture requires native xdg-desktop-portal/PipeWire support; external tools are not used"
-			if len(fbSources) > 0 {
+			if len(drmSources) > 0 {
+				caps.Supported = true
+				caps.ViewOnly = true
+				caps.Backends = append(caps.Backends, "drm-kms")
+				caps.Sources = append([]protocol.DesktopSource{{ID: "auto", Label: "Auto", Kind: "screen", Backend: "drm-kms", Width: drmSources[0].Width, Height: drmSources[0].Height, Primary: true}}, append(drmSources, fbSources...)...)
+				caps.Reason = "Wayland portal backend is not implemented; using DRM/KMS scanout fallback"
+			} else if len(fbSources) > 0 {
 				caps.Supported = true
 				caps.ViewOnly = true
 				caps.Backends = append(caps.Backends, "fbdev")
 				caps.Sources = append([]protocol.DesktopSource{{ID: "auto", Label: "Auto", Kind: "screen", Backend: "fbdev", Width: fbSources[0].Width, Height: fbSources[0].Height, Primary: true}}, fbSources...)
 				caps.Reason = "Wayland portal backend is not implemented; using root framebuffer fallback"
 			}
+		} else if len(drmSources) > 0 {
+			caps.DisplayServer = "drm-kms"
+			caps.Supported = true
+			caps.ViewOnly = true
+			caps.Input = false
+			caps.Backends = []string{"drm-kms"}
+			if len(fbSources) > 0 {
+				caps.Backends = append(caps.Backends, "fbdev")
+			}
+			caps.Sources = append([]protocol.DesktopSource{{ID: "auto", Label: "Auto", Kind: "screen", Backend: "drm-kms", Width: drmSources[0].Width, Height: drmSources[0].Height, Primary: true}}, append(drmSources, fbSources...)...)
 		} else if len(fbSources) > 0 {
 			caps.DisplayServer = "fbdev"
 			caps.Supported = true

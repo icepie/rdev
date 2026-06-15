@@ -50,8 +50,12 @@ type x11DesktopCapturer struct {
 
 func desktopSources() []protocol.DesktopSource {
 	fbSources := enumerateFBDevSources()
+	drmSources := enumerateDRMSources()
 	conn, err := xgb.NewConn()
 	if err != nil {
+		if len(drmSources) > 0 {
+			return append([]protocol.DesktopSource{{ID: "auto", Label: "Auto", Kind: "screen", Backend: "drm-kms", Width: drmSources[0].Width, Height: drmSources[0].Height, Primary: true}}, append(drmSources, fbSources...)...)
+		}
 		if len(fbSources) > 0 {
 			return append([]protocol.DesktopSource{{ID: "auto", Label: "Auto", Kind: "screen", Backend: "fbdev", Width: fbSources[0].Width, Height: fbSources[0].Height, Primary: true}}, fbSources...)
 		}
@@ -70,11 +74,15 @@ func desktopSources() []protocol.DesktopSource {
 	for _, window := range enumerateX11Windows(conn, screen, 80) {
 		sources = append(sources, window.source)
 	}
+	sources = append(sources, drmSources...)
 	sources = append(sources, fbSources...)
 	return sources
 }
 
 func newDesktopCapturer(source string) (desktopCapturer, error) {
+	if strings.HasPrefix(source, "drm:") || (os.Getenv("DISPLAY") == "" && drmSourceAvailable(source)) {
+		return newDRMCapturer(source)
+	}
 	if strings.HasPrefix(source, "fbdev:") || (os.Getenv("DISPLAY") == "" && fbdevPath(source) != "") {
 		return newFBDevCapturer(source)
 	}

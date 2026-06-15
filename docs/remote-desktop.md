@@ -5,12 +5,12 @@ This document describes a cross-platform remote desktop feature for RDev. It is 
 ## Current status
 
 - Phase 1 capability discovery is implemented for browser/device APIs.
-- Phase 2 screen streaming is implemented for Linux X11, Linux framebuffer (`fbdev` root/KMS-console fallback), and Windows Win32/GDI with the default `CGO_ENABLED=0` client build.
-- Capture source selection now supports Auto, all screens, individual monitors, and visible windows on Windows GDI and Linux X11; Linux framebuffer exposes framebuffer screen sources. Legacy `primary`/`virtual` source IDs are accepted only for compatibility and are not shown in the UI.
+- Phase 2 screen streaming is implemented for Linux X11, Linux framebuffer (`fbdev` root/KMS-console fallback), Linux DRM/KMS linear-scanout fallback, and Windows Win32/GDI with the default `CGO_ENABLED=0` client build.
+- Capture source selection now supports Auto, all screens, individual monitors, and visible windows on Windows GDI and Linux X11; Linux framebuffer exposes framebuffer screen sources; Linux DRM/KMS exposes active scanout screen/connector sources when available. Legacy `primary`/`virtual` source IDs are accepted only for compatibility and are not shown in the UI.
 - Phase 3 input control is implemented for Windows Win32 and Linux X11. Linux framebuffer, Wayland-unimplemented, and macOS-unimplemented paths are view-only until native input/capture backends are added.
 - The default stream is JPEG frames over binary WebSocket frames, rendered on a browser Canvas; this is effectively an MJPEG-style transport over the existing relay.
 - Browser auto mode requests an adaptive resolution based on viewport size and device pixel ratio; manual mode keeps explicit FPS/quality/max-size controls.
-- Linux Wayland reports the native `wayland-portal` backend as planned and never shells out to `grim`/`slurp`; if a readable framebuffer is present, root/no-display sessions can fall back to `fbdev` view-only capture.
+- Linux Wayland reports the native `wayland-portal` backend as planned and never shells out to `grim`/`slurp`; root/no-display sessions can fall back to `drm-kms` when active linear scanout buffers are mappable, otherwise to `fbdev` when a readable framebuffer is present.
 - macOS reports Quartz/CoreGraphics capability metadata in the default no-cgo build, but capture remains planned until a native backend is implemented without making cgo mandatory.
 - Clipboard sync, tile diffing, and hardware/WebRTC acceleration remain future phases.
 
@@ -75,7 +75,8 @@ For a non-cgo default build, avoid mandatory Go bindings to FFmpeg, GStreamer, V
 - **Windows Win32/GDI**: pure Go syscall backend, compatible with Windows 7 and newer. It supports all-screen, monitor, and visible-window capture. DXGI Desktop Duplication remains a future optional backend for Windows 8+ and must not replace the GDI Win7 path.
 - **Linux X11**: pure Go X11 protocol backend using XGB. It supports root/all-screen, RANDR monitor sources, visible EWMH window sources, and XTEST input.
 - **Linux framebuffer (`fbdev`)**: pure Go root/KMS-console fallback using `/dev/fb0` or `/dev/fb/0` with `FBIOGET_*` ioctls and read-only `mmap`. It is view-only, requires framebuffer permissions/root, and works only when the kernel exposes a readable framebuffer.
-- **Linux Wayland**: no external helper process is used. The intended backend is native xdg-desktop-portal + PipeWire; until implemented, Wayland reports a clear unavailable reason unless `fbdev` fallback is available.
+- **Linux DRM/KMS scanout**: pure Go/no-cgo probe and linear scanout mmap fallback using `/dev/dri/card*`, KMS resources, active CRTC framebuffer metadata, `GETFB2`, and PRIME dma-buf export. It exposes `drm:<card>:screen:all` and `drm:<card>:connector:<id>` sources when active outputs are visible. This is view-only and best-effort: many accelerated GPU paths expose non-mappable or non-linear scanout buffers, so the backend reports a clear error instead of returning black frames. Full accelerated KMS capture needs an optional native EGL/GBM/DRM-PRIME path.
+- **Linux Wayland**: no external helper process is used. The intended backend is native xdg-desktop-portal + PipeWire; until implemented, Wayland reports a clear unavailable reason unless `drm-kms` or `fbdev` fallback is available.
 - **macOS**: default no-cgo builds report planned Quartz/CoreGraphics capability metadata. Native capture/control still needs a backend that preserves the portable default build.
 
 ## Default dependency policy
@@ -94,7 +95,7 @@ The release target remains: `CGO_ENABLED=0`, no required external process, and g
 | Platform | Screen capture default | Input control default | Notes |
 | --- | --- | --- | --- |
 | Windows | Pure Go Win32/GDI syscall first; enumerates all screens, monitors, and visible windows; DXGI Desktop Duplication later | Pure Go Win32 syscall (`SetCursorPos`, `mouse_event`, `keybd_event`) | Best fit for `CGO_ENABLED=0` and no external process. GDI window capture reads the visible screen region of the selected window; GPU/PrintWindow backends can be added later as optional paths. |
-| Linux X11 | Pure Go X11 protocol first; enumerates all screens, RANDR monitors, and EWMH client windows; XShm later | Pure Go XTest protocol | Current implementation supports capture and input when X11/XTEST are available. |
+| Linux X11 | Pure Go X11 protocol first; enumerates all screens, RANDR monitors, EWMH client windows, DRM/KMS scanout sources, and fbdev fallback sources; XShm later | Pure Go XTest protocol | Current implementation supports capture and input when X11/XTEST are available. DRM/KMS and fbdev are view-only fallbacks and may fail clearly when the driver exposes non-mappable buffers or a blank framebuffer. |
 | Linux Wayland | Capability detection first; pure Go portal/PipeWire backend later | Usually unavailable without compositor-approved portal or privileged input path | Hard because of Wayland security policy, not because of Go. Start as unsupported/limited unless portal backend exists. |
 | macOS | Capability detection first; pure Go CoreGraphics/Objective-C runtime bridge later | Quartz event injection later | Hardest without cgo or external processes. Requires Screen Recording and Accessibility permissions. |
 
