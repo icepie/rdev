@@ -98,7 +98,7 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: 0
         run: |
-          go build -ldflags "-s -w" -o rdev-server-raw ./cmd/rdev-server
+          go build -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" -o rdev-server-raw ./cmd/rdev-server
           upx --best rdev-server-raw -o rdev-server${{ matrix.ext }} || cp rdev-server-raw rdev-server${{ matrix.ext }}
 
       - name: Build & compress client
@@ -107,7 +107,7 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: 0
         run: |
-          go build -ldflags "-s -w" -o rdev-client-raw ./cmd/rdev-client
+          go build -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" -o rdev-client-raw ./cmd/rdev-client
           upx --best rdev-client-raw -o rdev-client${{ matrix.ext }} || cp rdev-client-raw rdev-client${{ matrix.ext }}
 
       - name: Upload artifacts
@@ -167,9 +167,9 @@ jobs:
         run: |
           export PATH="/home/runner/go-win7/bin:$PATH"
           mkdir -p dist/windows-amd64
-          go build -ldflags "-s -w" -o rdev-server-raw ./cmd/rdev-server
+          go build -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" -o rdev-server-raw ./cmd/rdev-server
           upx --best rdev-server-raw -o dist/windows-amd64/rdev-server.exe || cp rdev-server-raw dist/windows-amd64/rdev-server.exe
-          go build -ldflags "-s -w" -o rdev-client-raw ./cmd/rdev-client
+          go build -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" -o rdev-client-raw ./cmd/rdev-client
           upx --best rdev-client-raw -o dist/windows-amd64/rdev-client.exe || cp rdev-client-raw dist/windows-amd64/rdev-client.exe
 
       - name: Build & compress windows/arm64
@@ -181,9 +181,9 @@ jobs:
         run: |
           export PATH="/home/runner/go-win7/bin:$PATH"
           mkdir -p dist/windows-arm64
-          go build -ldflags "-s -w" -o rdev-server-raw ./cmd/rdev-server
+          go build -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" -o rdev-server-raw ./cmd/rdev-server
           upx --best rdev-server-raw -o dist/windows-arm64/rdev-server.exe || cp rdev-server-raw dist/windows-arm64/rdev-server.exe
-          go build -ldflags "-s -w" -o rdev-client-raw ./cmd/rdev-client
+          go build -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" -o rdev-client-raw ./cmd/rdev-client
           upx --best rdev-client-raw -o dist/windows-arm64/rdev-client.exe || cp rdev-client-raw dist/windows-arm64/rdev-client.exe
 
       - name: Upload windows/amd64

@@ -1,21 +1,28 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net"
 	"os"
 	"strings"
+	"time"
 
 	"rdev/internal/client"
+	"rdev/internal/updater"
 )
+
+var version = "dev"
 
 func main() {
 	var (
-		serverURL string
-		clientID  string
-		password  string
-		shell     string
+		serverURL      string
+		clientID       string
+		password       string
+		shell          string
+		autoUpdate     = true
+		updateInterval = time.Minute
 	)
 
 	for i := 1; i < len(os.Args); i++ {
@@ -40,6 +47,23 @@ func main() {
 				shell = os.Args[i+1]
 				i++
 			}
+		case "--no-auto-update":
+			autoUpdate = false
+		case "--auto-update":
+			if i+1 < len(os.Args) {
+				autoUpdate = parseBoolDefault(os.Args[i+1], true)
+				i++
+			}
+		case "--update-interval":
+			if i+1 < len(os.Args) {
+				if d, err := time.ParseDuration(os.Args[i+1]); err == nil && d > 0 {
+					updateInterval = d
+				}
+				i++
+			}
+		case "--version", "-v":
+			fmt.Println(version)
+			os.Exit(0)
 		case "--help":
 			fmt.Print(`Usage: rdev-client -s <server-url> [options]
 
@@ -48,6 +72,10 @@ Options:
   --id, -i        Client/Device ID (default: hostname)
   --password, -p  Password for SSH auth (optional, enables password login)
   --shell, -S     Shell to use (default: $SHELL or /bin/sh or cmd.exe)
+  --no-auto-update Disable built-in GitHub release auto-update
+  --auto-update    Enable/disable auto-update explicitly (true/false)
+  --update-interval Auto-update polling interval (default 1m)
+  --version, -v   Print version and exit
 
 SSH port is auto-detected from server — no need to specify manually.
 
@@ -59,6 +87,9 @@ Environment variables:
   RDEV_SHELL    Shell to use (overrides --shell flag)
   RDEV_SERVER   Server URL (overrides --server flag)
   RDEV_ID       Client ID (overrides --id flag)
+  RDEV_AUTO_UPDATE true/false (default true)
+  RDEV_UPDATE_INTERVAL duration like 5m or 1h
+  RDEV_UPDATE_PROXY comma-separated GitHub proxy prefixes
 `)
 			os.Exit(0)
 		}
@@ -72,6 +103,14 @@ Environment variables:
 	}
 	if shell == "" {
 		shell = os.Getenv("RDEV_SHELL")
+	}
+	if env := os.Getenv("RDEV_AUTO_UPDATE"); env != "" {
+		autoUpdate = parseBoolDefault(env, autoUpdate)
+	}
+	if env := os.Getenv("RDEV_UPDATE_INTERVAL"); env != "" {
+		if d, err := time.ParseDuration(env); err == nil && d > 0 {
+			updateInterval = d
+		}
 	}
 	if serverURL == "" {
 		fmt.Println("Error: --server is required")
@@ -154,8 +193,21 @@ Environment variables:
 		fmt.Println()
 	}
 
+	updater.Start(context.Background(), updater.Config{App: "client", Version: version, Enabled: autoUpdate, Interval: updateInterval})
+
 	if err := c.Run(); err != nil {
 		log.Fatalf("client error: %v", err)
+	}
+}
+
+func parseBoolDefault(value string, fallback bool) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "1", "true", "yes", "y", "on", "enable", "enabled":
+		return true
+	case "0", "false", "no", "n", "off", "disable", "disabled":
+		return false
+	default:
+		return fallback
 	}
 }
 

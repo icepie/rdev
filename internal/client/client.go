@@ -1341,7 +1341,10 @@ func (c *Client) send(msg *protocol.Message) error {
 	}
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
-	return conn.WriteMessage(gws.OpcodeText, data)
+	_ = conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+	err = conn.WriteMessage(gws.OpcodeText, data)
+	_ = conn.SetWriteDeadline(time.Time{})
+	return err
 }
 
 func (c *Client) sendBinary(typ byte, id string, data []byte) error {
@@ -1354,7 +1357,10 @@ func (c *Client) sendBinary(typ byte, id string, data []byte) error {
 	frame := protocol.EncodeBinFrame(typ, id, data)
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
-	return conn.WriteMessage(gws.OpcodeBinary, frame)
+	_ = conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+	err := conn.WriteMessage(gws.OpcodeBinary, frame)
+	_ = conn.SetWriteDeadline(time.Time{})
+	return err
 }
 
 func (c *Client) sendClose(sessionID string) error {

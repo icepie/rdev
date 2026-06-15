@@ -593,6 +593,9 @@ func cloneDesktopCapabilities(caps *protocol.DesktopCapabilities) *protocol.Desk
 	if caps.Backends != nil {
 		clone.Backends = append([]string(nil), caps.Backends...)
 	}
+	if caps.Sources != nil {
+		clone.Sources = append([]protocol.DesktopSource(nil), caps.Sources...)
+	}
 	return &clone
 }
 

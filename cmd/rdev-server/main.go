@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net"
@@ -11,7 +12,10 @@ import (
 	"time"
 
 	"rdev/internal/server"
+	"rdev/internal/updater"
 )
+
+var version = "dev"
 
 func main() {
 	var (
@@ -22,6 +26,8 @@ func main() {
 		maxSessions      = 0
 		maxForwards      = 0
 		batchConcurrency = 0
+		autoUpdate       = true
+		updateInterval   = time.Minute
 	)
 
 	for i := 1; i < len(os.Args); i++ {
@@ -61,6 +67,23 @@ func main() {
 				fmt.Sscanf(os.Args[i+1], "%d", &batchConcurrency)
 				i++
 			}
+		case "--no-auto-update":
+			autoUpdate = false
+		case "--auto-update":
+			if i+1 < len(os.Args) {
+				autoUpdate = parseBoolDefault(os.Args[i+1], true)
+				i++
+			}
+		case "--update-interval":
+			if i+1 < len(os.Args) {
+				if d, err := time.ParseDuration(os.Args[i+1]); err == nil && d > 0 {
+					updateInterval = d
+				}
+				i++
+			}
+		case "--version", "-v":
+			fmt.Println(version)
+			os.Exit(0)
 		case "--help":
 			fmt.Print(`Usage: rdev-server [options]
 
@@ -72,6 +95,10 @@ Options:
   --max-sessions     Max concurrent sessions per device (default 256)
   --max-forwards     Max concurrent TCP forwards per device (default 1024)
   --batch-concurrency Max concurrent batch operations (default GOMAXPROCS*8)
+  --no-auto-update Disable built-in GitHub release auto-update
+  --auto-update    Enable/disable auto-update explicitly (true/false)
+  --update-interval Auto-update polling interval (default 1m)
+  --version, -v    Print version and exit
 
 Features:
   - SSH shell/exec/sftp/scp access to connected devices
@@ -89,6 +116,14 @@ Examples:
 
 	if adminToken == "" {
 		adminToken = os.Getenv("RDEV_ADMIN_TOKEN")
+	}
+	if env := os.Getenv("RDEV_AUTO_UPDATE"); env != "" {
+		autoUpdate = parseBoolDefault(env, autoUpdate)
+	}
+	if env := os.Getenv("RDEV_UPDATE_INTERVAL"); env != "" {
+		if d, err := time.ParseDuration(env); err == nil && d > 0 {
+			updateInterval = d
+		}
 	}
 
 	if dataDir == "" {
@@ -184,9 +219,22 @@ Examples:
 	fmt.Printf("  Auth keys:    %s\n", authorizedKeysPath)
 	fmt.Println()
 
+	updater.Start(context.Background(), updater.Config{App: "server", Version: version, Enabled: autoUpdate, Interval: updateInterval})
+
 	log.Printf("HTTP server listening on %s", httpAddr)
 	if err := http.Serve(httpListener, mux); err != nil {
 		log.Fatalf("HTTP server error: %v", err)
+	}
+}
+
+func parseBoolDefault(value string, fallback bool) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "1", "true", "yes", "y", "on", "enable", "enabled":
+		return true
+	case "0", "false", "no", "n", "off", "disable", "disabled":
+		return false
+	default:
+		return fallback
 	}
 }
 

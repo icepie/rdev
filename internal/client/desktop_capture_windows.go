@@ -10,6 +10,8 @@ import (
 )
 
 const (
+	smCXScreen        = 0
+	smCYScreen        = 1
 	smXVirtualScreen  = 76
 	smYVirtualScreen  = 77
 	smCXVirtualScreen = 78
@@ -72,7 +74,7 @@ type gdiDesktopCapturer struct {
 	bounds   image.Rectangle
 }
 
-func newDesktopCapturer() (desktopCapturer, error) {
+func newDesktopCapturer(source string) (desktopCapturer, error) {
 	desktop, _, _ := procOpenInputDesktop.Call(0, 0, desktopReadObjects|desktopWriteObjects)
 	if desktop != 0 {
 		procSetThreadDesktop.Call(desktop)
@@ -82,6 +84,12 @@ func newDesktopCapturer() (desktopCapturer, error) {
 	y := getSystemMetric(smYVirtualScreen)
 	width := getSystemMetric(smCXVirtualScreen)
 	height := getSystemMetric(smCYVirtualScreen)
+	if source == "primary" {
+		x = 0
+		y = 0
+		width = getSystemMetric(smCXScreen)
+		height = getSystemMetric(smCYScreen)
+	}
 	if width <= 0 || height <= 0 {
 		if desktop != 0 {
 			procCloseDesktop.Call(desktop)
@@ -118,6 +126,10 @@ func newDesktopCapturer() (desktopCapturer, error) {
 		return nil, fmt.Errorf("SelectObject failed: %s", windowsCallError(err))
 	}
 	capturer.oldObj = oldObj
+	if err := capturer.probe(); err != nil {
+		capturer.Close()
+		return nil, err
+	}
 	return capturer, nil
 }
 
@@ -134,6 +146,14 @@ func getSystemMetric(index uintptr) int {
 }
 
 func (c *gdiDesktopCapturer) Bounds() image.Rectangle { return c.bounds }
+
+func (c *gdiDesktopCapturer) probe() error {
+	ok, _, err := procBitBlt.Call(c.memDC, 0, 0, 1, 1, c.screenDC, uintptr(c.bounds.Min.X), uintptr(c.bounds.Min.Y), srcCopy|captureBlt)
+	if ok == 0 {
+		return fmt.Errorf("desktop capture is not accessible from this Windows session: %s", windowsCallError(err))
+	}
+	return nil
+}
 
 func (c *gdiDesktopCapturer) Close() error {
 	if c.memDC != 0 && c.oldObj != 0 {

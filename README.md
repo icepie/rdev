@@ -29,6 +29,7 @@
 | -R 端口转发 | 暴露调试者本地服务到服务端 |
 | Web UI | 实时查看已连接设备列表，支持 Web Terminal/Sessions 内联图片预览 (Sixel / iTerm2 inline image) |
 | 自动重连 | 客户端断开后自动重连 |
+| 自动更新 | 客户端/服务端默认每 1 分钟检查 GitHub Release，支持内置代理和 `--no-auto-update` 禁用 |
 | 指定 Shell | `--shell /bin/bash` 或 `$RDEV_SHELL` |
 | 跨平台 | Unix (creack/pty) / Windows (ConPty) / 其他 (pipe) |
 | Terminal Modes | SSH pty-req modes 完整转发 (ECHO, ONLCR, etc.) |
@@ -66,6 +67,26 @@ export RDEV_SERVER=ws://your-server:8080
 export RDEV_ID=my-device
 export RDEV_SHELL=/bin/fish
 ./rdev-client -s $RDEV_SERVER -i $RDEV_ID
+```
+
+### 自动更新
+
+客户端和服务端默认启用自动更新：启动 1 分钟后开始检查 GitHub latest release，之后每 1 分钟轮询一次。发现新版本后会下载当前平台/架构对应资产，使用 `github.com/minio/selfupdate` 替换当前二进制并重启进程。
+
+```bash
+# 禁用自动更新
+./rdev-server --no-auto-update
+./rdev-client -s ws://your-server:8080 --no-auto-update
+
+# 调整检查间隔
+./rdev-server --update-interval 10m
+RDEV_UPDATE_INTERVAL=10m ./rdev-client -s ws://your-server:8080
+
+# 自定义 GitHub 下载前缀，多个前缀逗号分隔；内置前缀会在直连失败后自动重试
+RDEV_UPDATE_PROXY=https://gh-proxy.com/ ./rdev-server
+
+# 如果需要 HTTP 代理，使用 Go 标准环境变量
+HTTPS_PROXY=http://127.0.0.1:7890 ./rdev-server
 ```
 
 ### 远程连接

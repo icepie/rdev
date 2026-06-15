@@ -24,6 +24,12 @@
         .controls { display:flex; align-items:center; gap:8px; padding:10px 12px; background:var(--card); border-bottom:1px solid var(--border); flex-wrap:wrap; }
         .controls select, .controls input { border:1px solid var(--border); border-radius:7px; background:var(--bg); color:var(--text); padding:7px 10px; font-size:.9rem; outline:none; }
         .controls input { min-width:180px; }
+        .controls input.small { min-width:64px; width:86px; }
+        .settings { display:flex; align-items:center; gap:8px; padding:8px 12px; background:var(--card); border-bottom:1px solid var(--border); flex-wrap:wrap; color:var(--muted); font-size:.82rem; }
+        .settings label { display:inline-flex; align-items:center; gap:5px; white-space:nowrap; }
+        .settings select, .settings input { border:1px solid var(--border); border-radius:7px; background:var(--bg); color:var(--text); padding:5px 8px; font-size:.82rem; outline:none; }
+        .settings input { width:72px; }
+        .manual-settings[data-disabled="true"] { opacity:.45; pointer-events:none; }
         .btn { border:1px solid var(--border); border-radius:7px; background:var(--bg); color:var(--text); padding:7px 12px; cursor:pointer; }
         .btn:hover { border-color:var(--accent); color:var(--accent); }
         .status { color:var(--muted); font-size:.86rem; }
@@ -56,6 +62,17 @@
         <button class="btn" id="disconnect" data-i18n="desktop.disconnect">断开</button>
         <span id="status" class="status" data-i18n="desktop.idle">Idle</span>
     </div>
+    <div class="settings">
+        <label><span data-i18n="desktop.mode">Mode</span><select id="mode"><option value="auto" data-i18n="desktop.modeAuto">Auto</option><option value="manual" data-i18n="desktop.modeManual">Manual</option></select></label>
+        <label><span data-i18n="desktop.source">Source</span><select id="source"><option value="auto" data-i18n="desktop.sourceAuto">Auto</option><option value="virtual" data-i18n="desktop.sourceVirtual">Virtual screen</option><option value="primary" data-i18n="desktop.sourcePrimary">Primary screen</option></select></label>
+        <span class="manual-settings" id="manual-settings">
+            <label><span data-i18n="desktop.fps">FPS</span><input id="fps" type="number" min="1" max="12" value="4"></label>
+            <label><span data-i18n="desktop.quality">Quality</span><input id="quality" type="number" min="25" max="90" value="50"></label>
+            <label><span data-i18n="desktop.maxWidth">Max W</span><input id="maxWidth" type="number" min="320" max="3840" value="1600"></label>
+            <label><span data-i18n="desktop.maxHeight">Max H</span><input id="maxHeight" type="number" min="240" max="2160" value="1000"></label>
+        </span>
+        <span id="frameInfo" class="status"></span>
+    </div>
     <div class="stage">
         <canvas id="screen" style="display:none"></canvas>
         <div id="empty" class="empty" data-i18n="desktop.empty">Select a device and connect.</div>
@@ -75,16 +92,63 @@
     const params = new URLSearchParams(location.search);
     const deviceSelect = document.getElementById('device');
     const passwordInput = document.getElementById('password');
+    const modeSelect = document.getElementById('mode');
+    const sourceSelect = document.getElementById('source');
+    const fpsInput = document.getElementById('fps');
+    const qualityInput = document.getElementById('quality');
+    const maxWidthInput = document.getElementById('maxWidth');
+    const maxHeightInput = document.getElementById('maxHeight');
+    const manualSettings = document.getElementById('manual-settings');
+    const frameInfo = document.getElementById('frameInfo');
     const statusEl = document.getElementById('status');
     const canvas = document.getElementById('screen');
     const ctx = canvas.getContext('2d');
     const empty = document.getElementById('empty');
-    let ws = null, drawing = false, pendingFrame = null;
+    let ws = null, drawing = false, pendingFrame = null, deviceCache = [];
 
+    function updateSourceOptions() {
+        const device = deviceCache.find(d => d.id === deviceSelect.value) || {};
+        const sources = (device.desktop && device.desktop.sources && device.desktop.sources.length) ? device.desktop.sources : [
+            {id:'auto', label:t('desktop.sourceAuto')},
+            {id:'virtual', label:t('desktop.sourceVirtual')},
+            {id:'primary', label:t('desktop.sourcePrimary')},
+        ];
+        const current = sourceSelect.value || 'auto';
+        sourceSelect.innerHTML = sources.map(s => `<option value="${esc(s.id)}">${esc(s.label || s.id)}${s.kind ? ' · ' + esc(s.kind) : ''}</option>`).join('');
+        sourceSelect.value = sources.some(s => s.id === current) ? current : 'auto';
+    }
+    function desktopOptions() {
+        const manual = modeSelect.value === 'manual';
+        return {
+            mode: modeSelect.value,
+            source: sourceSelect.value,
+            fps: manual ? clampInt(fpsInput.value, 1, 12, 4) : 4,
+            quality: manual ? clampInt(qualityInput.value, 25, 90, 50) : 50,
+            width: manual ? clampInt(maxWidthInput.value, 320, 3840, 1600) : 1600,
+            height: manual ? clampInt(maxHeightInput.value, 240, 2160, 1000) : 1000,
+        };
+    }
+    function desktopQuery() {
+        const opts = desktopOptions();
+        const q = new URLSearchParams({ device: deviceSelect.value, mode: opts.mode, source: opts.source, fps: String(opts.fps), quality: String(opts.quality), width: String(opts.width), height: String(opts.height) });
+        return q.toString();
+    }
+    function authPayload() {
+        return Object.assign({ op:'auth', password: passwordInput.value }, desktopOptions());
+    }
+    function clampInt(value, min, max, fallback) {
+        const n = parseInt(value, 10);
+        if (!Number.isFinite(n)) return fallback;
+        return Math.max(min, Math.min(max, n));
+    }
+    function updateMode() {
+        manualSettings.dataset.disabled = modeSelect.value === 'manual' ? 'false' : 'true';
+    }
     function setStatus(text, cls = '') { statusEl.textContent = text; statusEl.className = 'status ' + cls; }
     async function loadDevices() {
         const r = await authFetch('/api/devices');
         const devices = await r.json();
+        deviceCache = devices;
         const selected = params.get('device') || deviceSelect.value;
         deviceSelect.innerHTML = '<option value="">' + t('terminal.devicePlaceholder') + '</option>' + devices.map(d => {
             const desktop = d.desktop || {};
@@ -92,6 +156,7 @@
             return `<option value="${esc(d.id)}" ${d.id === selected ? 'selected' : ''}>${esc(label)}</option>`;
         }).join('');
         if (selected) deviceSelect.value = selected;
+        updateSourceOptions();
     }
     function esc(s) { const d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
     function disconnect() { if (ws) { ws.close(); ws = null; } setStatus(t('desktop.closed'), 'warn'); }
@@ -100,7 +165,7 @@
         const device = deviceSelect.value;
         if (!device) return setStatus(t('common.noDevices'), 'err');
         const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-        ws = RDevUI.socket(`${proto}//${location.host}${authURL('/desktop?device=' + encodeURIComponent(device))}`);
+        ws = RDevUI.socket(`${proto}//${location.host}${authURL('/desktop?' + desktopQuery())}`);
         ws.binaryType = 'arraybuffer';
         setStatus(t('common.connecting'));
         ws.onmessage = (evt) => {
@@ -110,7 +175,7 @@
                 setStatus(msg.message || t('desktop.authRequired'), 'warn');
                 const saved = RDevUI.getDevicePassword(device);
                 if (saved && !passwordInput.value) passwordInput.value = saved;
-                if (passwordInput.value) ws.send(JSON.stringify({op:'auth', password: passwordInput.value}));
+                if (passwordInput.value) ws.send(JSON.stringify(authPayload()));
             } else if (msg.op === 'auth_ok') {
                 if (passwordInput.value) RDevUI.rememberDevicePassword(device, passwordInput.value);
                 setStatus(t('desktop.starting'));
@@ -122,7 +187,9 @@
             } else if (msg.op === 'ready') {
                 canvas.width = msg.width || 1; canvas.height = msg.height || 1;
                 canvas.style.display = 'block'; empty.style.display = 'none';
-                setStatus(`${t('index.desktopReady')} · ${canvas.width}×${canvas.height}`, 'ok');
+                const source = msg.source ? ` · ${msg.source}` : '';
+                frameInfo.textContent = `${canvas.width}×${canvas.height}${source}`;
+                setStatus(`${t('index.desktopReady')} · ${canvas.width}×${canvas.height}${source}`, 'ok');
             } else if (msg.op === 'error') {
                 setStatus(msg.message || t('common.error'), 'err');
             } else if (msg.op === 'closed') {
@@ -150,8 +217,11 @@
     }
     document.getElementById('connect').addEventListener('click', connect);
     document.getElementById('disconnect').addEventListener('click', disconnect);
+    deviceSelect.addEventListener('change', updateSourceOptions);
+    modeSelect.addEventListener('change', updateMode);
     passwordInput.addEventListener('keydown', e => { if (e.key === 'Enter') connect(); });
     window.addEventListener('beforeunload', disconnect);
+    updateMode();
     loadDevices().then(() => { if (deviceSelect.value) connect(); }).catch(e => setStatus(e.message || String(e), 'err'));
     </script>
 </body>

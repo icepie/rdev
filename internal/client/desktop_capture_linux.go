@@ -29,7 +29,7 @@ type x11DesktopCapturer struct {
 	bytesPerPix int
 }
 
-func newDesktopCapturer() (desktopCapturer, error) {
+func newDesktopCapturer(source string) (desktopCapturer, error) {
 	conn, err := xgb.NewConn()
 	if err != nil {
 		return nil, fmt.Errorf("connect X11: %w", err)
