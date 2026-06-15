@@ -20,7 +20,8 @@ func desktopCapabilities() *protocol.DesktopCapabilities {
 	case "windows":
 		caps.DisplayServer = "gdi"
 		caps.Supported = true
-		caps.ViewOnly = true
+		caps.ViewOnly = false
+		caps.Input = true
 		caps.Backends = []string{"win32-gdi"}
 		caps.Sources = []protocol.DesktopSource{
 			{ID: "auto", Label: "Auto", Kind: "screen", Primary: true},
@@ -35,7 +36,8 @@ func desktopCapabilities() *protocol.DesktopCapabilities {
 		} else if os.Getenv("DISPLAY") != "" {
 			caps.DisplayServer = "x11"
 			caps.Supported = true
-			caps.ViewOnly = true
+			caps.ViewOnly = false
+			caps.Input = true
 			caps.Backends = []string{"x11"}
 			caps.Sources = []protocol.DesktopSource{{ID: "auto", Label: "Auto", Kind: "screen", Primary: true}, {ID: "virtual", Label: "X11 root window", Kind: "screen", Primary: true}}
 		} else {

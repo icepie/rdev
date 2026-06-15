@@ -14,8 +14,14 @@ func TestDesktopCapabilitiesReportsCurrentPlatform(t *testing.T) {
 		t.Fatalf("Platform = %q, want %q", caps.Platform, runtime.GOOS)
 	}
 	if caps.DisplayServer == "x11" {
-		if !caps.Supported || !caps.ViewOnly {
-			t.Fatalf("X11 capability = %#v, want supported view-only", caps)
+		if !caps.Supported || caps.ViewOnly || !caps.Input {
+			t.Fatalf("X11 capability = %#v, want supported interactive desktop", caps)
+		}
+		return
+	}
+	if caps.DisplayServer == "gdi" {
+		if !caps.Supported || caps.ViewOnly || !caps.Input {
+			t.Fatalf("Windows GDI capability = %#v, want supported interactive desktop", caps)
 		}
 		return
 	}

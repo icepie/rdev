@@ -40,7 +40,8 @@
         .status.err { color:var(--red); }
         .stage { flex:1; min-height:0; display:flex; align-items:center; justify-content:center; padding:12px; overflow:auto; }
         .stage[data-fit="actual"] { align-items:flex-start; justify-content:flex-start; }
-        canvas { background:#000; border:1px solid var(--border); border-radius:10px; image-rendering:auto; }
+        .stage[data-control="true"] canvas { cursor:crosshair; }
+        canvas { background:#000; border:1px solid var(--border); border-radius:10px; image-rendering:auto; outline:none; }
         .stage[data-fit="fit"] canvas { max-width:100%; max-height:100%; }
         .stage[data-fit="actual"] canvas { max-width:none; max-height:none; }
         .empty { color:var(--muted); text-align:center; line-height:1.8; }
@@ -76,13 +77,14 @@
             <label><span data-i18n="desktop.maxWidth">Max W</span><input id="maxWidth" type="number" min="320" max="3840" value="1600"></label>
             <label><span data-i18n="desktop.maxHeight">Max H</span><input id="maxHeight" type="number" min="240" max="2160" value="1000"></label>
         </span>
+        <label><input id="controlInput" type="checkbox" style="width:auto"> <span data-i18n="desktop.control">Control</span></label>
         <label><span data-i18n="desktop.view">View</span><select id="fitMode" class="fit-select"><option value="fit" data-i18n="desktop.fit">Fit</option><option value="actual" data-i18n="desktop.actual">Actual</option></select></label>
         <button class="btn" id="screenshot" data-i18n="desktop.screenshot">Screenshot</button>
         <button class="btn" id="fullscreen" data-i18n="desktop.fullscreen">Fullscreen</button>
         <span id="frameInfo" class="status"></span>
     </div>
     <div class="stage" id="stage" data-fit="fit">
-        <canvas id="screen" style="display:none"></canvas>
+        <canvas id="screen" style="display:none" tabindex="0"></canvas>
         <div id="empty" class="empty" data-i18n="desktop.empty">Select a device and connect.</div>
     </div>
 
@@ -107,6 +109,7 @@
     const maxWidthInput = document.getElementById('maxWidth');
     const maxHeightInput = document.getElementById('maxHeight');
     const fitModeSelect = document.getElementById('fitMode');
+    const controlInput = document.getElementById('controlInput');
     const manualSettings = document.getElementById('manual-settings');
     const frameInfo = document.getElementById('frameInfo');
     const statusEl = document.getElementById('status');
@@ -116,7 +119,7 @@
     const empty = document.getElementById('empty');
     const storagePrefix = 'rdevDesktop.';
     let ws = null, drawing = false, pendingFrame = null, deviceCache = [], lastCloseMessage = '', connectionSeq = 0;
-    let frameCount = 0, frameBytes = 0, statsStartedAt = 0, lastFrameAt = 0, currentSource = '';
+    let frameCount = 0, frameBytes = 0, statsStartedAt = 0, lastFrameAt = 0, currentSource = '', remoteInput = false, resizeTimer = null, lastMouseSent = 0;
 
     function loadSavedDesktopSettings() {
         const mode = localStorage.getItem(storagePrefix + 'mode');
@@ -128,13 +131,16 @@
         qualityInput.value = localStorage.getItem(storagePrefix + 'quality') || qualityInput.value;
         maxWidthInput.value = localStorage.getItem(storagePrefix + 'width') || maxWidthInput.value;
         maxHeightInput.value = localStorage.getItem(storagePrefix + 'height') || maxHeightInput.value;
-        stage.dataset.fit = fitModeSelect.value;
+        const control = localStorage.getItem(storagePrefix + 'control');
+        if (control === 'true') controlInput.checked = true;
+        stage.dataset.control = String(controlInput.checked);
     }
     function saveDesktopSettings() {
         if (deviceSelect.value) localStorage.setItem(storagePrefix + 'device', deviceSelect.value);
         localStorage.setItem(storagePrefix + 'mode', modeSelect.value);
         localStorage.setItem(storagePrefix + 'source', sourceSelect.value);
         localStorage.setItem(storagePrefix + 'fit', fitModeSelect.value);
+        localStorage.setItem(storagePrefix + 'control', String(controlInput.checked));
         localStorage.setItem(storagePrefix + 'fps', String(clampInt(fpsInput.value, 1, 12, 4)));
         localStorage.setItem(storagePrefix + 'quality', String(clampInt(qualityInput.value, 25, 90, 50)));
         localStorage.setItem(storagePrefix + 'width', String(clampInt(maxWidthInput.value, 320, 3840, 1600)));
@@ -152,15 +158,23 @@
         sourceSelect.value = sources.some(s => s.id === current) ? current : 'auto';
         saveDesktopSettings();
     }
+    function adaptiveSize() {
+        const rect = stage.getBoundingClientRect();
+        const ratio = Math.min(window.devicePixelRatio || 1, 2);
+        const width = Math.max(320, Math.min(3840, Math.round((rect.width || window.innerWidth || 1600) * ratio)));
+        const height = Math.max(240, Math.min(2160, Math.round((rect.height || window.innerHeight || 1000) * ratio)));
+        return { width, height };
+    }
     function desktopOptions() {
         const manual = modeSelect.value === 'manual';
+        const adaptive = adaptiveSize();
         return {
             mode: modeSelect.value,
             source: sourceSelect.value,
-            fps: manual ? clampInt(fpsInput.value, 1, 12, 4) : 4,
-            quality: manual ? clampInt(qualityInput.value, 25, 90, 50) : 50,
-            width: manual ? clampInt(maxWidthInput.value, 320, 3840, 1600) : 1600,
-            height: manual ? clampInt(maxHeightInput.value, 240, 2160, 1000) : 1000,
+            fps: manual ? clampInt(fpsInput.value, 1, 12, 4) : 8,
+            quality: manual ? clampInt(qualityInput.value, 25, 90, 50) : 55,
+            width: manual ? clampInt(maxWidthInput.value, 320, 3840, 1600) : adaptive.width,
+            height: manual ? clampInt(maxHeightInput.value, 240, 2160, 1000) : adaptive.height,
         };
     }
     function desktopQuery() {
@@ -218,6 +232,7 @@
         const device = deviceSelect.value;
         if (!device) return setStatus(t('common.noDevices'), 'err');
         const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+        remoteInput = false;
         resetFrameStats();
         ws = RDevUI.socket(`${proto}//${location.host}${authURL('/desktop?' + desktopQuery())}`);
         const connID = ++connectionSeq;
@@ -245,6 +260,10 @@
                 canvas.width = msg.width || 1; canvas.height = msg.height || 1;
                 canvas.style.display = 'block'; empty.style.display = 'none';
                 currentSource = msg.source || '';
+                remoteInput = !!(msg.desktop && msg.desktop.input);
+                controlInput.disabled = !remoteInput;
+                if (!remoteInput) controlInput.checked = false;
+                stage.dataset.control = String(controlInput.checked && remoteInput);
                 updateFrameInfo();
                 const source = currentSource ? ` · ${currentSource}` : '';
                 setStatus(`${t('index.desktopReady')} · ${canvas.width}×${canvas.height}${source}`, 'ok');
@@ -280,6 +299,33 @@
             if (pendingFrame) drawFrame(pendingFrame);
         });
     }
+    function canvasPoint(event) {
+        const rect = canvas.getBoundingClientRect();
+        const x = Math.max(0, Math.min(canvas.width - 1, Math.round((event.clientX - rect.left) * canvas.width / rect.width)));
+        const y = Math.max(0, Math.min(canvas.height - 1, Math.round((event.clientY - rect.top) * canvas.height / rect.height)));
+        return {x, y};
+    }
+    function sendInput(input) {
+        if (!ws || ws.readyState !== WebSocket.OPEN || !controlInput.checked || !remoteInput) return;
+        ws.send(JSON.stringify(Object.assign({op:'input'}, input)));
+    }
+    function sendMouse(type, event, extra = {}) {
+        const now = performance.now();
+        if (type === 'mouse_move' && now - lastMouseSent < 24) return;
+        lastMouseSent = now;
+        const point = canvasPoint(event);
+        sendInput(Object.assign({inputType:type, x:point.x, y:point.y, button:event.button || 0}, extra));
+    }
+    function sendKey(type, event) {
+        if (!controlInput.checked || !remoteInput) return;
+        event.preventDefault();
+        sendInput({inputType:type, key:event.key, code:event.code, ctrlKey:event.ctrlKey, altKey:event.altKey, shiftKey:event.shiftKey, metaKey:event.metaKey});
+    }
+    function scheduleAdaptiveReconnect() {
+        if (!ws || modeSelect.value !== 'auto') return;
+        clearTimeout(resizeTimer);
+        resizeTimer = setTimeout(() => connect(), 500);
+    }
     function saveScreenshot() {
         if (!canvas.width || !canvas.height || canvas.style.display === 'none') return;
         canvas.toBlob(blob => {
@@ -296,6 +342,15 @@
         if (document.fullscreenElement) { document.exitFullscreen && document.exitFullscreen(); return; }
         if (stage.requestFullscreen) stage.requestFullscreen();
     }
+    controlInput.addEventListener('change', () => { stage.dataset.control = String(controlInput.checked && remoteInput); if (controlInput.checked) canvas.focus(); saveDesktopSettings(); });
+    canvas.addEventListener('contextmenu', e => e.preventDefault());
+    canvas.addEventListener('pointermove', e => sendMouse('mouse_move', e));
+    canvas.addEventListener('pointerdown', e => { e.preventDefault(); canvas.focus(); canvas.setPointerCapture && canvas.setPointerCapture(e.pointerId); sendMouse('mouse_down', e); });
+    canvas.addEventListener('pointerup', e => { e.preventDefault(); sendMouse('mouse_up', e); });
+    canvas.addEventListener('wheel', e => { if (!controlInput.checked || !remoteInput) return; e.preventDefault(); const point = canvasPoint(e); sendInput({inputType:'wheel', x:point.x, y:point.y, deltaX:Math.round(e.deltaX), deltaY:Math.round(e.deltaY)}); }, {passive:false});
+    canvas.addEventListener('keydown', e => sendKey('key_down', e));
+    canvas.addEventListener('keyup', e => sendKey('key_up', e));
+    window.addEventListener('resize', scheduleAdaptiveReconnect);
     document.getElementById('connect').addEventListener('click', connect);
     document.getElementById('disconnect').addEventListener('click', disconnect);
     document.getElementById('screenshot').addEventListener('click', saveScreenshot);

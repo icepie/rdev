@@ -14,20 +14,32 @@ import (
 )
 
 type desktopMsg struct {
-	Op      string                        `json:"op"`
-	Message string                        `json:"message,omitempty"`
-	Device  string                        `json:"device,omitempty"`
-	Session string                        `json:"session,omitempty"`
-	Code    int                           `json:"code,omitempty"`
-	Width   int                           `json:"width,omitempty"`
-	Height  int                           `json:"height,omitempty"`
-	Format  string                        `json:"format,omitempty"`
-	Mode    string                        `json:"mode,omitempty"`
-	Source  string                        `json:"source,omitempty"`
-	Quality int                           `json:"quality,omitempty"`
-	FPS     int                           `json:"fps,omitempty"`
-	Desktop *protocol.DesktopCapabilities `json:"desktop,omitempty"`
-	Pass    string                        `json:"password,omitempty"`
+	Op         string                        `json:"op"`
+	Message    string                        `json:"message,omitempty"`
+	Device     string                        `json:"device,omitempty"`
+	Session    string                        `json:"session,omitempty"`
+	StatusCode int                           `json:"statusCode,omitempty"`
+	Width      int                           `json:"width,omitempty"`
+	Height     int                           `json:"height,omitempty"`
+	Format     string                        `json:"format,omitempty"`
+	Mode       string                        `json:"mode,omitempty"`
+	Source     string                        `json:"source,omitempty"`
+	Quality    int                           `json:"quality,omitempty"`
+	FPS        int                           `json:"fps,omitempty"`
+	Desktop    *protocol.DesktopCapabilities `json:"desktop,omitempty"`
+	Pass       string                        `json:"password,omitempty"`
+	InputType  string                        `json:"inputType,omitempty"`
+	X          int                           `json:"x,omitempty"`
+	Y          int                           `json:"y,omitempty"`
+	Button     int                           `json:"button,omitempty"`
+	DeltaX     int                           `json:"deltaX,omitempty"`
+	DeltaY     int                           `json:"deltaY,omitempty"`
+	Key        string                        `json:"key,omitempty"`
+	KeyCode    string                        `json:"code,omitempty"`
+	CtrlKey    bool                          `json:"ctrlKey,omitempty"`
+	AltKey     bool                          `json:"altKey,omitempty"`
+	ShiftKey   bool                          `json:"shiftKey,omitempty"`
+	MetaKey    bool                          `json:"metaKey,omitempty"`
 }
 
 type desktopRoute struct {
@@ -115,6 +127,18 @@ func (h *desktopWSHandler) OnMessage(socket *gws.Conn, message *gws.Message) {
 			return
 		}
 		bc.writeJSON(desktopMsg{Op: "auth_fail", Device: bc.deviceID, Message: "wrong password"})
+	case "input":
+		if !bc.authOK || bc.session == "" {
+			return
+		}
+		if bc.client.Desktop == nil || !bc.client.Desktop.Input {
+			return
+		}
+		bc.client.Send(&protocol.Message{
+			Type: protocol.MsgDesktopInput, SessionID: bc.session, InputType: msg.InputType,
+			X: msg.X, Y: msg.Y, Button: msg.Button, DeltaX: msg.DeltaX, DeltaY: msg.DeltaY,
+			Key: msg.Key, Code: msg.KeyCode, CtrlKey: msg.CtrlKey, AltKey: msg.AltKey, ShiftKey: msg.ShiftKey, MetaKey: msg.MetaKey,
+		})
 	case "close":
 		bc.close()
 	}

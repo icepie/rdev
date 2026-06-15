@@ -7,6 +7,7 @@ import (
 	"image/jpeg"
 	"log"
 	"runtime"
+	"sync"
 	"time"
 
 	"rdev/internal/protocol"
@@ -16,6 +17,50 @@ type desktopCapturer interface {
 	Bounds() image.Rectangle
 	Capture() (image.Image, error)
 	Close() error
+}
+
+type desktopSession struct {
+	stop    chan struct{}
+	input   desktopInput
+	inputMu sync.Mutex
+	frameMu sync.RWMutex
+	bounds  image.Rectangle
+	frameW  int
+	frameH  int
+}
+
+func (s *desktopSession) setFrame(bounds image.Rectangle, width, height int) {
+	s.frameMu.Lock()
+	s.bounds = bounds
+	s.frameW = width
+	s.frameH = height
+	s.frameMu.Unlock()
+}
+
+func (s *desktopSession) mapPoint(x, y int) (int, int) {
+	s.frameMu.RLock()
+	bounds := s.bounds
+	frameW := s.frameW
+	frameH := s.frameH
+	s.frameMu.RUnlock()
+	if frameW <= 0 || frameH <= 0 || bounds.Dx() <= 0 || bounds.Dy() <= 0 {
+		return x, y
+	}
+	mappedX := bounds.Min.X + x*bounds.Dx()/frameW
+	mappedY := bounds.Min.Y + y*bounds.Dy()/frameH
+	if mappedX < bounds.Min.X {
+		mappedX = bounds.Min.X
+	}
+	if mappedY < bounds.Min.Y {
+		mappedY = bounds.Min.Y
+	}
+	if mappedX >= bounds.Max.X {
+		mappedX = bounds.Max.X - 1
+	}
+	if mappedY >= bounds.Max.Y {
+		mappedY = bounds.Max.Y - 1
+	}
+	return mappedX, mappedY
 }
 
 func (c *Client) handleDesktopStart(msg *protocol.Message) {
@@ -28,17 +73,22 @@ func (c *Client) handleDesktopStart(msg *protocol.Message) {
 		c.mu.Unlock()
 		return
 	}
-	stop := make(chan struct{})
-	c.desktopSessions[msg.SessionID] = stop
+	session := &desktopSession{stop: make(chan struct{})}
+	c.desktopSessions[msg.SessionID] = session
 	c.mu.Unlock()
 
 	defer func() {
 		c.mu.Lock()
-		if current, ok := c.desktopSessions[msg.SessionID]; ok && current == stop {
+		if current, ok := c.desktopSessions[msg.SessionID]; ok && current == session {
 			delete(c.desktopSessions, msg.SessionID)
 		}
 		c.mu.Unlock()
 	}()
+
+	if input, err := newDesktopInput(); err == nil {
+		session.input = input
+		defer input.Close()
+	}
 
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
@@ -59,11 +109,12 @@ func (c *Client) handleDesktopStart(msg *protocol.Message) {
 	bounds := capturer.Bounds()
 	caps := desktopCapabilities()
 	caps.Supported = true
-	caps.ViewOnly = true
-	caps.Input = false
+	caps.ViewOnly = false
+	caps.Input = session.input != nil
 	caps.Clipboard = false
 	caps.Reason = ""
 	size := scaledDimension(bounds.Dx(), bounds.Dy(), msg.Width, msg.Height)
+	session.setFrame(bounds, size.X, size.Y)
 	c.send(&protocol.Message{
 		Type:                protocol.MsgDesktopReady,
 		SessionID:           msg.SessionID,
@@ -78,8 +129,8 @@ func (c *Client) handleDesktopStart(msg *protocol.Message) {
 	if fps <= 0 {
 		fps = 2
 	}
-	if fps > 10 {
-		fps = 10
+	if fps > 12 {
+		fps = 12
 	}
 	quality := msg.Quality
 	if quality <= 0 {
@@ -98,7 +149,7 @@ func (c *Client) handleDesktopStart(msg *protocol.Message) {
 	defer ticker.Stop()
 	for {
 		select {
-		case <-stop:
+		case <-session.stop:
 			return
 		case <-ticker.C:
 			img, err := capturer.Capture()
@@ -108,6 +159,7 @@ func (c *Client) handleDesktopStart(msg *protocol.Message) {
 				return
 			}
 			frame := resizeDesktopFrame(img, msg.Width, msg.Height)
+			session.setFrame(capturer.Bounds(), frame.Bounds().Dx(), frame.Bounds().Dy())
 			checksum := crc32.ChecksumIEEE(frame.Pix)
 			if checksum == lastChecksum && time.Since(lastSent) < 2*time.Second {
 				continue
@@ -186,17 +238,49 @@ func scaledDimension(sourceWidth, sourceHeight, maxWidth, maxHeight int) image.P
 	return image.Pt(width, height)
 }
 
+func (c *Client) handleDesktopInput(msg *protocol.Message) {
+	if msg.SessionID == "" {
+		return
+	}
+	c.mu.Lock()
+	session := c.desktopSessions[msg.SessionID]
+	c.mu.Unlock()
+	if session == nil || session.input == nil {
+		return
+	}
+	x, y := session.mapPoint(msg.X, msg.Y)
+	event := desktopInputEvent{
+		Type:     msg.InputType,
+		X:        x,
+		Y:        y,
+		Button:   msg.Button,
+		DeltaX:   msg.DeltaX,
+		DeltaY:   msg.DeltaY,
+		Key:      msg.Key,
+		Code:     msg.Code,
+		CtrlKey:  msg.CtrlKey,
+		AltKey:   msg.AltKey,
+		ShiftKey: msg.ShiftKey,
+		MetaKey:  msg.MetaKey,
+	}
+	session.inputMu.Lock()
+	defer session.inputMu.Unlock()
+	if err := session.input.Apply(event); err != nil {
+		log.Printf("desktop input error: %v", err)
+	}
+}
+
 func (c *Client) handleDesktopClose(sessionID string) {
 	if sessionID == "" {
 		return
 	}
 	c.mu.Lock()
-	stop := c.desktopSessions[sessionID]
-	if stop != nil {
+	session := c.desktopSessions[sessionID]
+	if session != nil {
 		delete(c.desktopSessions, sessionID)
 	}
 	c.mu.Unlock()
-	if stop != nil {
-		close(stop)
+	if session != nil {
+		close(session.stop)
 	}
 }

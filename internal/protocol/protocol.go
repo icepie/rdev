@@ -48,8 +48,9 @@ const (
 	MsgFileTransferCancel MessageType = "file_transfer_cancel" // bidir: cancel transfer
 
 	// Remote desktop (text frames for control, binary for frames)
-	MsgDesktopStart MessageType = "desktop_start" // S->C: start view-only desktop capture
+	MsgDesktopStart MessageType = "desktop_start" // S->C: start desktop capture
 	MsgDesktopReady MessageType = "desktop_ready" // C->S: desktop capture status/metadata
+	MsgDesktopInput MessageType = "desktop_input" // S->C: inject desktop mouse/keyboard input
 	MsgDesktopClose MessageType = "desktop_close" // bidir: close desktop session
 
 	// Legacy text-frame data types (kept for reference, use binary frames instead)
@@ -151,6 +152,18 @@ type Message struct {
 	Source              string               `json:"source,omitempty"`
 	Quality             int                  `json:"quality,omitempty"`
 	FPS                 int                  `json:"fps,omitempty"`
+	InputType           string               `json:"inputType,omitempty"`
+	X                   int                  `json:"x,omitempty"`
+	Y                   int                  `json:"y,omitempty"`
+	Button              int                  `json:"button,omitempty"`
+	DeltaX              int                  `json:"deltaX,omitempty"`
+	DeltaY              int                  `json:"deltaY,omitempty"`
+	Key                 string               `json:"key,omitempty"`
+	Code                string               `json:"code,omitempty"`
+	CtrlKey             bool                 `json:"ctrlKey,omitempty"`
+	AltKey              bool                 `json:"altKey,omitempty"`
+	ShiftKey            bool                 `json:"shiftKey,omitempty"`
+	MetaKey             bool                 `json:"metaKey,omitempty"`
 
 	// Legacy fields (text frames)
 	Data   string `json:"data,omitempty"`

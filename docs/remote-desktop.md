@@ -5,9 +5,12 @@ This document describes a cross-platform remote desktop feature for RDev. It is 
 ## Current status
 
 - Phase 1 capability discovery is implemented for browser/device APIs.
-- Phase 2 view-only MVP is implemented for Linux X11 and Windows Win32/GDI with the default `CGO_ENABLED=0` client build.
+- Phase 2 screen streaming is implemented for Linux X11 and Windows Win32/GDI with the default `CGO_ENABLED=0` client build.
+- Phase 3 input control is implemented for Windows Win32 and Linux X11, disabled in the browser by default until the user explicitly enables control.
+- The default stream is JPEG frames over binary WebSocket frames, rendered on a browser Canvas; this is effectively an MJPEG-style transport over the existing relay.
+- Browser auto mode requests an adaptive resolution based on viewport size and device pixel ratio; manual mode keeps explicit FPS/quality/max-size controls.
 - Linux Wayland and macOS still report limited/unavailable capability until non-cgo native capture paths are implemented.
-- Input control, clipboard sync, tile diffing, and hardware/WebRTC acceleration remain future phases.
+- Clipboard sync, tile diffing, and hardware/WebRTC acceleration remain future phases.
 
 ## Goals
 
@@ -46,12 +49,10 @@ The server should remain a relay and policy point. The device client owns screen
 
 Add a new logical channel family alongside terminal, file, and TCP forwarding:
 
-- `desktop_offer`: server asks a device to start a desktop session.
-- `desktop_ready`: device reports supported backends, monitors, pixel format, and permissions.
-- `desktop_frame`: device sends encoded frame chunks or delta frames.
-- `desktop_cursor`: device sends cursor image/position changes.
-- `desktop_input`: browser sends mouse, wheel, keyboard, clipboard, or touch events.
-- `desktop_resize`: browser requests viewport scale/quality/FPS changes.
+- `desktop_start`: server asks a device to start a desktop session with source/FPS/quality/max-size settings.
+- `desktop_ready`: device reports supported backends, sources, pixel format, dimensions, and permissions.
+- `desktop_frame`: device sends encoded JPEG frame bytes as `BinDesktopFrame` binary WebSocket frames.
+- `desktop_input`: browser sends normalized mouse, wheel, and keyboard events through the server to the device.
 - `desktop_close`: either side closes the desktop session.
 
 Use binary frames for high-volume data. Keep JSON text frames for metadata and control.
@@ -60,9 +61,10 @@ Use binary frames for high-volume data. Keep JSON text frames for metadata and c
 
 Recommended phases:
 
-1. **MVP MJPEG/PNG tiles**: simple, debuggable, works with pure Go image encoders, acceptable for low-FPS support sessions.
-2. **WASM codec in browser**: decode optimized delta/tile stream in browser without server CPU cost.
-3. **WebCodecs/WebRTC optional path**: use browser hardware decode where available and fall back to the WASM/tile path.
+1. **MVP MJPEG/JPEG stream**: simple, debuggable, works with pure Go image encoders, acceptable for low-FPS support sessions. This is the current default.
+2. **Tile diffing / dirty regions**: keep JPEG/PNG compatibility while avoiding full-frame uploads when only small regions change.
+3. **WASM codec in browser**: decode optimized delta/tile stream in browser without server CPU cost.
+4. **WebCodecs/WebRTC optional path**: use browser hardware decode where available and fall back to the WASM/tile path.
 
 For a non-cgo default build, avoid mandatory Go bindings to FFmpeg, GStreamer, VAAPI, MediaFoundation, VideoToolbox, or NVENC. Also avoid making external encoder processes mandatory. If hardware encoding is desired later, expose it as an optional backend behind capability detection.
 
@@ -81,8 +83,8 @@ The release target remains: `CGO_ENABLED=0`, no required external process, and g
 
 | Platform | Screen capture default | Input control default | Notes |
 | --- | --- | --- | --- |
-| Windows | Pure Go Win32/GDI syscall first; DXGI Desktop Duplication later | Pure Go `SendInput` syscall | Best fit for `CGO_ENABLED=0` and no external process. GPU capture/encoding can be added later as optional backend. |
-| Linux X11 | Pure Go X11 protocol first; XShm later | Pure Go XTest protocol | Good MVP target. Requires implementing enough X11/XTest protocol in Go. |
+| Windows | Pure Go Win32/GDI syscall first; DXGI Desktop Duplication later | Pure Go Win32 syscall (`SetCursorPos`, `mouse_event`, `keybd_event`) | Best fit for `CGO_ENABLED=0` and no external process. GPU capture/encoding can be added later as optional backend. |
+| Linux X11 | Pure Go X11 protocol first; XShm later | Pure Go XTest protocol | Current implementation supports capture and input when X11/XTEST are available. |
 | Linux Wayland | Capability detection first; pure Go portal/PipeWire backend later | Usually unavailable without compositor-approved portal or privileged input path | Hard because of Wayland security policy, not because of Go. Start as unsupported/limited unless portal backend exists. |
 | macOS | Capability detection first; pure Go CoreGraphics/Objective-C runtime bridge later | Quartz event injection later | Hardest without cgo or external processes. Requires Screen Recording and Accessibility permissions. |
 
@@ -136,11 +138,11 @@ Build tags should keep platform code isolated:
 
 ### Phase 3: Input control
 
-- Add normalized input event schema.
-- Implement Windows input injection with pure Go `SendInput` syscalls.
-- Implement Linux X11 input injection with pure Go XTest protocol.
-- Add permission/error reporting and UI safeguards.
-- Keep input disabled by default and require explicit opt-in.
+- Add normalized input event schema. Done for pointer move/down/up, wheel, key down, and key up.
+- Implement Windows input injection with pure Go Win32 syscalls. Done with Win7-compatible APIs.
+- Implement Linux X11 input injection with pure Go XTest protocol. Done when XTEST is available.
+- Add permission/error reporting and UI safeguards. Browser control is disabled by default and enabled per session.
+- Keep input disabled by default and require explicit opt-in. Done.
 
 ### Phase 4: Performance
 

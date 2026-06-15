@@ -192,7 +192,7 @@ type Client struct {
 	fileStreams     map[string]*fileStream
 	uploads         map[string]*managedUpload
 	downloads       map[string]chan struct{}
-	desktopSessions map[string]chan struct{}
+	desktopSessions map[string]*desktopSession
 	mu              sync.Mutex
 	done            chan struct{}
 
@@ -218,7 +218,7 @@ func NewClient(serverURL, clientID, password, shell string) *Client {
 		fileStreams:     make(map[string]*fileStream),
 		uploads:         make(map[string]*managedUpload),
 		downloads:       make(map[string]chan struct{}),
-		desktopSessions: make(map[string]chan struct{}),
+		desktopSessions: make(map[string]*desktopSession),
 		done:            make(chan struct{}, 1),
 	}
 }
@@ -264,8 +264,8 @@ func (h *wsEventHandler) OnClose(socket *gws.Conn, err error) {
 		close(cancel)
 		delete(h.client.downloads, tid)
 	}
-	for sid, stop := range h.client.desktopSessions {
-		close(stop)
+	for sid, session := range h.client.desktopSessions {
+		close(session.stop)
 		delete(h.client.desktopSessions, sid)
 	}
 	h.client.conn = nil
@@ -433,6 +433,8 @@ func (c *Client) handleMessage(msg *protocol.Message) {
 		c.handleManagedTransferCancel(msg.TaskID)
 	case protocol.MsgDesktopStart:
 		go c.handleDesktopStart(msg)
+	case protocol.MsgDesktopInput:
+		c.handleDesktopInput(msg)
 	case protocol.MsgDesktopClose:
 		c.handleDesktopClose(msg.SessionID)
 	}
