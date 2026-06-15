@@ -23,11 +23,7 @@ func desktopCapabilities() *protocol.DesktopCapabilities {
 		caps.ViewOnly = false
 		caps.Input = true
 		caps.Backends = []string{"win32-gdi"}
-		caps.Sources = []protocol.DesktopSource{
-			{ID: "auto", Label: "Auto", Kind: "screen", Primary: true},
-			{ID: "virtual", Label: "Virtual screen", Kind: "screen"},
-			{ID: "primary", Label: "Primary screen", Kind: "screen", Primary: true},
-		}
+		caps.Sources = desktopSources()
 	case "linux":
 		if os.Getenv("WAYLAND_DISPLAY") != "" {
 			caps.DisplayServer = "wayland"
@@ -39,7 +35,7 @@ func desktopCapabilities() *protocol.DesktopCapabilities {
 			caps.ViewOnly = false
 			caps.Input = true
 			caps.Backends = []string{"x11"}
-			caps.Sources = []protocol.DesktopSource{{ID: "auto", Label: "Auto", Kind: "screen", Primary: true}, {ID: "virtual", Label: "X11 root window", Kind: "screen", Primary: true}}
+			caps.Sources = desktopSources()
 		} else {
 			caps.Reason = "no desktop display detected"
 		}

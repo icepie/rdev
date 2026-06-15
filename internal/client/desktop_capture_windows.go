@@ -5,8 +5,12 @@ package client
 import (
 	"fmt"
 	"image"
+	"strconv"
+	"strings"
 	"syscall"
 	"unsafe"
+
+	"rdev/internal/protocol"
 )
 
 const (
@@ -20,6 +24,8 @@ const (
 	desktopReadObjects  = 0x0001
 	desktopWriteObjects = 0x0080
 
+	monitorInfoPrimary = 0x00000001
+
 	srcCopy    = 0x00CC0020
 	captureBlt = 0x40000000
 
@@ -31,19 +37,41 @@ var (
 	user32 = syscall.NewLazyDLL("user32.dll")
 	gdi32  = syscall.NewLazyDLL("gdi32.dll")
 
-	procGetSystemMetrics   = user32.NewProc("GetSystemMetrics")
-	procOpenInputDesktop   = user32.NewProc("OpenInputDesktop")
-	procSetThreadDesktop   = user32.NewProc("SetThreadDesktop")
-	procCloseDesktop       = user32.NewProc("CloseDesktop")
-	procGetDC              = user32.NewProc("GetDC")
-	procReleaseDC          = user32.NewProc("ReleaseDC")
-	procCreateCompatibleDC = gdi32.NewProc("CreateCompatibleDC")
-	procCreateDIBSection   = gdi32.NewProc("CreateDIBSection")
-	procSelectObject       = gdi32.NewProc("SelectObject")
-	procDeleteObject       = gdi32.NewProc("DeleteObject")
-	procDeleteDC           = gdi32.NewProc("DeleteDC")
-	procBitBlt             = gdi32.NewProc("BitBlt")
+	procGetSystemMetrics    = user32.NewProc("GetSystemMetrics")
+	procOpenInputDesktop    = user32.NewProc("OpenInputDesktop")
+	procSetThreadDesktop    = user32.NewProc("SetThreadDesktop")
+	procCloseDesktop        = user32.NewProc("CloseDesktop")
+	procGetDC               = user32.NewProc("GetDC")
+	procReleaseDC           = user32.NewProc("ReleaseDC")
+	procEnumDisplayMonitors = user32.NewProc("EnumDisplayMonitors")
+	procGetMonitorInfoW     = user32.NewProc("GetMonitorInfoW")
+	procEnumWindows         = user32.NewProc("EnumWindows")
+	procIsWindowVisible     = user32.NewProc("IsWindowVisible")
+	procGetWindowTextLength = user32.NewProc("GetWindowTextLengthW")
+	procGetWindowText       = user32.NewProc("GetWindowTextW")
+	procGetWindowRect       = user32.NewProc("GetWindowRect")
+	procCreateCompatibleDC  = gdi32.NewProc("CreateCompatibleDC")
+	procCreateDIBSection    = gdi32.NewProc("CreateDIBSection")
+	procSelectObject        = gdi32.NewProc("SelectObject")
+	procDeleteObject        = gdi32.NewProc("DeleteObject")
+	procDeleteDC            = gdi32.NewProc("DeleteDC")
+	procBitBlt              = gdi32.NewProc("BitBlt")
 )
+
+type winRect struct {
+	Left   int32
+	Top    int32
+	Right  int32
+	Bottom int32
+}
+
+type monitorInfoEx struct {
+	Size    uint32
+	Monitor winRect
+	Work    winRect
+	Flags   uint32
+	Device  [32]uint16
+}
 
 type bitmapInfoHeader struct {
 	Size          uint32
@@ -64,6 +92,11 @@ type bitmapInfo struct {
 	Colors [1]uint32
 }
 
+type windowsCaptureSource struct {
+	source protocol.DesktopSource
+	bounds image.Rectangle
+}
+
 type gdiDesktopCapturer struct {
 	desktop  uintptr
 	screenDC uintptr
@@ -73,6 +106,22 @@ type gdiDesktopCapturer struct {
 	bits     unsafe.Pointer
 	stride   int
 	bounds   image.Rectangle
+	source   protocol.DesktopSource
+}
+
+func desktopSources() []protocol.DesktopSource {
+	virtual := virtualScreenSource()
+	sources := []protocol.DesktopSource{
+		{ID: "auto", Label: "Auto", Kind: "screen", Backend: "win32-gdi", X: virtual.X, Y: virtual.Y, Width: virtual.Width, Height: virtual.Height, Primary: true},
+		virtual,
+	}
+	for _, monitor := range enumerateWindowsMonitors() {
+		sources = append(sources, monitor.source)
+	}
+	for _, window := range enumerateWindowsWindows(80) {
+		sources = append(sources, window.source)
+	}
+	return sources
 }
 
 func newDesktopCapturer(source string) (desktopCapturer, error) {
@@ -81,21 +130,20 @@ func newDesktopCapturer(source string) (desktopCapturer, error) {
 		procSetThreadDesktop.Call(desktop)
 	}
 
-	x := getSystemMetric(smXVirtualScreen)
-	y := getSystemMetric(smYVirtualScreen)
-	width := getSystemMetric(smCXVirtualScreen)
-	height := getSystemMetric(smCYVirtualScreen)
-	if source == "primary" {
-		x = 0
-		y = 0
-		width = getSystemMetric(smCXScreen)
-		height = getSystemMetric(smCYScreen)
+	selected, err := resolveWindowsCaptureSource(source)
+	if err != nil {
+		if desktop != 0 {
+			procCloseDesktop.Call(desktop)
+		}
+		return nil, err
 	}
+	width := selected.bounds.Dx()
+	height := selected.bounds.Dy()
 	if width <= 0 || height <= 0 {
 		if desktop != 0 {
 			procCloseDesktop.Call(desktop)
 		}
-		return nil, fmt.Errorf("invalid virtual screen size %dx%d", width, height)
+		return nil, fmt.Errorf("invalid capture source size %dx%d", width, height)
 	}
 
 	screenDC, _, err := procGetDC.Call(0)
@@ -105,7 +153,7 @@ func newDesktopCapturer(source string) (desktopCapturer, error) {
 		}
 		return nil, fmt.Errorf("GetDC failed: %s", windowsCallError(err))
 	}
-	capturer := &gdiDesktopCapturer{desktop: desktop, screenDC: screenDC, bounds: image.Rect(x, y, x+width, y+height)}
+	capturer := &gdiDesktopCapturer{desktop: desktop, screenDC: screenDC, bounds: selected.bounds, source: selected.source}
 
 	memDC, _, err := procCreateCompatibleDC.Call(screenDC)
 	if memDC == 0 {
@@ -153,6 +201,144 @@ func newDesktopCapturer(source string) (desktopCapturer, error) {
 	return capturer, nil
 }
 
+func resolveWindowsCaptureSource(source string) (windowsCaptureSource, error) {
+	switch {
+	case source == "", source == "auto", source == "virtual", source == "screen:virtual", source == "screen:all":
+		return sourceFromProtocol(virtualScreenSource()), nil
+	case source == "primary", source == "screen:primary":
+		return sourceFromProtocol(primaryScreenSource()), nil
+	case strings.HasPrefix(source, "monitor:"):
+		for _, monitor := range enumerateWindowsMonitors() {
+			if monitor.source.ID == source {
+				return monitor, nil
+			}
+		}
+		return windowsCaptureSource{}, fmt.Errorf("monitor source %q not found", source)
+	case strings.HasPrefix(source, "window:"):
+		hwnd, err := parseWindowHandle(source)
+		if err != nil {
+			return windowsCaptureSource{}, err
+		}
+		window, err := windowsWindowSource(hwnd)
+		if err != nil {
+			return windowsCaptureSource{}, err
+		}
+		return window, nil
+	default:
+		return windowsCaptureSource{}, fmt.Errorf("unsupported desktop source %q", source)
+	}
+}
+
+func sourceFromProtocol(source protocol.DesktopSource) windowsCaptureSource {
+	return windowsCaptureSource{source: source, bounds: image.Rect(source.X, source.Y, source.X+source.Width, source.Y+source.Height)}
+}
+
+func virtualScreenSource() protocol.DesktopSource {
+	x := getSystemMetric(smXVirtualScreen)
+	y := getSystemMetric(smYVirtualScreen)
+	width := getSystemMetric(smCXVirtualScreen)
+	height := getSystemMetric(smCYVirtualScreen)
+	return protocol.DesktopSource{ID: "screen:all", Label: "All screens", Kind: "screen", Backend: "win32-gdi", X: x, Y: y, Width: width, Height: height, Primary: true}
+}
+
+func primaryScreenSource() protocol.DesktopSource {
+	return protocol.DesktopSource{ID: "screen:primary", Label: "Primary screen", Kind: "screen", Backend: "win32-gdi", Width: getSystemMetric(smCXScreen), Height: getSystemMetric(smCYScreen), Primary: true}
+}
+
+func enumerateWindowsMonitors() []windowsCaptureSource {
+	var monitors []windowsCaptureSource
+	callback := syscall.NewCallback(func(hMonitor, hdcMonitor, rectPtr, data uintptr) uintptr {
+		var info monitorInfoEx
+		info.Size = uint32(unsafe.Sizeof(info))
+		ok, _, _ := procGetMonitorInfoW.Call(hMonitor, uintptr(unsafe.Pointer(&info)))
+		if ok == 0 {
+			return 1
+		}
+		idx := len(monitors) + 1
+		device := syscall.UTF16ToString(info.Device[:])
+		label := fmt.Sprintf("Monitor %d", idx)
+		if device != "" {
+			label += " (" + device + ")"
+		}
+		bounds := image.Rect(int(info.Monitor.Left), int(info.Monitor.Top), int(info.Monitor.Right), int(info.Monitor.Bottom))
+		source := protocol.DesktopSource{
+			ID:      fmt.Sprintf("monitor:%d", idx),
+			Label:   label,
+			Kind:    "monitor",
+			Backend: "win32-gdi",
+			X:       bounds.Min.X,
+			Y:       bounds.Min.Y,
+			Width:   bounds.Dx(),
+			Height:  bounds.Dy(),
+			Primary: info.Flags&monitorInfoPrimary != 0,
+		}
+		monitors = append(monitors, windowsCaptureSource{source: source, bounds: bounds})
+		return 1
+	})
+	procEnumDisplayMonitors.Call(0, 0, callback, 0)
+	return monitors
+}
+
+func enumerateWindowsWindows(limit int) []windowsCaptureSource {
+	var windows []windowsCaptureSource
+	callback := syscall.NewCallback(func(hwnd, data uintptr) uintptr {
+		if len(windows) >= limit {
+			return 0
+		}
+		visible, _, _ := procIsWindowVisible.Call(hwnd)
+		if visible == 0 {
+			return 1
+		}
+		window, err := windowsWindowSource(hwnd)
+		if err != nil || window.source.Label == "" || window.bounds.Dx() < 80 || window.bounds.Dy() < 60 {
+			return 1
+		}
+		windows = append(windows, window)
+		return 1
+	})
+	procEnumWindows.Call(callback, 0)
+	return windows
+}
+
+func windowsWindowSource(hwnd uintptr) (windowsCaptureSource, error) {
+	var rect winRect
+	ok, _, err := procGetWindowRect.Call(hwnd, uintptr(unsafe.Pointer(&rect)))
+	if ok == 0 {
+		return windowsCaptureSource{}, fmt.Errorf("GetWindowRect failed: %s", windowsCallError(err))
+	}
+	bounds := image.Rect(int(rect.Left), int(rect.Top), int(rect.Right), int(rect.Bottom))
+	length, _, _ := procGetWindowTextLength.Call(hwnd)
+	if length == 0 {
+		return windowsCaptureSource{}, fmt.Errorf("window has no title")
+	}
+	titleBuf := make([]uint16, int(length)+1)
+	procGetWindowText.Call(hwnd, uintptr(unsafe.Pointer(&titleBuf[0])), uintptr(len(titleBuf)))
+	title := strings.TrimSpace(syscall.UTF16ToString(titleBuf))
+	if title == "" {
+		return windowsCaptureSource{}, fmt.Errorf("window has no title")
+	}
+	source := protocol.DesktopSource{
+		ID:      fmt.Sprintf("window:%x", hwnd),
+		Label:   title,
+		Kind:    "window",
+		Backend: "win32-gdi",
+		X:       bounds.Min.X,
+		Y:       bounds.Min.Y,
+		Width:   bounds.Dx(),
+		Height:  bounds.Dy(),
+	}
+	return windowsCaptureSource{source: source, bounds: bounds}, nil
+}
+
+func parseWindowHandle(source string) (uintptr, error) {
+	raw := strings.TrimPrefix(source, "window:")
+	value, err := strconv.ParseUint(raw, 16, 64)
+	if err != nil || value == 0 {
+		return 0, fmt.Errorf("invalid window source %q", source)
+	}
+	return uintptr(value), nil
+}
+
 func windowsCallError(err error) string {
 	if err == nil || err == syscall.Errno(0) {
 		return "unknown error"
@@ -166,6 +352,8 @@ func getSystemMetric(index uintptr) int {
 }
 
 func (c *gdiDesktopCapturer) Bounds() image.Rectangle { return c.bounds }
+
+func (c *gdiDesktopCapturer) Source() protocol.DesktopSource { return c.source }
 
 func (c *gdiDesktopCapturer) probe() error {
 	ok, _, err := procBitBlt.Call(c.memDC, 0, 0, 1, 1, c.screenDC, uintptr(c.bounds.Min.X), uintptr(c.bounds.Min.Y), srcCopy|captureBlt)

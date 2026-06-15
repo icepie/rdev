@@ -70,7 +70,7 @@
     </div>
     <div class="settings">
         <label><span data-i18n="desktop.mode">Mode</span><select id="mode"><option value="auto" data-i18n="desktop.modeAuto">Auto</option><option value="manual" data-i18n="desktop.modeManual">Manual</option></select></label>
-        <label><span data-i18n="desktop.source">Source</span><select id="source"><option value="auto" data-i18n="desktop.sourceAuto">Auto</option><option value="virtual" data-i18n="desktop.sourceVirtual">Virtual screen</option><option value="primary" data-i18n="desktop.sourcePrimary">Primary screen</option></select></label>
+        <label><span data-i18n="desktop.source">Source</span><select id="source"><option value="auto" data-i18n="desktop.sourceAuto">Auto</option><option value="screen:all" data-i18n="desktop.sourceAll">All screens</option></select></label>
         <span class="manual-settings" id="manual-settings">
             <label><span data-i18n="desktop.fps">FPS</span><input id="fps" type="number" min="1" max="12" value="4"></label>
             <label><span data-i18n="desktop.quality">Quality</span><input id="quality" type="number" min="25" max="90" value="50"></label>
@@ -149,14 +149,23 @@
     function updateSourceOptions() {
         const device = deviceCache.find(d => d.id === deviceSelect.value) || {};
         const sources = (device.desktop && device.desktop.sources && device.desktop.sources.length) ? device.desktop.sources : [
-            {id:'auto', label:t('desktop.sourceAuto')},
-            {id:'virtual', label:t('desktop.sourceVirtual')},
-            {id:'primary', label:t('desktop.sourcePrimary')},
+            {id:'auto', label:t('desktop.sourceAuto'), kind:'screen'},
+            {id:'screen:all', label:t('desktop.sourceAll'), kind:'screen'},
         ];
-        const current = sourceSelect.value || localStorage.getItem(storagePrefix + 'source') || 'auto';
-        sourceSelect.innerHTML = sources.map(s => `<option value="${esc(s.id)}">${esc(s.label || s.id)}${s.kind ? ' · ' + esc(s.kind) : ''}</option>`).join('');
+        const saved = localStorage.getItem(storagePrefix + 'source') || '';
+        let current = sourceSelect.value || saved || 'auto';
+        if (current === 'virtual' || current === 'screen:virtual' || current === 'screen:root') current = 'screen:all';
+        if (current === 'primary') current = 'screen:primary';
+        sourceSelect.innerHTML = sources.map(s => `<option value="${esc(s.id)}">${esc(sourceLabel(s))}</option>`).join('');
         sourceSelect.value = sources.some(s => s.id === current) ? current : 'auto';
         saveDesktopSettings();
+    }
+    function sourceLabel(source) {
+        const parts = [source.label || source.id];
+        if (source.kind) parts.push(source.kind);
+        if (source.backend) parts.push(source.backend);
+        if (source.width && source.height) parts.push(`${source.width}×${source.height}${source.x || source.y ? `@${source.x},${source.y}` : ''}`);
+        return parts.join(' · ');
     }
     function adaptiveSize() {
         const rect = stage.getBoundingClientRect();

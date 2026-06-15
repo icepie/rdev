@@ -188,6 +188,11 @@ type DesktopSource struct {
 	ID      string `json:"id"`
 	Label   string `json:"label"`
 	Kind    string `json:"kind,omitempty"`
+	Backend string `json:"backend,omitempty"`
+	X       int    `json:"x,omitempty"`
+	Y       int    `json:"y,omitempty"`
+	Width   int    `json:"width,omitempty"`
+	Height  int    `json:"height,omitempty"`
 	Primary bool   `json:"primary,omitempty"`
 }
 

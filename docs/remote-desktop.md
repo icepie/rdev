@@ -6,6 +6,7 @@ This document describes a cross-platform remote desktop feature for RDev. It is 
 
 - Phase 1 capability discovery is implemented for browser/device APIs.
 - Phase 2 screen streaming is implemented for Linux X11 and Windows Win32/GDI with the default `CGO_ENABLED=0` client build.
+- Capture source selection now supports Auto, all screens, individual monitors, and visible windows on Windows GDI and Linux X11. Legacy `primary`/`virtual` source IDs are accepted only for compatibility and are not shown in the UI.
 - Phase 3 input control is implemented for Windows Win32 and Linux X11, disabled in the browser by default until the user explicitly enables control.
 - The default stream is JPEG frames over binary WebSocket frames, rendered on a browser Canvas; this is effectively an MJPEG-style transport over the existing relay.
 - Browser auto mode requests an adaptive resolution based on viewport size and device pixel ratio; manual mode keeps explicit FPS/quality/max-size controls.
@@ -49,7 +50,7 @@ The server should remain a relay and policy point. The device client owns screen
 
 Add a new logical channel family alongside terminal, file, and TCP forwarding:
 
-- `desktop_start`: server asks a device to start a desktop session with source/FPS/quality/max-size settings.
+- `desktop_start`: server asks a device to start a desktop session with source/FPS/quality/max-size settings. Source IDs are structured as `screen:all`, `monitor:<id>`, or `window:<id>`; `auto` chooses the best default.
 - `desktop_ready`: device reports supported backends, sources, pixel format, dimensions, and permissions.
 - `desktop_frame`: device sends encoded JPEG frame bytes as `BinDesktopFrame` binary WebSocket frames.
 - `desktop_input`: browser sends normalized mouse, wheel, and keyboard events through the server to the device.
@@ -83,8 +84,8 @@ The release target remains: `CGO_ENABLED=0`, no required external process, and g
 
 | Platform | Screen capture default | Input control default | Notes |
 | --- | --- | --- | --- |
-| Windows | Pure Go Win32/GDI syscall first; DXGI Desktop Duplication later | Pure Go Win32 syscall (`SetCursorPos`, `mouse_event`, `keybd_event`) | Best fit for `CGO_ENABLED=0` and no external process. GPU capture/encoding can be added later as optional backend. |
-| Linux X11 | Pure Go X11 protocol first; XShm later | Pure Go XTest protocol | Current implementation supports capture and input when X11/XTEST are available. |
+| Windows | Pure Go Win32/GDI syscall first; enumerates all screens, monitors, and visible windows; DXGI Desktop Duplication later | Pure Go Win32 syscall (`SetCursorPos`, `mouse_event`, `keybd_event`) | Best fit for `CGO_ENABLED=0` and no external process. GDI window capture reads the visible screen region of the selected window; GPU/PrintWindow backends can be added later as optional paths. |
+| Linux X11 | Pure Go X11 protocol first; enumerates all screens, RANDR monitors, and EWMH client windows; XShm later | Pure Go XTest protocol | Current implementation supports capture and input when X11/XTEST are available. |
 | Linux Wayland | Capability detection first; pure Go portal/PipeWire backend later | Usually unavailable without compositor-approved portal or privileged input path | Hard because of Wayland security policy, not because of Go. Start as unsupported/limited unless portal backend exists. |
 | macOS | Capability detection first; pure Go CoreGraphics/Objective-C runtime bridge later | Quartz event injection later | Hardest without cgo or external processes. Requires Screen Recording and Accessibility permissions. |
 

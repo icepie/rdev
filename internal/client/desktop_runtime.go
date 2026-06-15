@@ -19,6 +19,10 @@ type desktopCapturer interface {
 	Close() error
 }
 
+type desktopSourceReporter interface {
+	Source() protocol.DesktopSource
+}
+
 type desktopSession struct {
 	stop    chan struct{}
 	input   desktopInput
@@ -115,6 +119,12 @@ func (c *Client) handleDesktopStart(msg *protocol.Message) {
 	caps.Reason = ""
 	size := scaledDimension(bounds.Dx(), bounds.Dy(), msg.Width, msg.Height)
 	session.setFrame(bounds, size.X, size.Y)
+	sourceID := desktopSourceLabel(msg.Source)
+	if reporter, ok := capturer.(desktopSourceReporter); ok {
+		if source := reporter.Source(); source.ID != "" {
+			sourceID = source.ID
+		}
+	}
 	c.send(&protocol.Message{
 		Type:                protocol.MsgDesktopReady,
 		SessionID:           msg.SessionID,
@@ -122,7 +132,7 @@ func (c *Client) handleDesktopStart(msg *protocol.Message) {
 		Width:               size.X,
 		Height:              size.Y,
 		Format:              "jpeg",
-		Source:              desktopSourceLabel(msg.Source),
+		Source:              sourceID,
 	})
 
 	fps := msg.FPS
