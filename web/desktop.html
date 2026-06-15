@@ -120,6 +120,7 @@
     const storagePrefix = 'rdevDesktop.';
     let ws = null, drawing = false, pendingFrame = null, deviceCache = [], lastCloseMessage = '', connectionSeq = 0;
     let frameCount = 0, frameBytes = 0, statsStartedAt = 0, lastFrameAt = 0, currentSource = '', remoteInput = false, resizeTimer = null, reconnectTimer = null, lastMouseSent = 0;
+    let controlPreferenceSet = false;
 
     function loadSavedDesktopSettings() {
         const mode = localStorage.getItem(storagePrefix + 'mode');
@@ -132,7 +133,9 @@
         maxWidthInput.value = localStorage.getItem(storagePrefix + 'width') || maxWidthInput.value;
         maxHeightInput.value = localStorage.getItem(storagePrefix + 'height') || maxHeightInput.value;
         const control = localStorage.getItem(storagePrefix + 'control');
+        controlPreferenceSet = control !== null;
         if (control === 'true') controlInput.checked = true;
+        if (control === 'false') controlInput.checked = false;
         stage.dataset.control = String(controlInput.checked);
     }
     function saveDesktopSettings() {
@@ -276,8 +279,10 @@
                 currentSource = msg.source || '';
                 remoteInput = !!(msg.desktop && msg.desktop.input);
                 controlInput.disabled = !remoteInput;
+                if (remoteInput && !controlPreferenceSet) controlInput.checked = true;
                 if (!remoteInput) controlInput.checked = false;
                 stage.dataset.control = String(controlInput.checked && remoteInput);
+                if (remoteInput && !controlPreferenceSet) saveDesktopSettings();
                 updateFrameInfo();
                 const source = currentSource ? ` · ${currentSource}` : '';
                 setStatus(`${t('index.desktopReady')} · ${canvas.width}×${canvas.height}${source}`, 'ok');
@@ -287,6 +292,8 @@
             } else if (msg.op === 'closed') {
                 lastCloseMessage = msg.message || t('desktop.closed');
                 setStatus(lastCloseMessage, msg.message ? 'err' : 'warn');
+            } else if (msg.op === 'input_error') {
+                setStatus(msg.message || t('common.error'), 'err');
             }
         };
         ws.onclose = () => { if (connID !== connectionSeq) return; ws = null; setStatus(lastCloseMessage || t('desktop.closed'), lastCloseMessage ? 'err' : 'warn'); };
@@ -298,19 +305,42 @@
         requestAnimationFrame(async () => {
             const frame = pendingFrame; pendingFrame = null;
             try {
-                const bitmap = await createImageBitmap(new Blob([frame], {type:'image/jpeg'}));
-                if (canvas.width !== bitmap.width || canvas.height !== bitmap.height) { canvas.width = bitmap.width; canvas.height = bitmap.height; }
-                canvas.style.display = 'block'; empty.style.display = 'none';
-                ctx.drawImage(bitmap, 0, 0);
+                const blob = new Blob([frame], {type:'image/jpeg'});
+                if (window.createImageBitmap) {
+                    try {
+                        const bitmap = await createImageBitmap(blob);
+                        paintImage(bitmap, bitmap.width, bitmap.height);
+                        bitmap.close && bitmap.close();
+                    } catch (e) {
+                        const img = await decodeImage(blob);
+                        paintImage(img, img.naturalWidth || img.width, img.naturalHeight || img.height);
+                    }
+                } else {
+                    const img = await decodeImage(blob);
+                    paintImage(img, img.naturalWidth || img.width, img.naturalHeight || img.height);
+                }
                 frameCount++;
                 frameBytes += frame.byteLength || frame.size || 0;
                 if (!statsStartedAt) statsStartedAt = performance.now();
                 lastFrameAt = performance.now();
                 updateFrameInfo();
-                bitmap.close && bitmap.close();
             } catch (e) { console.error(e); }
             drawing = false;
             if (pendingFrame) drawFrame(pendingFrame);
+        });
+    }
+    function paintImage(image, width, height) {
+        if (canvas.width !== width || canvas.height !== height) { canvas.width = width; canvas.height = height; }
+        canvas.style.display = 'block'; empty.style.display = 'none';
+        ctx.drawImage(image, 0, 0);
+    }
+    function decodeImage(blob) {
+        return new Promise((resolve, reject) => {
+            const url = URL.createObjectURL(blob);
+            const img = new Image();
+            img.onload = () => { URL.revokeObjectURL(url); resolve(img); };
+            img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('image decode failed')); };
+            img.src = url;
         });
     }
     function canvasPoint(event) {
@@ -321,11 +351,13 @@
     }
     function sendInput(input) {
         if (!ws || ws.readyState !== WebSocket.OPEN || !controlInput.checked || !remoteInput) return;
-        ws.send(JSON.stringify(Object.assign({op:'input'}, input)));
+        if (ws.bufferedAmount > 512 * 1024) return;
+        try { ws.send(JSON.stringify(Object.assign({op:'input'}, input))); }
+        catch (e) { setStatus(e.message || String(e), 'err'); }
     }
     function sendMouse(type, event, extra = {}) {
         const now = performance.now();
-        if (type === 'mouse_move' && now - lastMouseSent < 24) return;
+        if (type === 'mouse_move' && (now - lastMouseSent < 16 || (ws && ws.bufferedAmount > 128 * 1024))) return;
         lastMouseSent = now;
         const point = canvasPoint(event);
         sendInput(Object.assign({inputType:type, x:point.x, y:point.y, button:event.button || 0}, extra));
@@ -356,7 +388,7 @@
         if (document.fullscreenElement) { document.exitFullscreen && document.exitFullscreen(); return; }
         if (stage.requestFullscreen) stage.requestFullscreen();
     }
-    controlInput.addEventListener('change', () => { stage.dataset.control = String(controlInput.checked && remoteInput); if (controlInput.checked) canvas.focus(); saveDesktopSettings(); });
+    controlInput.addEventListener('change', () => { controlPreferenceSet = true; stage.dataset.control = String(controlInput.checked && remoteInput); if (controlInput.checked) canvas.focus(); saveDesktopSettings(); });
     canvas.addEventListener('contextmenu', e => e.preventDefault());
     canvas.addEventListener('pointermove', e => sendMouse('mouse_move', e));
     canvas.addEventListener('pointerdown', e => { e.preventDefault(); canvas.focus(); canvas.setPointerCapture && canvas.setPointerCapture(e.pointerId); sendMouse('mouse_down', e); });

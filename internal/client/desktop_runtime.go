@@ -2,6 +2,7 @@ package client
 
 import (
 	"bytes"
+	"fmt"
 	"hash/crc32"
 	"image"
 	"image/jpeg"
@@ -155,6 +156,13 @@ func (c *Client) handleDesktopStart(msg *protocol.Message) {
 
 	var lastChecksum uint32
 	lastSent := time.Now().Add(-time.Hour)
+	encodeBuf := bytes.NewBuffer(make([]byte, 0, 512*1024))
+	sourceName := desktopSourceLabel(msg.Source)
+	if reporter, ok := capturer.(desktopSourceReporter); ok {
+		if source := reporter.Source(); source.ID != "" {
+			sourceName = source.ID
+		}
+	}
 	ticker := time.NewTicker(time.Second / time.Duration(fps))
 	defer ticker.Stop()
 	for {
@@ -164,7 +172,8 @@ func (c *Client) handleDesktopStart(msg *protocol.Message) {
 		case <-ticker.C:
 			img, err := capturer.Capture()
 			if err != nil {
-				log.Printf("desktop capture error: %v", err)
+				err = fmt.Errorf("desktop capture failed for source %s: %w", sourceName, err)
+				log.Printf("%v", err)
 				c.send(&protocol.Message{Type: protocol.MsgDesktopClose, SessionID: msg.SessionID, Error: err.Error()})
 				return
 			}
@@ -175,13 +184,18 @@ func (c *Client) handleDesktopStart(msg *protocol.Message) {
 				continue
 			}
 			lastChecksum = checksum
-			var buf bytes.Buffer
-			if err := jpeg.Encode(&buf, frame, &jpeg.Options{Quality: quality}); err != nil {
-				log.Printf("desktop encode error: %v", err)
+			encodeBuf.Reset()
+			if err := jpeg.Encode(encodeBuf, frame, &jpeg.Options{Quality: quality}); err != nil {
+				log.Printf("desktop encode error for source %s: %v", sourceName, err)
 				continue
 			}
-			if err := c.sendBinary(protocol.BinDesktopFrame, msg.SessionID, buf.Bytes()); err != nil {
+			started := time.Now()
+			if err := c.sendBinary(protocol.BinDesktopFrame, msg.SessionID, encodeBuf.Bytes()); err != nil {
+				log.Printf("desktop frame send error for source %s: %v", sourceName, err)
 				return
+			}
+			if elapsed := time.Since(started); elapsed > time.Second {
+				log.Printf("desktop frame send slow for source %s: %s", sourceName, elapsed)
 			}
 			lastSent = time.Now()
 		}
@@ -200,6 +214,11 @@ func resizeDesktopFrame(img image.Image, maxWidth, maxHeight int) *image.RGBA {
 	sourceWidth := bounds.Dx()
 	sourceHeight := bounds.Dy()
 	size := scaledDimension(sourceWidth, sourceHeight, maxWidth, maxHeight)
+	if sourceWidth == size.X && sourceHeight == size.Y {
+		if src, ok := img.(*image.RGBA); ok && bounds.Min.X == 0 && bounds.Min.Y == 0 {
+			return src
+		}
+	}
 	dst := image.NewRGBA(image.Rect(0, 0, size.X, size.Y))
 	if sourceWidth <= 0 || sourceHeight <= 0 || size.X <= 0 || size.Y <= 0 {
 		return dst

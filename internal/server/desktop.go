@@ -49,16 +49,23 @@ type desktopRoute struct {
 }
 
 type desktopBrowserConn struct {
-	srv      *Server
-	socket   *gws.Conn
-	deviceID string
-	session  string
-	client   *ClientConn
-	request  protocol.Message
-	authOK   bool
-	writeMu  sync.Mutex
-	done     chan struct{}
-	once     sync.Once
+	srv            *Server
+	socket         *gws.Conn
+	deviceID       string
+	session        string
+	client         *ClientConn
+	request        protocol.Message
+	authOK         bool
+	writeMu        sync.Mutex
+	frameCh        chan []byte
+	frameOnce      sync.Once
+	inputMu        sync.Mutex
+	lastMouseMove  time.Time
+	lastInputError time.Time
+	frameWidth     int
+	frameHeight    int
+	done           chan struct{}
+	once           sync.Once
 }
 
 type desktopWSHandler struct {
@@ -82,7 +89,7 @@ func (h *desktopWSHandler) OnOpen(socket *gws.Conn) {
 		return
 	}
 
-	bc := &desktopBrowserConn{srv: h.srv, socket: socket, deviceID: client.ID, client: client, request: desktopRequestFromSession(socket), done: make(chan struct{})}
+	bc := &desktopBrowserConn{srv: h.srv, socket: socket, deviceID: client.ID, client: client, request: desktopRequestFromSession(socket), frameCh: make(chan []byte, 1), done: make(chan struct{})}
 	socket.Session().Store("desktopConn", bc)
 	if client.Password != "" {
 		h.sendJSON(socket, desktopMsg{Op: "auth", Device: client.ID, Message: "device password required"})
@@ -128,17 +135,11 @@ func (h *desktopWSHandler) OnMessage(socket *gws.Conn, message *gws.Message) {
 		}
 		bc.writeJSON(desktopMsg{Op: "auth_fail", Device: bc.deviceID, Message: "wrong password"})
 	case "input":
-		if !bc.authOK || bc.session == "" {
+		input, ok := bc.prepareInput(msg)
+		if !ok {
 			return
 		}
-		if bc.client.Desktop == nil || !bc.client.Desktop.Input {
-			return
-		}
-		bc.client.Send(&protocol.Message{
-			Type: protocol.MsgDesktopInput, SessionID: bc.session, InputType: msg.InputType,
-			X: msg.X, Y: msg.Y, Button: msg.Button, DeltaX: msg.DeltaX, DeltaY: msg.DeltaY,
-			Key: msg.Key, Code: msg.KeyCode, CtrlKey: msg.CtrlKey, AltKey: msg.AltKey, ShiftKey: msg.ShiftKey, MetaKey: msg.MetaKey,
-		})
+		bc.client.Send(input)
 	case "close":
 		bc.close()
 	}
@@ -155,6 +156,7 @@ func (h *desktopWSHandler) start(bc *desktopBrowserConn) {
 	bc.srv.desktopMu.Unlock()
 	bc.writeJSON(desktopMsg{Op: "auth_ok", Device: bc.deviceID, Session: bc.session})
 	bc.writeJSON(desktopMsg{Op: "starting", Device: bc.deviceID, Session: bc.session})
+	bc.startFrameWriter()
 	startMsg := bc.request
 	startMsg.Type = protocol.MsgDesktopStart
 	startMsg.SessionID = bc.session
@@ -284,6 +286,126 @@ func (bc *desktopBrowserConn) write(opcode gws.Opcode, data []byte) error {
 	return err
 }
 
+func (bc *desktopBrowserConn) startFrameWriter() {
+	bc.frameOnce.Do(func() {
+		go func() {
+			for {
+				select {
+				case <-bc.done:
+					return
+				case frame := <-bc.frameCh:
+					if len(frame) == 0 {
+						continue
+					}
+					if err := bc.writeBinary(frame); err != nil {
+						bc.close()
+						return
+					}
+				}
+			}
+		}()
+	})
+}
+
+func (bc *desktopBrowserConn) enqueueFrame(data []byte) {
+	if len(data) == 0 {
+		return
+	}
+	frame := append([]byte(nil), data...)
+	select {
+	case bc.frameCh <- frame:
+		return
+	default:
+	}
+	select {
+	case <-bc.frameCh:
+	default:
+	}
+	select {
+	case bc.frameCh <- frame:
+	default:
+	}
+}
+
+func (bc *desktopBrowserConn) prepareInput(msg desktopMsg) (*protocol.Message, bool) {
+	if !bc.authOK || bc.session == "" {
+		return nil, false
+	}
+	if bc.client.Desktop == nil || !bc.client.Desktop.Input {
+		bc.inputError("desktop input is not available")
+		return nil, false
+	}
+	bc.inputMu.Lock()
+	defer bc.inputMu.Unlock()
+	now := time.Now()
+	switch msg.InputType {
+	case "mouse_move":
+		if now.Sub(bc.lastMouseMove) < 16*time.Millisecond {
+			return nil, false
+		}
+		bc.lastMouseMove = now
+		msg.X, msg.Y = bc.clampPoint(msg.X, msg.Y)
+	case "mouse_down", "mouse_up":
+		msg.X, msg.Y = bc.clampPoint(msg.X, msg.Y)
+		if msg.Button < 0 || msg.Button > 2 {
+			bc.inputError("unsupported mouse button")
+			return nil, false
+		}
+	case "wheel":
+		msg.X, msg.Y = bc.clampPoint(msg.X, msg.Y)
+		if msg.DeltaX > 2000 {
+			msg.DeltaX = 2000
+		}
+		if msg.DeltaX < -2000 {
+			msg.DeltaX = -2000
+		}
+		if msg.DeltaY > 2000 {
+			msg.DeltaY = 2000
+		}
+		if msg.DeltaY < -2000 {
+			msg.DeltaY = -2000
+		}
+	case "key_down", "key_up":
+		if len(msg.Key) > 64 || len(msg.KeyCode) > 64 {
+			bc.inputError("invalid key event")
+			return nil, false
+		}
+	default:
+		bc.inputError("unsupported input event")
+		return nil, false
+	}
+	return &protocol.Message{
+		Type: protocol.MsgDesktopInput, SessionID: bc.session, InputType: msg.InputType,
+		X: msg.X, Y: msg.Y, Button: msg.Button, DeltaX: msg.DeltaX, DeltaY: msg.DeltaY,
+		Key: msg.Key, Code: msg.KeyCode, CtrlKey: msg.CtrlKey, AltKey: msg.AltKey, ShiftKey: msg.ShiftKey, MetaKey: msg.MetaKey,
+	}, true
+}
+
+func (bc *desktopBrowserConn) clampPoint(x, y int) (int, int) {
+	if x < 0 {
+		x = 0
+	}
+	if y < 0 {
+		y = 0
+	}
+	if bc.frameWidth > 0 && x >= bc.frameWidth {
+		x = bc.frameWidth - 1
+	}
+	if bc.frameHeight > 0 && y >= bc.frameHeight {
+		y = bc.frameHeight - 1
+	}
+	return x, y
+}
+
+func (bc *desktopBrowserConn) inputError(message string) {
+	now := time.Now()
+	if now.Sub(bc.lastInputError) < 2*time.Second {
+		return
+	}
+	bc.lastInputError = now
+	bc.writeJSON(desktopMsg{Op: "input_error", Session: bc.session, Message: message})
+}
+
 func (bc *desktopBrowserConn) close() {
 	bc.once.Do(func() {
 		close(bc.done)
@@ -317,6 +439,10 @@ func (s *Server) handleDesktopMessage(msg *protocol.Message) {
 		if msg.Error != "" {
 			op = "error"
 		}
+		route.conn.inputMu.Lock()
+		route.conn.frameWidth = msg.Width
+		route.conn.frameHeight = msg.Height
+		route.conn.inputMu.Unlock()
 		route.conn.writeJSON(desktopMsg{Op: op, Session: msg.SessionID, Width: msg.Width, Height: msg.Height, Format: msg.Format, Source: msg.Source, Desktop: msg.DesktopCapabilities, Message: msg.Error})
 	case protocol.MsgDesktopClose:
 		route.conn.writeJSON(desktopMsg{Op: "closed", Session: msg.SessionID, Message: msg.Error})
@@ -331,9 +457,7 @@ func (s *Server) handleDesktopFrame(sessionID string, data []byte) {
 	if route == nil || route.conn == nil || len(data) == 0 {
 		return
 	}
-	if err := route.conn.writeBinary(data); err != nil {
-		route.conn.close()
-	}
+	route.conn.enqueueFrame(data)
 }
 
 func (s *Server) closeDesktopForClient(clientID string) {
