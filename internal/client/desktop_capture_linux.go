@@ -8,8 +8,11 @@ import (
 	"image"
 	"image/color"
 	"math/bits"
+	"os"
 	"strconv"
 	"strings"
+	"syscall"
+	"unsafe"
 
 	"github.com/BurntSushi/xgb"
 	"github.com/BurntSushi/xgb/randr"
@@ -46,8 +49,12 @@ type x11DesktopCapturer struct {
 }
 
 func desktopSources() []protocol.DesktopSource {
+	fbSources := enumerateFBDevSources()
 	conn, err := xgb.NewConn()
 	if err != nil {
+		if len(fbSources) > 0 {
+			return append([]protocol.DesktopSource{{ID: "auto", Label: "Auto", Kind: "screen", Backend: "fbdev", Width: fbSources[0].Width, Height: fbSources[0].Height, Primary: true}}, fbSources...)
+		}
 		return []protocol.DesktopSource{{ID: "auto", Label: "Auto", Kind: "screen", Backend: "x11", Primary: true}}
 	}
 	defer conn.Close()
@@ -63,10 +70,14 @@ func desktopSources() []protocol.DesktopSource {
 	for _, window := range enumerateX11Windows(conn, screen, 80) {
 		sources = append(sources, window.source)
 	}
+	sources = append(sources, fbSources...)
 	return sources
 }
 
 func newDesktopCapturer(source string) (desktopCapturer, error) {
+	if strings.HasPrefix(source, "fbdev:") || (os.Getenv("DISPLAY") == "" && fbdevPath(source) != "") {
+		return newFBDevCapturer(source)
+	}
 	conn, err := xgb.NewConn()
 	if err != nil {
 		return nil, fmt.Errorf("connect X11: %w", err)
@@ -349,4 +360,266 @@ func findVisual(setup *xproto.SetupInfo, visualID xproto.Visualid) (xproto.Visua
 		}
 	}
 	return xproto.VisualInfo{}, false
+}
+
+const (
+	fbioGetVScreenInfo = 0x4600
+	fbioGetFScreenInfo = 0x4602
+)
+
+type fbBitfield struct {
+	Offset   uint32
+	Length   uint32
+	MsbRight uint32
+}
+
+type fbVarScreenInfo struct {
+	Xres         uint32
+	Yres         uint32
+	XresVirtual  uint32
+	YresVirtual  uint32
+	Xoffset      uint32
+	Yoffset      uint32
+	BitsPerPixel uint32
+	Grayscale    uint32
+	Red          fbBitfield
+	Green        fbBitfield
+	Blue         fbBitfield
+	Transp       fbBitfield
+	Nonstd       uint32
+	Activate     uint32
+	Height       uint32
+	Width        uint32
+	AccelFlags   uint32
+	Pixclock     uint32
+	LeftMargin   uint32
+	RightMargin  uint32
+	UpperMargin  uint32
+	LowerMargin  uint32
+	HsyncLen     uint32
+	VsyncLen     uint32
+	Sync         uint32
+	Vmode        uint32
+	Rotate       uint32
+	Colorspace   uint32
+	Reserved     [4]uint32
+}
+
+type fbFixScreenInfo struct {
+	ID         [16]byte
+	SmemStart  uintptr
+	SmemLen    uint32
+	Type       uint32
+	TypeAux    uint32
+	Visual     uint32
+	XpanStep   uint16
+	YpanStep   uint16
+	YwrapStep  uint16
+	LineLength uint32
+	MmioStart  uintptr
+	MmioLen    uint32
+	Accel      uint32
+	Caps       uint16
+	Reserved   [2]uint16
+}
+
+type fbdevCapturer struct {
+	file   *os.File
+	data   []byte
+	path   string
+	bounds image.Rectangle
+	source protocol.DesktopSource
+	vinfo  fbVarScreenInfo
+	finfo  fbFixScreenInfo
+	stride int
+}
+
+func enumerateFBDevSources() []protocol.DesktopSource {
+	paths := []string{"/dev/fb0", "/dev/fb/0"}
+	var sources []protocol.DesktopSource
+	for _, path := range paths {
+		vinfo, finfo, err := probeFBDev(path)
+		if err != nil {
+			continue
+		}
+		label := strings.TrimRight(string(finfo.ID[:]), "\x00 ")
+		if label == "" {
+			label = path
+		}
+		sources = append(sources, protocol.DesktopSource{
+			ID:      "fbdev:" + path,
+			Label:   "Framebuffer " + label,
+			Kind:    "screen",
+			Backend: "fbdev",
+			Width:   int(vinfo.Xres),
+			Height:  int(vinfo.Yres),
+			Primary: len(sources) == 0,
+		})
+	}
+	return sources
+}
+
+func fbdevPath(source string) string {
+	if strings.HasPrefix(source, "fbdev:") {
+		return strings.TrimPrefix(source, "fbdev:")
+	}
+	if source == "" || source == "auto" || source == "screen:all" {
+		if _, err := os.Stat("/dev/fb0"); err == nil {
+			return "/dev/fb0"
+		}
+		if _, err := os.Stat("/dev/fb/0"); err == nil {
+			return "/dev/fb/0"
+		}
+	}
+	return ""
+}
+
+func probeFBDev(path string) (fbVarScreenInfo, fbFixScreenInfo, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return fbVarScreenInfo{}, fbFixScreenInfo{}, err
+	}
+	defer file.Close()
+	var vinfo fbVarScreenInfo
+	var finfo fbFixScreenInfo
+	if err := fbdevIoctl(file, fbioGetVScreenInfo, unsafe.Pointer(&vinfo)); err != nil {
+		return fbVarScreenInfo{}, fbFixScreenInfo{}, err
+	}
+	if err := fbdevIoctl(file, fbioGetFScreenInfo, unsafe.Pointer(&finfo)); err != nil {
+		return fbVarScreenInfo{}, fbFixScreenInfo{}, err
+	}
+	if vinfo.Xres == 0 || vinfo.Yres == 0 || vinfo.BitsPerPixel == 0 {
+		return fbVarScreenInfo{}, fbFixScreenInfo{}, fmt.Errorf("invalid framebuffer geometry")
+	}
+	if vinfo.BitsPerPixel != 16 && vinfo.BitsPerPixel != 24 && vinfo.BitsPerPixel != 32 {
+		return fbVarScreenInfo{}, fbFixScreenInfo{}, fmt.Errorf("unsupported framebuffer bpp %d", vinfo.BitsPerPixel)
+	}
+	return vinfo, finfo, nil
+}
+
+func newFBDevCapturer(source string) (desktopCapturer, error) {
+	path := fbdevPath(source)
+	if path == "" {
+		return nil, fmt.Errorf("fbdev source %q not found", source)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("open framebuffer %s: %w", path, err)
+	}
+	var vinfo fbVarScreenInfo
+	var finfo fbFixScreenInfo
+	if err := fbdevIoctl(file, fbioGetVScreenInfo, unsafe.Pointer(&vinfo)); err != nil {
+		file.Close()
+		return nil, fmt.Errorf("read framebuffer variable info: %w", err)
+	}
+	if err := fbdevIoctl(file, fbioGetFScreenInfo, unsafe.Pointer(&finfo)); err != nil {
+		file.Close()
+		return nil, fmt.Errorf("read framebuffer fixed info: %w", err)
+	}
+	if vinfo.Xres == 0 || vinfo.Yres == 0 || vinfo.BitsPerPixel == 0 {
+		file.Close()
+		return nil, fmt.Errorf("invalid framebuffer geometry")
+	}
+	stride := int(finfo.LineLength)
+	if stride <= 0 {
+		stride = int(vinfo.Xres * vinfo.BitsPerPixel / 8)
+	}
+	mapLen := int(finfo.SmemLen)
+	minLen := stride * int(vinfo.Yres+vinfo.Yoffset)
+	if mapLen < minLen {
+		mapLen = minLen
+	}
+	data, err := syscall.Mmap(int(file.Fd()), 0, mapLen, syscall.PROT_READ, syscall.MAP_SHARED)
+	if err != nil {
+		file.Close()
+		return nil, fmt.Errorf("mmap framebuffer: %w", err)
+	}
+	label := strings.TrimRight(string(finfo.ID[:]), "\x00 ")
+	if label == "" {
+		label = path
+	}
+	bounds := image.Rect(0, 0, int(vinfo.Xres), int(vinfo.Yres))
+	return &fbdevCapturer{
+		file: file, data: data, path: path, bounds: bounds, vinfo: vinfo, finfo: finfo, stride: stride,
+		source: protocol.DesktopSource{ID: "fbdev:" + path, Label: "Framebuffer " + label, Kind: "screen", Backend: "fbdev", Width: bounds.Dx(), Height: bounds.Dy(), Primary: true},
+	}, nil
+}
+
+func fbdevIoctl(file *os.File, req uintptr, ptr unsafe.Pointer) error {
+	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, file.Fd(), req, uintptr(ptr))
+	if errno != 0 {
+		return errno
+	}
+	return nil
+}
+
+func (c *fbdevCapturer) Bounds() image.Rectangle { return c.bounds }
+
+func (c *fbdevCapturer) Source() protocol.DesktopSource { return c.source }
+
+func (c *fbdevCapturer) Close() error {
+	if c.data != nil {
+		_ = syscall.Munmap(c.data)
+		c.data = nil
+	}
+	if c.file != nil {
+		return c.file.Close()
+	}
+	return nil
+}
+
+func (c *fbdevCapturer) Capture() (image.Image, error) {
+	width := int(c.vinfo.Xres)
+	height := int(c.vinfo.Yres)
+	bpp := int(c.vinfo.BitsPerPixel / 8)
+	if bpp <= 0 || c.stride <= 0 {
+		return nil, fmt.Errorf("invalid framebuffer layout")
+	}
+	img := image.NewRGBA(image.Rect(0, 0, width, height))
+	base := int(c.vinfo.Yoffset)*c.stride + int(c.vinfo.Xoffset)*bpp
+	for y := 0; y < height; y++ {
+		row := base + y*c.stride
+		for x := 0; x < width; x++ {
+			off := row + x*bpp
+			if off+bpp > len(c.data) {
+				break
+			}
+			pixel := c.fbPixel(c.data[off : off+bpp])
+			r := scaleColor((pixel&maskFor(c.vinfo.Red))>>c.vinfo.Red.Offset, bitfieldMax(c.vinfo.Red))
+			g := scaleColor((pixel&maskFor(c.vinfo.Green))>>c.vinfo.Green.Offset, bitfieldMax(c.vinfo.Green))
+			b := scaleColor((pixel&maskFor(c.vinfo.Blue))>>c.vinfo.Blue.Offset, bitfieldMax(c.vinfo.Blue))
+			img.SetRGBA(x, y, color.RGBA{R: r, G: g, B: b, A: 255})
+		}
+	}
+	return img, nil
+}
+
+func (c *fbdevCapturer) fbPixel(data []byte) uint32 {
+	switch c.vinfo.BitsPerPixel {
+	case 32:
+		return binary.LittleEndian.Uint32(data)
+	case 24:
+		return uint32(data[0]) | uint32(data[1])<<8 | uint32(data[2])<<16
+	case 16:
+		return uint32(binary.LittleEndian.Uint16(data))
+	default:
+		return 0
+	}
+}
+
+func maskFor(field fbBitfield) uint32 {
+	if field.Length == 0 || field.Length >= 32 {
+		return ^uint32(0)
+	}
+	return ((uint32(1) << field.Length) - 1) << field.Offset
+}
+
+func bitfieldMax(field fbBitfield) uint32 {
+	if field.Length == 0 {
+		return 0
+	}
+	if field.Length >= 32 {
+		return ^uint32(0)
+	}
+	return (uint32(1) << field.Length) - 1
 }
