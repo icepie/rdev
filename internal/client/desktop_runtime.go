@@ -5,6 +5,7 @@ import (
 	"image"
 	"image/jpeg"
 	"log"
+	"runtime"
 	"time"
 
 	"rdev/internal/protocol"
@@ -37,6 +38,9 @@ func (c *Client) handleDesktopStart(msg *protocol.Message) {
 		}
 		c.mu.Unlock()
 	}()
+
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 
 	capturer, err := newDesktopCapturer()
 	if err != nil {

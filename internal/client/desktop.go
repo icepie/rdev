@@ -18,8 +18,10 @@ func desktopCapabilities() *protocol.DesktopCapabilities {
 
 	switch runtime.GOOS {
 	case "windows":
+		caps.DisplayServer = "gdi"
+		caps.Supported = true
+		caps.ViewOnly = true
 		caps.Backends = []string{"win32-gdi"}
-		caps.Reason = "desktop capture backend is planned but not implemented"
 	case "linux":
 		if os.Getenv("WAYLAND_DISPLAY") != "" {
 			caps.DisplayServer = "wayland"
