@@ -1,10 +1,14 @@
 package updater
 
 import (
+	"bytes"
+	"errors"
+	"log"
 	"net/http"
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestNewerVersion(t *testing.T) {
@@ -60,6 +64,42 @@ func TestLooksLikeHTML(t *testing.T) {
 	}
 	if looksLikeHTML(resp, []byte("MZ"+strings.Repeat("x", 1024))) {
 		t.Fatal("binary body was detected as html")
+	}
+}
+
+func TestUpdateFailureLoggerSuppressesRepeats(t *testing.T) {
+	var buf bytes.Buffer
+	logger := log.New(&buf, "", 0)
+	failureLog := updateFailureLogger{summaryEvery: 15 * time.Minute}
+	now := time.Unix(1000, 0)
+
+	failureLog.record(logger, errors.New("dns failed"), now)
+	failureLog.record(logger, errors.New("dns failed"), now.Add(time.Minute))
+	failureLog.record(logger, errors.New("dns failed"), now.Add(2*time.Minute))
+	if got := strings.Count(buf.String(), "auto-update check failed"); got != 1 {
+		t.Fatalf("initial repeated failures logged %d times, want 1\n%s", got, buf.String())
+	}
+	if strings.Contains(buf.String(), "still failing") {
+		t.Fatalf("summary logged too early:\n%s", buf.String())
+	}
+
+	failureLog.record(logger, errors.New("dns failed"), now.Add(16*time.Minute))
+	if !strings.Contains(buf.String(), "suppressed 3 repeated failures") {
+		t.Fatalf("missing periodic summary:\n%s", buf.String())
+	}
+}
+
+func TestUpdateFailureLoggerRecovered(t *testing.T) {
+	var buf bytes.Buffer
+	logger := log.New(&buf, "", 0)
+	failureLog := updateFailureLogger{summaryEvery: 15 * time.Minute}
+	now := time.Unix(1000, 0)
+
+	failureLog.record(logger, errors.New("dns failed"), now)
+	failureLog.record(logger, errors.New("dns failed"), now.Add(time.Minute))
+	failureLog.recovered(logger)
+	if !strings.Contains(buf.String(), "recovered; suppressed 1 repeated failures") {
+		t.Fatalf("missing recovery summary:\n%s", buf.String())
 	}
 }
 

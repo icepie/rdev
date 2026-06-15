@@ -61,6 +61,7 @@ func Start(ctx context.Context, cfg Config) {
 }
 
 func run(ctx context.Context, cfg Config) {
+	failureLog := updateFailureLogger{summaryEvery: 15 * time.Minute}
 	timer := time.NewTimer(time.Minute)
 	defer timer.Stop()
 	for {
@@ -70,17 +71,64 @@ func run(ctx context.Context, cfg Config) {
 		case <-timer.C:
 			updated, err := CheckAndApply(ctx, cfg)
 			if err != nil {
-				cfg.Logger.Printf("auto-update check failed: %v", err)
+				if ctx.Err() != nil {
+					return
+				}
+				failureLog.record(cfg.Logger, err, time.Now())
 			} else if updated {
 				cfg.Logger.Printf("auto-update applied; restarting into new version")
 				if err := restartSelf(); err != nil {
 					cfg.Logger.Printf("auto-update restart failed: %v", err)
 				}
 				return
+			} else {
+				failureLog.recovered(cfg.Logger)
 			}
 			timer.Reset(cfg.Interval)
 		}
 	}
+}
+
+type updateFailureLogger struct {
+	lastErr      string
+	suppressed   int
+	lastLoggedAt time.Time
+	summaryEvery time.Duration
+}
+
+func (l *updateFailureLogger) record(logger *log.Logger, err error, now time.Time) {
+	message := err.Error()
+	if l.summaryEvery <= 0 {
+		l.summaryEvery = 15 * time.Minute
+	}
+	if message != l.lastErr {
+		if l.lastErr != "" && l.suppressed > 0 {
+			logger.Printf("auto-update check changed after suppressing %d repeated failures", l.suppressed)
+		}
+		l.lastErr = message
+		l.suppressed = 0
+		l.lastLoggedAt = now
+		logger.Printf("auto-update check failed: %v", err)
+		return
+	}
+	l.suppressed++
+	if now.Sub(l.lastLoggedAt) >= l.summaryEvery {
+		logger.Printf("auto-update check still failing; suppressed %d repeated failures: %v", l.suppressed, err)
+		l.suppressed = 0
+		l.lastLoggedAt = now
+	}
+}
+
+func (l *updateFailureLogger) recovered(logger *log.Logger) {
+	if l.lastErr == "" {
+		return
+	}
+	if l.suppressed > 0 {
+		logger.Printf("auto-update check recovered; suppressed %d repeated failures", l.suppressed)
+	}
+	l.lastErr = ""
+	l.suppressed = 0
+	l.lastLoggedAt = time.Time{}
 }
 
 func CheckAndApply(ctx context.Context, cfg Config) (bool, error) {
