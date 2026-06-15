@@ -360,6 +360,9 @@ func (c *dxgiDesktopCapturer) Capture() (image.Image, error) {
 
 	desc := d3d11Texture2DGetDesc(texture)
 	if desc.Width == 0 || desc.Height == 0 {
+		if c.lastFrame != nil {
+			return c.lastFrame, nil
+		}
 		return nil, fmt.Errorf("DXGI frame has invalid size")
 	}
 	if desc.Format != dxgiFormatB8G8R8A8 && desc.Format != dxgiFormatR8G8B8A8 {
