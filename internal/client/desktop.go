@@ -27,8 +27,9 @@ func desktopCapabilities() *protocol.DesktopCapabilities {
 			caps.Reason = "Wayland desktop capture requires a portal backend"
 		} else if os.Getenv("DISPLAY") != "" {
 			caps.DisplayServer = "x11"
+			caps.Supported = true
+			caps.ViewOnly = true
 			caps.Backends = []string{"x11"}
-			caps.Reason = "X11 desktop capture backend is planned but not implemented"
 		} else {
 			caps.Reason = "no desktop display detected"
 		}

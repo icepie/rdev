@@ -406,6 +406,8 @@ type Server struct {
 	fileRequests map[string]*fileSocket
 	fileTasks    map[string]*fileTaskRoute
 	fileMu       sync.RWMutex
+	desktops     map[string]*desktopRoute
+	desktopMu    sync.RWMutex
 	upgrader     *gws.Upgrader
 
 	// Public config (set by main) for API/UI
@@ -427,6 +429,7 @@ func NewServer() *Server {
 		fileResults:      make(map[string]chan *protocol.Message),
 		fileRequests:     make(map[string]*fileSocket),
 		fileTasks:        make(map[string]*fileTaskRoute),
+		desktops:         make(map[string]*desktopRoute),
 		MaxSessions:      256,
 		MaxForwards:      1024,
 		BatchConcurrency: runtime.GOMAXPROCS(0) * 8,
@@ -479,6 +482,7 @@ func closeClientResources(s *Server, client *ClientConn) {
 	for _, cancel := range cancels {
 		cancel()
 	}
+	s.closeDesktopForClient(client.ID)
 }
 
 func (h *wsHandler) OnOpen(socket *gws.Conn) {}
@@ -653,6 +657,8 @@ func (h *wsHandler) handleBinaryMessage(socket *gws.Conn, raw []byte) {
 		if fwd != nil && len(data) > 0 {
 			sendBytes(fwd.WriteCh, data, "tcp forward")
 		}
+	case protocol.BinDesktopFrame:
+		h.srv.handleDesktopFrame(id, data)
 	}
 }
 
@@ -725,6 +731,8 @@ func (s *Server) handleClientMessage(client *ClientConn, msg *protocol.Message) 
 		s.handleFileResult(msg)
 	case protocol.MsgFileListResult, protocol.MsgFileUploadReady, protocol.MsgFileDownloadStart, protocol.MsgFileTransferEnd, protocol.MsgFileTransferError:
 		s.handleFileManagerMessage(msg)
+	case protocol.MsgDesktopReady, protocol.MsgDesktopClose:
+		s.handleDesktopMessage(msg)
 	}
 }
 

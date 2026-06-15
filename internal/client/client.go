@@ -179,21 +179,22 @@ type managedUpload struct {
 
 // Client is the rdev client that connects to the server
 type Client struct {
-	serverURL   string
-	clientID    string
-	password    string
-	shell       string
-	conn        *gws.Conn
-	writeMu     sync.Mutex
-	sessions    map[string]*clientSession
-	forwards    map[string]net.Conn
-	forwardOpen map[string]chan struct{}
-	listeners   map[string]net.Listener
-	fileStreams map[string]*fileStream
-	uploads     map[string]*managedUpload
-	downloads   map[string]chan struct{}
-	mu          sync.Mutex
-	done        chan struct{}
+	serverURL       string
+	clientID        string
+	password        string
+	shell           string
+	conn            *gws.Conn
+	writeMu         sync.Mutex
+	sessions        map[string]*clientSession
+	forwards        map[string]net.Conn
+	forwardOpen     map[string]chan struct{}
+	listeners       map[string]net.Listener
+	fileStreams     map[string]*fileStream
+	uploads         map[string]*managedUpload
+	downloads       map[string]chan struct{}
+	desktopSessions map[string]chan struct{}
+	mu              sync.Mutex
+	done            chan struct{}
 
 	// Server info (received on register response)
 	sshPort  string
@@ -206,18 +207,19 @@ type Client struct {
 // NewClient creates a new client
 func NewClient(serverURL, clientID, password, shell string) *Client {
 	return &Client{
-		serverURL:   serverURL,
-		clientID:    clientID,
-		password:    password,
-		shell:       shell,
-		sessions:    make(map[string]*clientSession),
-		forwards:    make(map[string]net.Conn),
-		forwardOpen: make(map[string]chan struct{}),
-		listeners:   make(map[string]net.Listener),
-		fileStreams: make(map[string]*fileStream),
-		uploads:     make(map[string]*managedUpload),
-		downloads:   make(map[string]chan struct{}),
-		done:        make(chan struct{}, 1),
+		serverURL:       serverURL,
+		clientID:        clientID,
+		password:        password,
+		shell:           shell,
+		sessions:        make(map[string]*clientSession),
+		forwards:        make(map[string]net.Conn),
+		forwardOpen:     make(map[string]chan struct{}),
+		listeners:       make(map[string]net.Listener),
+		fileStreams:     make(map[string]*fileStream),
+		uploads:         make(map[string]*managedUpload),
+		downloads:       make(map[string]chan struct{}),
+		desktopSessions: make(map[string]chan struct{}),
+		done:            make(chan struct{}, 1),
 	}
 }
 
@@ -261,6 +263,10 @@ func (h *wsEventHandler) OnClose(socket *gws.Conn, err error) {
 	for tid, cancel := range h.client.downloads {
 		close(cancel)
 		delete(h.client.downloads, tid)
+	}
+	for sid, stop := range h.client.desktopSessions {
+		close(stop)
+		delete(h.client.desktopSessions, sid)
 	}
 	h.client.conn = nil
 	h.client.mu.Unlock()
@@ -425,6 +431,10 @@ func (c *Client) handleMessage(msg *protocol.Message) {
 		go c.handleManagedDownloadStart(msg)
 	case protocol.MsgFileTransferCancel:
 		c.handleManagedTransferCancel(msg.TaskID)
+	case protocol.MsgDesktopStart:
+		go c.handleDesktopStart(msg)
+	case protocol.MsgDesktopClose:
+		c.handleDesktopClose(msg.SessionID)
 	}
 }
 

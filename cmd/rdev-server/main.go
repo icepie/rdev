@@ -136,6 +136,7 @@ Examples:
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", srv.HandleWS)
 	mux.HandleFunc("/terminal", srv.HandleTerminalWS)
+	mux.HandleFunc("/desktop", srv.HandleDesktopWS)
 	mux.HandleFunc("/session", srv.HandleSessionAttachWS)
 	mux.HandleFunc("/batch", srv.HandleBatchWS)
 	mux.HandleFunc("/files", srv.HandleFilesWS)

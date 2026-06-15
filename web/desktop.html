@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <script src="/boot.js"></script>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title data-i18n="title.desktop">RDev Desktop</title>
+    <style>
+        :root { color-scheme: dark; }
+        :root[data-theme="dark"] { --bg:#0f1117; --card:#1a1d27; --border:#2a2d3a; --text:#e4e4e7; --muted:#71717a; --accent:#22d3ee; --green:#4ade80; --red:#f87171; --yellow:#facc15; }
+        :root[data-theme="light"] { color-scheme: light; --bg:#f6f8fb; --card:#fff; --border:#d8dee9; --text:#1f2937; --muted:#6b7280; --accent:#0891b2; --green:#16a34a; --red:#dc2626; --yellow:#ca8a04; }
+        * { box-sizing:border-box; margin:0; padding:0; }
+        body { height:100vh; height:100dvh; background:var(--bg); color:var(--text); font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; display:flex; flex-direction:column; overflow:hidden; }
+        .icon { width:1em; height:1em; vertical-align:-0.16em; flex-shrink:0; }
+        .icon-inline { display:inline-flex; align-items:center; gap:6px; }
+        .theme-toggle { display:inline-flex; align-items:center; gap:6px; border:1px solid var(--border); background:var(--card); color:var(--muted); border-radius:7px; padding:4px 8px; cursor:pointer; font-size:.78rem; }
+        .toolbar { display:flex; align-items:center; gap:10px; padding:8px 12px; background:var(--card); border-bottom:1px solid var(--border); flex-shrink:0; }
+        .logo { font-size:.9rem; font-weight:700; color:var(--accent); white-space:nowrap; }
+        .spacer { flex:1; }
+        .nav { display:flex; gap:6px; }
+        .nav a { color:var(--muted); border:1px solid var(--border); border-radius:6px; padding:4px 10px; font-size:.78rem; text-decoration:none; }
+        .nav a:hover { color:var(--accent); border-color:var(--accent); }
+        .lang-switch { display:inline-flex; align-items:center; gap:6px; color:var(--muted); font-size:.78rem; }
+        .controls { display:flex; align-items:center; gap:8px; padding:10px 12px; background:var(--card); border-bottom:1px solid var(--border); flex-wrap:wrap; }
+        .controls select, .controls input { border:1px solid var(--border); border-radius:7px; background:var(--bg); color:var(--text); padding:7px 10px; font-size:.9rem; outline:none; }
+        .controls input { min-width:180px; }
+        .btn { border:1px solid var(--border); border-radius:7px; background:var(--bg); color:var(--text); padding:7px 12px; cursor:pointer; }
+        .btn:hover { border-color:var(--accent); color:var(--accent); }
+        .status { color:var(--muted); font-size:.86rem; }
+        .status.ok { color:var(--green); }
+        .status.warn { color:var(--yellow); }
+        .status.err { color:var(--red); }
+        .stage { flex:1; min-height:0; display:flex; align-items:center; justify-content:center; padding:12px; overflow:auto; }
+        canvas { max-width:100%; max-height:100%; background:#000; border:1px solid var(--border); border-radius:10px; image-rendering:auto; }
+        .empty { color:var(--muted); text-align:center; line-height:1.8; }
+        @media (max-width:720px) { .toolbar { flex-wrap:wrap; } .nav { width:100%; overflow-x:auto; } .controls > * { flex:1 1 auto; } }
+    </style>
+</head>
+<body>
+    <div class="toolbar">
+        <div class="logo">RDev <span data-i18n="nav.desktop">Desktop</span></div>
+        <div class="spacer"></div>
+        <div id="lang-slot"></div>
+        <div class="nav">
+            <a href="/" data-auth-link data-i18n="nav.dashboard">Dashboard</a>
+            <a href="/terminal.html" data-auth-link data-i18n="nav.terminal">Terminal</a>
+            <a href="/files.html" data-auth-link data-i18n="nav.files">Files</a>
+            <a href="/sessions.html" data-auth-link data-i18n="nav.sessions">Sessions</a>
+            <a href="/desktop.html" data-auth-link data-i18n="nav.desktop">Desktop</a>
+        </div>
+    </div>
+    <div class="controls">
+        <select id="device"><option value="" data-i18n="terminal.devicePlaceholder">-- device --</option></select>
+        <input id="password" type="password" data-i18n-placeholder="terminal.passwordPlaceholder" placeholder="输入密码">
+        <button class="btn" id="connect" data-i18n="common.connect">连接</button>
+        <button class="btn" id="disconnect" data-i18n="desktop.disconnect">断开</button>
+        <span id="status" class="status" data-i18n="desktop.idle">Idle</span>
+    </div>
+    <div class="stage">
+        <canvas id="screen" style="display:none"></canvas>
+        <div id="empty" class="empty" data-i18n="desktop.empty">Select a device and connect.</div>
+    </div>
+
+    <script src="/i18n.js"></script>
+    <script src="/ui.js"></script>
+    <script>
+    document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n.langSelector();
+    RDevI18n.apply();
+    const adminToken = new URLSearchParams(location.search).get('token') || localStorage.getItem('rdevAdminToken') || '';
+    if (adminToken) localStorage.setItem('rdevAdminToken', adminToken);
+    function authURL(path) { return adminToken ? path + (path.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(adminToken) : path; }
+    function authFetch(path, init) { return fetch(authURL(path), init); }
+    document.querySelectorAll('[data-auth-link]').forEach(a => a.href = authURL(a.getAttribute('href')));
+
+    const params = new URLSearchParams(location.search);
+    const deviceSelect = document.getElementById('device');
+    const passwordInput = document.getElementById('password');
+    const statusEl = document.getElementById('status');
+    const canvas = document.getElementById('screen');
+    const ctx = canvas.getContext('2d');
+    const empty = document.getElementById('empty');
+    let ws = null, drawing = false, pendingFrame = null;
+
+    function setStatus(text, cls = '') { statusEl.textContent = text; statusEl.className = 'status ' + cls; }
+    async function loadDevices() {
+        const r = await authFetch('/api/devices');
+        const devices = await r.json();
+        const selected = params.get('device') || deviceSelect.value;
+        deviceSelect.innerHTML = '<option value="">' + t('terminal.devicePlaceholder') + '</option>' + devices.map(d => {
+            const desktop = d.desktop || {};
+            const label = `${d.id} · ${desktop.supported ? t('index.desktopReady') : (desktop.reason || t('index.desktopUnavailable'))}`;
+            return `<option value="${esc(d.id)}" ${d.id === selected ? 'selected' : ''}>${esc(label)}</option>`;
+        }).join('');
+        if (selected) deviceSelect.value = selected;
+    }
+    function esc(s) { const d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
+    function disconnect() { if (ws) { ws.close(); ws = null; } setStatus(t('desktop.closed'), 'warn'); }
+    async function connect() {
+        disconnect();
+        const device = deviceSelect.value;
+        if (!device) return setStatus(t('common.noDevices'), 'err');
+        const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+        ws = RDevUI.socket(`${proto}//${location.host}${authURL('/desktop?device=' + encodeURIComponent(device))}`);
+        ws.binaryType = 'arraybuffer';
+        setStatus(t('common.connecting'));
+        ws.onmessage = (evt) => {
+            if (evt.data instanceof ArrayBuffer) { drawFrame(evt.data); return; }
+            const msg = JSON.parse(evt.data);
+            if (msg.op === 'auth') {
+                setStatus(msg.message || t('desktop.authRequired'), 'warn');
+                const saved = RDevUI.getDevicePassword(device);
+                if (saved && !passwordInput.value) passwordInput.value = saved;
+                if (passwordInput.value) ws.send(JSON.stringify({op:'auth', password: passwordInput.value}));
+            } else if (msg.op === 'auth_ok') {
+                if (passwordInput.value) RDevUI.rememberDevicePassword(device, passwordInput.value);
+                setStatus(t('desktop.starting'));
+            } else if (msg.op === 'auth_fail') {
+                RDevUI.forgetDevicePassword(device);
+                setStatus(msg.message || t('common.passwordWrong'), 'err');
+            } else if (msg.op === 'starting') {
+                setStatus(t('desktop.starting'));
+            } else if (msg.op === 'ready') {
+                canvas.width = msg.width || 1; canvas.height = msg.height || 1;
+                canvas.style.display = 'block'; empty.style.display = 'none';
+                setStatus(`${t('index.desktopReady')} · ${canvas.width}×${canvas.height}`, 'ok');
+            } else if (msg.op === 'error') {
+                setStatus(msg.message || t('common.error'), 'err');
+            } else if (msg.op === 'closed') {
+                setStatus(msg.message || t('desktop.closed'), 'warn');
+            }
+        };
+        ws.onclose = () => { ws = null; setStatus(t('desktop.closed'), 'warn'); };
+    }
+    function drawFrame(data) {
+        pendingFrame = data;
+        if (drawing) return;
+        drawing = true;
+        requestAnimationFrame(async () => {
+            const frame = pendingFrame; pendingFrame = null;
+            try {
+                const bitmap = await createImageBitmap(new Blob([frame], {type:'image/jpeg'}));
+                if (canvas.width !== bitmap.width || canvas.height !== bitmap.height) { canvas.width = bitmap.width; canvas.height = bitmap.height; }
+                canvas.style.display = 'block'; empty.style.display = 'none';
+                ctx.drawImage(bitmap, 0, 0);
+                bitmap.close && bitmap.close();
+            } catch (e) { console.error(e); }
+            drawing = false;
+            if (pendingFrame) drawFrame(pendingFrame);
+        });
+    }
+    document.getElementById('connect').addEventListener('click', connect);
+    document.getElementById('disconnect').addEventListener('click', disconnect);
+    passwordInput.addEventListener('keydown', e => { if (e.key === 'Enter') connect(); });
+    window.addEventListener('beforeunload', disconnect);
+    loadDevices().then(() => { if (deviceSelect.value) connect(); }).catch(e => setStatus(e.message || String(e), 'err'));
+    </script>
+</body>
+</html>

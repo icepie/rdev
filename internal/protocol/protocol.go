@@ -47,6 +47,11 @@ const (
 	MsgFileTransferError  MessageType = "file_transfer_error"  // bidir: transfer failed
 	MsgFileTransferCancel MessageType = "file_transfer_cancel" // bidir: cancel transfer
 
+	// Remote desktop (text frames for control, binary for frames)
+	MsgDesktopStart MessageType = "desktop_start" // S->C: start view-only desktop capture
+	MsgDesktopReady MessageType = "desktop_ready" // C->S: desktop capture status/metadata
+	MsgDesktopClose MessageType = "desktop_close" // bidir: close desktop session
+
 	// Legacy text-frame data types (kept for reference, use binary frames instead)
 	MsgData       MessageType = "data"
 	MsgStderrData MessageType = "stderr"
@@ -73,6 +78,8 @@ const (
 	BinFileDownloadChunk  byte = 0x22
 	BinFileTransferEnd    byte = 0x23
 	BinFileTransferCancel byte = 0x24
+
+	BinDesktopFrame byte = 0x30 // Remote desktop encoded frame bytes
 )
 
 // File binary extended layout after common header:
@@ -136,8 +143,13 @@ type Message struct {
 	AttachMode  string        `json:"attachMode,omitempty"`  // "monitor" (read-only) or "takeover" (read-write)
 	Sessions    []SessionInfo `json:"sessions,omitempty"`
 
-	// Remote desktop capability discovery
+	// Remote desktop
 	DesktopCapabilities *DesktopCapabilities `json:"desktop,omitempty"`
+	Width               int                  `json:"width,omitempty"`
+	Height              int                  `json:"height,omitempty"`
+	Format              string               `json:"format,omitempty"`
+	Quality             int                  `json:"quality,omitempty"`
+	FPS                 int                  `json:"fps,omitempty"`
 
 	// Legacy fields (text frames)
 	Data   string `json:"data,omitempty"`
