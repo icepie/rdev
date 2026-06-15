@@ -119,7 +119,7 @@
     const empty = document.getElementById('empty');
     const storagePrefix = 'rdevDesktop.';
     let ws = null, drawing = false, pendingFrame = null, deviceCache = [], lastCloseMessage = '', connectionSeq = 0;
-    let frameCount = 0, frameBytes = 0, statsStartedAt = 0, lastFrameAt = 0, currentSource = '', remoteInput = false, resizeTimer = null, lastMouseSent = 0;
+    let frameCount = 0, frameBytes = 0, statsStartedAt = 0, lastFrameAt = 0, currentSource = '', remoteInput = false, resizeTimer = null, reconnectTimer = null, lastMouseSent = 0;
 
     function loadSavedDesktopSettings() {
         const mode = localStorage.getItem(storagePrefix + 'mode');
@@ -234,7 +234,12 @@
         updateSourceOptions();
     }
     function esc(s) { const d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
-    function disconnect() { connectionSeq++; if (ws) { ws.close(); ws = null; } lastCloseMessage = ''; resetFrameStats(); setStatus(t('desktop.closed'), 'warn'); }
+    function scheduleReconnectIfActive() {
+        if (!ws) return;
+        clearTimeout(reconnectTimer);
+        reconnectTimer = setTimeout(() => connect(), 150);
+    }
+    function disconnect() { connectionSeq++; clearTimeout(reconnectTimer); if (ws) { ws.close(); ws = null; } lastCloseMessage = ''; resetFrameStats(); setStatus(t('desktop.closed'), 'warn'); }
     async function connect() {
         disconnect();
         saveDesktopSettings();
@@ -364,11 +369,11 @@
     document.getElementById('disconnect').addEventListener('click', disconnect);
     document.getElementById('screenshot').addEventListener('click', saveScreenshot);
     document.getElementById('fullscreen').addEventListener('click', toggleFullscreen);
-    deviceSelect.addEventListener('change', () => { updateSourceOptions(); saveDesktopSettings(); });
-    modeSelect.addEventListener('change', () => { updateMode(); saveDesktopSettings(); });
-    sourceSelect.addEventListener('change', saveDesktopSettings);
+    deviceSelect.addEventListener('change', () => { updateSourceOptions(); saveDesktopSettings(); scheduleReconnectIfActive(); });
+    modeSelect.addEventListener('change', () => { updateMode(); saveDesktopSettings(); scheduleReconnectIfActive(); });
+    sourceSelect.addEventListener('change', () => { saveDesktopSettings(); scheduleReconnectIfActive(); });
     fitModeSelect.addEventListener('change', () => { stage.dataset.fit = fitModeSelect.value; saveDesktopSettings(); });
-    [fpsInput, qualityInput, maxWidthInput, maxHeightInput].forEach(input => input.addEventListener('change', saveDesktopSettings));
+    [fpsInput, qualityInput, maxWidthInput, maxHeightInput].forEach(input => input.addEventListener('change', () => { saveDesktopSettings(); scheduleReconnectIfActive(); }));
     passwordInput.addEventListener('keydown', e => { if (e.key === 'Enter') connect(); });
     window.addEventListener('beforeunload', disconnect);
     loadSavedDesktopSettings();
