@@ -85,9 +85,13 @@ RDEV_UPDATE_INTERVAL=10m ./rdev-client -s ws://your-server:8080
 # 自定义 GitHub 下载前缀，多个前缀逗号分隔；内置前缀会在直连失败后自动重试
 RDEV_UPDATE_PROXY=https://gh-proxy.com/ ./rdev-server
 
-# 如果需要 HTTP 代理，使用 Go 标准环境变量
+# 标准 HTTP/HTTPS 代理会同时用于自动更新下载和客户端 WebSocket 主连接
 HTTPS_PROXY=http://127.0.0.1:7890 ./rdev-server
+HTTPS_PROXY=http://127.0.0.1:7890 ./rdev-client -s wss://your-server.com
+NO_PROXY=localhost,127.0.0.1,.lan ./rdev-client -s wss://your-server.com
 ```
+
+说明：`RDEV_UPDATE_PROXY` 是 GitHub 下载前缀/模板，不是标准 HTTP 代理。标准代理请使用 `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY`；其中 `wss://` 连接使用 `HTTPS_PROXY`，`ws://` 连接使用 `HTTP_PROXY`，支持 `http://user:pass@host:port`。
 
 ### 远程连接
 

@@ -377,6 +377,7 @@ func (c *Client) connect() error {
 		Addr:               wsURL,
 		HandshakeTimeout:   10 * time.Second,
 		ReadMaxPayloadSize: 16 * 1024 * 1024,
+		NewDialer:          websocketDialerFor(wsURL),
 		PermessageDeflate: gws.PermessageDeflate{
 			Enabled:               true,
 			ServerContextTakeover: true,
