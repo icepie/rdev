@@ -1,12 +1,57 @@
 package server
 
 import (
+	"bytes"
 	"strings"
 	"testing"
 	"time"
 
 	"rdev/internal/protocol"
 )
+
+func TestProxySessionHistoryReplayAndLimit(t *testing.T) {
+	sess := &ProxySession{}
+	sess.BroadcastOutput([]byte("hello "))
+	sess.BroadcastStderr([]byte("world"))
+
+	history, writeCh, stderrCh, done := sess.AddObserver("obs-1")
+	if got := bytes.Join(history, nil); string(got) != "hello world" {
+		t.Fatalf("history = %q, want hello world", got)
+	}
+
+	sess.BroadcastOutput([]byte(" live"))
+	select {
+	case got := <-writeCh:
+		if string(got) != " live" {
+			t.Fatalf("live output = %q, want live", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("expected live output after observer registration")
+	}
+
+	sess.NotifyObserversClose()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("expected observer done after close notification")
+	}
+	select {
+	case got := <-stderrCh:
+		t.Fatalf("unexpected stderr after history replay: %q", got)
+	default:
+	}
+
+	large := bytes.Repeat([]byte("x"), sessionHistoryLimit+128)
+	limited := &ProxySession{}
+	limited.BroadcastOutput(large)
+	limitedHistory := bytes.Join(limited.HistorySnapshot(), nil)
+	if len(limitedHistory) != sessionHistoryLimit {
+		t.Fatalf("limited history size = %d, want %d", len(limitedHistory), sessionHistoryLimit)
+	}
+	if !bytes.Equal(limitedHistory, large[len(large)-sessionHistoryLimit:]) {
+		t.Fatal("history should keep the newest bytes")
+	}
+}
 
 func TestAllocateClientIDLockedUsesSuffixOnConflict(t *testing.T) {
 	s := NewServer()

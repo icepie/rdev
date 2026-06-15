@@ -22,6 +22,8 @@ import (
 //go:embed static
 var templateFS embed.FS
 
+const sessionHistoryLimit = 1024 * 1024
+
 // ClientConn represents a connected client device
 type ClientConn struct {
 	ID          string
@@ -114,6 +116,11 @@ type ProxySession struct {
 	command   string // original command (empty for shell)
 	subsystem string // "", "sftp"
 
+	// Recent output history for late session attach viewers.
+	historyMu    sync.Mutex
+	history      [][]byte
+	historyBytes int
+
 	// Observers for session attach.
 	obsMu     sync.RWMutex
 	observers map[string]*sessionObserver // id -> observer
@@ -177,7 +184,9 @@ func (s *ProxySession) WaitExitCode(timeout time.Duration) int {
 // --- Observer (session attach) support ---
 
 // AddObserver registers an observer that receives a copy of all session output.
-func (s *ProxySession) AddObserver(id string) (writeCh, stderrCh <-chan []byte, done <-chan struct{}) {
+func (s *ProxySession) AddObserver(id string) (history [][]byte, writeCh, stderrCh <-chan []byte, done <-chan struct{}) {
+	s.historyMu.Lock()
+	defer s.historyMu.Unlock()
 	s.obsMu.Lock()
 	defer s.obsMu.Unlock()
 	if s.observers == nil {
@@ -190,7 +199,42 @@ func (s *ProxySession) AddObserver(id string) (writeCh, stderrCh <-chan []byte, 
 		done:     make(chan struct{}),
 	}
 	s.observers[id] = obs
-	return obs.writeCh, obs.stderrCh, obs.done
+	if len(s.history) > 0 {
+		history = make([][]byte, len(s.history))
+		copy(history, s.history)
+	}
+	return history, obs.writeCh, obs.stderrCh, obs.done
+}
+
+func (s *ProxySession) recordHistoryLocked(data []byte) {
+	if len(data) == 0 || sessionHistoryLimit <= 0 {
+		return
+	}
+	chunk := data
+	if len(chunk) > sessionHistoryLimit {
+		chunk = chunk[len(chunk)-sessionHistoryLimit:]
+	}
+	copyChunk := make([]byte, len(chunk))
+	copy(copyChunk, chunk)
+
+	s.history = append(s.history, copyChunk)
+	s.historyBytes += len(copyChunk)
+	for s.historyBytes > sessionHistoryLimit && len(s.history) > 0 {
+		s.historyBytes -= len(s.history[0])
+		s.history[0] = nil
+		s.history = s.history[1:]
+	}
+}
+
+func (s *ProxySession) HistorySnapshot() [][]byte {
+	s.historyMu.Lock()
+	defer s.historyMu.Unlock()
+	if len(s.history) == 0 {
+		return nil
+	}
+	snapshot := make([][]byte, len(s.history))
+	copy(snapshot, s.history)
+	return snapshot
 }
 
 // RemoveObserver unregisters an observer.
@@ -207,6 +251,9 @@ func (s *ProxySession) RemoveObserver(id string) {
 
 // BroadcastOutput sends session output to all observers.
 func (s *ProxySession) BroadcastOutput(data []byte) {
+	s.historyMu.Lock()
+	defer s.historyMu.Unlock()
+	s.recordHistoryLocked(data)
 	s.obsMu.RLock()
 	defer s.obsMu.RUnlock()
 	for _, obs := range s.observers {
@@ -220,6 +267,9 @@ func (s *ProxySession) BroadcastOutput(data []byte) {
 
 // BroadcastStderr sends session stderr to all observers.
 func (s *ProxySession) BroadcastStderr(data []byte) {
+	s.historyMu.Lock()
+	defer s.historyMu.Unlock()
+	s.recordHistoryLocked(data)
 	s.obsMu.RLock()
 	defer s.obsMu.RUnlock()
 	for _, obs := range s.observers {

@@ -151,11 +151,11 @@ func (h *sessionAttachHandler) attach(ac *sessionAttachConn) {
 		return
 	}
 	obsID := generateID()
-	writeCh, stderrCh, done := ac.sess.AddObserver(obsID)
+	history, writeCh, stderrCh, done := ac.sess.AddObserver(obsID)
 	ac.obsID = obsID
 	ac.authOK = true
 	h.sendJSON(ac.socket, sessionAttachMsg{Op: "auth_ok"})
-	go ac.pumpOutput(writeCh, stderrCh, done)
+	go ac.pumpOutput(history, writeCh, stderrCh, done)
 }
 
 func (h *sessionAttachHandler) OnClose(socket *gws.Conn, err error) {
@@ -256,7 +256,14 @@ func (h *sessionAttachHandler) sendJSON(socket *gws.Conn, msg sessionAttachMsg) 
 	_ = socket.SetWriteDeadline(time.Time{})
 }
 
-func (ac *sessionAttachConn) pumpOutput(writeCh, stderrCh <-chan []byte, done <-chan struct{}) {
+func (ac *sessionAttachConn) pumpOutput(history [][]byte, writeCh, stderrCh <-chan []byte, done <-chan struct{}) {
+	for _, data := range history {
+		if err := ac.writeMessage(gws.OpcodeBinary, data); err != nil {
+			ac.close()
+			return
+		}
+	}
+
 	for {
 		select {
 		case data, ok := <-writeCh:
