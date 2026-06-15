@@ -251,7 +251,9 @@ func (h *sessionAttachHandler) sendError(socket *gws.Conn, msg string) {
 
 func (h *sessionAttachHandler) sendJSON(socket *gws.Conn, msg sessionAttachMsg) {
 	data, _ := json.Marshal(msg)
-	socket.WriteMessage(gws.OpcodeText, data)
+	_ = socket.SetWriteDeadline(time.Now().Add(10 * time.Second))
+	_ = socket.WriteMessage(gws.OpcodeText, data)
+	_ = socket.SetWriteDeadline(time.Time{})
 }
 
 func (ac *sessionAttachConn) pumpOutput(writeCh, stderrCh <-chan []byte, done <-chan struct{}) {
@@ -262,13 +264,19 @@ func (ac *sessionAttachConn) pumpOutput(writeCh, stderrCh <-chan []byte, done <-
 				ac.sendExit(-1)
 				return
 			}
-			ac.writeMessage(gws.OpcodeBinary, data)
+			if err := ac.writeMessage(gws.OpcodeBinary, data); err != nil {
+				ac.close()
+				return
+			}
 
 		case data, ok := <-stderrCh:
 			if !ok {
 				return
 			}
-			ac.writeMessage(gws.OpcodeBinary, data)
+			if err := ac.writeMessage(gws.OpcodeBinary, data); err != nil {
+				ac.close()
+				return
+			}
 
 		case <-done:
 			ac.sendExit(ac.sess.WaitExitCode(2 * time.Second))
@@ -280,15 +288,18 @@ func (ac *sessionAttachConn) pumpOutput(writeCh, stderrCh <-chan []byte, done <-
 	}
 }
 
-func (ac *sessionAttachConn) writeMessage(opcode gws.Opcode, data []byte) {
+func (ac *sessionAttachConn) writeMessage(opcode gws.Opcode, data []byte) error {
 	ac.writeMu.Lock()
 	defer ac.writeMu.Unlock()
-	ac.socket.WriteMessage(opcode, data)
+	_ = ac.socket.SetWriteDeadline(time.Now().Add(10 * time.Second))
+	err := ac.socket.WriteMessage(opcode, data)
+	_ = ac.socket.SetWriteDeadline(time.Time{})
+	return err
 }
 
 func (ac *sessionAttachConn) sendExit(code int) {
 	msg, _ := json.Marshal(sessionAttachMsg{Op: "exit", Code: code})
-	ac.writeMessage(gws.OpcodeText, msg)
+	_ = ac.writeMessage(gws.OpcodeText, msg)
 }
 
 func (ac *sessionAttachConn) close() {

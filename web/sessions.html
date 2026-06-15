@@ -187,7 +187,48 @@
     const WebLinksAddon = window.WebLinksAddon;
     const WebglAddon = window.AddonWebgl?.WebglAddon;
 
-    let sessions = [], activeId = null, term = null, fitAddon = null, imageWriter = null, ws = null, needAuth = false;
+    let sessions = [], sessionsFingerprint = '', sessionsLoadSeq = 0;
+    let activeId = null, term = null, fitAddon = null, imageWriter = null, ws = null, needAuth = false;
+    let outputQueue = [], outputFlushScheduled = false, attachResizeTimer = null, lastResize = null;
+
+    function flushAttachOutput() {
+        outputFlushScheduled = false;
+        if (!imageWriter) { outputQueue = []; return; }
+        const started = performance.now();
+        while (outputQueue.length) {
+            imageWriter.write(outputQueue.shift());
+            if (performance.now() - started > 12) {
+                outputFlushScheduled = true;
+                requestAnimationFrame(flushAttachOutput);
+                return;
+            }
+        }
+    }
+    function enqueueAttachOutput(data) {
+        outputQueue.push(data);
+        if (!outputFlushScheduled) {
+            outputFlushScheduled = true;
+            requestAnimationFrame(flushAttachOutput);
+        }
+    }
+    function drainAttachOutput() {
+        if (!outputQueue.length || !imageWriter) return;
+        const queued = outputQueue;
+        outputQueue = [];
+        outputFlushScheduled = false;
+        queued.forEach(data => imageWriter.write(data));
+    }
+    function sendAttachResize(rows, cols) {
+        if (!ws || ws.readyState !== WebSocket.OPEN || needAuth) return;
+        if (lastResize && lastResize.rows === rows && lastResize.cols === cols) return;
+        lastResize = { rows, cols };
+        clearTimeout(attachResizeTimer);
+        attachResizeTimer = setTimeout(() => {
+            if (ws && ws.readyState === WebSocket.OPEN && !needAuth) {
+                ws.send(JSON.stringify({ op: 'resize', rows, cols }));
+            }
+        }, 80);
+    }
 
     function loadTerminalImageAddon(term) {
         if (!window.ImageAddon || !window.ImageAddon.ImageAddon) return null;
@@ -263,9 +304,15 @@
 
     // ── Session list ──
     async function loadSessions() {
+        const seq = ++sessionsLoadSeq;
         try {
             const r = await authFetch('/api/sessions');
-            sessions = await r.json();
+            const nextSessions = await r.json();
+            if (seq !== sessionsLoadSeq) return;
+            const nextFingerprint = JSON.stringify(nextSessions);
+            if (nextFingerprint === sessionsFingerprint) return;
+            sessionsFingerprint = nextFingerprint;
+            sessions = nextSessions;
             document.getElementById('sess-count').textContent = sessions.length;
             renderList();
         } catch(e) { console.error('loadSessions', e); }
@@ -318,11 +365,15 @@
 
     // ── Attach to session ──
     function attachSession(sessionID) {
-        if (activeId === sessionID && ws) return;
+        if (activeId === sessionID && ws && ws.readyState !== WebSocket.CLOSED) return;
         detachSession();
 
         activeId = sessionID;
         needAuth = false;
+        outputQueue = [];
+        outputFlushScheduled = false;
+        lastResize = null;
+        clearTimeout(attachResizeTimer);
         renderList();
 
         const sess = sessions.find(s => s.id === sessionID);
@@ -371,7 +422,7 @@
             if (evt.data instanceof ArrayBuffer) {
                 removeAuthOverlay();
                 needAuth = false;
-                imageWriter.write(evt.data);
+                enqueueAttachOutput(evt.data);
                 return;
             }
             const msg = JSON.parse(evt.data);
@@ -394,9 +445,11 @@
                 if (btn) { btn.disabled = false; btn.textContent = t('common.connect'); }
                 if (input) { input.value = ''; input.focus(); }
             } else if (msg.op === 'exit') {
+                drainAttachOutput();
                 removeAuthOverlay();
                 term.write('\r\n\x1b[33m[' + t('sessions.exitCode', {code: msg.code}) + ']\x1b[0m\r\n');
             } else if (msg.op === 'error') {
+                drainAttachOutput();
                 removeAuthOverlay();
                 term.write('\r\n\x1b[31m[' + t('sessions.error', {message: msg.message}) + ']\x1b[0m\r\n');
             }
@@ -404,6 +457,7 @@
 
         ws.onclose = () => {
             if (activeId === sessionID) {
+                drainAttachOutput();
                 term.write('\r\n\x1b[31m' + t('sessions.disconnected') + '\x1b[0m\r\n');
             }
         };
@@ -413,14 +467,17 @@
         });
 
         term.onResize(({ cols, rows }) => {
-            if (ws && ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({ op: 'resize', rows, cols }));
-            }
+            sendAttachResize(rows, cols);
         });
     }
 
     function detachSession() {
-        if (ws) { ws.close(); ws = null; }
+        if (ws) { const closing = ws; ws = null; closing.onclose = null; closing.close(); }
+        clearTimeout(attachResizeTimer);
+        drainAttachOutput();
+        outputQueue = [];
+        outputFlushScheduled = false;
+        lastResize = null;
         removeAuthOverlay();
         if (term) { term.dispose(); term = null; }
         imageWriter = null;
