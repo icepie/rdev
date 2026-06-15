@@ -1,7 +1,9 @@
 package updater
 
 import (
+	"net/http"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -44,6 +46,20 @@ func TestReleaseAssetName(t *testing.T) {
 	}
 	if name != expected {
 		t.Fatalf("releaseAssetName = %q, want %q", name, expected)
+	}
+}
+
+func TestLooksLikeHTML(t *testing.T) {
+	resp := &http.Response{Header: http.Header{"Content-Type": []string{"text/html; charset=utf-8"}}}
+	if !looksLikeHTML(resp, []byte("ok")) {
+		t.Fatal("content-type html was not detected")
+	}
+	resp = &http.Response{Header: http.Header{"Content-Type": []string{"application/octet-stream"}}}
+	if !looksLikeHTML(resp, []byte("  <!doctype html><html></html>")) {
+		t.Fatal("html body was not detected")
+	}
+	if looksLikeHTML(resp, []byte("MZ"+strings.Repeat("x", 1024))) {
+		t.Fatal("binary body was detected as html")
 	}
 }
 

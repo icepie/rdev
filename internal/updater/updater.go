@@ -107,7 +107,7 @@ func CheckAndApply(ctx context.Context, cfg Config) (bool, error) {
 	if assetURL == "" {
 		return false, fmt.Errorf("release %s asset %s not found", release.TagName, assetName)
 	}
-	data, err := downloadWithProxies(ctx, assetURL)
+	data, err := downloadAssetWithProxies(ctx, assetURL)
 	if err != nil {
 		return false, err
 	}
@@ -122,7 +122,7 @@ func CheckAndApply(ctx context.Context, cfg Config) (bool, error) {
 
 func latestRelease(ctx context.Context) (*releaseInfo, error) {
 	url := "https://api.github.com/repos/" + repo + "/releases/latest"
-	data, err := downloadWithProxies(ctx, url)
+	data, err := downloadJSONWithProxies(ctx, url)
 	if err != nil {
 		return nil, err
 	}
@@ -136,7 +136,28 @@ func latestRelease(ctx context.Context) (*releaseInfo, error) {
 	return &release, nil
 }
 
-func downloadWithProxies(ctx context.Context, target string) ([]byte, error) {
+func downloadJSONWithProxies(ctx context.Context, target string) ([]byte, error) {
+	return downloadWithProxies(ctx, target, func(url string, resp *http.Response, body []byte) error {
+		if !json.Valid(body) {
+			return fmt.Errorf("%s returned non-json response", url)
+		}
+		return nil
+	})
+}
+
+func downloadAssetWithProxies(ctx context.Context, target string) ([]byte, error) {
+	return downloadWithProxies(ctx, target, func(url string, resp *http.Response, body []byte) error {
+		if looksLikeHTML(resp, body) {
+			return fmt.Errorf("%s returned html instead of release asset", url)
+		}
+		if len(body) == 0 {
+			return fmt.Errorf("%s returned empty release asset", url)
+		}
+		return nil
+	})
+}
+
+func downloadWithProxies(ctx context.Context, target string, validate func(string, *http.Response, []byte) error) ([]byte, error) {
 	client := &http.Client{Timeout: 3 * time.Minute}
 	var lastErr error
 	for _, prefix := range proxyPrefixes() {
@@ -162,12 +183,31 @@ func downloadWithProxies(ctx context.Context, target string) ([]byte, error) {
 			lastErr = fmt.Errorf("%s returned %s", url, resp.Status)
 			continue
 		}
+		if validate != nil {
+			if err := validate(url, resp, body); err != nil {
+				lastErr = err
+				continue
+			}
+		}
 		return body, nil
 	}
 	if lastErr == nil {
 		lastErr = errors.New("all update URLs failed")
 	}
 	return nil, lastErr
+}
+
+func looksLikeHTML(resp *http.Response, body []byte) bool {
+	contentType := strings.ToLower(resp.Header.Get("Content-Type"))
+	if strings.Contains(contentType, "text/html") {
+		return true
+	}
+	prefix := bytes.TrimSpace(body)
+	if len(prefix) > 256 {
+		prefix = prefix[:256]
+	}
+	prefix = bytes.ToLower(prefix)
+	return bytes.HasPrefix(prefix, []byte("<html")) || bytes.HasPrefix(prefix, []byte("<!doctype html")) || bytes.HasPrefix(prefix, []byte("<"))
 }
 
 func proxyPrefixes() []string {
