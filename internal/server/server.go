@@ -32,6 +32,7 @@ type ClientConn struct {
 	Password    string
 	Sessions    map[string]*ProxySession
 	Forwards    map[string]*ProxyForward
+	Desktop     *protocol.DesktopCapabilities
 	writeMu     sync.Mutex
 	mu          sync.Mutex
 }
@@ -558,6 +559,7 @@ func (h *wsHandler) handleRegister(socket *gws.Conn, msg *protocol.Message) {
 		Conn:        socket,
 		ConnectedAt: time.Now(),
 		Password:    msg.Password,
+		Desktop:     cloneDesktopCapabilities(msg.DesktopCapabilities),
 		Sessions:    make(map[string]*ProxySession),
 		Forwards:    make(map[string]*ProxyForward),
 	}
@@ -577,6 +579,17 @@ func (h *wsHandler) handleRegister(socket *gws.Conn, msg *protocol.Message) {
 		SSHPort:  h.srv.SSHPort,
 		HTTPHost: h.srv.HTTPHost,
 	})
+}
+
+func cloneDesktopCapabilities(caps *protocol.DesktopCapabilities) *protocol.DesktopCapabilities {
+	if caps == nil {
+		return nil
+	}
+	clone := *caps
+	if caps.Backends != nil {
+		clone.Backends = append([]string(nil), caps.Backends...)
+	}
+	return &clone
 }
 
 func (s *Server) allocateClientIDLocked(base string) string {
@@ -947,11 +960,12 @@ func (s *Server) HandleAPI(w http.ResponseWriter, r *http.Request) {
 	defer s.mu.RUnlock()
 
 	type clientInfo struct {
-		ID          string `json:"id"`
-		ConnectedAt string `json:"connectedAt"`
-		Sessions    int    `json:"sessions"`
-		Forwards    int    `json:"forwards"`
-		HasPassword bool   `json:"hasPassword"`
+		ID          string                        `json:"id"`
+		ConnectedAt string                        `json:"connectedAt"`
+		Sessions    int                           `json:"sessions"`
+		Forwards    int                           `json:"forwards"`
+		HasPassword bool                          `json:"hasPassword"`
+		Desktop     *protocol.DesktopCapabilities `json:"desktop,omitempty"`
 	}
 
 	var clients []clientInfo
@@ -966,6 +980,7 @@ func (s *Server) HandleAPI(w http.ResponseWriter, r *http.Request) {
 			Sessions:    n,
 			Forwards:    f,
 			HasPassword: c.Password != "",
+			Desktop:     cloneDesktopCapabilities(c.Desktop),
 		})
 	}
 
@@ -999,9 +1014,10 @@ func (s *Server) HandleTerminalAPI(w http.ResponseWriter, r *http.Request) {
 	defer s.mu.RUnlock()
 
 	type deviceInfo struct {
-		ID          string `json:"id"`
-		ConnectedAt string `json:"connectedAt"`
-		HasPassword bool   `json:"hasPassword"`
+		ID          string                        `json:"id"`
+		ConnectedAt string                        `json:"connectedAt"`
+		HasPassword bool                          `json:"hasPassword"`
+		Desktop     *protocol.DesktopCapabilities `json:"desktop,omitempty"`
 	}
 
 	var devices []deviceInfo
@@ -1010,6 +1026,7 @@ func (s *Server) HandleTerminalAPI(w http.ResponseWriter, r *http.Request) {
 			ID:          c.ID,
 			ConnectedAt: c.ConnectedAt.Format(time.RFC3339),
 			HasPassword: c.Password != "",
+			Desktop:     cloneDesktopCapabilities(c.Desktop),
 		})
 	}
 

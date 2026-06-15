@@ -134,8 +134,8 @@
         </div>
 
         <table>
-            <thead><tr><th data-i18n="index.status">状态</th><th data-i18n="index.deviceId">设备 ID</th><th data-i18n="index.connectedAt">连接时间</th><th data-i18n="index.sessions">会话</th><th data-i18n="index.forwards">转发</th><th data-i18n="index.auth">认证</th><th data-i18n="files.actions">Actions</th></tr></thead>
-            <tbody id="tbody"><tr><td colspan="7" class="empty"><div class="empty-icon" data-icon="radio"></div><span data-i18n="index.waitingDevices">等待设备连接...</span></td></tr></tbody>
+            <thead><tr><th data-i18n="index.status">状态</th><th data-i18n="index.deviceId">设备 ID</th><th data-i18n="index.connectedAt">连接时间</th><th data-i18n="index.sessions">会话</th><th data-i18n="index.forwards">转发</th><th data-i18n="index.auth">认证</th><th data-i18n="index.desktop">桌面</th><th data-i18n="files.actions">Actions</th></tr></thead>
+            <tbody id="tbody"><tr><td colspan="8" class="empty"><div class="empty-icon" data-icon="radio"></div><span data-i18n="index.waitingDevices">等待设备连接...</span></td></tr></tbody>
         </table>
 
         <div class="install">
@@ -328,13 +328,14 @@
                 document.getElementById('stat-sessions').textContent = c.reduce((s,x) => s + x.sessions, 0);
                 document.getElementById('stat-forwards').textContent = c.reduce((s,x) => s + x.forwards, 0);
                 const tb = document.getElementById('tbody');
-                if (!c.length) { tb.innerHTML = '<tr><td colspan="7" class="empty"><div class="empty-icon" data-icon="radio"></div><span data-i18n="index.waitingDevices">等待设备连接...</span></td></tr>'; return; }
+                if (!c.length) { tb.innerHTML = '<tr><td colspan="8" class="empty"><div class="empty-icon" data-icon="radio"></div><span data-i18n="index.waitingDevices">等待设备连接...</span></td></tr>'; return; }
                 tb.innerHTML = c.map(d => `<tr>
                     <td><span class="dot online"></span>${t('common.online')}</td>
                     <td style="font-weight:600">${esc(d.id)}</td>
                     <td style="color:var(--muted)">${ago(d.connectedAt)}</td>
                     <td>${d.sessions}</td><td>${d.forwards}</td>
                     <td>${d.hasPassword?'<span class="badge green">' + t('common.password') + '</span>':'<span class="badge yellow">' + t('common.open') + '</span>'}</td>
+                    <td>${desktopBadge(d.desktop)}</td>
                     <td><div class="row-actions">
                         <a href="/terminal.html?device=${encodeURIComponent(d.id)}" class="term-btn">${icon('terminal')} ${t('index.navTerminal')}</a>
                         <a href="/files.html?device=${encodeURIComponent(d.id)}" class="term-btn">${icon('files')} ${t('index.navFiles')}</a>
@@ -343,6 +344,13 @@
             } catch(e) {}
         }
         function esc(s) { const d=document.createElement('div'); d.textContent=s; return d.innerHTML; }
+        function desktopBadge(desktop) {
+            if (!desktop) return '<span class="badge yellow" title="">' + t('index.desktopUnavailable') + '</span>';
+            const title = esc([desktop.platform, desktop.displayServer, desktop.backends && desktop.backends.join(','), desktop.reason].filter(Boolean).join(' · '));
+            if (desktop.supported) return '<span class="badge green" title="' + title + '">' + t('index.desktopReady') + '</span>';
+            if (desktop.backends && desktop.backends.length) return '<span class="badge yellow" title="' + title + '">' + t('index.desktopLimited') + '</span>';
+            return '<span class="badge yellow" title="' + title + '">' + t('index.desktopUnavailable') + '</span>';
+        }
         function ago(iso) { const d=new Date(iso),s=Math.floor((Date.now()-d)/1000);
             if(s<60)return t('common.justNow'); if(s<3600)return t('common.minutesAgo', {n: Math.floor(s/60)});
             if(s<86400)return t('common.hoursAgo', {n: Math.floor(s/3600)}); return t('common.daysAgo', {n: Math.floor(s/86400)}); }

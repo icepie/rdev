@@ -136,9 +136,24 @@ type Message struct {
 	AttachMode  string        `json:"attachMode,omitempty"`  // "monitor" (read-only) or "takeover" (read-write)
 	Sessions    []SessionInfo `json:"sessions,omitempty"`
 
+	// Remote desktop capability discovery
+	DesktopCapabilities *DesktopCapabilities `json:"desktop,omitempty"`
+
 	// Legacy fields (text frames)
 	Data   string `json:"data,omitempty"`
 	Stderr string `json:"stderr,omitempty"`
+}
+
+// DesktopCapabilities describes remote desktop support reported by a device.
+type DesktopCapabilities struct {
+	Platform      string   `json:"platform"`
+	DisplayServer string   `json:"displayServer,omitempty"`
+	Supported     bool     `json:"supported"`
+	ViewOnly      bool     `json:"viewOnly"`
+	Input         bool     `json:"input"`
+	Clipboard     bool     `json:"clipboard"`
+	Backends      []string `json:"backends,omitempty"`
+	Reason        string   `json:"reason,omitempty"`
 }
 
 // SessionInfo describes an active session for the management API.

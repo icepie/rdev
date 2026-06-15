@@ -230,9 +230,10 @@ type wsEventHandler struct {
 func (h *wsEventHandler) OnOpen(socket *gws.Conn) {
 	h.client.conn = socket
 	if err := h.client.send(&protocol.Message{
-		Type:     protocol.MsgRegister,
-		ClientID: h.client.clientID,
-		Password: h.client.password,
+		Type:                protocol.MsgRegister,
+		ClientID:            h.client.clientID,
+		Password:            h.client.password,
+		DesktopCapabilities: desktopCapabilities(),
 	}); err != nil {
 		log.Printf("register send error: %v", err)
 		return
