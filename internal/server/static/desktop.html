@@ -104,7 +104,7 @@
     const canvas = document.getElementById('screen');
     const ctx = canvas.getContext('2d');
     const empty = document.getElementById('empty');
-    let ws = null, drawing = false, pendingFrame = null, deviceCache = [];
+    let ws = null, drawing = false, pendingFrame = null, deviceCache = [], lastCloseMessage = '';
 
     function updateSourceOptions() {
         const device = deviceCache.find(d => d.id === deviceSelect.value) || {};
@@ -159,13 +159,14 @@
         updateSourceOptions();
     }
     function esc(s) { const d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
-    function disconnect() { if (ws) { ws.close(); ws = null; } setStatus(t('desktop.closed'), 'warn'); }
+    function disconnect() { if (ws) { ws.close(); ws = null; } lastCloseMessage = ''; setStatus(t('desktop.closed'), 'warn'); }
     async function connect() {
         disconnect();
         const device = deviceSelect.value;
         if (!device) return setStatus(t('common.noDevices'), 'err');
         const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
         ws = RDevUI.socket(`${proto}//${location.host}${authURL('/desktop?' + desktopQuery())}`);
+        lastCloseMessage = '';
         ws.binaryType = 'arraybuffer';
         setStatus(t('common.connecting'));
         ws.onmessage = (evt) => {
@@ -191,12 +192,14 @@
                 frameInfo.textContent = `${canvas.width}×${canvas.height}${source}`;
                 setStatus(`${t('index.desktopReady')} · ${canvas.width}×${canvas.height}${source}`, 'ok');
             } else if (msg.op === 'error') {
-                setStatus(msg.message || t('common.error'), 'err');
+                lastCloseMessage = msg.message || t('common.error');
+                setStatus(lastCloseMessage, 'err');
             } else if (msg.op === 'closed') {
-                setStatus(msg.message || t('desktop.closed'), 'warn');
+                lastCloseMessage = msg.message || t('desktop.closed');
+                setStatus(lastCloseMessage, msg.message ? 'err' : 'warn');
             }
         };
-        ws.onclose = () => { ws = null; setStatus(t('desktop.closed'), 'warn'); };
+        ws.onclose = () => { ws = null; setStatus(lastCloseMessage || t('desktop.closed'), lastCloseMessage ? 'err' : 'warn'); };
     }
     function drawFrame(data) {
         pendingFrame = data;

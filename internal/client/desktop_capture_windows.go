@@ -31,19 +31,18 @@ var (
 	user32 = syscall.NewLazyDLL("user32.dll")
 	gdi32  = syscall.NewLazyDLL("gdi32.dll")
 
-	procGetSystemMetrics       = user32.NewProc("GetSystemMetrics")
-	procOpenInputDesktop       = user32.NewProc("OpenInputDesktop")
-	procSetThreadDesktop       = user32.NewProc("SetThreadDesktop")
-	procCloseDesktop           = user32.NewProc("CloseDesktop")
-	procGetDC                  = user32.NewProc("GetDC")
-	procReleaseDC              = user32.NewProc("ReleaseDC")
-	procCreateCompatibleDC     = gdi32.NewProc("CreateCompatibleDC")
-	procCreateCompatibleBitmap = gdi32.NewProc("CreateCompatibleBitmap")
-	procSelectObject           = gdi32.NewProc("SelectObject")
-	procDeleteObject           = gdi32.NewProc("DeleteObject")
-	procDeleteDC               = gdi32.NewProc("DeleteDC")
-	procBitBlt                 = gdi32.NewProc("BitBlt")
-	procGetDIBits              = gdi32.NewProc("GetDIBits")
+	procGetSystemMetrics   = user32.NewProc("GetSystemMetrics")
+	procOpenInputDesktop   = user32.NewProc("OpenInputDesktop")
+	procSetThreadDesktop   = user32.NewProc("SetThreadDesktop")
+	procCloseDesktop       = user32.NewProc("CloseDesktop")
+	procGetDC              = user32.NewProc("GetDC")
+	procReleaseDC          = user32.NewProc("ReleaseDC")
+	procCreateCompatibleDC = gdi32.NewProc("CreateCompatibleDC")
+	procCreateDIBSection   = gdi32.NewProc("CreateDIBSection")
+	procSelectObject       = gdi32.NewProc("SelectObject")
+	procDeleteObject       = gdi32.NewProc("DeleteObject")
+	procDeleteDC           = gdi32.NewProc("DeleteDC")
+	procBitBlt             = gdi32.NewProc("BitBlt")
 )
 
 type bitmapInfoHeader struct {
@@ -71,6 +70,8 @@ type gdiDesktopCapturer struct {
 	memDC    uintptr
 	bitmap   uintptr
 	oldObj   uintptr
+	bits     unsafe.Pointer
+	stride   int
 	bounds   image.Rectangle
 }
 
@@ -113,12 +114,31 @@ func newDesktopCapturer(source string) (desktopCapturer, error) {
 	}
 	capturer.memDC = memDC
 
-	bitmap, _, err := procCreateCompatibleBitmap.Call(screenDC, uintptr(width), uintptr(height))
-	if bitmap == 0 {
+	bmi := bitmapInfo{}
+	bmi.Header.Size = uint32(unsafe.Sizeof(bmi.Header))
+	bmi.Header.Width = int32(width)
+	bmi.Header.Height = -int32(height)
+	bmi.Header.Planes = 1
+	bmi.Header.BitCount = 32
+	bmi.Header.Compression = biRGB
+	bmi.Header.SizeImage = uint32(width * height * 4)
+
+	var bits unsafe.Pointer
+	bitmap, _, err := procCreateDIBSection.Call(
+		screenDC,
+		uintptr(unsafe.Pointer(&bmi)),
+		dibRGBColors,
+		uintptr(unsafe.Pointer(&bits)),
+		0,
+		0,
+	)
+	if bitmap == 0 || bits == nil {
 		capturer.Close()
-		return nil, fmt.Errorf("CreateCompatibleBitmap failed: %s", windowsCallError(err))
+		return nil, fmt.Errorf("CreateDIBSection failed: %s", windowsCallError(err))
 	}
 	capturer.bitmap = bitmap
+	capturer.bits = bits
+	capturer.stride = width * 4
 
 	oldObj, _, err := procSelectObject.Call(memDC, bitmap)
 	if oldObj == 0 {
@@ -201,33 +221,10 @@ func (c *gdiDesktopCapturer) Capture() (image.Image, error) {
 		return nil, fmt.Errorf("BitBlt failed: %s", windowsCallError(err))
 	}
 
-	stride := width * 4
-	pixels := make([]byte, stride*height)
-	bmi := bitmapInfo{}
-	bmi.Header.Size = uint32(unsafe.Sizeof(bmi.Header))
-	bmi.Header.Width = int32(width)
-	bmi.Header.Height = -int32(height)
-	bmi.Header.Planes = 1
-	bmi.Header.BitCount = 32
-	bmi.Header.Compression = biRGB
-	bmi.Header.SizeImage = uint32(len(pixels))
-
-	ret, _, err := procGetDIBits.Call(
-		c.memDC,
-		c.bitmap,
-		0,
-		uintptr(height),
-		uintptr(unsafe.Pointer(&pixels[0])),
-		uintptr(unsafe.Pointer(&bmi)),
-		dibRGBColors,
-	)
-	if ret == 0 {
-		return nil, fmt.Errorf("GetDIBits failed: %s", windowsCallError(err))
-	}
-
+	pixels := unsafe.Slice((*byte)(c.bits), c.stride*height)
 	img := image.NewRGBA(image.Rect(0, 0, width, height))
 	for y := 0; y < height; y++ {
-		src := pixels[y*stride : y*stride+stride]
+		src := pixels[y*c.stride : y*c.stride+width*4]
 		dst := img.Pix[y*img.Stride : y*img.Stride+width*4]
 		for x := 0; x < width; x++ {
 			si := x * 4
