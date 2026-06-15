@@ -29,6 +29,8 @@
         .settings label { display:inline-flex; align-items:center; gap:5px; white-space:nowrap; }
         .settings select, .settings input { border:1px solid var(--border); border-radius:7px; background:var(--bg); color:var(--text); padding:5px 8px; font-size:.82rem; outline:none; }
         .settings input { width:72px; }
+        .settings .btn { padding:5px 9px; font-size:.82rem; }
+        .settings .fit-select { width:auto; }
         .manual-settings[data-disabled="true"] { opacity:.45; pointer-events:none; }
         .btn { border:1px solid var(--border); border-radius:7px; background:var(--bg); color:var(--text); padding:7px 12px; cursor:pointer; }
         .btn:hover { border-color:var(--accent); color:var(--accent); }
@@ -37,7 +39,10 @@
         .status.warn { color:var(--yellow); }
         .status.err { color:var(--red); }
         .stage { flex:1; min-height:0; display:flex; align-items:center; justify-content:center; padding:12px; overflow:auto; }
-        canvas { max-width:100%; max-height:100%; background:#000; border:1px solid var(--border); border-radius:10px; image-rendering:auto; }
+        .stage[data-fit="actual"] { align-items:flex-start; justify-content:flex-start; }
+        canvas { background:#000; border:1px solid var(--border); border-radius:10px; image-rendering:auto; }
+        .stage[data-fit="fit"] canvas { max-width:100%; max-height:100%; }
+        .stage[data-fit="actual"] canvas { max-width:none; max-height:none; }
         .empty { color:var(--muted); text-align:center; line-height:1.8; }
         @media (max-width:720px) { .toolbar { flex-wrap:wrap; } .nav { width:100%; overflow-x:auto; } .controls > * { flex:1 1 auto; } }
     </style>
@@ -71,9 +76,12 @@
             <label><span data-i18n="desktop.maxWidth">Max W</span><input id="maxWidth" type="number" min="320" max="3840" value="1600"></label>
             <label><span data-i18n="desktop.maxHeight">Max H</span><input id="maxHeight" type="number" min="240" max="2160" value="1000"></label>
         </span>
+        <label><span data-i18n="desktop.view">View</span><select id="fitMode" class="fit-select"><option value="fit" data-i18n="desktop.fit">Fit</option><option value="actual" data-i18n="desktop.actual">Actual</option></select></label>
+        <button class="btn" id="screenshot" data-i18n="desktop.screenshot">Screenshot</button>
+        <button class="btn" id="fullscreen" data-i18n="desktop.fullscreen">Fullscreen</button>
         <span id="frameInfo" class="status"></span>
     </div>
-    <div class="stage">
+    <div class="stage" id="stage" data-fit="fit">
         <canvas id="screen" style="display:none"></canvas>
         <div id="empty" class="empty" data-i18n="desktop.empty">Select a device and connect.</div>
     </div>
@@ -98,14 +106,40 @@
     const qualityInput = document.getElementById('quality');
     const maxWidthInput = document.getElementById('maxWidth');
     const maxHeightInput = document.getElementById('maxHeight');
+    const fitModeSelect = document.getElementById('fitMode');
     const manualSettings = document.getElementById('manual-settings');
     const frameInfo = document.getElementById('frameInfo');
     const statusEl = document.getElementById('status');
+    const stage = document.getElementById('stage');
     const canvas = document.getElementById('screen');
     const ctx = canvas.getContext('2d');
     const empty = document.getElementById('empty');
-    let ws = null, drawing = false, pendingFrame = null, deviceCache = [], lastCloseMessage = '';
+    const storagePrefix = 'rdevDesktop.';
+    let ws = null, drawing = false, pendingFrame = null, deviceCache = [], lastCloseMessage = '', connectionSeq = 0;
+    let frameCount = 0, frameBytes = 0, statsStartedAt = 0, lastFrameAt = 0, currentSource = '';
 
+    function loadSavedDesktopSettings() {
+        const mode = localStorage.getItem(storagePrefix + 'mode');
+        const fit = localStorage.getItem(storagePrefix + 'fit');
+        if (mode === 'auto' || mode === 'manual') modeSelect.value = mode;
+        if (fit === 'fit' || fit === 'actual') fitModeSelect.value = fit;
+        sourceSelect.value = localStorage.getItem(storagePrefix + 'source') || sourceSelect.value;
+        fpsInput.value = localStorage.getItem(storagePrefix + 'fps') || fpsInput.value;
+        qualityInput.value = localStorage.getItem(storagePrefix + 'quality') || qualityInput.value;
+        maxWidthInput.value = localStorage.getItem(storagePrefix + 'width') || maxWidthInput.value;
+        maxHeightInput.value = localStorage.getItem(storagePrefix + 'height') || maxHeightInput.value;
+        stage.dataset.fit = fitModeSelect.value;
+    }
+    function saveDesktopSettings() {
+        if (deviceSelect.value) localStorage.setItem(storagePrefix + 'device', deviceSelect.value);
+        localStorage.setItem(storagePrefix + 'mode', modeSelect.value);
+        localStorage.setItem(storagePrefix + 'source', sourceSelect.value);
+        localStorage.setItem(storagePrefix + 'fit', fitModeSelect.value);
+        localStorage.setItem(storagePrefix + 'fps', String(clampInt(fpsInput.value, 1, 12, 4)));
+        localStorage.setItem(storagePrefix + 'quality', String(clampInt(qualityInput.value, 25, 90, 50)));
+        localStorage.setItem(storagePrefix + 'width', String(clampInt(maxWidthInput.value, 320, 3840, 1600)));
+        localStorage.setItem(storagePrefix + 'height', String(clampInt(maxHeightInput.value, 240, 2160, 1000)));
+    }
     function updateSourceOptions() {
         const device = deviceCache.find(d => d.id === deviceSelect.value) || {};
         const sources = (device.desktop && device.desktop.sources && device.desktop.sources.length) ? device.desktop.sources : [
@@ -113,9 +147,10 @@
             {id:'virtual', label:t('desktop.sourceVirtual')},
             {id:'primary', label:t('desktop.sourcePrimary')},
         ];
-        const current = sourceSelect.value || 'auto';
+        const current = sourceSelect.value || localStorage.getItem(storagePrefix + 'source') || 'auto';
         sourceSelect.innerHTML = sources.map(s => `<option value="${esc(s.id)}">${esc(s.label || s.id)}${s.kind ? ' · ' + esc(s.kind) : ''}</option>`).join('');
         sourceSelect.value = sources.some(s => s.id === current) ? current : 'auto';
+        saveDesktopSettings();
     }
     function desktopOptions() {
         const manual = modeSelect.value === 'manual';
@@ -145,11 +180,28 @@
         manualSettings.dataset.disabled = modeSelect.value === 'manual' ? 'false' : 'true';
     }
     function setStatus(text, cls = '') { statusEl.textContent = text; statusEl.className = 'status ' + cls; }
+    function resetFrameStats() {
+        frameCount = 0; frameBytes = 0; statsStartedAt = 0; lastFrameAt = 0; currentSource = ''; frameInfo.textContent = '';
+    }
+    function formatBytes(bytes) {
+        if (bytes >= 1024 * 1024) return (bytes / 1024 / 1024).toFixed(1) + ' MB';
+        if (bytes >= 1024) return (bytes / 1024).toFixed(1) + ' KB';
+        return bytes + ' B';
+    }
+    function updateFrameInfo() {
+        if (!canvas.width || !canvas.height) return;
+        const source = currentSource ? ` · ${currentSource}` : '';
+        const elapsed = statsStartedAt ? Math.max(0.001, (performance.now() - statsStartedAt) / 1000) : 0;
+        const fps = elapsed ? (frameCount / elapsed).toFixed(1) : '0.0';
+        const kbps = elapsed ? ((frameBytes * 8 / elapsed) / 1024).toFixed(0) : '0';
+        const age = lastFrameAt ? Math.max(0, ((performance.now() - lastFrameAt) / 1000)).toFixed(1) : '0.0';
+        frameInfo.textContent = `${canvas.width}×${canvas.height}${source} · ${fps} fps · ${kbps} kbps · ${formatBytes(frameBytes)} · ${age}s`;
+    }
     async function loadDevices() {
         const r = await authFetch('/api/devices');
         const devices = await r.json();
         deviceCache = devices;
-        const selected = params.get('device') || deviceSelect.value;
+        const selected = params.get('device') || deviceSelect.value || localStorage.getItem(storagePrefix + 'device');
         deviceSelect.innerHTML = '<option value="">' + t('terminal.devicePlaceholder') + '</option>' + devices.map(d => {
             const desktop = d.desktop || {};
             const label = `${d.id} · ${desktop.supported ? t('index.desktopReady') : (desktop.reason || t('index.desktopUnavailable'))}`;
@@ -159,17 +211,21 @@
         updateSourceOptions();
     }
     function esc(s) { const d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
-    function disconnect() { if (ws) { ws.close(); ws = null; } lastCloseMessage = ''; setStatus(t('desktop.closed'), 'warn'); }
+    function disconnect() { connectionSeq++; if (ws) { ws.close(); ws = null; } lastCloseMessage = ''; resetFrameStats(); setStatus(t('desktop.closed'), 'warn'); }
     async function connect() {
         disconnect();
+        saveDesktopSettings();
         const device = deviceSelect.value;
         if (!device) return setStatus(t('common.noDevices'), 'err');
         const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+        resetFrameStats();
         ws = RDevUI.socket(`${proto}//${location.host}${authURL('/desktop?' + desktopQuery())}`);
+        const connID = ++connectionSeq;
         lastCloseMessage = '';
         ws.binaryType = 'arraybuffer';
         setStatus(t('common.connecting'));
         ws.onmessage = (evt) => {
+            if (connID !== connectionSeq) return;
             if (evt.data instanceof ArrayBuffer) { drawFrame(evt.data); return; }
             const msg = JSON.parse(evt.data);
             if (msg.op === 'auth') {
@@ -188,8 +244,9 @@
             } else if (msg.op === 'ready') {
                 canvas.width = msg.width || 1; canvas.height = msg.height || 1;
                 canvas.style.display = 'block'; empty.style.display = 'none';
-                const source = msg.source ? ` · ${msg.source}` : '';
-                frameInfo.textContent = `${canvas.width}×${canvas.height}${source}`;
+                currentSource = msg.source || '';
+                updateFrameInfo();
+                const source = currentSource ? ` · ${currentSource}` : '';
                 setStatus(`${t('index.desktopReady')} · ${canvas.width}×${canvas.height}${source}`, 'ok');
             } else if (msg.op === 'error') {
                 lastCloseMessage = msg.message || t('common.error');
@@ -199,7 +256,7 @@
                 setStatus(lastCloseMessage, msg.message ? 'err' : 'warn');
             }
         };
-        ws.onclose = () => { ws = null; setStatus(lastCloseMessage || t('desktop.closed'), lastCloseMessage ? 'err' : 'warn'); };
+        ws.onclose = () => { if (connID !== connectionSeq) return; ws = null; setStatus(lastCloseMessage || t('desktop.closed'), lastCloseMessage ? 'err' : 'warn'); };
     }
     function drawFrame(data) {
         pendingFrame = data;
@@ -212,18 +269,45 @@
                 if (canvas.width !== bitmap.width || canvas.height !== bitmap.height) { canvas.width = bitmap.width; canvas.height = bitmap.height; }
                 canvas.style.display = 'block'; empty.style.display = 'none';
                 ctx.drawImage(bitmap, 0, 0);
+                frameCount++;
+                frameBytes += frame.byteLength || frame.size || 0;
+                if (!statsStartedAt) statsStartedAt = performance.now();
+                lastFrameAt = performance.now();
+                updateFrameInfo();
                 bitmap.close && bitmap.close();
             } catch (e) { console.error(e); }
             drawing = false;
             if (pendingFrame) drawFrame(pendingFrame);
         });
     }
+    function saveScreenshot() {
+        if (!canvas.width || !canvas.height || canvas.style.display === 'none') return;
+        canvas.toBlob(blob => {
+            if (!blob) return;
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `rdev-${deviceSelect.value || 'desktop'}-${new Date().toISOString().replace(/[:.]/g, '-')}.png`;
+            a.click();
+            setTimeout(() => URL.revokeObjectURL(url), 1000);
+        }, 'image/png');
+    }
+    function toggleFullscreen() {
+        if (document.fullscreenElement) { document.exitFullscreen && document.exitFullscreen(); return; }
+        if (stage.requestFullscreen) stage.requestFullscreen();
+    }
     document.getElementById('connect').addEventListener('click', connect);
     document.getElementById('disconnect').addEventListener('click', disconnect);
-    deviceSelect.addEventListener('change', updateSourceOptions);
-    modeSelect.addEventListener('change', updateMode);
+    document.getElementById('screenshot').addEventListener('click', saveScreenshot);
+    document.getElementById('fullscreen').addEventListener('click', toggleFullscreen);
+    deviceSelect.addEventListener('change', () => { updateSourceOptions(); saveDesktopSettings(); });
+    modeSelect.addEventListener('change', () => { updateMode(); saveDesktopSettings(); });
+    sourceSelect.addEventListener('change', saveDesktopSettings);
+    fitModeSelect.addEventListener('change', () => { stage.dataset.fit = fitModeSelect.value; saveDesktopSettings(); });
+    [fpsInput, qualityInput, maxWidthInput, maxHeightInput].forEach(input => input.addEventListener('change', saveDesktopSettings));
     passwordInput.addEventListener('keydown', e => { if (e.key === 'Enter') connect(); });
     window.addEventListener('beforeunload', disconnect);
+    loadSavedDesktopSettings();
     updateMode();
     loadDevices().then(() => { if (deviceSelect.value) connect(); }).catch(e => setStatus(e.message || String(e), 'err'));
     </script>
