@@ -25,13 +25,15 @@ type desktopSourceReporter interface {
 }
 
 type desktopSession struct {
-	stop    chan struct{}
-	input   desktopInput
-	inputMu sync.Mutex
-	frameMu sync.RWMutex
-	bounds  image.Rectangle
-	frameW  int
-	frameH  int
+	stop     chan struct{}
+	input    desktopInput
+	inputMu  sync.Mutex
+	frameMu  sync.RWMutex
+	bounds   image.Rectangle
+	frameW   int
+	frameH   int
+	cursor   image.Point
+	cursorOK bool
 }
 
 func (s *desktopSession) setFrame(bounds image.Rectangle, width, height int) {
@@ -40,6 +42,21 @@ func (s *desktopSession) setFrame(bounds image.Rectangle, width, height int) {
 	s.frameW = width
 	s.frameH = height
 	s.frameMu.Unlock()
+}
+
+func (s *desktopSession) setCursor(x, y int) {
+	s.frameMu.Lock()
+	s.cursor = image.Pt(x, y)
+	s.cursorOK = true
+	s.frameMu.Unlock()
+}
+
+func (s *desktopSession) cursorPosition() (image.Point, bool) {
+	s.frameMu.RLock()
+	cursor := s.cursor
+	ok := s.cursorOK
+	s.frameMu.RUnlock()
+	return cursor, ok
 }
 
 func (s *desktopSession) mapPoint(x, y int) (int, int) {
@@ -194,7 +211,13 @@ func (c *Client) handleDesktopStart(msg *protocol.Message) {
 				return
 			}
 			frame := resizeDesktopFrame(img, msg.Width, msg.Height)
-			session.setFrame(capturer.Bounds(), frame.Bounds().Dx(), frame.Bounds().Dy())
+			bounds := capturer.Bounds()
+			if msg.ShowCursor {
+				if cursor, ok := desktopCursorPosition(session, capturer); ok {
+					overlayDesktopCursor(frame, bounds, cursor)
+				}
+			}
+			session.setFrame(bounds, frame.Bounds().Dx(), frame.Bounds().Dy())
 			checksum := crc32.ChecksumIEEE(frame.Pix)
 			if checksum == lastChecksum && time.Since(lastSent) < 2*time.Second {
 				continue
@@ -294,6 +317,9 @@ func (c *Client) handleDesktopInput(msg *protocol.Message) {
 		return
 	}
 	x, y := session.mapPoint(msg.X, msg.Y)
+	if msg.InputType == "mouse_move" || msg.InputType == "mouse_down" || msg.InputType == "mouse_up" || msg.InputType == "wheel" {
+		session.setCursor(x, y)
+	}
 	event := desktopInputEvent{
 		Type:        msg.InputType,
 		X:           x,

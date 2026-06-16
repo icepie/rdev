@@ -288,6 +288,14 @@ func (c *x11DesktopCapturer) Bounds() image.Rectangle { return c.bounds }
 
 func (c *x11DesktopCapturer) Source() protocol.DesktopSource { return c.source }
 
+func (c *x11DesktopCapturer) CursorPosition() (image.Point, bool) {
+	reply, err := xproto.QueryPointer(c.conn, c.screen.Root).Reply()
+	if err != nil || reply == nil {
+		return image.Point{}, false
+	}
+	return image.Pt(int(reply.RootX), int(reply.RootY)), true
+}
+
 func (c *x11DesktopCapturer) Close() error {
 	c.conn.Close()
 	return nil

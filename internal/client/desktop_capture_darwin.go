@@ -27,6 +27,8 @@ var (
 	cgMainDisplayID        func() uint32
 	cgDisplayBounds        func(uint32) cgRect
 	cgDisplayCreateImage   func(uint32) uintptr
+	cgEventCreate          func(uintptr) uintptr
+	cgEventGetLocation     func(uintptr) cgPoint
 	cgImageGetWidth        func(uintptr) uintptr
 	cgImageGetHeight       func(uintptr) uintptr
 	cgImageGetBytesPerRow  func(uintptr) uintptr
@@ -85,6 +87,8 @@ func initQuartzCapture() error {
 	purego.RegisterLibFunc(&cgMainDisplayID, appServices, "CGMainDisplayID")
 	purego.RegisterLibFunc(&cgDisplayBounds, appServices, "CGDisplayBounds")
 	purego.RegisterLibFunc(&cgDisplayCreateImage, appServices, "CGDisplayCreateImage")
+	purego.RegisterLibFunc(&cgEventCreate, appServices, "CGEventCreate")
+	purego.RegisterLibFunc(&cgEventGetLocation, appServices, "CGEventGetLocation")
 	purego.RegisterLibFunc(&cgImageGetWidth, appServices, "CGImageGetWidth")
 	purego.RegisterLibFunc(&cgImageGetHeight, appServices, "CGImageGetHeight")
 	purego.RegisterLibFunc(&cgImageGetBytesPerRow, appServices, "CGImageGetBytesPerRow")
@@ -115,6 +119,19 @@ func quartzDisplayBounds(displayID uint32) image.Rectangle {
 
 func (q *quartzCapturer) Bounds() image.Rectangle { return q.bounds }
 func (q *quartzCapturer) Close() error            { return nil }
+
+func (q *quartzCapturer) CursorPosition() (image.Point, bool) {
+	if cgEventCreate == nil || cgEventGetLocation == nil {
+		return image.Point{}, false
+	}
+	event := cgEventCreate(0)
+	if event == 0 {
+		return image.Point{}, false
+	}
+	defer cfRelease(event)
+	point := cgEventGetLocation(event)
+	return image.Pt(int(point.X+0.5), int(point.Y+0.5)), true
+}
 
 func (q *quartzCapturer) Capture() (image.Image, error) {
 	imageRef := cgDisplayCreateImage(q.displayID)

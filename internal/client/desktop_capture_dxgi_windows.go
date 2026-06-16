@@ -298,6 +298,15 @@ func (c *dxgiDesktopCapturer) Bounds() image.Rectangle { return c.bounds }
 
 func (c *dxgiDesktopCapturer) Source() protocol.DesktopSource { return c.source }
 
+func (c *dxgiDesktopCapturer) CursorPosition() (image.Point, bool) {
+	var point winPoint
+	ok, _, _ := procGetCursorPos.Call(uintptr(unsafe.Pointer(&point)))
+	if ok == 0 {
+		return image.Point{}, false
+	}
+	return image.Pt(int(point.X), int(point.Y)), true
+}
+
 func (c *dxgiDesktopCapturer) Close() error {
 	if c.staging != 0 {
 		comRelease(c.staging)

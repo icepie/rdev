@@ -27,6 +27,7 @@ type desktopMsg struct {
 	Quality      int                           `json:"quality,omitempty"`
 	FPS          int                           `json:"fps,omitempty"`
 	InputBackend string                        `json:"inputBackend,omitempty"`
+	ShowCursor   *bool                         `json:"showCursor,omitempty"`
 	Desktop      *protocol.DesktopCapabilities `json:"desktop,omitempty"`
 	Pass         string                        `json:"password,omitempty"`
 	InputType    string                        `json:"inputType,omitempty"`
@@ -184,6 +185,7 @@ func desktopRequestFromQuery(r *http.Request) protocol.Message {
 		Height:       parseDesktopInt(q.Get("height")),
 		Source:       q.Get("source"),
 		InputBackend: q.Get("inputBackend"),
+		ShowCursor:   parseDesktopBool(q.Get("showCursor"), true),
 	}
 	return normalizeDesktopRequest(request)
 }
@@ -207,16 +209,22 @@ func mergeDesktopRequest(base protocol.Message, msg desktopMsg) protocol.Message
 	if msg.InputBackend != "" {
 		base.InputBackend = msg.InputBackend
 	}
+	if msg.ShowCursor != nil {
+		base.ShowCursor = *msg.ShowCursor
+	}
 	if msg.Mode != "" && msg.Mode != "manual" {
 		base = defaultDesktopRequest()
 		base.Source = msg.Source
 		base.InputBackend = msg.InputBackend
+		if msg.ShowCursor != nil {
+			base.ShowCursor = *msg.ShowCursor
+		}
 	}
 	return normalizeDesktopRequest(base)
 }
 
 func defaultDesktopRequest() protocol.Message {
-	return protocol.Message{FPS: 4, Quality: 50, Width: 1600, Height: 1000, Source: "auto"}
+	return protocol.Message{FPS: 4, Quality: 50, Width: 1600, Height: 1000, Source: "auto", ShowCursor: true}
 }
 
 func normalizeDesktopRequest(request protocol.Message) protocol.Message {
@@ -262,6 +270,17 @@ func parseDesktopInt(value string) int {
 	}
 	n, _ := strconv.Atoi(value)
 	return n
+}
+
+func parseDesktopBool(value string, fallback bool) bool {
+	if value == "" {
+		return fallback
+	}
+	b, err := strconv.ParseBool(value)
+	if err != nil {
+		return fallback
+	}
+	return b
 }
 
 func (h *desktopWSHandler) sendJSON(socket *gws.Conn, msg desktopMsg) {

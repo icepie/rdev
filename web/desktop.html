@@ -41,6 +41,7 @@
         .stage { flex:1; min-height:0; display:flex; align-items:center; justify-content:center; padding:12px; overflow:auto; }
         .stage[data-fit="actual"] { align-items:flex-start; justify-content:flex-start; }
         .stage[data-control="true"] canvas { cursor:crosshair; }
+        .stage[data-control="true"][data-cursor="true"] canvas { cursor:none; }
         canvas { background:#000; border:1px solid var(--border); border-radius:10px; image-rendering:auto; outline:none; }
         .stage[data-fit="fit"] canvas { max-width:100%; max-height:100%; }
         .stage[data-fit="actual"] canvas { max-width:none; max-height:none; }
@@ -78,6 +79,7 @@
             <label><span data-i18n="desktop.maxHeight">Max H</span><input id="maxHeight" type="number" min="240" max="2160" value="1000"></label>
         </span>
         <label><input id="controlInput" type="checkbox" style="width:auto"> <span data-i18n="desktop.control">Control</span></label>
+        <label><input id="showCursor" type="checkbox" style="width:auto"> <span data-i18n="desktop.showCursor">Show cursor</span></label>
         <label><span data-i18n="desktop.inputBackend">Input</span><select id="inputBackend" class="fit-select"><option value="auto" data-i18n="desktop.inputAuto">Auto</option></select></label>
         <label><span data-i18n="desktop.view">View</span><select id="fitMode" class="fit-select"><option value="fit" data-i18n="desktop.fit">Fit</option><option value="actual" data-i18n="desktop.actual">Actual</option></select></label>
         <button class="btn" id="screenshot" data-i18n="desktop.screenshot">Screenshot</button>
@@ -112,6 +114,7 @@
     const fitModeSelect = document.getElementById('fitMode');
     const inputBackendSelect = document.getElementById('inputBackend');
     const controlInput = document.getElementById('controlInput');
+    const showCursorInput = document.getElementById('showCursor');
     const manualSettings = document.getElementById('manual-settings');
     const frameInfo = document.getElementById('frameInfo');
     const statusEl = document.getElementById('status');
@@ -139,7 +142,9 @@
         controlPreferenceSet = control !== null;
         if (control === 'true') controlInput.checked = true;
         if (control === 'false') controlInput.checked = false;
+        showCursorInput.checked = localStorage.getItem(storagePrefix + 'showCursor') !== 'false';
         stage.dataset.control = String(controlInput.checked);
+        stage.dataset.cursor = String(showCursorInput.checked);
     }
     function saveDesktopSettings() {
         if (deviceSelect.value) localStorage.setItem(storagePrefix + 'device', deviceSelect.value);
@@ -148,6 +153,7 @@
         localStorage.setItem(storagePrefix + 'inputBackend', inputBackendSelect.value);
         localStorage.setItem(storagePrefix + 'fit', fitModeSelect.value);
         localStorage.setItem(storagePrefix + 'control', String(controlInput.checked));
+        localStorage.setItem(storagePrefix + 'showCursor', String(showCursorInput.checked));
         localStorage.setItem(storagePrefix + 'fps', String(clampInt(fpsInput.value, 1, 12, 4)));
         localStorage.setItem(storagePrefix + 'quality', String(clampInt(qualityInput.value, 25, 90, 50)));
         localStorage.setItem(storagePrefix + 'width', String(clampInt(maxWidthInput.value, 320, 3840, 1600)));
@@ -212,11 +218,12 @@
             width: manual ? clampInt(maxWidthInput.value, 320, 3840, 1600) : adaptive.width,
             height: manual ? clampInt(maxHeightInput.value, 240, 2160, 1000) : adaptive.height,
             inputBackend: inputBackendSelect.value || 'auto',
+            showCursor: showCursorInput.checked,
         };
     }
     function desktopQuery() {
         const opts = desktopOptions();
-        const q = new URLSearchParams({ device: deviceSelect.value, mode: opts.mode, source: opts.source, fps: String(opts.fps), quality: String(opts.quality), width: String(opts.width), height: String(opts.height), inputBackend: opts.inputBackend });
+        const q = new URLSearchParams({ device: deviceSelect.value, mode: opts.mode, source: opts.source, fps: String(opts.fps), quality: String(opts.quality), width: String(opts.width), height: String(opts.height), inputBackend: opts.inputBackend, showCursor: String(opts.showCursor) });
         return q.toString();
     }
     function authPayload() {
@@ -308,6 +315,7 @@
                 if (remoteInput && !controlPreferenceSet) controlInput.checked = true;
                 if (!remoteInput) controlInput.checked = false;
                 stage.dataset.control = String(controlInput.checked && remoteInput);
+                stage.dataset.cursor = String(showCursorInput.checked);
                 if (remoteInput && !controlPreferenceSet) saveDesktopSettings();
                 updateFrameInfo();
                 const source = currentSource ? ` · ${currentSource}` : '';
@@ -415,6 +423,7 @@
         if (stage.requestFullscreen) stage.requestFullscreen();
     }
     controlInput.addEventListener('change', () => { controlPreferenceSet = true; stage.dataset.control = String(controlInput.checked && remoteInput); if (controlInput.checked) canvas.focus(); saveDesktopSettings(); });
+    showCursorInput.addEventListener('change', () => { stage.dataset.cursor = String(showCursorInput.checked); saveDesktopSettings(); scheduleReconnectIfActive(); });
     canvas.addEventListener('contextmenu', e => e.preventDefault());
     canvas.addEventListener('auxclick', e => e.preventDefault());
     canvas.addEventListener('pointermove', e => sendMouse('mouse_move', e));

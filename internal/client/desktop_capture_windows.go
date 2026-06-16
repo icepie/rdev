@@ -42,6 +42,7 @@ var (
 	procSetThreadDesktop    = user32.NewProc("SetThreadDesktop")
 	procCloseDesktop        = user32.NewProc("CloseDesktop")
 	procGetDC               = user32.NewProc("GetDC")
+	procGetCursorPos        = user32.NewProc("GetCursorPos")
 	procReleaseDC           = user32.NewProc("ReleaseDC")
 	procEnumDisplayMonitors = user32.NewProc("EnumDisplayMonitors")
 	procGetMonitorInfoW     = user32.NewProc("GetMonitorInfoW")
@@ -359,6 +360,15 @@ func getSystemMetric(index uintptr) int {
 func (c *gdiDesktopCapturer) Bounds() image.Rectangle { return c.bounds }
 
 func (c *gdiDesktopCapturer) Source() protocol.DesktopSource { return c.source }
+
+func (c *gdiDesktopCapturer) CursorPosition() (image.Point, bool) {
+	var point winPoint
+	ok, _, _ := procGetCursorPos.Call(uintptr(unsafe.Pointer(&point)))
+	if ok == 0 {
+		return image.Point{}, false
+	}
+	return image.Pt(int(point.X), int(point.Y)), true
+}
 
 func (c *gdiDesktopCapturer) probe() error {
 	ok, _, err := procBitBlt.Call(c.memDC, 0, 0, 1, 1, c.screenDC, uintptr(c.bounds.Min.X), uintptr(c.bounds.Min.Y), srcCopy|captureBlt)

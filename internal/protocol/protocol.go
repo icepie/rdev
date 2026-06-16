@@ -154,6 +154,7 @@ type Message struct {
 	FPS                 int                  `json:"fps,omitempty"`
 	InputType           string               `json:"inputType,omitempty"`
 	InputBackend        string               `json:"inputBackend,omitempty"`
+	ShowCursor          bool                 `json:"showCursor,omitempty"`
 	X                   int                  `json:"x,omitempty"`
 	Y                   int                  `json:"y,omitempty"`
 	Button              int                  `json:"button,omitempty"`
