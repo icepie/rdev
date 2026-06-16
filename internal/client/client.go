@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -539,9 +540,70 @@ func safeJoinFile(dir, name string) string {
 	return filepath.Join(defaultFilePath(dir), filepath.Base(name))
 }
 
+func (c *Client) handleManagedUploadFromURL(msg *protocol.Message) {
+	taskID := msg.TaskID
+	target := msg.Path
+	if target == "" {
+		target = safeJoinFile(msg.ParentPath, msg.Name)
+	}
+	if taskID == "" || target == "" {
+		return
+	}
+	partPath := target + ".rdevpart"
+	if err := os.MkdirAll(filepath.Dir(partPath), 0755); err != nil {
+		c.sendFileTransferError(taskID, target, fmt.Sprintf("mkdir error: %v", err))
+		return
+	}
+	req, err := http.NewRequest(http.MethodGet, msg.DownloadURL, nil)
+	if err != nil {
+		c.sendFileTransferError(taskID, target, err.Error())
+		return
+	}
+	req.Header.Set("user-agent", "Mozilla/5.0 RDev")
+	req.Header.Set("referer", "https://www.aliyundrive.com/")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		c.sendFileTransferError(taskID, target, err.Error())
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusPartialContent {
+		c.sendFileTransferError(taskID, target, fmt.Sprintf("download url failed: %s", resp.Status))
+		return
+	}
+	file, err := os.OpenFile(partPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+	if err != nil {
+		c.sendFileTransferError(taskID, target, err.Error())
+		return
+	}
+	written, copyErr := io.Copy(file, resp.Body)
+	closeErr := file.Close()
+	if copyErr != nil {
+		c.sendFileTransferError(taskID, target, copyErr.Error())
+		return
+	}
+	if closeErr != nil {
+		c.sendFileTransferError(taskID, target, closeErr.Error())
+		return
+	}
+	if msg.Size >= 0 && written != msg.Size {
+		c.sendFileTransferError(taskID, target, fmt.Sprintf("size mismatch: wrote %d of %d", written, msg.Size))
+		return
+	}
+	if err := os.Rename(partPath, target); err != nil {
+		c.sendFileTransferError(taskID, target, err.Error())
+		return
+	}
+	c.send(&protocol.Message{Type: protocol.MsgFileTransferEnd, TaskID: taskID, Path: target, Size: written, Success: true})
+}
+
 func (c *Client) handleManagedUploadStart(msg *protocol.Message) {
 	taskID := msg.TaskID
 	if taskID == "" {
+		return
+	}
+	if msg.DownloadURL != "" {
+		go c.handleManagedUploadFromURL(msg)
 		return
 	}
 	target := msg.Path

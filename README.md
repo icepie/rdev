@@ -109,6 +109,17 @@ scp file my-device@your-server:/tmp/ -P 2222
 # SFTP
 sftp -P 2222 my-device@your-server
 
+# AliyunPan 虚拟文件后端（服务端直接集成 OpenAPI）
+# 先用 aliyunpan CLI 登录生成 aliyunpan_config.json，再让 rdev-server 读取该配置。
+./rdev-server --data /etc/rdev --aliyunpan-config /root/.config/aliyunpan/aliyunpan_config.json
+sftp -P 2222 aliyunpan@your-server
+
+# 也可通过 /etc/rdev/aliyunpan.json 开启：
+# {"enabled":true,"configPath":"/root/.config/aliyunpan/aliyunpan_config.json","deviceId":"aliyunpan","root":"/我的文件","tmpDir":"/var/lib/rdev/tmp","transferDir":"/rdev-transfer","password":"optional-ssh-password"}
+# root=虚拟 aliyunpan 设备暴露的网盘根目录；tmpDir=服务端本地临时目录；transferDir=阿里云盘云端中转临时目录。
+# 网页文件管理会出现 aliyunpan 虚拟设备；网页下载使用阿里云盘直链，不经 RDev server 转发文件内容。
+# 选择真实设备上传文件时，服务端会代码级上传到 transferDir，再下发直链给设备端自拉到目标路径。
+
 # 本地端口转发 (访问设备上 80 端口的服务)
 ssh -L 8080:localhost:80 my-device@your-server -p 2222
 

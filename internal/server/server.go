@@ -411,12 +411,13 @@ type Server struct {
 	upgrader     *gws.Upgrader
 
 	// Public config (set by main) for API/UI
-	SSHPort          string // e.g. "2222"
-	HTTPHost         string // e.g. "192.168.1.100:8080"
-	AdminToken       string // optional token for web APIs and browser WebSockets
-	MaxSessions      int    // maximum concurrent sessions per device
-	MaxForwards      int    // maximum concurrent forwards per device
-	BatchConcurrency int    // maximum concurrent batch operations
+	SSHPort          string      // e.g. "2222"
+	HTTPHost         string      // e.g. "192.168.1.100:8080"
+	AdminToken       string      // optional token for web APIs and browser WebSockets
+	MaxSessions      int         // maximum concurrent sessions per device
+	MaxForwards      int         // maximum concurrent forwards per device
+	BatchConcurrency int         // maximum concurrent batch operations
+	FileBackend      fileBackend // optional server-side virtual file backend
 }
 
 // NewServer creates a new Server
@@ -1013,6 +1014,14 @@ func (s *Server) HandleAPI(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	if s.FileBackend != nil {
+		clients = append(clients, clientInfo{
+			ID:          s.FileBackend.ID(),
+			ConnectedAt: time.Now().Format(time.RFC3339),
+			HasPassword: false,
+		})
+	}
+
 	sort.Slice(clients, func(i, j int) bool {
 		if clients[i].ID != clients[j].ID {
 			return clients[i].ID < clients[j].ID
@@ -1056,6 +1065,14 @@ func (s *Server) HandleTerminalAPI(w http.ResponseWriter, r *http.Request) {
 			ConnectedAt: c.ConnectedAt.Format(time.RFC3339),
 			HasPassword: c.Password != "",
 			Desktop:     cloneDesktopCapabilities(c.Desktop),
+		})
+	}
+
+	if s.FileBackend != nil {
+		devices = append(devices, deviceInfo{
+			ID:          s.FileBackend.ID(),
+			ConnectedAt: time.Now().Format(time.RFC3339),
+			HasPassword: false,
 		})
 	}
 

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"log"
 	"net/http"
@@ -12,24 +13,25 @@ import (
 )
 
 type fileMsg struct {
-	Op         string               `json:"op"`
-	DeviceID   string               `json:"deviceId,omitempty"`
-	RequestID  string               `json:"requestId,omitempty"`
-	TaskID     string               `json:"taskId,omitempty"`
-	Path       string               `json:"path,omitempty"`
-	ParentPath string               `json:"parentPath,omitempty"`
-	Name       string               `json:"name,omitempty"`
-	Size       int64                `json:"size,omitempty"`
-	Offset     int64                `json:"offset,omitempty"`
-	ModTime    string               `json:"modTime,omitempty"`
-	Password   string               `json:"password,omitempty"`
-	Success    bool                 `json:"success,omitempty"`
-	Message    string               `json:"message,omitempty"`
-	Error      string               `json:"error,omitempty"`
-	Entries    []protocol.FileEntry `json:"entries,omitempty"`
-	Parent     string               `json:"parent,omitempty"`
-	Home       string               `json:"home,omitempty"`
-	Truncated  bool                 `json:"truncated,omitempty"`
+	Op          string               `json:"op"`
+	DeviceID    string               `json:"deviceId,omitempty"`
+	RequestID   string               `json:"requestId,omitempty"`
+	TaskID      string               `json:"taskId,omitempty"`
+	Path        string               `json:"path,omitempty"`
+	ParentPath  string               `json:"parentPath,omitempty"`
+	Name        string               `json:"name,omitempty"`
+	Size        int64                `json:"size,omitempty"`
+	Offset      int64                `json:"offset,omitempty"`
+	ModTime     string               `json:"modTime,omitempty"`
+	DownloadURL string               `json:"downloadUrl,omitempty"`
+	Password    string               `json:"password,omitempty"`
+	Success     bool                 `json:"success,omitempty"`
+	Message     string               `json:"message,omitempty"`
+	Error       string               `json:"error,omitempty"`
+	Entries     []protocol.FileEntry `json:"entries,omitempty"`
+	Parent      string               `json:"parent,omitempty"`
+	Home        string               `json:"home,omitempty"`
+	Truncated   bool                 `json:"truncated,omitempty"`
 }
 
 type fileSocket struct {
@@ -42,8 +44,14 @@ type fileSocket struct {
 }
 
 type fileTaskRoute struct {
-	socket   *fileSocket
-	deviceID string
+	socket       *fileSocket
+	deviceID     string
+	backend      fileBackend
+	upload       backendUpload
+	cancel       context.CancelFunc
+	targetPath   string
+	cleanupStore fileBackend
+	cleanupPath  string
 }
 
 type filesWSHandler struct {
@@ -89,7 +97,15 @@ func (h *filesWSHandler) OnClose(socket *gws.Conn, err error) {
 	}
 	for id, route := range h.srv.fileTasks {
 		if route.socket == fs {
-			if client, ok := h.srv.GetClient(route.deviceID); ok {
+			if route.backend != nil {
+				if route.cancel != nil {
+					route.cancel()
+				}
+				if route.upload != nil {
+					route.upload.Cancel()
+				}
+				cleanupRelayFile(route)
+			} else if client, ok := h.srv.GetClient(route.deviceID); ok {
 				client.Send(&protocol.Message{Type: protocol.MsgFileTransferCancel, TaskID: id})
 				client.SendBinaryOffset(protocol.BinFileTransferCancel, id, 0, nil)
 			}
@@ -145,6 +161,14 @@ func (h *filesWSHandler) handleAuth(socket *fileSocket, msg fileMsg) {
 		socket.writeText(fileMsg{Op: "auth_fail", Message: "missing device"})
 		return
 	}
+	if backend := h.srv.backendByID(msg.DeviceID); backend != nil {
+		socket.authMu.Lock()
+		socket.authorized[msg.DeviceID] = "backend"
+		delete(socket.authFails, msg.DeviceID)
+		socket.authMu.Unlock()
+		socket.writeText(fileMsg{Op: "auth_ok", DeviceID: msg.DeviceID})
+		return
+	}
 	client, ok := h.srv.GetClient(msg.DeviceID)
 	if !ok {
 		socket.writeText(fileMsg{Op: "auth_fail", DeviceID: msg.DeviceID, Message: "device not connected"})
@@ -192,6 +216,10 @@ func (h *filesWSHandler) clientFor(socket *fileSocket, deviceID string) (*Client
 }
 
 func (h *filesWSHandler) handleList(socket *fileSocket, msg fileMsg) {
+	if backend := h.srv.backendByID(msg.DeviceID); backend != nil {
+		h.handleBackendList(socket, backend, msg)
+		return
+	}
 	if msg.RequestID == "" {
 		msg.RequestID = generateID()
 	}
@@ -209,6 +237,14 @@ func (h *filesWSHandler) handleList(socket *fileSocket, msg fileMsg) {
 }
 
 func (h *filesWSHandler) handleUploadStart(socket *fileSocket, msg fileMsg) {
+	if backend := h.srv.backendByID(msg.DeviceID); backend != nil {
+		h.handleBackendUploadStart(socket, backend, msg)
+		return
+	}
+	if h.srv.FileBackend != nil {
+		h.handleRelayUploadStart(socket, h.srv.FileBackend, msg)
+		return
+	}
 	if msg.TaskID == "" {
 		msg.TaskID = generateID()
 	}
@@ -233,6 +269,10 @@ func (h *filesWSHandler) handleUploadStart(socket *fileSocket, msg fileMsg) {
 }
 
 func (h *filesWSHandler) handleDownloadStart(socket *fileSocket, msg fileMsg) {
+	if backend := h.srv.backendByID(msg.DeviceID); backend != nil {
+		h.handleBackendDownloadStart(socket, backend, msg)
+		return
+	}
 	if msg.TaskID == "" {
 		msg.TaskID = generateID()
 	}
@@ -253,6 +293,12 @@ func (h *filesWSHandler) forwardTaskControl(socket *fileSocket, msg fileMsg, typ
 		socket.writeText(fileMsg{Op: "error", TaskID: msg.TaskID, Message: "task not found"})
 		return
 	}
+	if route.backend != nil {
+		if typ == protocol.MsgFileUploadEnd {
+			h.handleBackendUploadEnd(socket, route, msg)
+		}
+		return
+	}
 	client, ok := h.srv.GetClient(route.deviceID)
 	if !ok {
 		socket.writeText(fileMsg{Op: "error", TaskID: msg.TaskID, Message: "device not connected"})
@@ -266,10 +312,23 @@ func (h *filesWSHandler) handleCancel(socket *fileSocket, msg fileMsg) {
 	if route == nil || route.socket != socket {
 		return
 	}
+	if route.backend != nil {
+		if route.cancel != nil {
+			route.cancel()
+		}
+		if route.upload != nil {
+			route.upload.Cancel()
+		}
+		cleanupRelayFile(route)
+		h.srv.removeFileTask(msg.TaskID)
+		socket.writeText(fileMsg{Op: "canceled", TaskID: msg.TaskID})
+		return
+	}
 	if client, ok := h.srv.GetClient(route.deviceID); ok {
 		client.Send(&protocol.Message{Type: protocol.MsgFileTransferCancel, TaskID: msg.TaskID})
 		client.SendBinaryOffset(protocol.BinFileTransferCancel, msg.TaskID, msg.Offset, nil)
 	}
+	cleanupRelayFile(route)
 	h.srv.removeFileTask(msg.TaskID)
 	socket.writeText(fileMsg{Op: "canceled", TaskID: msg.TaskID})
 }
@@ -283,6 +342,10 @@ func (h *filesWSHandler) handleBinary(socket *fileSocket, raw []byte) {
 	route := h.srv.getFileTask(taskID)
 	if route == nil || route.socket != socket {
 		socket.writeText(fileMsg{Op: "error", TaskID: taskID, Message: "task not found"})
+		return
+	}
+	if route.backend != nil {
+		h.handleBackendBinary(socket, route, typ, taskID, offset, payload)
 		return
 	}
 	client, ok := h.srv.GetClient(route.deviceID)
@@ -305,6 +368,28 @@ func (s *Server) registerFileTask(taskID string, socket *fileSocket, deviceID st
 	s.fileMu.Unlock()
 }
 
+func (s *Server) registerBackendFileTask(taskID string, socket *fileSocket, backend fileBackend, upload backendUpload, cancel context.CancelFunc) {
+	s.fileMu.Lock()
+	s.fileTasks[taskID] = &fileTaskRoute{socket: socket, deviceID: backend.ID(), backend: backend, upload: upload, cancel: cancel}
+	s.fileMu.Unlock()
+}
+
+func (s *Server) registerRelayFileTask(taskID string, socket *fileSocket, deviceID string, backend fileBackend, upload backendUpload, targetPath string) {
+	s.fileMu.Lock()
+	s.fileTasks[taskID] = &fileTaskRoute{socket: socket, deviceID: deviceID, backend: backend, upload: upload, targetPath: targetPath, cleanupStore: backend, cleanupPath: upload.Path()}
+	s.fileMu.Unlock()
+}
+
+func (s *Server) promoteRelayFileTask(taskID string) {
+	s.fileMu.Lock()
+	if route := s.fileTasks[taskID]; route != nil {
+		route.backend = nil
+		route.upload = nil
+		route.cancel = nil
+	}
+	s.fileMu.Unlock()
+}
+
 func (s *Server) getFileTask(taskID string) *fileTaskRoute {
 	s.fileMu.RLock()
 	defer s.fileMu.RUnlock()
@@ -315,6 +400,12 @@ func (s *Server) removeFileTask(taskID string) {
 	s.fileMu.Lock()
 	delete(s.fileTasks, taskID)
 	s.fileMu.Unlock()
+}
+
+func cleanupRelayFile(route *fileTaskRoute) {
+	if route != nil && route.cleanupStore != nil && route.cleanupPath != "" {
+		go route.cleanupStore.Remove(context.Background(), route.cleanupPath)
+	}
 }
 
 func (s *Server) removeFileRequest(requestID string) {
@@ -353,11 +444,13 @@ func (s *Server) handleFileManagerMessage(msg *protocol.Message) {
 		}
 	case protocol.MsgFileTransferEnd:
 		if route := s.getFileTask(msg.TaskID); route != nil {
+			cleanupRelayFile(route)
 			route.socket.writeText(fileMsg{Op: "transfer_end", TaskID: msg.TaskID, Path: msg.Path, Size: msg.Size, Offset: msg.Offset, Success: msg.Success})
 			s.removeFileTask(msg.TaskID)
 		}
 	case protocol.MsgFileTransferError:
 		if route := s.getFileTask(msg.TaskID); route != nil {
+			cleanupRelayFile(route)
 			route.socket.writeText(fileMsg{Op: "transfer_error", TaskID: msg.TaskID, Path: msg.Path, Error: msg.Error, Message: msg.Error})
 			s.removeFileTask(msg.TaskID)
 		}
@@ -377,6 +470,7 @@ func (s *Server) handleFileManagerBinary(raw []byte) bool {
 		}
 		route.socket.writeBinary(raw)
 		if typ == protocol.BinFileTransferEnd || typ == protocol.BinFileTransferCancel {
+			cleanupRelayFile(route)
 			s.removeFileTask(taskID)
 		}
 		return true

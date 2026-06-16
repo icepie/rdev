@@ -134,6 +134,7 @@ type Message struct {
 	Size        int64       `json:"size,omitempty"`
 	Offset      int64       `json:"offset,omitempty"`
 	ModTime     string      `json:"modTime,omitempty"`
+	DownloadURL string      `json:"downloadUrl,omitempty"`
 	IsDir       bool        `json:"isDir,omitempty"`
 	Truncated   bool        `json:"truncated,omitempty"`
 	HomePath    string      `json:"homePath,omitempty"`

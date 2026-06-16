@@ -154,6 +154,17 @@ func (s *SSHServer) loadAuthorizedKeys(path string) {
 
 func (s *SSHServer) handlePublicKey(ctx ssh.Context, key ssh.PublicKey) bool {
 	clientID := ctx.User()
+	if s.srv.backendByID(clientID) != nil {
+		s.authKeysMu.RLock()
+		defer s.authKeysMu.RUnlock()
+		for _, authKey := range s.authKeys {
+			if ssh.KeysEqual(key, authKey) {
+				log.Printf("ssh auth: %s authenticated via public key", clientID)
+				return true
+			}
+		}
+		return false
+	}
 	client, ok := s.srv.GetClient(clientID)
 	if !ok {
 		return true // let auth pass, session handler will show error and close
@@ -176,6 +187,13 @@ func (s *SSHServer) handlePublicKey(ctx ssh.Context, key ssh.PublicKey) bool {
 
 func (s *SSHServer) handlePassword(ctx ssh.Context, pass string) bool {
 	clientID := ctx.User()
+	if backend := s.srv.backendByID(clientID); backend != nil {
+		if b, ok := backend.(*AliyunPanBackend); ok && b.Password() != "" && b.Password() == pass {
+			log.Printf("ssh auth: %s authenticated via backend password", clientID)
+			return true
+		}
+		return false
+	}
 	client, ok := s.srv.GetClient(clientID)
 	if !ok {
 		return true // let auth pass, session handler will show error and close
@@ -194,6 +212,14 @@ func (s *SSHServer) handlePassword(ctx ssh.Context, pass string) bool {
 
 func (s *SSHServer) handleKeyboardInteractive(ctx ssh.Context, challenger gossh.KeyboardInteractiveChallenge) bool {
 	clientID := ctx.User()
+	if backend := s.srv.backendByID(clientID); backend != nil {
+		b, ok := backend.(*AliyunPanBackend)
+		if !ok || b.Password() == "" {
+			return false
+		}
+		answers, err := challenger("RDev Authentication", "", []string{"Password: "}, []bool{false})
+		return err == nil && len(answers) > 0 && answers[0] == b.Password()
+	}
 	client, ok := s.srv.GetClient(clientID)
 	if !ok {
 		return true // let auth pass, session handler will show error and close
@@ -217,6 +243,17 @@ func (s *SSHServer) handleKeyboardInteractive(ctx ssh.Context, challenger gossh.
 
 // --- Session handling (shell/exec/sftp) ---
 
+func (s *SSHServer) handleBackendSession(sess ssh.Session, backend fileBackend) {
+	if sess.Subsystem() != "sftp" {
+		fmt.Fprintf(sess, "rdev: backend '%s' supports SFTP; use: sftp -P <port> %s@<host>\n", backend.ID(), backend.ID())
+		sess.Exit(1)
+		return
+	}
+	if err := serveBackendSFTP(sess, backend); err != nil && err != io.EOF {
+		log.Printf("backend sftp %s error: %v", backend.ID(), err)
+	}
+}
+
 func generateID() string {
 	b := make([]byte, 16)
 	rand.Read(b)
@@ -231,6 +268,10 @@ func (s *SSHServer) handleSession(sess ssh.Session) {
 		}
 	}()
 	clientID := sess.User()
+	if backend := s.srv.backendByID(clientID); backend != nil {
+		s.handleBackendSession(sess, backend)
+		return
+	}
 	client, ok := s.srv.GetClient(clientID)
 	if !ok {
 		fmt.Fprintf(sess, "rdev: client '%s' is not connected\n", clientID)

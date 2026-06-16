@@ -250,6 +250,7 @@
             task.path = msg.path; task.done = msg.offset || 0; task.status = 'running'; saveTasks(); uploadLoop(task);
         } else if (msg.op === 'download_start' && task) {
             task.size = msg.size || task.size; task.done = msg.offset || 0; task.name = msg.name || task.name; task.status = 'running'; saveTasks();
+            if (msg.downloadUrl) directDownload(task, msg.downloadUrl);
         } else if (msg.op === 'transfer_end' && task) {
             task.done = msg.offset || task.size || task.done; task.status = 'completed'; saveTasks(); finishDownload(task);
         } else if ((msg.op === 'transfer_error' || msg.op === 'error') && task) {
@@ -336,8 +337,16 @@
         tasks.set(task.id, task); saveTasks(); renderTasks();
         send({ op: 'download_start', deviceId: activeDevice, taskId: task.id, path, offset: 0 });
     }
+    function directDownload(task, url) {
+        if (task.saved) return;
+        const a = document.createElement('a');
+        a.href = url; a.download = task.name || 'download'; a.target = '_blank'; a.rel = 'noopener';
+        document.body.appendChild(a); a.click(); a.remove();
+        task.done = task.size || task.done; task.saved = true; saveTasks();
+    }
     function finishDownload(task) {
-        if (task.dir !== 'download' || !task.blobParts || task.saved) return;
+        if (task.saved || task.directUrl) return;
+        if (task.dir !== 'download' || !task.blobParts) return;
         const blob = new Blob(task.blobParts);
         const a = document.createElement('a');
         a.href = URL.createObjectURL(blob); a.download = task.name || 'download'; document.body.appendChild(a); a.click();
