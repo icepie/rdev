@@ -150,21 +150,21 @@
                 <div class="cmd-group">
                     <div class="cmd-label icon-inline"><span data-icon="package"></span><span data-i18n="index.curlLabel">curl 一键启动（替换 {password} 为你的密码）</span></div>
                     <div class="cmd-row">
-                        <div class="cmd-code" data-tpl="curl -sL {{HTTP}}{{H}}/install.sh | sh -s -- {{WS}}{{H}} -p {{PW}}"></div>
+                        <div class="cmd-code" data-tpl="curl -sL {{HTTP}}{{H}}/run.sh | sh -s -- {{WS}}{{H}} -p {{PW}}"></div>
                         <button class="copy-btn" onclick="cp(this)"><span data-i18n="common.copy">复制</span></button>
                     </div>
                 </div>
                 <div class="cmd-group">
                     <div class="cmd-label" data-i18n="index.wgetLabel">wget 版</div>
                     <div class="cmd-row">
-                        <div class="cmd-code" data-tpl="wget -qO- {{HTTP}}{{H}}/install.sh | sh -s -- {{WS}}{{H}} -p {{PW}}"></div>
+                        <div class="cmd-code" data-tpl="wget -qO- {{HTTP}}{{H}}/run.sh | sh -s -- {{WS}}{{H}} -p {{PW}}"></div>
                         <button class="copy-btn" onclick="cp(this)"><span data-i18n="common.copy">复制</span></button>
                     </div>
                 </div>
                 <div class="cmd-group">
                     <div class="cmd-label icon-inline"><span data-icon="lockOpen"></span><span data-i18n="index.openMode">开放模式（无密码，仅限内网）</span></div>
                     <div class="cmd-row">
-                        <div class="cmd-code" data-tpl="curl -sL {{HTTP}}{{H}}/install.sh | sh -s -- {{WS}}{{H}}"></div>
+                        <div class="cmd-code" data-tpl="curl -sL {{HTTP}}{{H}}/run.sh | sh -s -- {{WS}}{{H}}"></div>
                         <button class="copy-btn" onclick="cp(this)"><span data-i18n="common.copy">复制</span></button>
                     </div>
                 </div>
@@ -174,14 +174,14 @@
                 <div class="cmd-group">
                     <div class="cmd-label icon-inline"><span data-icon="package"></span><span data-i18n="index.psLabel">PowerShell 一键启动（替换 {password} 为你的密码）</span></div>
                     <div class="cmd-row">
-                        <div class="cmd-code" data-tpl='powershell -Command "iwr -useb {{HTTP}}{{H}}/install.ps1 | iex; RDev {{WS}}{{H}} -Password {{PW}}"'></div>
+                        <div class="cmd-code" data-tpl='powershell -Command "iwr -useb {{HTTP}}{{H}}/run.ps1 | iex; RDev {{WS}}{{H}} -Password {{PW}}"'></div>
                         <button class="copy-btn" onclick="cp(this)"><span data-i18n="common.copy">复制</span></button>
                     </div>
                 </div>
                 <div class="cmd-group">
                     <div class="cmd-label icon-inline"><span data-icon="lockOpen"></span><span data-i18n="index.openMode">开放模式（无密码，仅限内网）</span></div>
                     <div class="cmd-row">
-                        <div class="cmd-code" data-tpl='powershell -Command "iwr -useb {{HTTP}}{{H}}/install.ps1 | iex; RDev {{WS}}{{H}}"'></div>
+                        <div class="cmd-code" data-tpl='powershell -Command "iwr -useb {{HTTP}}{{H}}/run.ps1 | iex; RDev {{WS}}{{H}}"'></div>
                         <button class="copy-btn" onclick="cp(this)"><span data-i18n="common.copy">复制</span></button>
                     </div>
                 </div>
@@ -272,8 +272,8 @@
             });
             // Win7/8 PS2.0 commands (nested quotes break data-tpl, render via JS)
             const el = id => document.getElementById(id);
-            if (el('c-w7-pw'))   setCmdCode(el('c-w7-pw'), `[Net.ServicePointManager]::SecurityProtocol=[Enum]::ToObject([Net.SecurityProtocolType],3072); $wc=New-Object Net.WebClient; $wc.DownloadString('${HTTP}${H}/install.ps1') | iex; RDev ${WS}${H} -Password ${passwordPlaceholder}`);
-            if (el('c-w7-open')) setCmdCode(el('c-w7-open'), `[Net.ServicePointManager]::SecurityProtocol=[Enum]::ToObject([Net.SecurityProtocolType],3072); $wc=New-Object Net.WebClient; $wc.DownloadString('${HTTP}${H}/install.ps1') | iex; RDev ${WS}${H}`);
+            if (el('c-w7-pw'))   setCmdCode(el('c-w7-pw'), `[Net.ServicePointManager]::SecurityProtocol=[Enum]::ToObject([Net.SecurityProtocolType],3072); $wc=New-Object Net.WebClient; $wc.DownloadString('${HTTP}${H}/run.ps1') | iex; RDev ${WS}${H} -Password ${passwordPlaceholder}`);
+            if (el('c-w7-open')) setCmdCode(el('c-w7-open'), `[Net.ServicePointManager]::SecurityProtocol=[Enum]::ToObject([Net.SecurityProtocolType],3072); $wc=New-Object Net.WebClient; $wc.DownloadString('${HTTP}${H}/run.ps1') | iex; RDev ${WS}${H}`);
             document.querySelectorAll('.hint code[id]').forEach(el => {
                 el.innerHTML = el.innerHTML
                     .replace(/\{\{H\}\}/g, '<span class="h1">' + H + '</span>')

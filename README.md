@@ -153,7 +153,7 @@ go test ./...
 ## Windows 兼容性
 
 - Windows 10 1809+ 使用系统 ConPTY，不需要额外组件。
-- Windows 7/8/8.1 的 `install.ps1` 会自动下载 WinPTY 运行时，并通过同一套 GitHub 代理前缀重试。
+- Windows 7/8/8.1 的 `run.ps1` 会自动下载 WinPTY 运行时，并通过同一套 GitHub 代理前缀重试。
 - WinPTY 文件默认放在 `%TEMP%\rdev-winpty`，客户端也可通过 `RDEV_WINPTY_DIR` 指定 `winpty.dll` 和 `winpty-agent.exe` 所在目录。
 - 如果 WinPTY 不可用，客户端会退回 pipe shell，普通命令仍可执行，但完整交互体验会弱一些。
 
