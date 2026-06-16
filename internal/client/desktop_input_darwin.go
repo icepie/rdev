@@ -34,6 +34,9 @@ const (
 	cgEventFlagMaskControl   = 0x00040000
 	cgEventFlagMaskAlternate = 0x00080000
 	cgEventFlagMaskCommand   = 0x00100000
+
+	cgMouseEventClickState   = 1
+	cgMouseEventButtonNumber = 3
 )
 
 type cgPoint struct {
@@ -47,13 +50,14 @@ var (
 	darwinInputOnce sync.Once
 	darwinInputErr  error
 
-	cgEventCreateKeyboardEvent func(uintptr, uint16, bool) uintptr
-	cgEventCreateMouseEvent    func(uintptr, uint32, cgPoint, uint32) uintptr
-	cgEventSetFlags            func(uintptr, uint64)
-	cgEventPost                func(uint32, uintptr)
-	cfRelease                  func(uintptr)
-	cgEventCreateScrollWheel   uintptr
-	axIsProcessTrusted         func() bool
+	cgEventCreateKeyboardEvent  func(uintptr, uint16, bool) uintptr
+	cgEventCreateMouseEvent     func(uintptr, uint32, cgPoint, uint32) uintptr
+	cgEventSetFlags             func(uintptr, uint64)
+	cgEventSetIntegerValueField func(uintptr, uint32, int64)
+	cgEventPost                 func(uint32, uintptr)
+	cfRelease                   func(uintptr)
+	cgEventCreateScrollWheel    uintptr
+	axIsProcessTrusted          func() bool
 )
 
 func platformDesktopInputOptions() []protocol.DesktopInputBackend {
@@ -88,6 +92,7 @@ func initDarwinInput() error {
 		purego.RegisterLibFunc(&cgEventCreateKeyboardEvent, appServices, "CGEventCreateKeyboardEvent")
 		purego.RegisterLibFunc(&cgEventCreateMouseEvent, appServices, "CGEventCreateMouseEvent")
 		purego.RegisterLibFunc(&cgEventSetFlags, appServices, "CGEventSetFlags")
+		purego.RegisterLibFunc(&cgEventSetIntegerValueField, appServices, "CGEventSetIntegerValueField")
 		purego.RegisterLibFunc(&cgEventPost, appServices, "CGEventPost")
 		purego.RegisterLibFunc(&cfRelease, appServices, "CFRelease")
 		purego.RegisterLibFunc(&axIsProcessTrusted, appServices, "AXIsProcessTrusted")
@@ -140,6 +145,10 @@ func postDarwinMouse(eventType uint32, event desktopInputEvent, button uint32) e
 	cgEvent := cgEventCreateMouseEvent(0, eventType, cgPoint{X: float64(event.X), Y: float64(event.Y)}, button)
 	if cgEvent == 0 {
 		return fmt.Errorf("CGEventCreateMouseEvent failed")
+	}
+	if eventType == cgEventLeftMouseDown || eventType == cgEventLeftMouseUp || eventType == cgEventRightMouseDown || eventType == cgEventRightMouseUp || eventType == cgEventOtherMouseDown || eventType == cgEventOtherMouseUp {
+		cgEventSetIntegerValueField(cgEvent, cgMouseEventClickState, 1)
+		cgEventSetIntegerValueField(cgEvent, cgMouseEventButtonNumber, int64(button))
 	}
 	cgEventPost(cgAnnotatedSessionEventTap, cgEvent)
 	cfRelease(cgEvent)
