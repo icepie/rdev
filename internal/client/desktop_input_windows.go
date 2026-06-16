@@ -18,6 +18,8 @@ const (
 	mouseEventRightUp    = 0x0010
 	mouseEventMiddleDown = 0x0020
 	mouseEventMiddleUp   = 0x0040
+	mouseEventXDown      = 0x0080
+	mouseEventXUp        = 0x0100
 	mouseEventWheel      = 0x0800
 	mouseEventHWheel     = 0x01000
 	keyEventKeyUp        = 0x0002
@@ -198,6 +200,7 @@ func setCursorPos(x, y int) {
 
 func mouseButton(button int, down bool) {
 	var flag uintptr
+	var data uintptr
 	switch button {
 	case 0:
 		if down {
@@ -217,9 +220,23 @@ func mouseButton(button int, down bool) {
 		} else {
 			flag = mouseEventRightUp
 		}
+	case 3:
+		if down {
+			flag = mouseEventXDown
+		} else {
+			flag = mouseEventXUp
+		}
+		data = 1
+	case 4:
+		if down {
+			flag = mouseEventXDown
+		} else {
+			flag = mouseEventXUp
+		}
+		data = 2
 	}
 	if flag != 0 {
-		procMouseEvent.Call(flag, 0, 0, 0, 0)
+		procMouseEvent.Call(flag, 0, 0, data, 0)
 	}
 }
 

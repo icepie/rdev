@@ -190,6 +190,8 @@ func darwinMouseButton(button int) uint32 {
 		return cgMouseButtonCenter
 	case 2:
 		return cgMouseButtonRight
+	case 3, 4:
+		return uint32(button)
 	default:
 		return cgMouseButtonLeft
 	}
@@ -197,7 +199,7 @@ func darwinMouseButton(button int) uint32 {
 
 func darwinMouseEvent(button int, down bool) uint32 {
 	switch button {
-	case 1:
+	case 1, 3, 4:
 		if down {
 			return cgEventOtherMouseDown
 		}

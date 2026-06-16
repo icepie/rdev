@@ -40,6 +40,10 @@ const (
 	btnLeft       = 0x110
 	btnRight      = 0x111
 	btnMiddle     = 0x112
+	btnSide       = 0x113
+	btnExtra      = 0x114
+	btnBack       = 0x116
+	btnForward    = 0x115
 	btnToolPen    = 0x140
 	btnToolFinger = 0x145
 	btnTouch      = 0x14a
@@ -279,7 +283,7 @@ func newUInputDesktopInput() (desktopInput, error) {
 	if err != nil {
 		errors = append(errors, err.Error())
 	}
-	input.mouse, err = newUInputDevice("RDev mouse", []int{btnLeft, btnRight, btnMiddle}, []int{relX, relY, relWheel, relHWheel}, nil)
+	input.mouse, err = newUInputDevice("RDev mouse", []int{btnLeft, btnRight, btnMiddle, btnSide, btnExtra, btnBack, btnForward}, []int{relX, relY, relWheel, relHWheel}, nil)
 	if err != nil {
 		errors = append(errors, err.Error())
 	}
@@ -624,6 +628,10 @@ func uinputButton(button int) int {
 		return btnMiddle
 	case 2:
 		return btnRight
+	case 3:
+		return btnSide
+	case 4:
+		return btnExtra
 	default:
 		return btnLeft
 	}
@@ -798,6 +806,10 @@ func x11Button(button int) byte {
 		return 2
 	case 2:
 		return 3
+	case 3:
+		return 8
+	case 4:
+		return 9
 	default:
 		return 1
 	}

@@ -416,6 +416,7 @@
     }
     controlInput.addEventListener('change', () => { controlPreferenceSet = true; stage.dataset.control = String(controlInput.checked && remoteInput); if (controlInput.checked) canvas.focus(); saveDesktopSettings(); });
     canvas.addEventListener('contextmenu', e => e.preventDefault());
+    canvas.addEventListener('auxclick', e => e.preventDefault());
     canvas.addEventListener('pointermove', e => sendMouse('mouse_move', e));
     canvas.addEventListener('pointerdown', e => { e.preventDefault(); canvas.focus(); canvas.setPointerCapture && canvas.setPointerCapture(e.pointerId); sendMouse('mouse_down', e); });
     canvas.addEventListener('pointerup', e => { e.preventDefault(); sendMouse('mouse_up', e); });

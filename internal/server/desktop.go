@@ -363,7 +363,7 @@ func (bc *desktopBrowserConn) prepareInput(msg desktopMsg) (*protocol.Message, b
 		msg.PointerType = normalizePointerType(msg.PointerType)
 		msg.Pressure = normalizePressure(msg.Pressure)
 		msg.X, msg.Y = bc.clampPoint(msg.X, msg.Y)
-		if msg.Button < 0 || msg.Button > 2 {
+		if msg.Button < 0 || msg.Button > 4 {
 			bc.inputError("unsupported mouse button")
 			return nil, false
 		}
