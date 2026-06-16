@@ -221,11 +221,7 @@ func (b *AliyunPanBackend) Download(ctx context.Context, reqPath string, offset 
 }
 
 func (b *AliyunPanBackend) DownloadURL(ctx context.Context, reqPath string) (backendDownloadInfo, string, error) {
-	return b.DownloadURLAbsolute(ctx, b.panPath(reqPath))
-}
-
-func (b *AliyunPanBackend) DownloadURLAbsolute(ctx context.Context, panPath string) (backendDownloadInfo, string, error) {
-	panPath = cleanPanPath(panPath)
+	panPath := b.panPath(reqPath)
 	info, err := b.fileInfo(panPath)
 	if err != nil {
 		return backendDownloadInfo{}, "", err
@@ -575,7 +571,6 @@ func parsePanTime(value string) time.Time {
 
 var _ fileBackend = (*AliyunPanBackend)(nil)
 var _ transferUploadBackend = (*AliyunPanBackend)(nil)
-var _ absolutePathBackend = (*AliyunPanBackend)(nil)
 var _ backendUpload = (*aliyunPanUpload)(nil)
 var _ os.FileInfo = panFileInfo{}
 var _ os.FileInfo = staticFileInfo{}

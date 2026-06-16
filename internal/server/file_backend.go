@@ -28,10 +28,6 @@ type transferUploadBackend interface {
 	OpenTransferUpload(ctx context.Context, taskID, name string, size int64, modTime string) (backendUpload, error)
 }
 
-type absolutePathBackend interface {
-	DownloadURLAbsolute(ctx context.Context, panPath string) (backendDownloadInfo, string, error)
-}
-
 type backendUpload interface {
 	Path() string
 	Offset() int64
