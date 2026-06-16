@@ -44,6 +44,13 @@ type backendDownloadInfo struct {
 	ModTime time.Time
 }
 
+func backendHasPassword(backend fileBackend) bool {
+	if b, ok := backend.(*AliyunPanBackend); ok {
+		return b.Password() != ""
+	}
+	return false
+}
+
 func (s *Server) backendByID(id string) fileBackend {
 	if s.FileBackend != nil && id == s.FileBackend.ID() {
 		return s.FileBackend
