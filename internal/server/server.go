@@ -494,18 +494,11 @@ func (h *wsHandler) OnClose(socket *gws.Conn, err error) {
 	}
 	id := clientID.(string)
 
-	h.srv.mu.Lock()
-	client, ok := h.srv.clients[id]
-	if ok {
-		delete(h.srv.clients, id)
-	}
-	h.srv.mu.Unlock()
-
+	client, ok := h.srv.unregisterClient(id, socket)
 	if ok {
 		closeClientResources(h.srv, client)
+		log.Printf("client unregistered: %s", id)
 	}
-
-	log.Printf("client unregistered: %s", id)
 }
 
 func (h *wsHandler) OnMessage(socket *gws.Conn, message *gws.Message) {
@@ -542,7 +535,7 @@ func (h *wsHandler) OnMessage(socket *gws.Conn, message *gws.Message) {
 	h.srv.mu.RLock()
 	client, ok := h.srv.clients[clientID.(string)]
 	h.srv.mu.RUnlock()
-	if !ok {
+	if !ok || client.Conn != socket {
 		return
 	}
 
@@ -555,9 +548,7 @@ func (h *wsHandler) handleRegister(socket *gws.Conn, msg *protocol.Message) {
 		return
 	}
 
-	h.srv.mu.Lock()
-	clientID := h.srv.allocateClientIDLocked(msg.ClientID)
-
+	clientID := msg.ClientID
 	client := &ClientConn{
 		ID:          clientID,
 		Conn:        socket,
@@ -569,11 +560,14 @@ func (h *wsHandler) handleRegister(socket *gws.Conn, msg *protocol.Message) {
 	}
 
 	socket.Session().Store("clientID", clientID)
-	h.srv.clients[clientID] = client
-	h.srv.mu.Unlock()
+	old := h.srv.registerClient(client)
 
-	if clientID != msg.ClientID {
-		log.Printf("client registered: %s (requested %s)", clientID, msg.ClientID)
+	if old != nil && old.Conn != socket {
+		log.Printf("client replaced: %s", clientID)
+		closeClientResources(h.srv, old)
+		if old.Conn != nil {
+			_ = old.Conn.WriteClose(1000, []byte("connection replaced"))
+		}
 	} else {
 		log.Printf("client registered: %s", clientID)
 	}
@@ -599,16 +593,23 @@ func cloneDesktopCapabilities(caps *protocol.DesktopCapabilities) *protocol.Desk
 	return &clone
 }
 
-func (s *Server) allocateClientIDLocked(base string) string {
-	if _, ok := s.clients[base]; !ok {
-		return base
+func (s *Server) registerClient(client *ClientConn) *ClientConn {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	old := s.clients[client.ID]
+	s.clients[client.ID] = client
+	return old
+}
+
+func (s *Server) unregisterClient(id string, conn *gws.Conn) (*ClientConn, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	client, ok := s.clients[id]
+	if !ok || client.Conn != conn {
+		return nil, false
 	}
-	for n := 2; ; n++ {
-		candidate := base + "-" + strconv.Itoa(n)
-		if _, ok := s.clients[candidate]; !ok {
-			return candidate
-		}
-	}
+	delete(s.clients, id)
+	return client, true
 }
 
 func sendBytes(ch chan []byte, data []byte, label string) {
@@ -633,6 +634,13 @@ func (h *wsHandler) handleBinaryMessage(socket *gws.Conn, raw []byte) {
 
 	clientID, _ := socket.Session().Load("clientID")
 	if clientID == nil {
+		return
+	}
+
+	h.srv.mu.RLock()
+	client, ok := h.srv.clients[clientID.(string)]
+	h.srv.mu.RUnlock()
+	if !ok || client.Conn != socket {
 		return
 	}
 

@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/lxzan/gws"
 	"rdev/internal/protocol"
 )
 
@@ -53,21 +54,46 @@ func TestProxySessionHistoryReplayAndLimit(t *testing.T) {
 	}
 }
 
-func TestAllocateClientIDLockedUsesSuffixOnConflict(t *testing.T) {
+func TestRegisterClientReplacesExistingID(t *testing.T) {
 	s := NewServer()
-	s.clients["device"] = &ClientConn{ID: "device"}
+	oldConn := &gws.Conn{}
+	newConn := &gws.Conn{}
+	oldClient := &ClientConn{ID: "device", Conn: oldConn, Sessions: make(map[string]*ProxySession), Forwards: make(map[string]*ProxyForward)}
+	newClient := &ClientConn{ID: "device", Conn: newConn, Sessions: make(map[string]*ProxySession), Forwards: make(map[string]*ProxyForward)}
 
-	if got := s.allocateClientIDLocked("other"); got != "other" {
-		t.Fatalf("expected free ID to be unchanged, got %q", got)
+	if old := s.registerClient(oldClient); old != nil {
+		t.Fatalf("first registration replaced %#v", old)
 	}
-	if got := s.allocateClientIDLocked("device"); got != "device-2" {
-		t.Fatalf("expected first conflicting ID to use -2 suffix, got %q", got)
+	if old := s.registerClient(newClient); old != oldClient {
+		t.Fatalf("second registration old = %#v, want oldClient", old)
 	}
+	if got := s.clients["device"]; got != newClient {
+		t.Fatalf("current client = %#v, want newClient", got)
+	}
+	if _, ok := s.clients["device-2"]; ok {
+		t.Fatal("same device reconnect should not allocate a suffixed ID")
+	}
+}
 
-	s.clients["device-2"] = &ClientConn{ID: "device-2"}
-	s.clients["device-3"] = &ClientConn{ID: "device-3"}
-	if got := s.allocateClientIDLocked("device"); got != "device-4" {
-		t.Fatalf("expected suffix allocation to skip occupied IDs, got %q", got)
+func TestUnregisterClientIgnoresStaleSocket(t *testing.T) {
+	s := NewServer()
+	oldConn := &gws.Conn{}
+	newConn := &gws.Conn{}
+	newClient := &ClientConn{ID: "device", Conn: newConn, Sessions: make(map[string]*ProxySession), Forwards: make(map[string]*ProxyForward)}
+	s.clients["device"] = newClient
+
+	if removed, ok := s.unregisterClient("device", oldConn); ok || removed != nil {
+		t.Fatalf("stale unregister removed %#v", removed)
+	}
+	if got := s.clients["device"]; got != newClient {
+		t.Fatalf("stale unregister changed current client to %#v", got)
+	}
+	removed, ok := s.unregisterClient("device", newConn)
+	if !ok || removed != newClient {
+		t.Fatalf("current unregister = (%#v, %v), want newClient true", removed, ok)
+	}
+	if got := s.clients["device"]; got != nil {
+		t.Fatalf("current unregister should remove device, got %#v", got)
 	}
 }
 
