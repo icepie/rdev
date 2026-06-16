@@ -150,7 +150,7 @@ func postDarwinMouse(eventType uint32, event desktopInputEvent, button uint32) e
 		cgEventSetIntegerValueField(cgEvent, cgMouseEventClickState, 1)
 		cgEventSetIntegerValueField(cgEvent, cgMouseEventButtonNumber, int64(button))
 	}
-	cgEventPost(cgAnnotatedSessionEventTap, cgEvent)
+	cgEventPost(cgHIDEventTap, cgEvent)
 	cfRelease(cgEvent)
 	return nil
 }
@@ -165,7 +165,7 @@ func postDarwinWheel(event desktopInputEvent) error {
 	if r1 == 0 {
 		return nil
 	}
-	cgEventPost(cgAnnotatedSessionEventTap, r1)
+	cgEventPost(cgHIDEventTap, r1)
 	cfRelease(r1)
 	return nil
 }
