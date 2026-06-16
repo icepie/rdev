@@ -142,7 +142,7 @@
         controlPreferenceSet = control !== null;
         if (control === 'true') controlInput.checked = true;
         if (control === 'false') controlInput.checked = false;
-        showCursorInput.checked = localStorage.getItem(storagePrefix + 'showCursor') !== 'false';
+        showCursorInput.checked = localStorage.getItem(storagePrefix + 'showCursor') === 'true';
         stage.dataset.control = String(controlInput.checked);
         stage.dataset.cursor = String(showCursorInput.checked);
     }

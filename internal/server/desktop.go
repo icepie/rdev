@@ -185,7 +185,7 @@ func desktopRequestFromQuery(r *http.Request) protocol.Message {
 		Height:       parseDesktopInt(q.Get("height")),
 		Source:       q.Get("source"),
 		InputBackend: q.Get("inputBackend"),
-		ShowCursor:   parseDesktopBool(q.Get("showCursor"), true),
+		ShowCursor:   parseDesktopBool(q.Get("showCursor"), false),
 	}
 	return normalizeDesktopRequest(request)
 }
@@ -224,7 +224,7 @@ func mergeDesktopRequest(base protocol.Message, msg desktopMsg) protocol.Message
 }
 
 func defaultDesktopRequest() protocol.Message {
-	return protocol.Message{FPS: 4, Quality: 50, Width: 1600, Height: 1000, Source: "auto", ShowCursor: true}
+	return protocol.Message{FPS: 4, Quality: 50, Width: 1600, Height: 1000, Source: "auto"}
 }
 
 func normalizeDesktopRequest(request protocol.Message) protocol.Message {
