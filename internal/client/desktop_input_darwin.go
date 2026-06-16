@@ -27,7 +27,8 @@ const (
 	cgMouseButtonRight  = 1
 	cgMouseButtonCenter = 2
 
-	cgHIDEventTap = 0
+	cgHIDEventTap              = 0
+	cgAnnotatedSessionEventTap = 4
 
 	cgEventFlagMaskShift     = 0x00020000
 	cgEventFlagMaskControl   = 0x00040000
@@ -130,7 +131,7 @@ func postDarwinKey(key uint16, down bool, flags uint64) error {
 	if flags != 0 {
 		cgEventSetFlags(event, flags)
 	}
-	cgEventPost(cgHIDEventTap, event)
+	cgEventPost(cgAnnotatedSessionEventTap, event)
 	cfRelease(event)
 	return nil
 }
@@ -140,7 +141,7 @@ func postDarwinMouse(eventType uint32, event desktopInputEvent, button uint32) e
 	if cgEvent == 0 {
 		return fmt.Errorf("CGEventCreateMouseEvent failed")
 	}
-	cgEventPost(cgHIDEventTap, cgEvent)
+	cgEventPost(cgAnnotatedSessionEventTap, cgEvent)
 	cfRelease(cgEvent)
 	return nil
 }
@@ -155,7 +156,7 @@ func postDarwinWheel(event desktopInputEvent) error {
 	if r1 == 0 {
 		return nil
 	}
-	cgEventPost(cgHIDEventTap, r1)
+	cgEventPost(cgAnnotatedSessionEventTap, r1)
 	cfRelease(r1)
 	return nil
 }
@@ -222,8 +223,62 @@ func darwinEventFlags(event desktopInputEvent) uint64 {
 	return flags
 }
 
+func darwinCodeFromKey(key string) string {
+	if key == "" {
+		return ""
+	}
+	lower := strings.ToLower(key)
+	if len(lower) == 1 {
+		ch := lower[0]
+		if ch >= 'a' && ch <= 'z' {
+			return "Key" + strings.ToUpper(lower)
+		}
+		if ch >= '0' && ch <= '9' {
+			return "Digit" + lower
+		}
+		switch ch {
+		case ' ':
+			return "Space"
+		case '-':
+			return "Minus"
+		case '=':
+			return "Equal"
+		case '[':
+			return "BracketLeft"
+		case ']':
+			return "BracketRight"
+		case '\\':
+			return "Backslash"
+		case ';':
+			return "Semicolon"
+		case '\'':
+			return "Quote"
+		case ',':
+			return "Comma"
+		case '.':
+			return "Period"
+		case '/':
+			return "Slash"
+		case '`':
+			return "Backquote"
+		}
+	}
+	switch key {
+	case "Enter", "Tab", "Backspace", "Escape", "Delete", "Home", "End", "PageUp", "PageDown":
+		return key
+	case " ":
+		return "Space"
+	case "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown":
+		return key
+	}
+	return ""
+}
+
 func darwinKeycode(event desktopInputEvent) uint16 {
 	code := event.Code
+	if code == "" {
+		code = darwinCodeFromKey(event.Key)
+	}
 	if strings.HasPrefix(code, "Key") && len(code) == 4 {
 		return map[byte]uint16{
 			'A': 0x00, 'S': 0x01, 'D': 0x02, 'F': 0x03, 'H': 0x04, 'G': 0x05, 'Z': 0x06, 'X': 0x07, 'C': 0x08, 'V': 0x09, 'B': 0x0b,

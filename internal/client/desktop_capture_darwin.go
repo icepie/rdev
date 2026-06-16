@@ -11,6 +11,13 @@ import (
 	"rdev/internal/protocol"
 )
 
+type cgRect struct {
+	X      float64
+	Y      float64
+	Width  float64
+	Height float64
+}
+
 type quartzCapturer struct {
 	displayID uint32
 	bounds    image.Rectangle
@@ -18,6 +25,7 @@ type quartzCapturer struct {
 
 var (
 	cgMainDisplayID        func() uint32
+	cgDisplayBounds        func(uint32) cgRect
 	cgDisplayCreateImage   func(uint32) uintptr
 	cgImageGetWidth        func(uintptr) uintptr
 	cgImageGetHeight       func(uintptr) uintptr
@@ -47,6 +55,7 @@ func newDesktopCapturer(source string) (desktopCapturer, error) {
 		return nil, err
 	}
 	displayID := cgMainDisplayID()
+	bounds := quartzDisplayBounds(displayID)
 	imageRef := cgDisplayCreateImage(displayID)
 	if imageRef == 0 {
 		return nil, fmt.Errorf("CGDisplayCreateImage failed; grant Screen Recording permission to rdev-client")
@@ -57,7 +66,10 @@ func newDesktopCapturer(source string) (desktopCapturer, error) {
 	if width <= 0 || height <= 0 {
 		return nil, fmt.Errorf("CGDisplayCreateImage returned invalid size %dx%d", width, height)
 	}
-	return &quartzCapturer{displayID: displayID, bounds: image.Rect(0, 0, width, height)}, nil
+	if bounds.Empty() {
+		bounds = image.Rect(0, 0, width, height)
+	}
+	return &quartzCapturer{displayID: displayID, bounds: bounds}, nil
 }
 
 func initQuartzCapture() error {
@@ -71,6 +83,7 @@ func initQuartzCapture() error {
 		return quartzCaptureInitErr
 	}
 	purego.RegisterLibFunc(&cgMainDisplayID, appServices, "CGMainDisplayID")
+	purego.RegisterLibFunc(&cgDisplayBounds, appServices, "CGDisplayBounds")
 	purego.RegisterLibFunc(&cgDisplayCreateImage, appServices, "CGDisplayCreateImage")
 	purego.RegisterLibFunc(&cgImageGetWidth, appServices, "CGImageGetWidth")
 	purego.RegisterLibFunc(&cgImageGetHeight, appServices, "CGImageGetHeight")
@@ -83,6 +96,21 @@ func initQuartzCapture() error {
 	purego.RegisterLibFunc(&cfDataGetLength, appServices, "CFDataGetLength")
 	purego.RegisterLibFunc(&cfRelease, appServices, "CFRelease")
 	return nil
+}
+
+func quartzDisplayBounds(displayID uint32) image.Rectangle {
+	if cgDisplayBounds == nil {
+		return image.Rectangle{}
+	}
+	bounds := cgDisplayBounds(displayID)
+	minX := int(bounds.X)
+	minY := int(bounds.Y)
+	width := int(bounds.Width + 0.5)
+	height := int(bounds.Height + 0.5)
+	if width <= 0 || height <= 0 {
+		return image.Rectangle{}
+	}
+	return image.Rect(minX, minY, minX+width, minY+height)
 }
 
 func (q *quartzCapturer) Bounds() image.Rectangle { return q.bounds }
