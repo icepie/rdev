@@ -51,7 +51,7 @@ type x11DesktopCapturer struct {
 func desktopSources() []protocol.DesktopSource {
 	fbSources := enumerateFBDevSources()
 	drmSources := enumerateDRMSources()
-	conn, err := xgb.NewConn()
+	conn, env, err := linuxX11ConnectAny()
 	if err != nil {
 		if len(drmSources) > 0 {
 			return append([]protocol.DesktopSource{{ID: "auto", Label: "Auto", Kind: "screen", Backend: "drm-kms", Width: drmSources[0].Width, Height: drmSources[0].Height, Primary: true}}, append(drmSources, fbSources...)...)
@@ -64,9 +64,13 @@ func desktopSources() []protocol.DesktopSource {
 	defer conn.Close()
 	setup := xproto.Setup(conn)
 	screen := setup.DefaultScreen(conn)
+	label := "All screens"
+	if env.Display != "" {
+		label += " (" + env.Display + ")"
+	}
 	sources := []protocol.DesktopSource{
 		{ID: "auto", Label: "Auto", Kind: "screen", Backend: "x11", Width: int(screen.WidthInPixels), Height: int(screen.HeightInPixels), Primary: true},
-		{ID: "screen:all", Label: "All screens", Kind: "screen", Backend: "x11", Width: int(screen.WidthInPixels), Height: int(screen.HeightInPixels), Primary: true},
+		{ID: "screen:all", Label: label, Kind: "screen", Backend: "x11", Width: int(screen.WidthInPixels), Height: int(screen.HeightInPixels), Primary: true},
 	}
 	for _, monitor := range enumerateX11Monitors(conn, screen) {
 		sources = append(sources, monitor.source)
@@ -86,9 +90,17 @@ func newDesktopCapturer(source string) (desktopCapturer, error) {
 	if strings.HasPrefix(source, "fbdev:") || (os.Getenv("DISPLAY") == "" && fbdevPath(source) != "") {
 		return newFBDevCapturer(source)
 	}
-	conn, err := xgb.NewConn()
+	conn, _, err := linuxX11ConnectAny()
 	if err != nil {
-		return nil, fmt.Errorf("connect X11: %w", err)
+		if source == "" || source == "auto" || source == "screen:all" || source == "virtual" {
+			if drmSourceAvailable(source) {
+				return newDRMCapturer(source)
+			}
+			if fbdevPath(source) != "" {
+				return newFBDevCapturer(source)
+			}
+		}
+		return nil, err
 	}
 	setup := xproto.Setup(conn)
 	screen := setup.DefaultScreen(conn)

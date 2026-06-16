@@ -55,7 +55,8 @@ func desktopCapabilities() *protocol.DesktopCapabilities {
 		inputBackends := desktopInputBackendIDs(inputOptions)
 		fbSources := desktopSourcesByBackendFrom(sources, "fbdev")
 		drmSources := desktopSourcesByBackendFrom(sources, "drm-kms")
-		if os.Getenv("DISPLAY") != "" {
+		x11Sources := append(desktopSourcesByBackendFrom(sources, "x11"), desktopSourcesByBackendFrom(sources, "x11-randr")...)
+		if len(x11Sources) > 0 {
 			caps.DisplayServer = "x11"
 			caps.Supported = true
 			caps.ViewOnly = false

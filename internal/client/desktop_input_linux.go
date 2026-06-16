@@ -145,7 +145,7 @@ func newDesktopInput(backend string) (desktopInput, error) {
 }
 
 func x11InputAvailable() bool {
-	conn, err := xgb.NewConn()
+	conn, _, err := linuxX11ConnectAny()
 	if err != nil {
 		return false
 	}
@@ -154,7 +154,7 @@ func x11InputAvailable() bool {
 }
 
 func newX11DesktopInput() (desktopInput, error) {
-	conn, err := xgb.NewConn()
+	conn, _, err := linuxX11ConnectAny()
 	if err != nil {
 		return nil, fmt.Errorf("connect X11 input: %w", err)
 	}
