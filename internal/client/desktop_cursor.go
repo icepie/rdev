@@ -29,8 +29,9 @@ var desktopCursorBitmap = []string{
 }
 
 func desktopCursorPosition(session *desktopSession, capturer desktopCapturer) (image.Point, bool) {
+	bounds := capturer.Bounds()
 	if provider, ok := capturer.(desktopCursorProvider); ok {
-		if point, ok := provider.CursorPosition(); ok {
+		if point, ok := provider.CursorPosition(); ok && point.In(bounds) {
 			return point, true
 		}
 	}

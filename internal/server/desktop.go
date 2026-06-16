@@ -363,13 +363,21 @@ func (bc *desktopBrowserConn) prepareInput(msg desktopMsg) (*protocol.Message, b
 		return nil, false
 	}
 	if bc.client.Desktop == nil || !bc.client.Desktop.Input {
-		bc.inputError("desktop input is not available")
-		return nil, false
+		if msg.InputType != "cursor_move" {
+			bc.inputError("desktop input is not available")
+			return nil, false
+		}
 	}
 	bc.inputMu.Lock()
 	defer bc.inputMu.Unlock()
 	now := time.Now()
 	switch msg.InputType {
+	case "cursor_move":
+		if now.Sub(bc.lastMouseMove) < 16*time.Millisecond {
+			return nil, false
+		}
+		bc.lastMouseMove = now
+		msg.X, msg.Y = bc.clampPoint(msg.X, msg.Y)
 	case "mouse_move":
 		msg.PointerType = normalizePointerType(msg.PointerType)
 		msg.Pressure = normalizePressure(msg.Pressure)

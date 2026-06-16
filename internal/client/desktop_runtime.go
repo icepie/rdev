@@ -313,12 +313,15 @@ func (c *Client) handleDesktopInput(msg *protocol.Message) {
 	c.mu.Lock()
 	session := c.desktopSessions[msg.SessionID]
 	c.mu.Unlock()
-	if session == nil || session.input == nil {
+	if session == nil {
 		return
 	}
 	x, y := session.mapPoint(msg.X, msg.Y)
-	if msg.InputType == "mouse_move" || msg.InputType == "mouse_down" || msg.InputType == "mouse_up" || msg.InputType == "wheel" {
+	if msg.InputType == "mouse_move" || msg.InputType == "mouse_down" || msg.InputType == "mouse_up" || msg.InputType == "wheel" || msg.InputType == "cursor_move" {
 		session.setCursor(x, y)
+	}
+	if msg.InputType == "cursor_move" || session.input == nil {
+		return
 	}
 	event := desktopInputEvent{
 		Type:        msg.InputType,

@@ -1,9 +1,36 @@
 package client
 
 import (
+	"image"
 	"runtime"
 	"testing"
 )
+
+func TestDesktopCursorPositionFallsBackWhenProviderOutOfBounds(t *testing.T) {
+	session := &desktopSession{}
+	session.setCursor(5, 6)
+	capturer := fakeCursorCapturer{bounds: image.Rect(0, 0, 10, 10), cursor: image.Pt(20, 20), cursorOK: true}
+	point, ok := desktopCursorPosition(session, capturer)
+	if !ok {
+		t.Fatal("desktopCursorPosition returned no point")
+	}
+	if point != image.Pt(5, 6) {
+		t.Fatalf("cursor = %v, want fallback cursor", point)
+	}
+}
+
+type fakeCursorCapturer struct {
+	bounds   image.Rectangle
+	cursor   image.Point
+	cursorOK bool
+}
+
+func (f fakeCursorCapturer) Bounds() image.Rectangle       { return f.bounds }
+func (f fakeCursorCapturer) Capture() (image.Image, error) { return image.NewRGBA(f.bounds), nil }
+func (f fakeCursorCapturer) Close() error                  { return nil }
+func (f fakeCursorCapturer) CursorPosition() (image.Point, bool) {
+	return f.cursor, f.cursorOK
+}
 
 func TestDesktopCapabilitiesReportsCurrentPlatform(t *testing.T) {
 	caps := desktopCapabilities()
