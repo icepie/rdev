@@ -408,12 +408,15 @@ type Server struct {
 	fileMu       sync.RWMutex
 	desktops     map[string]*desktopRoute
 	desktopMu    sync.RWMutex
+	vncMu        sync.RWMutex
+	vncSettings  map[string]protocol.Message
 	upgrader     *gws.Upgrader
 
 	// Public config (set by main) for API/UI
 	SSHPort          string // e.g. "2222"
 	HTTPHost         string // e.g. "192.168.1.100:8080"
 	AdminToken       string // optional token for web APIs and browser WebSockets
+	VNCAddr          string // optional VNC/RFB listen address
 	MaxSessions      int    // maximum concurrent sessions per device
 	MaxForwards      int    // maximum concurrent forwards per device
 	BatchConcurrency int    // maximum concurrent batch operations
@@ -430,6 +433,7 @@ func NewServer() *Server {
 		fileRequests:     make(map[string]*fileSocket),
 		fileTasks:        make(map[string]*fileTaskRoute),
 		desktops:         make(map[string]*desktopRoute),
+		vncSettings:      make(map[string]protocol.Message),
 		MaxSessions:      256,
 		MaxForwards:      1024,
 		BatchConcurrency: runtime.GOMAXPROCS(0) * 8,
@@ -1030,6 +1034,7 @@ func (s *Server) HandleConfigAPI(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{
 		"sshPort":      s.SSHPort,
 		"httpHost":     s.HTTPHost,
+		"vncAddr":      s.VNCAddr,
 		"authRequired": map[bool]string{true: "true", false: "false"}[s.AdminToken != ""],
 	})
 }

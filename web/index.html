@@ -218,6 +218,10 @@
             <code id="h-scp"><span class="h1">scp</span> file &lt;deviceID&gt;@{{H}}:/tmp/ -P {{SP}}</code>
             <code id="h-sftp"><span class="h1">sftp</span> -P {{SP}} &lt;deviceID&gt;@{{H}}</code>
             <code id="h-rsync"><span class="h1">rsync</span> -az --delete -e "ssh -p {{SP}}" ./local-dir/ &lt;deviceID&gt;@{{H}}:/tmp/remote-dir/</code>
+            <h3 style="margin-top:0.8rem" class="icon-inline"><span data-icon="monitor"></span><span data-i18n="index.remoteDesktopTitle">远程桌面</span></h3>
+            <code id="h-web-desktop"><span class="h1">open</span> {{HTTP}}{{H}}/desktop.html?device=&lt;deviceID&gt;</code>
+            <code id="h-vnc" data-vnc-only><span class="h1">vncviewer</span> {{VP}}</code>
+            <code data-vnc-only><span class="h3"><span data-i18n="index.vncAuthComment"># VNC 用户名 = 设备 ID；密码 = 设备密码；无密码设备可用 password=deviceID</span></span></code>
             <h3 style="margin-top:0.8rem" class="icon-inline"><span data-icon="monitor"></span><span data-i18n="index.forwardTitle">端口转发</span></h3>
             <code><span class="h3"><span data-i18n="index.localForwardComment"># -L 访问设备上的服务</span></span></code>
             <code id="h-lfwd"><span class="h1">ssh</span> -L 8080:localhost:80 &lt;deviceID&gt;@{{H}} -p {{SP}}</code>
@@ -262,23 +266,35 @@
         const WS = isHTTPS ? 'wss://' : 'ws://';
         const HTTP = isHTTPS ? 'https://' : 'http://';
         let SP = '2222';
+        let VP = '';
+
+        function vncDisplayAddr(addr) {
+            if (!addr) return '';
+            const host = location.hostname || H.split(':')[0];
+            if (addr.startsWith('0.0.0.0:') || addr.startsWith(':')) return host + ':' + addr.split(':').pop();
+            if (addr.startsWith('[::]:')) return host + ':' + addr.slice(5);
+            return addr;
+        }
 
         function render() {
             const passwordPlaceholder = t('index.passwordPlaceholder');
             document.querySelectorAll('.cmd-code[data-tpl]').forEach(el => {
                 setCmdCode(el, el.dataset.tpl
                     .replace(/\{\{WS\}\}/g, WS).replace(/\{\{HTTP\}\}/g, HTTP)
-                    .replace(/\{\{H\}\}/g, H).replace(/\{\{SP\}\}/g, SP)
+                    .replace(/\{\{H\}\}/g, H).replace(/\{\{SP\}\}/g, SP).replace(/\{\{VP\}\}/g, VP || t('index.vncUnavailable'))
                     .replace(/\{\{PW\}\}/g, passwordPlaceholder));
             });
             // Win7/8 PS2.0 commands (nested quotes break data-tpl, render via JS)
             const el = id => document.getElementById(id);
             if (el('c-w7-pw'))   setCmdCode(el('c-w7-pw'), `[Net.ServicePointManager]::SecurityProtocol=[Enum]::ToObject([Net.SecurityProtocolType],3072); $wc=New-Object Net.WebClient; $wc.DownloadString('${HTTP}${H}/run.ps1') | iex; RDev ${WS}${H} -Password ${passwordPlaceholder}`);
             if (el('c-w7-open')) setCmdCode(el('c-w7-open'), `[Net.ServicePointManager]::SecurityProtocol=[Enum]::ToObject([Net.SecurityProtocolType],3072); $wc=New-Object Net.WebClient; $wc.DownloadString('${HTTP}${H}/run.ps1') | iex; RDev ${WS}${H}`);
+            document.querySelectorAll('[data-vnc-only]').forEach(el => { el.style.display = VP ? '' : 'none'; });
             document.querySelectorAll('.hint code[id]').forEach(el => {
                 el.innerHTML = el.innerHTML
+                    .replace(/\{\{HTTP\}\}/g, '<span class="url">' + HTTP + '</span>')
                     .replace(/\{\{H\}\}/g, '<span class="h1">' + H + '</span>')
-                    .replace(/\{\{SP\}\}/g, '<span class="h3">' + SP + '</span>');
+                    .replace(/\{\{SP\}\}/g, '<span class="h3">' + SP + '</span>')
+                    .replace(/\{\{VP\}\}/g, '<span class="h3">' + (VP || t('index.vncUnavailable')) + '</span>');
             });
         }
 
@@ -303,6 +319,7 @@
 
         authFetch('/api/config').then(r=>r.json()).then(cfg => {
             if (cfg.sshPort) SP = cfg.sshPort;
+            if (cfg.vncAddr) VP = vncDisplayAddr(cfg.vncAddr);
             document.getElementById('stat-ssh').textContent = SP;
             render();
         }).catch(() => { document.getElementById('stat-ssh').textContent = SP; render(); });

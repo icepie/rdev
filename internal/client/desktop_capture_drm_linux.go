@@ -120,6 +120,22 @@ type drmModeFBCmd2 struct {
 	Modifiers   [4]uint64
 }
 
+type drmModeFBCmd struct {
+	FBID   uint32
+	Width  uint32
+	Height uint32
+	Pitch  uint32
+	BPP    uint32
+	Depth  uint32
+	Handle uint32
+}
+
+type drmModeMapDumb struct {
+	Handle uint32
+	Pad    uint32
+	Offset uint64
+}
+
 type drmPrimeHandle struct {
 	Handle uint32
 	Flags  uint32
@@ -143,13 +159,16 @@ type drmCaptureSource struct {
 }
 
 type drmKMSCapturer struct {
-	file       *os.File
-	dmabufFD   int
-	data       []byte
-	mappedFBID uint32
-	fb         drmModeFBCmd2
-	selected   drmCaptureSource
-	bounds     image.Rectangle
+	file         *os.File
+	dmabufFD     int
+	data         []byte
+	mappedFBID   uint32
+	mappedHandle uint32
+	mappedPitch  int
+	mappedFormat uint32
+	fb           drmModeFBCmd2
+	selected     drmCaptureSource
+	bounds       image.Rectangle
 }
 
 func enumerateDRMSources() []protocol.DesktopSource {
@@ -214,7 +233,20 @@ func drmCaptureSourcesForCard(file *os.File, path string) []drmCaptureSource {
 			continue
 		}
 		fb, err := drmFB2(file, crtc.FBID)
-		if err != nil || fb.Width == 0 || fb.Height == 0 || fb.Pitches[0] == 0 {
+		fbWidth := fb.Width
+		fbHeight := fb.Height
+		fbPitch := fb.Pitches[0]
+		if err != nil {
+			legacy, legacyErr := drmFB(file, crtc.FBID)
+			if legacyErr != nil {
+				continue
+			}
+			_ = drmGemCloseHandle(file, legacy.Handle)
+			fbWidth = legacy.Width
+			fbHeight = legacy.Height
+			fbPitch = legacy.Pitch
+		}
+		if fbWidth == 0 || fbHeight == 0 || fbPitch == 0 {
 			continue
 		}
 		if !seenScreen[crtc.FBID] {
@@ -226,8 +258,8 @@ func drmCaptureSourcesForCard(file *os.File, path string) []drmCaptureSource {
 					Label:   "DRM/KMS all screens",
 					Kind:    "screen",
 					Backend: "drm-kms",
-					Width:   int(fb.Width),
-					Height:  int(fb.Height),
+					Width:   int(fbWidth),
+					Height:  int(fbHeight),
 					Primary: len(sources) == 0,
 				},
 			})
@@ -235,8 +267,8 @@ func drmCaptureSourcesForCard(file *os.File, path string) []drmCaptureSource {
 		width := int(crtc.Mode.HDisplay)
 		height := int(crtc.Mode.VDisplay)
 		if width <= 0 || height <= 0 {
-			width = int(fb.Width)
-			height = int(fb.Height)
+			width = int(fbWidth)
+			height = int(fbHeight)
 		}
 		label := drmConnectorName(connector.ConnectorType, connector.ConnectorTypeID)
 		sources = append(sources, drmCaptureSource{
@@ -312,21 +344,21 @@ func (c *drmKMSCapturer) Capture() (image.Image, error) {
 		return nil, fmt.Errorf("invalid DRM/KMS capture bounds")
 	}
 	img := image.NewRGBA(image.Rect(0, 0, width, height))
-	bytesPerPixel := drmBytesPerPixel(c.fb.PixelFormat)
+	bytesPerPixel := drmBytesPerPixel(c.mappedFormat)
 	if bytesPerPixel <= 0 {
-		return nil, fmt.Errorf("unsupported DRM/KMS pixel format %s", drmFourCC(c.fb.PixelFormat))
+		return nil, fmt.Errorf("unsupported DRM/KMS pixel format %s", drmFourCC(c.mappedFormat))
 	}
-	base := int(c.fb.Offsets[0]) + c.selected.captureY*int(c.fb.Pitches[0]) + c.selected.captureX*bytesPerPixel
+	base := c.selected.captureY*c.mappedPitch + c.selected.captureX*bytesPerPixel
 	parallelDesktopRows(width, height, func(y0, y1 int) {
 		for y := y0; y < y1; y++ {
-			row := base + y*int(c.fb.Pitches[0])
+			row := base + y*c.mappedPitch
 			dst := img.Pix[y*img.Stride:]
 			for x := 0; x < width; x++ {
 				off := row + x*bytesPerPixel
 				if off+bytesPerPixel > len(c.data) {
 					break
 				}
-				pixel := drmPixel(c.fb.PixelFormat, c.data[off:off+bytesPerPixel])
+				pixel := drmPixel(c.mappedFormat, c.data[off:off+bytesPerPixel])
 				d := x * 4
 				dst[d+0] = pixel.R
 				dst[d+1] = pixel.G
@@ -347,38 +379,61 @@ func (c *drmKMSCapturer) refresh() error {
 		return fmt.Errorf("DRM/KMS CRTC %d has no active framebuffer", c.selected.crtcID)
 	}
 	fb, err := drmFB2(c.file, crtc.FBID)
+	fbWidth := fb.Width
+	fbHeight := fb.Height
+	fbFormat := fb.PixelFormat
+	legacyFB := false
 	if err != nil {
-		return fmt.Errorf("read DRM/KMS framebuffer %d: %w", crtc.FBID, err)
+		legacy, legacyErr := drmFB(c.file, crtc.FBID)
+		if legacyErr != nil {
+			return fmt.Errorf("read DRM/KMS framebuffer %d: GETFB2 failed: %w; GETFB failed: %v", crtc.FBID, err, legacyErr)
+		}
+		format, ok := drmLegacyFormat(legacy.BPP, legacy.Depth)
+		if !ok {
+			_ = drmGemCloseHandle(c.file, legacy.Handle)
+			return fmt.Errorf("unsupported DRM/KMS legacy framebuffer %d format bpp=%d depth=%d", crtc.FBID, legacy.BPP, legacy.Depth)
+		}
+		fb = drmModeFBCmd2{FBID: legacy.FBID, Width: legacy.Width, Height: legacy.Height, PixelFormat: format, Handles: [4]uint32{legacy.Handle}, Pitches: [4]uint32{legacy.Pitch}}
+		fbWidth = legacy.Width
+		fbHeight = legacy.Height
+		fbFormat = format
+		legacyFB = true
 	}
-	if fb.Width == 0 || fb.Height == 0 || fb.Pitches[0] == 0 {
+	if fbWidth == 0 || fbHeight == 0 || fb.Pitches[0] == 0 {
+		_ = drmGemCloseHandle(c.file, fb.Handles[0])
 		return fmt.Errorf("invalid DRM/KMS framebuffer %d layout", crtc.FBID)
 	}
-	if (fb.Flags&drmModeFBModifiers) != 0 && fb.Modifiers[0] != drmFormatModLinear {
-		return fmt.Errorf("DRM/KMS framebuffer %d uses non-linear modifier 0x%x; mmap capture only supports linear scanout", crtc.FBID, fb.Modifiers[0])
-	}
-	if drmBytesPerPixel(fb.PixelFormat) <= 0 {
-		return fmt.Errorf("unsupported DRM/KMS pixel format %s", drmFourCC(fb.PixelFormat))
+	if drmBytesPerPixel(fbFormat) <= 0 {
+		_ = drmGemCloseHandle(c.file, fb.Handles[0])
+		return fmt.Errorf("unsupported DRM/KMS pixel format %s", drmFourCC(fbFormat))
 	}
 	if c.mappedFBID != crtc.FBID {
 		c.unmap()
-		if err := c.mapFB(fb); err != nil {
+		if legacyFB {
+			if err := c.mapFBLegacy(crtc.FBID, fmt.Errorf("DRM/KMS GETFB2 unavailable")); err != nil {
+				_ = drmGemCloseHandle(c.file, fb.Handles[0])
+				return err
+			}
+		} else if err := c.mapFB(fb); err != nil {
 			return err
 		}
 		c.mappedFBID = crtc.FBID
+	} else {
+		_ = drmGemCloseHandle(c.file, fb.Handles[0])
 	}
 	c.fb = fb
 	if c.selected.fullScreen {
 		c.selected.captureX = 0
 		c.selected.captureY = 0
-		c.bounds = image.Rect(0, 0, int(fb.Width), int(fb.Height))
-		c.selected.source.Width = int(fb.Width)
-		c.selected.source.Height = int(fb.Height)
+		c.bounds = image.Rect(0, 0, int(fbWidth), int(fbHeight))
+		c.selected.source.Width = int(fbWidth)
+		c.selected.source.Height = int(fbHeight)
 	} else {
 		width := int(crtc.Mode.HDisplay)
 		height := int(crtc.Mode.VDisplay)
 		if width <= 0 || height <= 0 {
-			width = int(fb.Width)
-			height = int(fb.Height)
+			width = int(fbWidth)
+			height = int(fbHeight)
 		}
 		c.selected.captureX = int(crtc.X)
 		c.selected.captureY = int(crtc.Y)
@@ -392,8 +447,19 @@ func (c *drmKMSCapturer) refresh() error {
 }
 
 func (c *drmKMSCapturer) mapFB(fb drmModeFBCmd2) error {
+	if (fb.Flags&drmModeFBModifiers) != 0 && fb.Modifiers[0] != drmFormatModLinear {
+		_ = drmGemCloseHandle(c.file, fb.Handles[0])
+		return c.mapFBLegacy(fb.FBID, fmt.Errorf("DRM/KMS framebuffer %d uses non-linear modifier 0x%x", fb.FBID, fb.Modifiers[0]))
+	}
 	if fb.Handles[0] == 0 {
-		return fmt.Errorf("DRM/KMS framebuffer %d did not expose a GEM handle; run as DRM master or with CAP_SYS_ADMIN", fb.FBID)
+		return c.mapFBLegacy(fb.FBID, fmt.Errorf("DRM/KMS framebuffer %d did not expose a GEM handle", fb.FBID))
+	}
+	mapLen := int(fb.Offsets[0]) + int(fb.Pitches[0])*int(fb.Height)
+	if err := c.mapDumbHandle(fb.Handles[0], mapLen); err == nil {
+		c.mappedHandle = fb.Handles[0]
+		c.mappedPitch = int(fb.Pitches[0])
+		c.mappedFormat = fb.PixelFormat
+		return nil
 	}
 	prime := drmPrimeHandle{Handle: fb.Handles[0], Flags: drmPrimeHandleToFDFlags, FD: -1}
 	if err := drmIoctl(c.file, drmIOWR(0x2d, unsafe.Sizeof(prime)), unsafe.Pointer(&prime)); err != nil {
@@ -401,7 +467,6 @@ func (c *drmKMSCapturer) mapFB(fb drmModeFBCmd2) error {
 		return fmt.Errorf("export DRM/KMS framebuffer %d as dma-buf: %w", fb.FBID, err)
 	}
 	_ = drmGemCloseHandle(c.file, fb.Handles[0])
-	mapLen := int(fb.Offsets[0]) + int(fb.Pitches[0])*int(fb.Height)
 	data, err := syscall.Mmap(int(prime.FD), 0, mapLen, syscall.PROT_READ, syscall.MAP_SHARED)
 	if err != nil {
 		_ = syscall.Close(int(prime.FD))
@@ -409,6 +474,66 @@ func (c *drmKMSCapturer) mapFB(fb drmModeFBCmd2) error {
 	}
 	c.dmabufFD = int(prime.FD)
 	c.data = data
+	c.mappedHandle = fb.Handles[0]
+	c.mappedPitch = int(fb.Pitches[0])
+	c.mappedFormat = fb.PixelFormat
+	return nil
+}
+
+func (c *drmKMSCapturer) mapFBLegacy(fbID uint32, cause error) error {
+	fb, err := drmFB(c.file, fbID)
+	if err != nil {
+		return fmt.Errorf("%v; fallback GETFB failed: %w", cause, err)
+	}
+	if fb.Handle == 0 || fb.Pitch == 0 || fb.Width == 0 || fb.Height == 0 {
+		return fmt.Errorf("%v; fallback GETFB returned invalid layout", cause)
+	}
+	format, ok := drmLegacyFormat(fb.BPP, fb.Depth)
+	if !ok {
+		_ = drmGemCloseHandle(c.file, fb.Handle)
+		return fmt.Errorf("%v; unsupported fallback GETFB format bpp=%d depth=%d", cause, fb.BPP, fb.Depth)
+	}
+	mapLen := int(fb.Pitch) * int(fb.Height)
+	if err := c.mapDumbHandle(fb.Handle, mapLen); err == nil {
+		c.mappedHandle = fb.Handle
+		c.mappedPitch = int(fb.Pitch)
+		c.mappedFormat = format
+		return nil
+	}
+	prime := drmPrimeHandle{Handle: fb.Handle, Flags: drmPrimeHandleToFDFlags, FD: -1}
+	if err := drmIoctl(c.file, drmIOWR(0x2d, unsafe.Sizeof(prime)), unsafe.Pointer(&prime)); err != nil {
+		_ = drmGemCloseHandle(c.file, fb.Handle)
+		return fmt.Errorf("%v; fallback PRIME export failed: %w", cause, err)
+	}
+	_ = drmGemCloseHandle(c.file, fb.Handle)
+	data, err := syscall.Mmap(int(prime.FD), 0, mapLen, syscall.PROT_READ, syscall.MAP_SHARED)
+	if err != nil {
+		_ = syscall.Close(int(prime.FD))
+		return fmt.Errorf("%v; fallback PRIME mmap failed: %w", cause, err)
+	}
+	c.dmabufFD = int(prime.FD)
+	c.data = data
+	c.mappedHandle = fb.Handle
+	c.mappedPitch = int(fb.Pitch)
+	c.mappedFormat = format
+	return nil
+}
+
+func (c *drmKMSCapturer) mapDumbHandle(handle uint32, mapLen int) error {
+	if handle == 0 || mapLen <= 0 {
+		return fmt.Errorf("invalid GEM handle or map length")
+	}
+	mapping := drmModeMapDumb{Handle: handle}
+	if err := drmIoctl(c.file, drmIOWR(0xB3, unsafe.Sizeof(mapping)), unsafe.Pointer(&mapping)); err != nil {
+		return fmt.Errorf("DRM_IOCTL_MODE_MAP_DUMB: %w", err)
+	}
+	data, err := syscall.Mmap(int(c.file.Fd()), int64(mapping.Offset), mapLen, syscall.PROT_READ, syscall.MAP_SHARED)
+	if err != nil {
+		return fmt.Errorf("mmap DRM/KMS dumb buffer: %w", err)
+	}
+	_ = drmGemCloseHandle(c.file, handle)
+	c.data = data
+	c.dmabufFD = -1
 	return nil
 }
 
@@ -422,6 +547,9 @@ func (c *drmKMSCapturer) unmap() {
 		c.dmabufFD = -1
 	}
 	c.mappedFBID = 0
+	c.mappedHandle = 0
+	c.mappedPitch = 0
+	c.mappedFormat = 0
 }
 
 func drmResources(file *os.File) (drmModeCardRes, []uint32, error) {
@@ -502,6 +630,14 @@ func drmFB2(file *os.File, fbID uint32) (drmModeFBCmd2, error) {
 	return fb, nil
 }
 
+func drmFB(file *os.File, fbID uint32) (drmModeFBCmd, error) {
+	fb := drmModeFBCmd{FBID: fbID}
+	if err := drmIoctl(file, drmIOWR(0xAD, unsafe.Sizeof(fb)), unsafe.Pointer(&fb)); err != nil {
+		return drmModeFBCmd{}, err
+	}
+	return fb, nil
+}
+
 func drmGemCloseHandle(file *os.File, handle uint32) error {
 	if handle == 0 {
 		return nil
@@ -528,6 +664,19 @@ func drmIOWR(nr uintptr, size uintptr) uintptr {
 
 func ioctl(dir, typ, nr, size uintptr) uintptr {
 	return (dir << 30) | (typ << 8) | nr | (size << 16)
+}
+
+func drmLegacyFormat(bpp, depth uint32) (uint32, bool) {
+	switch {
+	case bpp == 32 && depth == 24:
+		return drmFormatXRGB8888, true
+	case bpp == 32 && depth == 32:
+		return drmFormatARGB8888, true
+	case bpp == 16 && depth == 16:
+		return drmFormatRGB565, true
+	default:
+		return 0, false
+	}
 }
 
 func drmBytesPerPixel(format uint32) int {

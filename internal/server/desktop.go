@@ -51,6 +51,7 @@ type desktopRoute struct {
 	id       string
 	clientID string
 	conn     *desktopBrowserConn
+	vnc      *vncConn
 }
 
 type desktopBrowserConn struct {
@@ -494,11 +495,18 @@ func (s *Server) handleDesktopMessage(msg *protocol.Message) {
 	s.desktopMu.RLock()
 	route := s.desktops[msg.SessionID]
 	s.desktopMu.RUnlock()
-	if route == nil || route.conn == nil {
+	if route == nil {
 		return
 	}
 	switch msg.Type {
 	case protocol.MsgDesktopReady:
+		if route.vnc != nil {
+			route.vnc.handleReady(msg)
+			return
+		}
+		if route.conn == nil {
+			return
+		}
 		op := "ready"
 		if msg.Error != "" {
 			op = "error"
@@ -509,6 +517,13 @@ func (s *Server) handleDesktopMessage(msg *protocol.Message) {
 		route.conn.inputMu.Unlock()
 		route.conn.writeJSON(desktopMsg{Op: op, Session: msg.SessionID, Width: msg.Width, Height: msg.Height, Format: msg.Format, Source: msg.Source, InputBackend: msg.InputBackend, Desktop: msg.DesktopCapabilities, Message: msg.Error})
 	case protocol.MsgDesktopClose:
+		if route.vnc != nil {
+			route.vnc.handleClose(msg)
+			return
+		}
+		if route.conn == nil {
+			return
+		}
 		route.conn.writeJSON(desktopMsg{Op: "closed", Session: msg.SessionID, Message: msg.Error})
 		route.conn.close()
 	}
@@ -518,7 +533,14 @@ func (s *Server) handleDesktopFrame(sessionID string, data []byte) {
 	s.desktopMu.RLock()
 	route := s.desktops[sessionID]
 	s.desktopMu.RUnlock()
-	if route == nil || route.conn == nil || len(data) == 0 {
+	if route == nil || len(data) == 0 {
+		return
+	}
+	if route.vnc != nil {
+		route.vnc.enqueueFrame(data)
+		return
+	}
+	if route.conn == nil {
 		return
 	}
 	route.conn.enqueueFrame(data)
@@ -535,6 +557,10 @@ func (s *Server) closeDesktopForClient(clientID string) {
 	}
 	s.desktopMu.Unlock()
 	for _, route := range routes {
+		if route.vnc != nil {
+			route.vnc.close()
+			continue
+		}
 		if route.conn != nil {
 			route.conn.writeJSON(desktopMsg{Op: "closed", Session: route.id, Message: "device disconnected"})
 			route.conn.close()

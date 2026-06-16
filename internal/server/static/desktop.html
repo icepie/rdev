@@ -82,6 +82,7 @@
         <label><input id="showCursor" type="checkbox" style="width:auto"> <span data-i18n="desktop.showCursor">Show cursor</span></label>
         <label><span data-i18n="desktop.inputBackend">Input</span><select id="inputBackend" class="fit-select"><option value="auto" data-i18n="desktop.inputAuto">Auto</option></select></label>
         <label><span data-i18n="desktop.view">View</span><select id="fitMode" class="fit-select"><option value="fit" data-i18n="desktop.fit">Fit</option><option value="actual" data-i18n="desktop.actual">Actual</option></select></label>
+        <button class="btn" id="syncVNC" data-i18n="desktop.syncVNC">Sync to VNC</button>
         <button class="btn" id="screenshot" data-i18n="desktop.screenshot">Screenshot</button>
         <button class="btn" id="fullscreen" data-i18n="desktop.fullscreen">Fullscreen</button>
         <span id="frameInfo" class="status"></span>
@@ -228,6 +229,20 @@
     }
     function authPayload() {
         return Object.assign({ op:'auth', password: passwordInput.value }, desktopOptions());
+    }
+    async function syncVNCSettings() {
+        if (!deviceSelect.value) { setStatus('Select a device first', 'warn'); return; }
+        saveDesktopSettings();
+        const opts = desktopOptions();
+        try {
+            const r = await authFetch('/api/vnc/settings', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(Object.assign({device:deviceSelect.value}, opts))});
+            const data = await r.json().catch(() => ({}));
+            if (!r.ok || !data.ok) throw new Error(data.message || data.error || `HTTP ${r.status}`);
+            const suffix = data.closedSessions ? `; reconnect VNC (${data.closedSessions} session reset)` : '';
+            setStatus(data.vncAddr ? `VNC settings synced: ${data.vncAddr}${suffix}` : `VNC settings synced${suffix}`, 'ok');
+        } catch (e) {
+            setStatus(e.message || String(e), 'err');
+        }
     }
     function clampInt(value, min, max, fallback) {
         const n = parseInt(value, 10);
@@ -443,6 +458,7 @@
     document.getElementById('connect').addEventListener('click', connect);
     document.getElementById('disconnect').addEventListener('click', disconnect);
     document.getElementById('screenshot').addEventListener('click', saveScreenshot);
+    document.getElementById('syncVNC').addEventListener('click', syncVNCSettings);
     document.getElementById('fullscreen').addEventListener('click', toggleFullscreen);
     deviceSelect.addEventListener('change', () => { updateSourceOptions(); saveDesktopSettings(); scheduleReconnectIfActive(); });
     modeSelect.addEventListener('change', () => { updateMode(); saveDesktopSettings(); scheduleReconnectIfActive(); });

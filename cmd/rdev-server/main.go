@@ -26,6 +26,7 @@ func main() {
 		maxSessions      = 0
 		maxForwards      = 0
 		batchConcurrency = 0
+		vncAddr          = ""
 		autoUpdate       = true
 		updateInterval   = time.Minute
 	)
@@ -67,6 +68,11 @@ func main() {
 				fmt.Sscanf(os.Args[i+1], "%d", &batchConcurrency)
 				i++
 			}
+		case "--vnc":
+			if i+1 < len(os.Args) {
+				vncAddr = os.Args[i+1]
+				i++
+			}
 		case "--no-auto-update":
 			autoUpdate = false
 		case "--auto-update":
@@ -95,6 +101,7 @@ Options:
   --max-sessions     Max concurrent sessions per device (default 256)
   --max-forwards     Max concurrent TCP forwards per device (default 1024)
   --batch-concurrency Max concurrent batch operations (default GOMAXPROCS*8)
+  --vnc             VNC/RFB listen address with username=deviceId auth (optional)
   --no-auto-update Disable built-in GitHub release auto-update
   --auto-update    Enable/disable auto-update explicitly (true/false)
   --update-interval Auto-update polling interval (default 1m)
@@ -105,6 +112,7 @@ Features:
   - Public key (authorized_keys) and password authentication
   - Local port forwarding (-L) and remote port forwarding (-R)
   - Web terminal, batch commands, file distribution
+  - Optional VNC/RFB bridge with VeNCrypt username/password device selection
 
 Examples:
   rdev-server
@@ -161,12 +169,23 @@ Examples:
 	if batchConcurrency > 0 {
 		srv.BatchConcurrency = batchConcurrency
 	}
+	if vncAddr != "" {
+		srv.VNCAddr = vncAddr
+	}
 
 	sshServer, err := server.NewSSHServer(srv, sshAddr, hostKeyPath, authorizedKeysPath)
 	if err != nil {
 		log.Fatalf("SSH server init error: %v", err)
 	}
 	sshServer.WatchAuthorizedKeys(authorizedKeysPath)
+
+	if vncAddr != "" {
+		vncListener, err := server.StartVNCServer(srv, vncAddr)
+		if err != nil {
+			log.Fatalf("VNC server init error: %v", err)
+		}
+		defer vncListener.Close()
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", srv.HandleWS)
@@ -180,6 +199,7 @@ Examples:
 	mux.HandleFunc("/api/devices", srv.HandleTerminalAPI)
 	mux.HandleFunc("/api/batch/devices", srv.HandleBatchDevicesAPI)
 	mux.HandleFunc("/api/config", srv.HandleConfigAPI)
+	mux.HandleFunc("/api/vnc/settings", srv.HandleVNCSettingsAPI)
 	mux.HandleFunc("/api/upload", srv.HandleFileUpload)
 	mux.Handle("/", srv.StaticHandler())
 
@@ -199,6 +219,9 @@ Examples:
 	if adminToken != "" {
 		fmt.Println("  ║  WebAuth: enabled                              ║")
 	}
+	if vncAddr != "" {
+		fmt.Printf("  ║  VNC:    %-37s║\n", vncAddr)
+	}
 	fmt.Println("  ╚════════════════════════════════════════════════╝")
 
 	// Start HTTP listener before printing info, so we know it's bound
@@ -213,6 +236,9 @@ Examples:
 	fmt.Printf("  Client:   ./rdev-client -s ws://%s:%s -i <device-id>\n", outboundIP, httpPort)
 	fmt.Printf("  SSH:      ssh <device-id>@%s -p %s\n", outboundIP, sshPort)
 	fmt.Printf("  Dashboard: http://%s:%s\n", outboundIP, httpPort)
+	if vncAddr != "" {
+		fmt.Printf("  VNC:      vncviewer %s  (username=device-id)\n", vncAddr)
+	}
 	fmt.Println("  ────────────────────────────────────────────────")
 	fmt.Println()
 	fmt.Printf("  Host key:     %s\n", hostKeyPath)

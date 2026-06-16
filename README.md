@@ -35,6 +35,7 @@
 | 跨平台 | Unix (creack/pty) / Windows (ConPty) / 其他 (pipe) |
 | Terminal Modes | SSH pty-req modes 完整转发 (ECHO, ONLCR, etc.) |
 | Remote Desktop | 已支持浏览器远程屏幕查看与输入控制 MVP（Linux X11/DRM/fbdev、Windows GDI/DXGI、macOS Quartz/CoreGraphics no-cgo 截屏；输入后端含 XTEST、可选 uinput、Win32、可选 Win8+ Touch Injection、macOS Quartz mouse/keyboard；默认 CGO_ENABLED=0），设计见 `docs/remote-desktop.md` |
+| VNC/RFB Bridge | 服务端可选 `--vnc` 暴露现代 VNC 入口，使用 VeNCrypt Plain 用户名/密码认证，`username=deviceId` 选择设备 |
 
 ## 快速开始
 
@@ -49,6 +50,9 @@
 
 # 数据目录 (host key, authorized_keys)
 ./rdev-server --data /etc/rdev
+
+# 可选 VNC/RFB 入口（只支持带 username/password 的现代 VNC Viewer）
+./rdev-server --vnc 127.0.0.1:5900
 ```
 
 ### 启动客户端
@@ -113,6 +117,12 @@ sftp -P 2222 my-device@your-server
 # Rsync（设备端需安装 rsync；通过 RDev SSH 执行远端 rsync --server）
 rsync -az --delete -e 'ssh -p 2222' ./local-dir/ my-device@your-server:/tmp/remote-dir/
 rsync -az --delete -e 'ssh -p 2222' my-device@your-server:/tmp/remote-dir/ ./local-dir/
+
+# VNC/RFB（服务端需加 --vnc 127.0.0.1:5900；VNC Viewer 需支持 VeNCrypt Plain username/password）
+vncviewer 127.0.0.1:5900
+# username = my-device；password = 设备密码
+# 无设备密码时 password 可留空；若 Viewer 不允许空密码，可填 my-device
+# username 为空时，password=my-device 也可连接无密码设备
 
 # 本地端口转发 (访问设备上 80 端口的服务)
 ssh -L 8080:localhost:80 my-device@your-server -p 2222
