@@ -1017,13 +1017,6 @@ func (c *Client) startShellExecSession(msg *protocol.Message) (*clientSession, e
 	stderrW.Close()
 
 	sess.stdinPipe = wincompat.EncodeInput(stdinW)
-
-	// Most non-interactive exec commands do not consume stdin. Git smart SSH
-	// commands do: upload-pack/receive-pack exchange pack data over stdin/stdout.
-	if msg.Command != "" && !isGitSmartSSHCommand(msg.Command) {
-		sess.stdinPipe.Close()
-		sess.stdinPipe = nil
-	}
 	sess.cmdWaitFn = func() (int, error) {
 		err := cmd.Wait()
 		if err == nil {
