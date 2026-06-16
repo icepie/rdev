@@ -217,6 +217,7 @@
             <code id="h-ssh"><span class="h1">ssh</span> &lt;deviceID&gt;@{{H}} -p {{SP}}</code>
             <code id="h-scp"><span class="h1">scp</span> file &lt;deviceID&gt;@{{H}}:/tmp/ -P {{SP}}</code>
             <code id="h-sftp"><span class="h1">sftp</span> -P {{SP}} &lt;deviceID&gt;@{{H}}</code>
+            <code id="h-rsync"><span class="h1">rsync</span> -az --delete -e "ssh -p {{SP}}" ./local-dir/ &lt;deviceID&gt;@{{H}}:/tmp/remote-dir/</code>
             <h3 style="margin-top:0.8rem" class="icon-inline"><span data-icon="monitor"></span><span data-i18n="index.forwardTitle">端口转发</span></h3>
             <code><span class="h3"><span data-i18n="index.localForwardComment"># -L 访问设备上的服务</span></span></code>
             <code id="h-lfwd"><span class="h1">ssh</span> -L 8080:localhost:80 &lt;deviceID&gt;@{{H}} -p {{SP}}</code>

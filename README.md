@@ -1,6 +1,6 @@
 # RDev - Remote Debug over SSH
 
-通过 SSH 远程调试已连接设备。客户端（设备端）连接到服务端后，其他人可通过标准 SSH/SCP/SFTP 访问该设备的 Shell 和文件系统，并支持端口转发。
+通过 SSH 远程调试已连接设备。客户端（设备端）连接到服务端后，其他人可通过标准 SSH/SCP/SFTP/Rsync 访问该设备的 Shell 和文件系统，并支持端口转发。
 
 ## 架构
 
@@ -23,6 +23,7 @@
 | SSH Exec | 远程命令执行 |
 | SCP 上传/下载 | 通过 SFTP 子系统 |
 | SFTP | 完整的 SFTP 文件操作 |
+| Rsync | 通过 SSH exec 运行设备端 `rsync --server`，支持增量同步 |
 | 公钥免密 | `~/.rdev/authorized_keys` 加入公钥即可 |
 | 密码认证 | 客户端启动时指定密码 |
 | -L 端口转发 | 访问设备侧网络的服务 |
@@ -108,6 +109,10 @@ scp file my-device@your-server:/tmp/ -P 2222
 
 # SFTP
 sftp -P 2222 my-device@your-server
+
+# Rsync（设备端需安装 rsync；通过 RDev SSH 执行远端 rsync --server）
+rsync -az --delete -e 'ssh -p 2222' ./local-dir/ my-device@your-server:/tmp/remote-dir/
+rsync -az --delete -e 'ssh -p 2222' my-device@your-server:/tmp/remote-dir/ ./local-dir/
 
 # 本地端口转发 (访问设备上 80 端口的服务)
 ssh -L 8080:localhost:80 my-device@your-server -p 2222
