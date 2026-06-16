@@ -19,21 +19,15 @@ var version = "dev"
 
 func main() {
 	var (
-		httpAddr             = ":8080"
-		sshAddr              = ":2222"
-		dataDir              = ""
-		adminToken           = ""
-		maxSessions          = 0
-		maxForwards          = 0
-		batchConcurrency     = 0
-		autoUpdate           = true
-		updateInterval       = time.Minute
-		aliyunPanConfig      = ""
-		aliyunPanDeviceID    = ""
-		aliyunPanRoot        = ""
-		aliyunPanTmpDir      = ""
-		aliyunPanTransferDir = ""
-		aliyunPanPassword    = ""
+		httpAddr         = ":8080"
+		sshAddr          = ":2222"
+		dataDir          = ""
+		adminToken       = ""
+		maxSessions      = 0
+		maxForwards      = 0
+		batchConcurrency = 0
+		autoUpdate       = true
+		updateInterval   = time.Minute
 	)
 
 	for i := 1; i < len(os.Args); i++ {
@@ -73,36 +67,6 @@ func main() {
 				fmt.Sscanf(os.Args[i+1], "%d", &batchConcurrency)
 				i++
 			}
-		case "--aliyunpan-config":
-			if i+1 < len(os.Args) {
-				aliyunPanConfig = os.Args[i+1]
-				i++
-			}
-		case "--aliyunpan-id":
-			if i+1 < len(os.Args) {
-				aliyunPanDeviceID = os.Args[i+1]
-				i++
-			}
-		case "--aliyunpan-root":
-			if i+1 < len(os.Args) {
-				aliyunPanRoot = os.Args[i+1]
-				i++
-			}
-		case "--aliyunpan-tmp-dir":
-			if i+1 < len(os.Args) {
-				aliyunPanTmpDir = os.Args[i+1]
-				i++
-			}
-		case "--aliyunpan-transfer-dir":
-			if i+1 < len(os.Args) {
-				aliyunPanTransferDir = os.Args[i+1]
-				i++
-			}
-		case "--aliyunpan-password":
-			if i+1 < len(os.Args) {
-				aliyunPanPassword = os.Args[i+1]
-				i++
-			}
 		case "--no-auto-update":
 			autoUpdate = false
 		case "--auto-update":
@@ -134,12 +98,6 @@ Options:
   --no-auto-update Disable built-in GitHub release auto-update
   --auto-update    Enable/disable auto-update explicitly (true/false)
   --update-interval Auto-update polling interval (default 1m)
-  --aliyunpan-config Enable AliyunPan virtual file backend with aliyunpan_config.json
-  --aliyunpan-id     Virtual device ID for AliyunPan backend (default aliyunpan)
-  --aliyunpan-root   Root path exposed from AliyunPan (default /)
-  --aliyunpan-tmp-dir Temp directory for AliyunPan uploads/SFTP staging
-  --aliyunpan-transfer-dir AliyunPan cloud directory for device relay transfers (default /rdev-transfer)
-  --aliyunpan-password Optional SSH password for AliyunPan backend; authorized_keys also work
   --version, -v    Print version and exit
 
 Features:
@@ -166,25 +124,6 @@ Examples:
 		if d, err := time.ParseDuration(env); err == nil && d > 0 {
 			updateInterval = d
 		}
-	}
-
-	if env := os.Getenv("RDEV_ALIYUNPAN_CONFIG"); env != "" && aliyunPanConfig == "" {
-		aliyunPanConfig = env
-	}
-	if env := os.Getenv("RDEV_ALIYUNPAN_ID"); env != "" && aliyunPanDeviceID == "" {
-		aliyunPanDeviceID = env
-	}
-	if env := os.Getenv("RDEV_ALIYUNPAN_ROOT"); env != "" && aliyunPanRoot == "" {
-		aliyunPanRoot = env
-	}
-	if env := os.Getenv("RDEV_ALIYUNPAN_TMP_DIR"); env != "" && aliyunPanTmpDir == "" {
-		aliyunPanTmpDir = env
-	}
-	if env := os.Getenv("RDEV_ALIYUNPAN_TRANSFER_DIR"); env != "" && aliyunPanTransferDir == "" {
-		aliyunPanTransferDir = env
-	}
-	if env := os.Getenv("RDEV_ALIYUNPAN_PASSWORD"); env != "" && aliyunPanPassword == "" {
-		aliyunPanPassword = env
 	}
 
 	if dataDir == "" {
@@ -221,45 +160,6 @@ Examples:
 	}
 	if batchConcurrency > 0 {
 		srv.BatchConcurrency = batchConcurrency
-	}
-
-	aliyunPanOptions := server.AliyunPanConfig{Enabled: aliyunPanConfig != "", ConfigPath: aliyunPanConfig, DeviceID: aliyunPanDeviceID, Root: aliyunPanRoot, TempDir: aliyunPanTmpDir, TransferDir: aliyunPanTransferDir, Password: aliyunPanPassword}
-	aliyunPanOptionsPath := filepath.Join(dataDir, "aliyunpan.json")
-	if fileOptions, err := server.LoadAliyunPanConfig(aliyunPanOptionsPath); err == nil {
-		if fileOptions.Enabled || aliyunPanOptions.ConfigPath == "" {
-			aliyunPanOptions = fileOptions
-		}
-		if aliyunPanConfig != "" {
-			aliyunPanOptions.Enabled = true
-			aliyunPanOptions.ConfigPath = aliyunPanConfig
-		}
-		if aliyunPanDeviceID != "" {
-			aliyunPanOptions.DeviceID = aliyunPanDeviceID
-		}
-		if aliyunPanRoot != "" {
-			aliyunPanOptions.Root = aliyunPanRoot
-		}
-		if aliyunPanTmpDir != "" {
-			aliyunPanOptions.TempDir = aliyunPanTmpDir
-		}
-		if aliyunPanTransferDir != "" {
-			aliyunPanOptions.TransferDir = aliyunPanTransferDir
-		}
-		if aliyunPanPassword != "" {
-			aliyunPanOptions.Password = aliyunPanPassword
-		}
-	}
-	if aliyunPanOptions.ConfigPath != "" && !filepath.IsAbs(aliyunPanOptions.ConfigPath) {
-		aliyunPanOptions.ConfigPath = filepath.Join(dataDir, aliyunPanOptions.ConfigPath)
-	}
-	if aliyunPanOptions.Enabled && aliyunPanOptions.ConfigPath != "" {
-		backend, err := server.NewAliyunPanBackend(aliyunPanOptions.ConfigPath, aliyunPanOptions)
-		if err != nil {
-			log.Printf("aliyunpan backend disabled: %v", err)
-		} else {
-			srv.FileBackend = backend
-			log.Printf("aliyunpan backend enabled as device %q", backend.ID())
-		}
 	}
 
 	sshServer, err := server.NewSSHServer(srv, sshAddr, hostKeyPath, authorizedKeysPath)
