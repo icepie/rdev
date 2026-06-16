@@ -162,6 +162,17 @@ func (h *filesWSHandler) handleAuth(socket *fileSocket, msg fileMsg) {
 		return
 	}
 	if backend := h.srv.backendByID(msg.DeviceID); backend != nil {
+		if b, ok := backend.(*AliyunPanBackend); ok && b.Password() != "" && !constantTimeEqual(b.Password(), msg.Password) {
+			socket.authMu.Lock()
+			socket.authFails[msg.DeviceID]++
+			failures := socket.authFails[msg.DeviceID]
+			socket.authMu.Unlock()
+			if failures > 3 {
+				time.Sleep(time.Duration(failures-3) * 300 * time.Millisecond)
+			}
+			socket.writeText(fileMsg{Op: "auth_fail", DeviceID: msg.DeviceID, Message: "wrong password"})
+			return
+		}
 		socket.authMu.Lock()
 		socket.authorized[msg.DeviceID] = "backend"
 		delete(socket.authFails, msg.DeviceID)

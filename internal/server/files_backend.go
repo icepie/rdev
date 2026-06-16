@@ -81,6 +81,9 @@ func (h *filesWSHandler) handleBackendUploadEnd(socket *fileSocket, route *fileT
 	}
 	if route.targetPath != "" {
 		_, url, err := route.backend.DownloadURL(context.Background(), route.upload.Path())
+		if absoluteBackend, ok := route.backend.(absolutePathBackend); ok {
+			_, url, err = absoluteBackend.DownloadURLAbsolute(context.Background(), route.upload.Path())
+		}
 		if err != nil {
 			socket.writeText(fileMsg{Op: "transfer_error", TaskID: msg.TaskID, Path: route.targetPath, Error: err.Error(), Message: err.Error()})
 			h.srv.removeFileTask(msg.TaskID)
