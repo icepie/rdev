@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"image"
+	"log"
 	"os"
 	"os/exec"
 	"strings"
@@ -44,6 +45,9 @@ const (
 	btnTouch      = 0x14a
 
 	busUSB = 0x03
+
+	uinputReadyTimeout = 2 * time.Second
+	uinputCreateDelay  = 150 * time.Millisecond
 )
 
 const (
@@ -208,10 +212,7 @@ func (x *x11DesktopInput) fake(typ, detail byte, rootX, rootY int) {
 }
 
 func uinputAvailable() bool {
-	if os.Geteuid() == 0 {
-		_ = exec.Command("modprobe", "uinput").Run()
-	}
-	file, err := os.OpenFile("/dev/uinput", os.O_WRONLY|syscall.O_NONBLOCK, 0)
+	file, err := prepareUInputFile()
 	if err != nil {
 		return false
 	}
@@ -219,33 +220,85 @@ func uinputAvailable() bool {
 	return true
 }
 
-func newUInputDesktopInput() (desktopInput, error) {
-	if os.Geteuid() == 0 {
-		_ = exec.Command("modprobe", "uinput").Run()
+func prepareUInputFile() (*os.File, error) {
+	file, err := openUInputFile()
+	if err == nil {
+		return file, nil
 	}
+	if os.Geteuid() != 0 {
+		return nil, err
+	}
+	loadUInputModule()
+	deadline := time.Now().Add(uinputReadyTimeout)
+	for {
+		file, err = openUInputFile()
+		if err == nil {
+			return file, nil
+		}
+		if time.Now().After(deadline) {
+			return nil, err
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+func openUInputFile() (*os.File, error) {
+	paths := []string{"/dev/uinput", "/dev/input/uinput"}
+	var errors []string
+	for _, path := range paths {
+		file, err := os.OpenFile(path, os.O_WRONLY|syscall.O_NONBLOCK, 0)
+		if err == nil {
+			return file, nil
+		}
+		errors = append(errors, fmt.Sprintf("%s: %v", path, err))
+	}
+	return nil, fmt.Errorf("open uinput: %s", strings.Join(errors, "; "))
+}
+
+func loadUInputModule() {
+	candidates := []string{"modprobe", "/sbin/modprobe", "/usr/sbin/modprobe"}
+	for _, command := range candidates {
+		if strings.Contains(command, "/") {
+			if _, err := os.Stat(command); err != nil {
+				continue
+			}
+		} else if _, err := exec.LookPath(command); err != nil {
+			continue
+		}
+		if err := exec.Command(command, "uinput").Run(); err == nil {
+			return
+		}
+	}
+}
+
+func newUInputDesktopInput() (desktopInput, error) {
 	input := &uinputDesktopInput{}
+	var errors []string
 	var err error
 	input.keyboard, err = newUInputDevice("RDev keyboard", uinputKeyboardKeys(), nil, nil)
 	if err != nil {
-		input.Close()
-		return nil, err
+		errors = append(errors, err.Error())
 	}
 	input.mouse, err = newUInputDevice("RDev mouse", []int{btnLeft, btnRight, btnMiddle}, []int{relX, relY, relWheel, relHWheel}, nil)
 	if err != nil {
-		input.Close()
-		return nil, err
+		errors = append(errors, err.Error())
 	}
 	input.touch, err = newUInputDevice("RDev touch", []int{btnTouch, btnToolFinger}, nil, []uinputAbsConfig{{Code: absX, Maximum: 65535, Resolution: 10}, {Code: absY, Maximum: 65535, Resolution: 10}})
 	if err != nil {
-		input.Close()
-		return nil, err
+		errors = append(errors, err.Error())
 	}
 	input.pen, err = newUInputDevice("RDev pen", []int{btnTouch, btnToolPen}, nil, []uinputAbsConfig{{Code: absX, Maximum: 65535, Resolution: 10}, {Code: absY, Maximum: 65535, Resolution: 10}, {Code: absPressure, Maximum: 1024}})
 	if err != nil {
-		input.Close()
-		return nil, err
+		errors = append(errors, err.Error())
 	}
-	time.Sleep(100 * time.Millisecond)
+	if input.keyboard == nil && input.mouse == nil && input.touch == nil && input.pen == nil {
+		input.Close()
+		return nil, fmt.Errorf("initialize uinput devices: %s", strings.Join(errors, "; "))
+	}
+	if len(errors) > 0 {
+		log.Printf("uinput initialized with partial device support: %s", strings.Join(errors, "; "))
+	}
+	time.Sleep(uinputCreateDelay)
 	return input, nil
 }
 
@@ -423,9 +476,9 @@ func wheelStep(delta int) int {
 }
 
 func newUInputDevice(name string, keyBits, relBits []int, absAxes []uinputAbsConfig) (*uinputDevice, error) {
-	file, err := os.OpenFile("/dev/uinput", os.O_WRONLY|syscall.O_NONBLOCK, 0)
+	file, err := prepareUInputFile()
 	if err != nil {
-		return nil, fmt.Errorf("open /dev/uinput for %s: %w", name, err)
+		return nil, fmt.Errorf("open uinput for %s: %w", name, err)
 	}
 	device := &uinputDevice{file: file}
 	if err := device.setup(name, keyBits, relBits, absAxes); err != nil {
@@ -477,6 +530,7 @@ func (d *uinputDevice) setup(name string, keyBits, relBits []int, absAxes []uinp
 	if err := d.ioctl(uiDevCreate, 0); err != nil {
 		return fmt.Errorf("uinput create device %s: %w", name, err)
 	}
+	time.Sleep(uinputCreateDelay)
 	return nil
 }
 

@@ -28,7 +28,7 @@ const (
 	cgMouseButtonCenter = 2
 
 	cgHIDEventTap              = 0
-	cgAnnotatedSessionEventTap = 4
+	cgAnnotatedSessionEventTap = 2
 
 	cgEventFlagMaskShift     = 0x00020000
 	cgEventFlagMaskControl   = 0x00040000
