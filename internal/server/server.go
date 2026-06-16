@@ -1018,7 +1018,7 @@ func (s *Server) HandleAPI(w http.ResponseWriter, r *http.Request) {
 		clients = append(clients, clientInfo{
 			ID:          s.FileBackend.ID(),
 			ConnectedAt: time.Now().Format(time.RFC3339),
-			HasPassword: backendHasPassword(s.FileBackend),
+			HasPassword: false,
 		})
 	}
 
@@ -1072,7 +1072,7 @@ func (s *Server) HandleTerminalAPI(w http.ResponseWriter, r *http.Request) {
 		devices = append(devices, deviceInfo{
 			ID:          s.FileBackend.ID(),
 			ConnectedAt: time.Now().Format(time.RFC3339),
-			HasPassword: backendHasPassword(s.FileBackend),
+			HasPassword: false,
 		})
 	}
 
