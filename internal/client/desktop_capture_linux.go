@@ -472,14 +472,31 @@ func fbdevPath(source string) string {
 		return strings.TrimPrefix(source, "fbdev:")
 	}
 	if source == "" || source == "auto" || source == "screen:all" {
-		if _, err := os.Stat("/dev/fb0"); err == nil {
-			return "/dev/fb0"
-		}
-		if _, err := os.Stat("/dev/fb/0"); err == nil {
-			return "/dev/fb/0"
+		for _, candidate := range []string{"/dev/fb0", "/dev/fb/0"} {
+			if _, _, err := probeFBDev(candidate); err == nil {
+				return candidate
+			}
 		}
 	}
 	return ""
+}
+
+func fbdevSysfsName(path string) string {
+	name := strings.TrimPrefix(path, "/dev/")
+	name = strings.TrimPrefix(name, "fb/")
+	if name == "0" {
+		return "fb0"
+	}
+	return name
+}
+
+func fbdevBlanked(path string) bool {
+	data, err := os.ReadFile("/sys/class/graphics/" + fbdevSysfsName(path) + "/blank")
+	if err != nil {
+		return false
+	}
+	blank, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	return err == nil && blank != 0
 }
 
 func probeFBDev(path string) (fbVarScreenInfo, fbFixScreenInfo, error) {
@@ -498,6 +515,9 @@ func probeFBDev(path string) (fbVarScreenInfo, fbFixScreenInfo, error) {
 	}
 	if vinfo.Xres == 0 || vinfo.Yres == 0 || vinfo.BitsPerPixel == 0 {
 		return fbVarScreenInfo{}, fbFixScreenInfo{}, fmt.Errorf("invalid framebuffer geometry")
+	}
+	if fbdevBlanked(path) {
+		return fbVarScreenInfo{}, fbFixScreenInfo{}, fmt.Errorf("framebuffer is blanked")
 	}
 	if vinfo.BitsPerPixel != 16 && vinfo.BitsPerPixel != 24 && vinfo.BitsPerPixel != 32 {
 		return fbVarScreenInfo{}, fbFixScreenInfo{}, fmt.Errorf("unsupported framebuffer bpp %d", vinfo.BitsPerPixel)
@@ -527,6 +547,10 @@ func newFBDevCapturer(source string) (desktopCapturer, error) {
 	if vinfo.Xres == 0 || vinfo.Yres == 0 || vinfo.BitsPerPixel == 0 {
 		file.Close()
 		return nil, fmt.Errorf("invalid framebuffer geometry")
+	}
+	if fbdevBlanked(path) {
+		file.Close()
+		return nil, fmt.Errorf("framebuffer %s is blanked", path)
 	}
 	stride := int(finfo.LineLength)
 	if stride <= 0 {

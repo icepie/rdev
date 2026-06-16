@@ -19,16 +19,22 @@ func TestDesktopCapabilitiesReportsCurrentPlatform(t *testing.T) {
 		}
 		return
 	}
-	if caps.DisplayServer == "gdi" {
+	if caps.DisplayServer == "windows" {
 		if !caps.Supported || caps.ViewOnly || !caps.Input {
-			t.Fatalf("Windows GDI capability = %#v, want supported interactive desktop", caps)
+			t.Fatalf("Windows capability = %#v, want supported interactive desktop", caps)
+		}
+		return
+	}
+	if caps.DisplayServer == "drm-kms" || caps.DisplayServer == "fbdev" {
+		if !caps.Supported || !caps.ViewOnly || caps.Input {
+			t.Fatalf("Linux fallback capability = %#v, want supported view-only fallback", caps)
 		}
 		return
 	}
 	if caps.Supported {
-		t.Fatalf("non-X11 Phase 1 capability should be unavailable/limited, got %#v", caps)
+		t.Fatalf("unsupported desktop capability should be unavailable, got %#v", caps)
 	}
 	if caps.Reason == "" {
-		t.Fatal("expected an unavailable/limited reason")
+		t.Fatal("expected an unavailable reason")
 	}
 }

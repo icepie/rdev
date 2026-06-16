@@ -8,8 +8,15 @@ import (
 )
 
 func desktopSourcesByBackend(backend string) []protocol.DesktopSource {
+	return desktopSourcesByBackendFrom(desktopSources(), backend)
+}
+
+func desktopSourcesByBackendFrom(sources []protocol.DesktopSource, backend string) []protocol.DesktopSource {
 	var filtered []protocol.DesktopSource
-	for _, source := range desktopSources() {
+	for _, source := range sources {
+		if source.ID == "auto" {
+			continue
+		}
 		if source.Backend == backend {
 			filtered = append(filtered, source)
 		}
@@ -28,18 +35,20 @@ func desktopCapabilities() *protocol.DesktopCapabilities {
 
 	switch runtime.GOOS {
 	case "windows":
+		sources := desktopSources()
 		caps.DisplayServer = "windows"
 		caps.Supported = true
 		caps.ViewOnly = false
 		caps.Input = true
 		caps.Backends = []string{"win32-gdi"}
-		if len(desktopSourcesByBackend("dxgi")) > 0 {
+		if len(desktopSourcesByBackendFrom(sources, "dxgi")) > 0 {
 			caps.Backends = append(caps.Backends, "dxgi")
 		}
-		caps.Sources = desktopSources()
+		caps.Sources = sources
 	case "linux":
-		fbSources := desktopSourcesByBackend("fbdev")
-		drmSources := desktopSourcesByBackend("drm-kms")
+		sources := desktopSources()
+		fbSources := desktopSourcesByBackendFrom(sources, "fbdev")
+		drmSources := desktopSourcesByBackendFrom(sources, "drm-kms")
 		if os.Getenv("DISPLAY") != "" {
 			caps.DisplayServer = "x11"
 			caps.Supported = true
@@ -49,7 +58,7 @@ func desktopCapabilities() *protocol.DesktopCapabilities {
 			if len(drmSources) > 0 {
 				caps.Backends = append(caps.Backends, "drm-kms")
 			}
-			caps.Sources = desktopSources()
+			caps.Sources = sources
 		} else if os.Getenv("WAYLAND_DISPLAY") != "" {
 			caps.DisplayServer = "wayland"
 			caps.Backends = []string{"wayland-portal"}

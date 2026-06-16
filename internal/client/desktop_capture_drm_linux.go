@@ -175,7 +175,7 @@ func enumerateDRMCaptureSources() []drmCaptureSource {
 	paths, _ := filepath.Glob("/dev/dri/card*")
 	var sources []drmCaptureSource
 	for _, path := range paths {
-		file, err := os.OpenFile(path, os.O_RDWR, 0)
+		file, err := os.Open(path)
 		if err != nil {
 			continue
 		}
