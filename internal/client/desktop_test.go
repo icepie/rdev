@@ -26,8 +26,14 @@ func TestDesktopCapabilitiesReportsCurrentPlatform(t *testing.T) {
 		return
 	}
 	if caps.DisplayServer == "drm-kms" || caps.DisplayServer == "fbdev" {
-		if !caps.Supported || !caps.ViewOnly || caps.Input {
-			t.Fatalf("Linux fallback capability = %#v, want supported view-only fallback", caps)
+		if !caps.Supported {
+			t.Fatalf("Linux fallback capability = %#v, want supported fallback", caps)
+		}
+		if caps.Input && caps.ViewOnly {
+			t.Fatalf("Linux fallback with input should not be view-only: %#v", caps)
+		}
+		if !caps.Input && !caps.ViewOnly {
+			t.Fatalf("Linux fallback without input should be view-only: %#v", caps)
 		}
 		return
 	}

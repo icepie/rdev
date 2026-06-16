@@ -78,6 +78,7 @@
             <label><span data-i18n="desktop.maxHeight">Max H</span><input id="maxHeight" type="number" min="240" max="2160" value="1000"></label>
         </span>
         <label><input id="controlInput" type="checkbox" style="width:auto"> <span data-i18n="desktop.control">Control</span></label>
+        <label><span data-i18n="desktop.inputBackend">Input</span><select id="inputBackend" class="fit-select"><option value="auto" data-i18n="desktop.inputAuto">Auto</option></select></label>
         <label><span data-i18n="desktop.view">View</span><select id="fitMode" class="fit-select"><option value="fit" data-i18n="desktop.fit">Fit</option><option value="actual" data-i18n="desktop.actual">Actual</option></select></label>
         <button class="btn" id="screenshot" data-i18n="desktop.screenshot">Screenshot</button>
         <button class="btn" id="fullscreen" data-i18n="desktop.fullscreen">Fullscreen</button>
@@ -109,6 +110,7 @@
     const maxWidthInput = document.getElementById('maxWidth');
     const maxHeightInput = document.getElementById('maxHeight');
     const fitModeSelect = document.getElementById('fitMode');
+    const inputBackendSelect = document.getElementById('inputBackend');
     const controlInput = document.getElementById('controlInput');
     const manualSettings = document.getElementById('manual-settings');
     const frameInfo = document.getElementById('frameInfo');
@@ -128,6 +130,7 @@
         if (mode === 'auto' || mode === 'manual') modeSelect.value = mode;
         if (fit === 'fit' || fit === 'actual') fitModeSelect.value = fit;
         sourceSelect.value = localStorage.getItem(storagePrefix + 'source') || sourceSelect.value;
+        inputBackendSelect.value = localStorage.getItem(storagePrefix + 'inputBackend') || inputBackendSelect.value;
         fpsInput.value = localStorage.getItem(storagePrefix + 'fps') || fpsInput.value;
         qualityInput.value = localStorage.getItem(storagePrefix + 'quality') || qualityInput.value;
         maxWidthInput.value = localStorage.getItem(storagePrefix + 'width') || maxWidthInput.value;
@@ -142,6 +145,7 @@
         if (deviceSelect.value) localStorage.setItem(storagePrefix + 'device', deviceSelect.value);
         localStorage.setItem(storagePrefix + 'mode', modeSelect.value);
         localStorage.setItem(storagePrefix + 'source', sourceSelect.value);
+        localStorage.setItem(storagePrefix + 'inputBackend', inputBackendSelect.value);
         localStorage.setItem(storagePrefix + 'fit', fitModeSelect.value);
         localStorage.setItem(storagePrefix + 'control', String(controlInput.checked));
         localStorage.setItem(storagePrefix + 'fps', String(clampInt(fpsInput.value, 1, 12, 4)));
@@ -161,7 +165,27 @@
         if (current === 'primary') current = 'screen:primary';
         sourceSelect.innerHTML = sources.map(s => `<option value="${esc(s.id)}">${esc(sourceLabel(s))}</option>`).join('');
         sourceSelect.value = sources.some(s => s.id === current) ? current : 'auto';
+        updateInputBackendOptions(device.desktop || {});
         saveDesktopSettings();
+    }
+    function updateInputBackendOptions(desktop) {
+        const backends = (desktop.inputOptions && desktop.inputOptions.length) ? desktop.inputOptions : ((desktop.inputBackends || []).map(b => ({id:b, label:inputBackendLabel(b), kinds:[]})));
+        const saved = localStorage.getItem(storagePrefix + 'inputBackend') || 'auto';
+        const options = [{id:'auto', label:t('desktop.inputAuto')}].concat(backends.map(b => ({id:b.id || b, label:inputBackendLabel(b)})));
+        inputBackendSelect.innerHTML = options.map(o => `<option value="${esc(o.id)}">${esc(o.label)}</option>`).join('');
+        inputBackendSelect.value = options.some(o => o.id === saved) ? saved : 'auto';
+        inputBackendSelect.disabled = backends.length === 0;
+    }
+    function inputBackendLabel(backend) {
+        const id = backend.id || backend;
+        const label = backend.label || id;
+        const kinds = backend.kinds && backend.kinds.length ? ` · ${backend.kinds.join('/')}` : '';
+        const requires = backend.requires && backend.requires.length ? ` · ${backend.requires.join(', ')}` : '';
+        if (id === 'x11-xtest') return `${label}${kinds || ' · mouse/keyboard'}${requires}`;
+        if (id === 'uinput') return `${label}${kinds || ' · mouse/keyboard/touch/pen'}${requires}`;
+        if (id === 'win32') return `${label}${kinds || ' · mouse/keyboard'}${requires}`;
+        if (id === 'win32-touch') return `${label}${kinds || ' · mouse/keyboard/touch/pen'}${requires}`;
+        return `${label}${kinds}${requires}`;
     }
     function sourceLabel(source) {
         const parts = [source.label || source.id];
@@ -187,11 +211,12 @@
             quality: manual ? clampInt(qualityInput.value, 25, 90, 50) : 55,
             width: manual ? clampInt(maxWidthInput.value, 320, 3840, 1600) : adaptive.width,
             height: manual ? clampInt(maxHeightInput.value, 240, 2160, 1000) : adaptive.height,
+            inputBackend: inputBackendSelect.value || 'auto',
         };
     }
     function desktopQuery() {
         const opts = desktopOptions();
-        const q = new URLSearchParams({ device: deviceSelect.value, mode: opts.mode, source: opts.source, fps: String(opts.fps), quality: String(opts.quality), width: String(opts.width), height: String(opts.height) });
+        const q = new URLSearchParams({ device: deviceSelect.value, mode: opts.mode, source: opts.source, fps: String(opts.fps), quality: String(opts.quality), width: String(opts.width), height: String(opts.height), inputBackend: opts.inputBackend });
         return q.toString();
     }
     function authPayload() {
@@ -277,6 +302,7 @@
                 canvas.width = msg.width || 1; canvas.height = msg.height || 1;
                 canvas.style.display = 'block'; empty.style.display = 'none';
                 currentSource = msg.source || '';
+                if (msg.inputBackend) inputBackendSelect.value = msg.inputBackend;
                 remoteInput = !!(msg.desktop && msg.desktop.input);
                 controlInput.disabled = !remoteInput;
                 if (remoteInput && !controlPreferenceSet) controlInput.checked = true;
@@ -360,7 +386,7 @@
         if (type === 'mouse_move' && (now - lastMouseSent < 16 || (ws && ws.bufferedAmount > 128 * 1024))) return;
         lastMouseSent = now;
         const point = canvasPoint(event);
-        sendInput(Object.assign({inputType:type, x:point.x, y:point.y, button:event.button || 0}, extra));
+        sendInput(Object.assign({inputType:type, x:point.x, y:point.y, button:event.button || 0, pointerType:event.pointerType || 'mouse', pointerId:event.pointerId || 0, pressure:event.pressure || 0}, extra));
     }
     function sendKey(type, event) {
         if (!controlInput.checked || !remoteInput) return;
@@ -404,6 +430,7 @@
     deviceSelect.addEventListener('change', () => { updateSourceOptions(); saveDesktopSettings(); scheduleReconnectIfActive(); });
     modeSelect.addEventListener('change', () => { updateMode(); saveDesktopSettings(); scheduleReconnectIfActive(); });
     sourceSelect.addEventListener('change', () => { saveDesktopSettings(); scheduleReconnectIfActive(); });
+    inputBackendSelect.addEventListener('change', () => { saveDesktopSettings(); scheduleReconnectIfActive(); });
     fitModeSelect.addEventListener('change', () => { stage.dataset.fit = fitModeSelect.value; saveDesktopSettings(); });
     [fpsInput, qualityInput, maxWidthInput, maxHeightInput].forEach(input => input.addEventListener('change', () => { saveDesktopSettings(); scheduleReconnectIfActive(); }));
     passwordInput.addEventListener('keydown', e => { if (e.key === 'Enter') connect(); });

@@ -153,6 +153,7 @@ type Message struct {
 	Quality             int                  `json:"quality,omitempty"`
 	FPS                 int                  `json:"fps,omitempty"`
 	InputType           string               `json:"inputType,omitempty"`
+	InputBackend        string               `json:"inputBackend,omitempty"`
 	X                   int                  `json:"x,omitempty"`
 	Y                   int                  `json:"y,omitempty"`
 	Button              int                  `json:"button,omitempty"`
@@ -164,6 +165,9 @@ type Message struct {
 	AltKey              bool                 `json:"altKey,omitempty"`
 	ShiftKey            bool                 `json:"shiftKey,omitempty"`
 	MetaKey             bool                 `json:"metaKey,omitempty"`
+	PointerType         string               `json:"pointerType,omitempty"`
+	PointerID           int                  `json:"pointerId,omitempty"`
+	Pressure            float64              `json:"pressure,omitempty"`
 
 	// Legacy fields (text frames)
 	Data   string `json:"data,omitempty"`
@@ -172,15 +176,26 @@ type Message struct {
 
 // DesktopCapabilities describes remote desktop support reported by a device.
 type DesktopCapabilities struct {
-	Platform      string          `json:"platform"`
-	DisplayServer string          `json:"displayServer,omitempty"`
-	Supported     bool            `json:"supported"`
-	ViewOnly      bool            `json:"viewOnly"`
-	Input         bool            `json:"input"`
-	Clipboard     bool            `json:"clipboard"`
-	Backends      []string        `json:"backends,omitempty"`
-	Reason        string          `json:"reason,omitempty"`
-	Sources       []DesktopSource `json:"sources,omitempty"`
+	Platform      string                `json:"platform"`
+	DisplayServer string                `json:"displayServer,omitempty"`
+	Supported     bool                  `json:"supported"`
+	ViewOnly      bool                  `json:"viewOnly"`
+	Input         bool                  `json:"input"`
+	Clipboard     bool                  `json:"clipboard"`
+	Backends      []string              `json:"backends,omitempty"`
+	InputBackends []string              `json:"inputBackends,omitempty"`
+	InputOptions  []DesktopInputBackend `json:"inputOptions,omitempty"`
+	Reason        string                `json:"reason,omitempty"`
+	Sources       []DesktopSource       `json:"sources,omitempty"`
+}
+
+// DesktopInputBackend describes one selectable desktop input backend.
+type DesktopInputBackend struct {
+	ID       string   `json:"id"`
+	Label    string   `json:"label"`
+	Kinds    []string `json:"kinds,omitempty"`
+	Requires []string `json:"requires,omitempty"`
+	Reason   string   `json:"reason,omitempty"`
 }
 
 // DesktopSource describes a selectable capture source.

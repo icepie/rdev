@@ -2,7 +2,13 @@
 
 package client
 
-import "strings"
+import (
+	"fmt"
+	"strings"
+	"unsafe"
+
+	"rdev/internal/protocol"
+)
 
 const (
 	mouseEventMove       = 0x0001
@@ -18,18 +24,86 @@ const (
 )
 
 var (
-	procSetCursorPos = user32.NewProc("SetCursorPos")
-	procMouseEvent   = user32.NewProc("mouse_event")
-	procKeybdEvent   = user32.NewProc("keybd_event")
+	procSetCursorPos             = user32.NewProc("SetCursorPos")
+	procMouseEvent               = user32.NewProc("mouse_event")
+	procKeybdEvent               = user32.NewProc("keybd_event")
+	procInitializeTouchInjection = user32.NewProc("InitializeTouchInjection")
+	procInjectTouchInput         = user32.NewProc("InjectTouchInput")
 )
 
-type windowsDesktopInput struct{}
+type windowsDesktopInput struct {
+	touch *windowsTouchInput
+}
 
-func newDesktopInput() (desktopInput, error) { return windowsDesktopInput{}, nil }
+type windowsTouchInput struct {
+	active map[uint32]bool
+}
+
+type pointerInfo struct {
+	PointerType           uint32
+	PointerID             uint32
+	FrameID               uint32
+	PointerFlags          uint32
+	SourceDevice          uintptr
+	HwndTarget            uintptr
+	PtPixelLocation       winPoint
+	PtHimetricLocation    winPoint
+	PtPixelLocationRaw    winPoint
+	PtHimetricLocationRaw winPoint
+	Time                  uint32
+	HistoryCount          uint32
+	InputData             int32
+	KeyStates             uint32
+	PerformanceCount      uint64
+	ButtonChangeType      uint32
+}
+
+type pointerTouchInfo struct {
+	PointerInfo pointerInfo
+	TouchFlags  uint32
+	TouchMask   uint32
+	Contact     winRect
+	ContactRaw  winRect
+	Orientation uint32
+	Pressure    uint32
+}
+
+func platformDesktopInputOptions() []protocol.DesktopInputBackend {
+	options := []protocol.DesktopInputBackend{{ID: "win32", Label: "Win32 input", Kinds: []string{"mouse", "keyboard"}, Requires: []string{"Windows 7+"}}}
+	if windowsTouchInjectionAvailable() {
+		options = append(options, protocol.DesktopInputBackend{ID: "win32-touch", Label: "Win32 Touch Injection", Kinds: []string{"mouse", "keyboard", "touch", "pen"}, Requires: []string{"Windows 8+", "interactive desktop"}, Reason: "pen input is accepted and injected through the Windows touch injection path until native pen injection is available"})
+	}
+	return options
+}
+
+func newDesktopInput(backend string) (desktopInput, error) {
+	switch backend {
+	case "", "auto", "win32":
+		return windowsDesktopInput{}, nil
+	case "win32-touch":
+		touch, err := newWindowsTouchInput()
+		if err != nil {
+			return nil, err
+		}
+		return windowsDesktopInput{touch: touch}, nil
+	default:
+		return nil, fmt.Errorf("unsupported desktop input backend %q", backend)
+	}
+}
+
+func (w windowsDesktopInput) Backend() string {
+	if w.touch != nil {
+		return "win32-touch"
+	}
+	return "win32"
+}
 
 func (windowsDesktopInput) Close() error { return nil }
 
-func (windowsDesktopInput) Apply(event desktopInputEvent) error {
+func (w windowsDesktopInput) Apply(event desktopInputEvent) error {
+	if (event.PointerType == "touch" || event.PointerType == "pen") && w.touch != nil {
+		return w.touch.Apply(event)
+	}
 	switch event.Type {
 	case "mouse_move":
 		setCursorPos(event.X, event.Y)
@@ -54,6 +128,65 @@ func (windowsDesktopInput) Apply(event desktopInputEvent) error {
 		if vk := windowsVK(event); vk != 0 {
 			procKeybdEvent.Call(uintptr(vk), 0, keyEventKeyUp, 0)
 		}
+	}
+	return nil
+}
+
+func windowsTouchInjectionAvailable() bool {
+	return procInitializeTouchInjection.Find() == nil && procInjectTouchInput.Find() == nil
+}
+
+func newWindowsTouchInput() (*windowsTouchInput, error) {
+	if !windowsTouchInjectionAvailable() {
+		return nil, fmt.Errorf("Windows touch injection is unavailable")
+	}
+	r1, _, err := procInitializeTouchInjection.Call(8, 0)
+	if r1 == 0 {
+		return nil, fmt.Errorf("InitializeTouchInjection failed: %w", err)
+	}
+	return &windowsTouchInput{active: make(map[uint32]bool)}, nil
+}
+
+func (t *windowsTouchInput) Apply(event desktopInputEvent) error {
+	pointerID := uint32(event.PointerID)
+	if pointerID == 0 {
+		pointerID = 1
+	}
+	flags := uint32(0x00000002)
+	switch event.Type {
+	case "mouse_down":
+		flags |= 0x00010000 | 0x00000004
+		t.active[pointerID] = true
+	case "mouse_move":
+		flags |= 0x00020000
+		if t.active[pointerID] {
+			flags |= 0x00000004
+		}
+	case "mouse_up":
+		flags |= 0x00040000
+		delete(t.active, pointerID)
+	default:
+		return nil
+	}
+	pressure := uint32(event.Pressure * 1024)
+	if pressure == 0 && flags&0x00000004 != 0 {
+		pressure = 512
+	}
+	if pressure > 1024 {
+		pressure = 1024
+	}
+	contact := winRect{Left: int32(event.X - 2), Top: int32(event.Y - 2), Right: int32(event.X + 2), Bottom: int32(event.Y + 2)}
+	info := pointerTouchInfo{
+		PointerInfo: pointerInfo{PointerType: 2, PointerID: pointerID, PointerFlags: flags, PtPixelLocation: winPoint{X: int32(event.X), Y: int32(event.Y)}},
+		TouchMask:   0x00000001 | 0x00000002 | 0x00000004,
+		Contact:     contact,
+		ContactRaw:  contact,
+		Orientation: 90,
+		Pressure:    pressure,
+	}
+	r1, _, err := procInjectTouchInput.Call(1, uintptr(unsafe.Pointer(&info)))
+	if r1 == 0 {
+		return fmt.Errorf("InjectTouchInput failed: %w", err)
 	}
 	return nil
 }

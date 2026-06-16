@@ -33,7 +33,7 @@
 | 指定 Shell | `--shell /bin/bash` 或 `$RDEV_SHELL` |
 | 跨平台 | Unix (creack/pty) / Windows (ConPty) / 其他 (pipe) |
 | Terminal Modes | SSH pty-req modes 完整转发 (ECHO, ONLCR, etc.) |
-| Remote Desktop | 已支持浏览器远程屏幕查看 MVP（Linux X11 / Windows GDI，默认 CGO_ENABLED=0），设计与后续输入控制见 `docs/remote-desktop.md` |
+| Remote Desktop | 已支持浏览器远程屏幕查看与输入控制 MVP（Linux X11/DRM/fbdev、Windows GDI/DXGI、macOS Quartz/CoreGraphics no-cgo 截屏；输入后端含 XTEST、可选 uinput、Win32、可选 Win8+ Touch Injection、macOS Quartz mouse/keyboard；默认 CGO_ENABLED=0），设计见 `docs/remote-desktop.md` |
 
 ## 快速开始
 

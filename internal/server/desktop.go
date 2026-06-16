@@ -14,32 +14,36 @@ import (
 )
 
 type desktopMsg struct {
-	Op         string                        `json:"op"`
-	Message    string                        `json:"message,omitempty"`
-	Device     string                        `json:"device,omitempty"`
-	Session    string                        `json:"session,omitempty"`
-	StatusCode int                           `json:"statusCode,omitempty"`
-	Width      int                           `json:"width,omitempty"`
-	Height     int                           `json:"height,omitempty"`
-	Format     string                        `json:"format,omitempty"`
-	Mode       string                        `json:"mode,omitempty"`
-	Source     string                        `json:"source,omitempty"`
-	Quality    int                           `json:"quality,omitempty"`
-	FPS        int                           `json:"fps,omitempty"`
-	Desktop    *protocol.DesktopCapabilities `json:"desktop,omitempty"`
-	Pass       string                        `json:"password,omitempty"`
-	InputType  string                        `json:"inputType,omitempty"`
-	X          int                           `json:"x,omitempty"`
-	Y          int                           `json:"y,omitempty"`
-	Button     int                           `json:"button,omitempty"`
-	DeltaX     int                           `json:"deltaX,omitempty"`
-	DeltaY     int                           `json:"deltaY,omitempty"`
-	Key        string                        `json:"key,omitempty"`
-	KeyCode    string                        `json:"code,omitempty"`
-	CtrlKey    bool                          `json:"ctrlKey,omitempty"`
-	AltKey     bool                          `json:"altKey,omitempty"`
-	ShiftKey   bool                          `json:"shiftKey,omitempty"`
-	MetaKey    bool                          `json:"metaKey,omitempty"`
+	Op           string                        `json:"op"`
+	Message      string                        `json:"message,omitempty"`
+	Device       string                        `json:"device,omitempty"`
+	Session      string                        `json:"session,omitempty"`
+	StatusCode   int                           `json:"statusCode,omitempty"`
+	Width        int                           `json:"width,omitempty"`
+	Height       int                           `json:"height,omitempty"`
+	Format       string                        `json:"format,omitempty"`
+	Mode         string                        `json:"mode,omitempty"`
+	Source       string                        `json:"source,omitempty"`
+	Quality      int                           `json:"quality,omitempty"`
+	FPS          int                           `json:"fps,omitempty"`
+	InputBackend string                        `json:"inputBackend,omitempty"`
+	Desktop      *protocol.DesktopCapabilities `json:"desktop,omitempty"`
+	Pass         string                        `json:"password,omitempty"`
+	InputType    string                        `json:"inputType,omitempty"`
+	X            int                           `json:"x,omitempty"`
+	Y            int                           `json:"y,omitempty"`
+	Button       int                           `json:"button,omitempty"`
+	DeltaX       int                           `json:"deltaX,omitempty"`
+	DeltaY       int                           `json:"deltaY,omitempty"`
+	Key          string                        `json:"key,omitempty"`
+	KeyCode      string                        `json:"code,omitempty"`
+	CtrlKey      bool                          `json:"ctrlKey,omitempty"`
+	AltKey       bool                          `json:"altKey,omitempty"`
+	ShiftKey     bool                          `json:"shiftKey,omitempty"`
+	MetaKey      bool                          `json:"metaKey,omitempty"`
+	PointerType  string                        `json:"pointerType,omitempty"`
+	PointerID    int                           `json:"pointerId,omitempty"`
+	Pressure     float64                       `json:"pressure,omitempty"`
 }
 
 type desktopRoute struct {
@@ -174,11 +178,12 @@ func desktopRequestFromSession(socket *gws.Conn) protocol.Message {
 func desktopRequestFromQuery(r *http.Request) protocol.Message {
 	q := r.URL.Query()
 	request := protocol.Message{
-		FPS:     parseDesktopInt(q.Get("fps")),
-		Quality: parseDesktopInt(q.Get("quality")),
-		Width:   parseDesktopInt(q.Get("width")),
-		Height:  parseDesktopInt(q.Get("height")),
-		Source:  q.Get("source"),
+		FPS:          parseDesktopInt(q.Get("fps")),
+		Quality:      parseDesktopInt(q.Get("quality")),
+		Width:        parseDesktopInt(q.Get("width")),
+		Height:       parseDesktopInt(q.Get("height")),
+		Source:       q.Get("source"),
+		InputBackend: q.Get("inputBackend"),
 	}
 	return normalizeDesktopRequest(request)
 }
@@ -199,9 +204,13 @@ func mergeDesktopRequest(base protocol.Message, msg desktopMsg) protocol.Message
 	if msg.Source != "" {
 		base.Source = msg.Source
 	}
+	if msg.InputBackend != "" {
+		base.InputBackend = msg.InputBackend
+	}
 	if msg.Mode != "" && msg.Mode != "manual" {
 		base = defaultDesktopRequest()
 		base.Source = msg.Source
+		base.InputBackend = msg.InputBackend
 	}
 	return normalizeDesktopRequest(base)
 }
@@ -240,6 +249,9 @@ func normalizeDesktopRequest(request protocol.Message) protocol.Message {
 	}
 	if request.Source == "" {
 		request.Source = "auto"
+	}
+	if request.InputBackend == "" {
+		request.InputBackend = "auto"
 	}
 	return request
 }
@@ -340,18 +352,23 @@ func (bc *desktopBrowserConn) prepareInput(msg desktopMsg) (*protocol.Message, b
 	now := time.Now()
 	switch msg.InputType {
 	case "mouse_move":
+		msg.PointerType = normalizePointerType(msg.PointerType)
+		msg.Pressure = normalizePressure(msg.Pressure)
 		if now.Sub(bc.lastMouseMove) < 16*time.Millisecond {
 			return nil, false
 		}
 		bc.lastMouseMove = now
 		msg.X, msg.Y = bc.clampPoint(msg.X, msg.Y)
 	case "mouse_down", "mouse_up":
+		msg.PointerType = normalizePointerType(msg.PointerType)
+		msg.Pressure = normalizePressure(msg.Pressure)
 		msg.X, msg.Y = bc.clampPoint(msg.X, msg.Y)
 		if msg.Button < 0 || msg.Button > 2 {
 			bc.inputError("unsupported mouse button")
 			return nil, false
 		}
 	case "wheel":
+		msg.PointerType = normalizePointerType(msg.PointerType)
 		msg.X, msg.Y = bc.clampPoint(msg.X, msg.Y)
 		if msg.DeltaX > 2000 {
 			msg.DeltaX = 2000
@@ -377,8 +394,28 @@ func (bc *desktopBrowserConn) prepareInput(msg desktopMsg) (*protocol.Message, b
 	return &protocol.Message{
 		Type: protocol.MsgDesktopInput, SessionID: bc.session, InputType: msg.InputType,
 		X: msg.X, Y: msg.Y, Button: msg.Button, DeltaX: msg.DeltaX, DeltaY: msg.DeltaY,
-		Key: msg.Key, Code: msg.KeyCode, CtrlKey: msg.CtrlKey, AltKey: msg.AltKey, ShiftKey: msg.ShiftKey, MetaKey: msg.MetaKey,
+		Key: msg.Key, Code: msg.KeyCode, CtrlKey: msg.CtrlKey, AltKey: msg.AltKey, ShiftKey: msg.ShiftKey, MetaKey: msg.MetaKey, InputBackend: bc.request.InputBackend,
+		PointerType: msg.PointerType, PointerID: msg.PointerID, Pressure: msg.Pressure,
 	}, true
+}
+
+func normalizePointerType(pointerType string) string {
+	switch pointerType {
+	case "touch", "pen":
+		return pointerType
+	default:
+		return "mouse"
+	}
+}
+
+func normalizePressure(pressure float64) float64 {
+	if pressure < 0 {
+		return 0
+	}
+	if pressure > 1 {
+		return 1
+	}
+	return pressure
 }
 
 func (bc *desktopBrowserConn) clampPoint(x, y int) (int, int) {
@@ -443,7 +480,7 @@ func (s *Server) handleDesktopMessage(msg *protocol.Message) {
 		route.conn.frameWidth = msg.Width
 		route.conn.frameHeight = msg.Height
 		route.conn.inputMu.Unlock()
-		route.conn.writeJSON(desktopMsg{Op: op, Session: msg.SessionID, Width: msg.Width, Height: msg.Height, Format: msg.Format, Source: msg.Source, Desktop: msg.DesktopCapabilities, Message: msg.Error})
+		route.conn.writeJSON(desktopMsg{Op: op, Session: msg.SessionID, Width: msg.Width, Height: msg.Height, Format: msg.Format, Source: msg.Source, InputBackend: msg.InputBackend, Desktop: msg.DesktopCapabilities, Message: msg.Error})
 	case protocol.MsgDesktopClose:
 		route.conn.writeJSON(desktopMsg{Op: "closed", Session: msg.SessionID, Message: msg.Error})
 		route.conn.close()

@@ -36,10 +36,14 @@ func desktopCapabilities() *protocol.DesktopCapabilities {
 	switch runtime.GOOS {
 	case "windows":
 		sources := desktopSources()
+		inputOptions := desktopInputOptions()
+		inputBackends := desktopInputBackendIDs(inputOptions)
 		caps.DisplayServer = "windows"
 		caps.Supported = true
 		caps.ViewOnly = false
-		caps.Input = true
+		caps.Input = len(inputBackends) > 0
+		caps.InputBackends = inputBackends
+		caps.InputOptions = inputOptions
 		caps.Backends = []string{"win32-gdi"}
 		if len(desktopSourcesByBackendFrom(sources, "dxgi")) > 0 {
 			caps.Backends = append(caps.Backends, "dxgi")
@@ -47,13 +51,17 @@ func desktopCapabilities() *protocol.DesktopCapabilities {
 		caps.Sources = sources
 	case "linux":
 		sources := desktopSources()
+		inputOptions := desktopInputOptions()
+		inputBackends := desktopInputBackendIDs(inputOptions)
 		fbSources := desktopSourcesByBackendFrom(sources, "fbdev")
 		drmSources := desktopSourcesByBackendFrom(sources, "drm-kms")
 		if os.Getenv("DISPLAY") != "" {
 			caps.DisplayServer = "x11"
 			caps.Supported = true
 			caps.ViewOnly = false
-			caps.Input = true
+			caps.Input = len(inputBackends) > 0
+			caps.InputBackends = inputBackends
+			caps.InputOptions = inputOptions
 			caps.Backends = []string{"x11"}
 			if len(drmSources) > 0 {
 				caps.Backends = append(caps.Backends, "drm-kms")
@@ -61,17 +69,20 @@ func desktopCapabilities() *protocol.DesktopCapabilities {
 			caps.Sources = sources
 		} else if os.Getenv("WAYLAND_DISPLAY") != "" {
 			caps.DisplayServer = "wayland"
+			caps.Input = len(inputBackends) > 0
+			caps.InputBackends = inputBackends
+			caps.InputOptions = inputOptions
 			caps.Backends = []string{"wayland-portal"}
 			caps.Reason = "Wayland capture requires native xdg-desktop-portal/PipeWire support; external tools are not used"
 			if len(drmSources) > 0 {
 				caps.Supported = true
-				caps.ViewOnly = true
+				caps.ViewOnly = !caps.Input
 				caps.Backends = append(caps.Backends, "drm-kms")
 				caps.Sources = append([]protocol.DesktopSource{{ID: "auto", Label: "Auto", Kind: "screen", Backend: "drm-kms", Width: drmSources[0].Width, Height: drmSources[0].Height, Primary: true}}, append(drmSources, fbSources...)...)
 				caps.Reason = "Wayland portal backend is not implemented; using DRM/KMS scanout fallback"
 			} else if len(fbSources) > 0 {
 				caps.Supported = true
-				caps.ViewOnly = true
+				caps.ViewOnly = !caps.Input
 				caps.Backends = append(caps.Backends, "fbdev")
 				caps.Sources = append([]protocol.DesktopSource{{ID: "auto", Label: "Auto", Kind: "screen", Backend: "fbdev", Width: fbSources[0].Width, Height: fbSources[0].Height, Primary: true}}, fbSources...)
 				caps.Reason = "Wayland portal backend is not implemented; using root framebuffer fallback"
@@ -79,8 +90,10 @@ func desktopCapabilities() *protocol.DesktopCapabilities {
 		} else if len(drmSources) > 0 {
 			caps.DisplayServer = "drm-kms"
 			caps.Supported = true
-			caps.ViewOnly = true
-			caps.Input = false
+			caps.Input = len(inputBackends) > 0
+			caps.ViewOnly = !caps.Input
+			caps.InputBackends = inputBackends
+			caps.InputOptions = inputOptions
 			caps.Backends = []string{"drm-kms"}
 			if len(fbSources) > 0 {
 				caps.Backends = append(caps.Backends, "fbdev")
@@ -89,18 +102,27 @@ func desktopCapabilities() *protocol.DesktopCapabilities {
 		} else if len(fbSources) > 0 {
 			caps.DisplayServer = "fbdev"
 			caps.Supported = true
-			caps.ViewOnly = true
-			caps.Input = false
+			caps.Input = len(inputBackends) > 0
+			caps.ViewOnly = !caps.Input
+			caps.InputBackends = inputBackends
+			caps.InputOptions = inputOptions
 			caps.Backends = []string{"fbdev"}
 			caps.Sources = append([]protocol.DesktopSource{{ID: "auto", Label: "Auto", Kind: "screen", Backend: "fbdev", Width: fbSources[0].Width, Height: fbSources[0].Height, Primary: true}}, fbSources...)
 		} else {
 			caps.Reason = "no desktop display or readable framebuffer detected"
 		}
 	case "darwin":
+		inputOptions := desktopInputOptions()
+		inputBackends := desktopInputBackendIDs(inputOptions)
 		caps.DisplayServer = "quartz"
+		caps.Supported = true
+		caps.Input = len(inputBackends) > 0
+		caps.ViewOnly = !caps.Input
+		caps.InputBackends = inputBackends
+		caps.InputOptions = inputOptions
 		caps.Backends = []string{"quartz"}
 		caps.Sources = desktopSources()
-		caps.Reason = "macOS Quartz/CoreGraphics capture backend is planned; default no-cgo build reports capability only"
+		caps.Reason = "macOS Quartz capture requires Screen Recording permission; input requires Accessibility permission"
 	default:
 		caps.Reason = "unsupported platform"
 	}

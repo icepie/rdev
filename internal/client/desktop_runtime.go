@@ -90,9 +90,17 @@ func (c *Client) handleDesktopStart(msg *protocol.Message) {
 		c.mu.Unlock()
 	}()
 
-	if input, err := newDesktopInput(); err == nil {
-		session.input = input
-		defer input.Close()
+	availableInputs := desktopInputBackends()
+	inputBackend := chooseDesktopInputBackend(msg.InputBackend, availableInputs)
+	if inputBackend != "" {
+		if input, err := newDesktopInput(inputBackend); err == nil {
+			session.input = input
+			inputBackend = input.Backend()
+			defer input.Close()
+		} else {
+			log.Printf("desktop input backend %s unavailable: %v", inputBackend, err)
+			inputBackend = ""
+		}
 	}
 
 	runtime.LockOSThread()
@@ -112,10 +120,17 @@ func (c *Client) handleDesktopStart(msg *protocol.Message) {
 	defer capturer.Close()
 
 	bounds := capturer.Bounds()
+	if boundsInput, ok := session.input.(desktopInputBounds); ok {
+		boundsInput.SetBounds(bounds)
+	}
 	caps := desktopCapabilities()
 	caps.Supported = true
 	caps.ViewOnly = false
 	caps.Input = session.input != nil
+	if len(availableInputs) > 0 {
+		caps.InputBackends = append([]string(nil), availableInputs...)
+		caps.InputOptions = desktopInputOptions()
+	}
 	caps.Clipboard = false
 	caps.Reason = ""
 	size := scaledDimension(bounds.Dx(), bounds.Dy(), msg.Width, msg.Height)
@@ -134,6 +149,7 @@ func (c *Client) handleDesktopStart(msg *protocol.Message) {
 		Height:              size.Y,
 		Format:              "jpeg",
 		Source:              sourceID,
+		InputBackend:        inputBackend,
 	})
 
 	fps := msg.FPS
@@ -279,18 +295,21 @@ func (c *Client) handleDesktopInput(msg *protocol.Message) {
 	}
 	x, y := session.mapPoint(msg.X, msg.Y)
 	event := desktopInputEvent{
-		Type:     msg.InputType,
-		X:        x,
-		Y:        y,
-		Button:   msg.Button,
-		DeltaX:   msg.DeltaX,
-		DeltaY:   msg.DeltaY,
-		Key:      msg.Key,
-		Code:     msg.Code,
-		CtrlKey:  msg.CtrlKey,
-		AltKey:   msg.AltKey,
-		ShiftKey: msg.ShiftKey,
-		MetaKey:  msg.MetaKey,
+		Type:        msg.InputType,
+		X:           x,
+		Y:           y,
+		Button:      msg.Button,
+		DeltaX:      msg.DeltaX,
+		DeltaY:      msg.DeltaY,
+		Key:         msg.Key,
+		Code:        msg.Code,
+		CtrlKey:     msg.CtrlKey,
+		AltKey:      msg.AltKey,
+		ShiftKey:    msg.ShiftKey,
+		MetaKey:     msg.MetaKey,
+		PointerType: msg.PointerType,
+		PointerID:   msg.PointerID,
+		Pressure:    msg.Pressure,
 	}
 	session.inputMu.Lock()
 	defer session.inputMu.Unlock()

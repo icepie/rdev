@@ -587,6 +587,16 @@ func cloneDesktopCapabilities(caps *protocol.DesktopCapabilities) *protocol.Desk
 	if caps.Backends != nil {
 		clone.Backends = append([]string(nil), caps.Backends...)
 	}
+	if caps.InputBackends != nil {
+		clone.InputBackends = append([]string(nil), caps.InputBackends...)
+	}
+	if caps.InputOptions != nil {
+		clone.InputOptions = append([]protocol.DesktopInputBackend(nil), caps.InputOptions...)
+		for i := range clone.InputOptions {
+			clone.InputOptions[i].Kinds = append([]string(nil), caps.InputOptions[i].Kinds...)
+			clone.InputOptions[i].Requires = append([]string(nil), caps.InputOptions[i].Requires...)
+		}
+	}
 	if caps.Sources != nil {
 		clone.Sources = append([]protocol.DesktopSource(nil), caps.Sources...)
 	}
