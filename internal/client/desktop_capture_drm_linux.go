@@ -317,16 +317,24 @@ func (c *drmKMSCapturer) Capture() (image.Image, error) {
 		return nil, fmt.Errorf("unsupported DRM/KMS pixel format %s", drmFourCC(c.fb.PixelFormat))
 	}
 	base := int(c.fb.Offsets[0]) + c.selected.captureY*int(c.fb.Pitches[0]) + c.selected.captureX*bytesPerPixel
-	for y := 0; y < height; y++ {
-		row := base + y*int(c.fb.Pitches[0])
-		for x := 0; x < width; x++ {
-			off := row + x*bytesPerPixel
-			if off+bytesPerPixel > len(c.data) {
-				break
+	parallelDesktopRows(width, height, func(y0, y1 int) {
+		for y := y0; y < y1; y++ {
+			row := base + y*int(c.fb.Pitches[0])
+			dst := img.Pix[y*img.Stride:]
+			for x := 0; x < width; x++ {
+				off := row + x*bytesPerPixel
+				if off+bytesPerPixel > len(c.data) {
+					break
+				}
+				pixel := drmPixel(c.fb.PixelFormat, c.data[off:off+bytesPerPixel])
+				d := x * 4
+				dst[d+0] = pixel.R
+				dst[d+1] = pixel.G
+				dst[d+2] = pixel.B
+				dst[d+3] = pixel.A
 			}
-			img.SetRGBA(x, y, drmPixel(c.fb.PixelFormat, c.data[off:off+bytesPerPixel]))
 		}
-	}
+	})
 	return img, nil
 }
 

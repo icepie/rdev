@@ -6,7 +6,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"image"
-	"image/color"
 	"math/bits"
 	"os"
 	"strconv"
@@ -322,20 +321,27 @@ func (c *x11DesktopCapturer) Capture() (image.Image, error) {
 	}
 	img := image.NewRGBA(image.Rect(0, 0, width, height))
 	stride := scanlineStride(width, int(c.format.BitsPerPixel), int(c.format.ScanlinePad))
-	for y := 0; y < height; y++ {
-		row := y * stride
-		for x := 0; x < width; x++ {
-			off := row + x*c.bytesPerPix
-			if off+c.bytesPerPix > len(reply.Data) {
-				break
+	parallelDesktopRows(width, height, func(y0, y1 int) {
+		for y := y0; y < y1; y++ {
+			row := y * stride
+			dst := img.Pix[y*img.Stride:]
+			for x := 0; x < width; x++ {
+				off := row + x*c.bytesPerPix
+				if off+c.bytesPerPix > len(reply.Data) {
+					break
+				}
+				pixel := c.pixel(reply.Data[off : off+c.bytesPerPix])
+				r := scaleColor((pixel&c.visual.RedMask)>>c.redShift, c.redMax)
+				g := scaleColor((pixel&c.visual.GreenMask)>>c.greenShift, c.greenMax)
+				b := scaleColor((pixel&c.visual.BlueMask)>>c.blueShift, c.blueMax)
+				d := x * 4
+				dst[d+0] = r
+				dst[d+1] = g
+				dst[d+2] = b
+				dst[d+3] = 255
 			}
-			pixel := c.pixel(reply.Data[off : off+c.bytesPerPix])
-			r := scaleColor((pixel&c.visual.RedMask)>>c.redShift, c.redMax)
-			g := scaleColor((pixel&c.visual.GreenMask)>>c.greenShift, c.greenMax)
-			b := scaleColor((pixel&c.visual.BlueMask)>>c.blueShift, c.blueMax)
-			img.SetRGBA(x, y, color.RGBA{R: r, G: g, B: b, A: 255})
 		}
-	}
+	})
 	return img, nil
 }
 
@@ -629,20 +635,27 @@ func (c *fbdevCapturer) Capture() (image.Image, error) {
 	}
 	img := image.NewRGBA(image.Rect(0, 0, width, height))
 	base := int(c.vinfo.Yoffset)*c.stride + int(c.vinfo.Xoffset)*bpp
-	for y := 0; y < height; y++ {
-		row := base + y*c.stride
-		for x := 0; x < width; x++ {
-			off := row + x*bpp
-			if off+bpp > len(c.data) {
-				break
+	parallelDesktopRows(width, height, func(y0, y1 int) {
+		for y := y0; y < y1; y++ {
+			row := base + y*c.stride
+			dst := img.Pix[y*img.Stride:]
+			for x := 0; x < width; x++ {
+				off := row + x*bpp
+				if off+bpp > len(c.data) {
+					break
+				}
+				pixel := c.fbPixel(c.data[off : off+bpp])
+				r := scaleColor((pixel&maskFor(c.vinfo.Red))>>c.vinfo.Red.Offset, bitfieldMax(c.vinfo.Red))
+				g := scaleColor((pixel&maskFor(c.vinfo.Green))>>c.vinfo.Green.Offset, bitfieldMax(c.vinfo.Green))
+				b := scaleColor((pixel&maskFor(c.vinfo.Blue))>>c.vinfo.Blue.Offset, bitfieldMax(c.vinfo.Blue))
+				d := x * 4
+				dst[d+0] = r
+				dst[d+1] = g
+				dst[d+2] = b
+				dst[d+3] = 255
 			}
-			pixel := c.fbPixel(c.data[off : off+bpp])
-			r := scaleColor((pixel&maskFor(c.vinfo.Red))>>c.vinfo.Red.Offset, bitfieldMax(c.vinfo.Red))
-			g := scaleColor((pixel&maskFor(c.vinfo.Green))>>c.vinfo.Green.Offset, bitfieldMax(c.vinfo.Green))
-			b := scaleColor((pixel&maskFor(c.vinfo.Blue))>>c.vinfo.Blue.Offset, bitfieldMax(c.vinfo.Blue))
-			img.SetRGBA(x, y, color.RGBA{R: r, G: g, B: b, A: 255})
 		}
-	}
+	})
 	return img, nil
 }
 

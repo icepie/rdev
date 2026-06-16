@@ -173,26 +173,30 @@ func (q *quartzCapturer) Capture() (image.Image, error) {
 func convertQuartzImage(dst *image.RGBA, src []byte, stride int, bitmapInfo uint32) {
 	alphaInfo := bitmapInfo & 0x1f
 	byteOrder := bitmapInfo & 0x7000
-	for y := 0; y < dst.Rect.Dy(); y++ {
-		srcRow := src[y*stride:]
-		dstRow := dst.Pix[y*dst.Stride:]
-		for x := 0; x < dst.Rect.Dx(); x++ {
-			s := srcRow[x*4:]
-			d := dstRow[x*4:]
-			if byteOrder == 0x2000 && (alphaInfo == 2 || alphaInfo == 6) {
-				d[0], d[1], d[2] = s[2], s[1], s[0]
-			} else if byteOrder == 0x4000 && (alphaInfo == 2 || alphaInfo == 6) {
-				d[0], d[1], d[2] = s[1], s[2], s[3]
-			} else {
-				d[0], d[1], d[2] = s[0], s[1], s[2]
-			}
-			if alphaInfo == 5 || alphaInfo == 6 {
-				d[3] = 0xff
-			} else if byteOrder == 0x4000 && alphaInfo == 2 {
-				d[3] = s[0]
-			} else {
-				d[3] = s[3]
+	width := dst.Rect.Dx()
+	height := dst.Rect.Dy()
+	parallelDesktopRows(width, height, func(y0, y1 int) {
+		for y := y0; y < y1; y++ {
+			srcRow := src[y*stride:]
+			dstRow := dst.Pix[y*dst.Stride:]
+			for x := 0; x < width; x++ {
+				s := srcRow[x*4:]
+				d := dstRow[x*4:]
+				if byteOrder == 0x2000 && (alphaInfo == 2 || alphaInfo == 6) {
+					d[0], d[1], d[2] = s[2], s[1], s[0]
+				} else if byteOrder == 0x4000 && (alphaInfo == 2 || alphaInfo == 6) {
+					d[0], d[1], d[2] = s[1], s[2], s[3]
+				} else {
+					d[0], d[1], d[2] = s[0], s[1], s[2]
+				}
+				if alphaInfo == 5 || alphaInfo == 6 {
+					d[3] = 0xff
+				} else if byteOrder == 0x4000 && alphaInfo == 2 {
+					d[3] = s[0]
+				} else {
+					d[3] = s[3]
+				}
 			}
 		}
-	}
+	})
 }

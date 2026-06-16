@@ -426,16 +426,18 @@ func (c *gdiDesktopCapturer) Capture() (image.Image, error) {
 
 	pixels := unsafe.Slice((*byte)(c.bits), c.stride*height)
 	img := image.NewRGBA(image.Rect(0, 0, width, height))
-	for y := 0; y < height; y++ {
-		src := pixels[y*c.stride : y*c.stride+width*4]
-		dst := img.Pix[y*img.Stride : y*img.Stride+width*4]
-		for x := 0; x < width; x++ {
-			si := x * 4
-			dst[si+0] = src[si+2]
-			dst[si+1] = src[si+1]
-			dst[si+2] = src[si+0]
-			dst[si+3] = 0xff
+	parallelDesktopRows(width, height, func(y0, y1 int) {
+		for y := y0; y < y1; y++ {
+			src := pixels[y*c.stride : y*c.stride+width*4]
+			dst := img.Pix[y*img.Stride : y*img.Stride+width*4]
+			for x := 0; x < width; x++ {
+				si := x * 4
+				dst[si+0] = src[si+2]
+				dst[si+1] = src[si+1]
+				dst[si+2] = src[si+0]
+				dst[si+3] = 0xff
+			}
 		}
-	}
+	})
 	return img, nil
 }

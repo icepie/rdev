@@ -263,29 +263,33 @@ func resizeDesktopFrame(img image.Image, maxWidth, maxHeight int) *image.RGBA {
 		return dst
 	}
 	if src, ok := img.(*image.RGBA); ok {
-		for y := 0; y < size.Y; y++ {
+		parallelDesktopRows(size.X, size.Y, func(y0, y1 int) {
+			for y := y0; y < y1; y++ {
+				sourceY := bounds.Min.Y + y*sourceHeight/size.Y
+				for x := 0; x < size.X; x++ {
+					sourceX := bounds.Min.X + x*sourceWidth/size.X
+					sourceOffset := src.PixOffset(sourceX, sourceY)
+					destOffset := dst.PixOffset(x, y)
+					copy(dst.Pix[destOffset:destOffset+4], src.Pix[sourceOffset:sourceOffset+4])
+				}
+			}
+		})
+		return dst
+	}
+	parallelDesktopRows(size.X, size.Y, func(y0, y1 int) {
+		for y := y0; y < y1; y++ {
 			sourceY := bounds.Min.Y + y*sourceHeight/size.Y
 			for x := 0; x < size.X; x++ {
 				sourceX := bounds.Min.X + x*sourceWidth/size.X
-				sourceOffset := src.PixOffset(sourceX, sourceY)
-				destOffset := dst.PixOffset(x, y)
-				copy(dst.Pix[destOffset:destOffset+4], src.Pix[sourceOffset:sourceOffset+4])
+				r, g, b, a := img.At(sourceX, sourceY).RGBA()
+				offset := dst.PixOffset(x, y)
+				dst.Pix[offset+0] = byte(r >> 8)
+				dst.Pix[offset+1] = byte(g >> 8)
+				dst.Pix[offset+2] = byte(b >> 8)
+				dst.Pix[offset+3] = byte(a >> 8)
 			}
 		}
-		return dst
-	}
-	for y := 0; y < size.Y; y++ {
-		sourceY := bounds.Min.Y + y*sourceHeight/size.Y
-		for x := 0; x < size.X; x++ {
-			sourceX := bounds.Min.X + x*sourceWidth/size.X
-			r, g, b, a := img.At(sourceX, sourceY).RGBA()
-			offset := dst.PixOffset(x, y)
-			dst.Pix[offset+0] = byte(r >> 8)
-			dst.Pix[offset+1] = byte(g >> 8)
-			dst.Pix[offset+2] = byte(b >> 8)
-			dst.Pix[offset+3] = byte(a >> 8)
-		}
-	}
+	})
 	return dst
 }
 
