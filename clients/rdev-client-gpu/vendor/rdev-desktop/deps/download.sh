@@ -38,7 +38,7 @@ clone_repo ffmpeg n8.0 \
     https://github.com/FFmpeg/FFmpeg.git
 if [ "$TARGET_OS" == "linux" ]; then
     if [ "${ENABLE_NVENC:-n}" = "y" ] || [ "${ENABLE_VULKAN_VIDEO:-n}" = "y" ]; then
-        clone_repo nv-codec-headers "" \
+        clone_repo nv-codec-headers "n13.0.19.0" \
             https://git.videolan.org/git/ffmpeg/nv-codec-headers.git \
             https://github.com/FFmpeg/nv-codec-headers.git
     fi
@@ -47,7 +47,7 @@ if [ "$TARGET_OS" == "linux" ]; then
     fi
 fi
 if [ "$TARGET_OS" == "windows" ] && [ "${ENABLE_NVENC:-n}" = "y" ]; then
-    clone_repo nv-codec-headers "" \
+    clone_repo nv-codec-headers "n13.0.19.0" \
         https://git.videolan.org/git/ffmpeg/nv-codec-headers.git \
         https://github.com/FFmpeg/nv-codec-headers.git
 fi

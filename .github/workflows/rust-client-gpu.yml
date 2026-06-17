@@ -156,7 +156,7 @@ jobs:
   package-linux-desktop:
     name: Package Linux desktop ${{ matrix.name }}
     needs: test
-    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -241,14 +241,14 @@ jobs:
   package-macos-desktop:
     name: Package macOS desktop ${{ matrix.name }}
     needs: test
-    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - name: amd64
-            os: macos-13
+            os: macos-14
             target: x86_64-apple-darwin
             asset: rdev-client-gpu-darwin-amd64-desktop
             deployment_target: '10.13'
@@ -299,7 +299,7 @@ jobs:
 
   release:
     name: Release Rust GPU client
-    needs: [build, package-linux-desktop, package-macos-desktop]
+    needs: build
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
     steps:

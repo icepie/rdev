@@ -55,6 +55,7 @@ wayland-protocols-wlr = { version = "0.3", features = ["client"], optional = tru
 x11 = { version = "2.21", features = ["xlib", "xtest"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+autopilot = { git = "https://github.com/autopilot-rs/autopilot-rs.git" }
 core-foundation = "^0.10"
 core-graphics = "^0.24"
 
