@@ -219,10 +219,26 @@ jobs:
               "dist/${{ matrix.asset }}/rdev-client-gpu.exe"
             python3 win7/build_shims.py "dist/${{ matrix.asset }}"
             python3 win7/copy_winpty_runtime.py "dist/${{ matrix.asset }}"
+            case "${{ matrix.target }}" in
+              aarch64-*) runtime_arch="aarch64" ;;
+              *) runtime_arch="x86_64" ;;
+            esac
+            runtime_dir="/opt/llvm-mingw/${runtime_arch}-w64-mingw32/bin"
+            for dll in libunwind.dll libc++.dll libwinpthread-1.dll; do
+              [ -f "$runtime_dir/$dll" ] && cp "$runtime_dir/$dll" "dist/${{ matrix.asset }}/"
+            done
             "dist/${{ matrix.asset }}/rdev-client-gpu.exe" --version > "dist/${{ matrix.asset }}/VERSION.txt" || true
             (cd dist && python3 -m zipfile -c "${{ matrix.asset }}.zip" "${{ matrix.asset }}")
           elif [[ "${{ matrix.target }}" == *windows* ]]; then
             cp "target/${{ matrix.target }}/release/${{ matrix.artifact }}" "dist/${{ matrix.asset }}/rdev-client-gpu.exe"
+            case "${{ matrix.target }}" in
+              aarch64-*) runtime_arch="aarch64" ;;
+              *) runtime_arch="x86_64" ;;
+            esac
+            runtime_dir="/opt/llvm-mingw/${runtime_arch}-w64-mingw32/bin"
+            for dll in libunwind.dll libc++.dll libwinpthread-1.dll; do
+              [ -f "$runtime_dir/$dll" ] && cp "$runtime_dir/$dll" "dist/${{ matrix.asset }}/"
+            done
             "dist/${{ matrix.asset }}/rdev-client-gpu.exe" --version > "dist/${{ matrix.asset }}/VERSION.txt" || true
             (cd dist && python3 -m zipfile -c "${{ matrix.asset }}.zip" "${{ matrix.asset }}")
           else
