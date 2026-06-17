@@ -84,7 +84,7 @@ jobs:
             artifact: rdev-client-gpu.exe
             asset: rdev-client-gpu-windows-win7-amd64
           - name: darwin-amd64
-            os: macos-13
+            os: macos-14
             target: x86_64-apple-darwin
             artifact: rdev-client-gpu
             asset: rdev-client-gpu-darwin-amd64
