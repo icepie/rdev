@@ -354,7 +354,7 @@
                     <td style="color:var(--muted)">${ago(d.connectedAt)}</td>
                     <td>${d.sessions}</td><td>${d.forwards}</td>
                     <td>${d.hasPassword?'<span class="badge green">' + t('common.password') + '</span>':'<span class="badge yellow">' + t('common.open') + '</span>'}</td>
-                    <td>${desktopBadge(d.desktop)}</td>
+                    <td>${desktopBadge(d)}</td>
                     <td><div class="row-actions">
                         <a href="/terminal.html?device=${encodeURIComponent(d.id)}" class="term-btn">${icon('terminal')} ${t('index.navTerminal')}</a>
                         <a href="/desktop.html?device=${encodeURIComponent(d.id)}" class="term-btn">${icon('monitor')} ${t('index.navDesktop')}</a>
@@ -364,7 +364,9 @@
             } catch(e) {}
         }
         function esc(s) { const d=document.createElement('div'); d.textContent=s; return d.innerHTML; }
-        function desktopBadge(desktop) {
+        function desktopBadge(device) {
+            const desktop = device && device.desktop;
+            if (device && device.gpuDesktop) return '<span class="badge green" title="GPU tunnel">' + t('index.gpuDesktopReady') + '</span>';
             if (!desktop) return '<span class="badge yellow" title="">' + t('index.desktopUnavailable') + '</span>';
             const title = esc([desktop.platform, desktop.displayServer, desktop.backends && desktop.backends.join(','), desktop.reason].filter(Boolean).join(' · '));
             if (desktop.supported) return '<span class="badge green" title="' + title + '">' + t('index.desktopReady') + '</span>';
