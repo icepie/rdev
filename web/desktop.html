@@ -617,8 +617,22 @@
         sendInput({inputType:type, key:event.key, code:event.code, ctrlKey:event.ctrlKey, altKey:event.altKey, shiftKey:event.shiftKey, metaKey:event.metaKey});
     }
     function gpuPointerBits(button) { return button === 0 ? 1 : button === 2 ? 2 : button === 1 ? 4 : 0; }
-    function gpuPointerMessage(event) {
+    function gpuVideoContentRect() {
         const rect = gpuOverlay.getBoundingClientRect();
+        const videoWidth = gpuVideo.videoWidth || 0;
+        const videoHeight = gpuVideo.videoHeight || 0;
+        if (!videoWidth || !videoHeight || !rect.width || !rect.height) return rect;
+        const containerRatio = rect.width / rect.height;
+        const videoRatio = videoWidth / videoHeight;
+        if (containerRatio > videoRatio) {
+            const width = rect.height * videoRatio;
+            return {left: rect.left + (rect.width - width) / 2, top: rect.top, width, height: rect.height};
+        }
+        const height = rect.width / videoRatio;
+        return {left: rect.left, top: rect.top + (rect.height - height) / 2, width: rect.width, height};
+    }
+    function gpuPointerMessage(event) {
+        const rect = gpuVideoContentRect();
         const x = Math.max(0, Math.min(1, (event.clientX - rect.left) / Math.max(1, rect.width)));
         const y = Math.max(0, Math.min(1, (event.clientY - rect.top) / Math.max(1, rect.height)));
         const previous = gpuLastPointer.get(event.pointerId) || {x:event.clientX,y:event.clientY};
