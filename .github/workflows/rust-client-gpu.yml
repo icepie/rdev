@@ -237,7 +237,7 @@ jobs:
               [ -d "$package_dir" ] || continue
               found=1
               package_name="$(basename "$package_dir")"
-              "$package_dir/rdev-client-gpu" --version > "$package_dir/VERSION.txt"
+              [ -s "$package_dir/VERSION.txt" ] || echo "rdev-client-gpu" > "$package_dir/VERSION.txt"
               tar -C dist -czf "dist/${package_name}.tar.gz" "$package_name"
             done
             [ "$found" = "1" ] || { echo "no Linux packages found for ${{ matrix.asset }}" >&2; exit 1; }
