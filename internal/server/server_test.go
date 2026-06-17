@@ -54,24 +54,45 @@ func TestProxySessionHistoryReplayAndLimit(t *testing.T) {
 	}
 }
 
-func TestRegisterClientReplacesExistingID(t *testing.T) {
+func TestRegisterClientReplacesSameInstanceReconnect(t *testing.T) {
 	s := NewServer()
 	oldConn := &gws.Conn{}
 	newConn := &gws.Conn{}
-	oldClient := &ClientConn{ID: "device", Conn: oldConn, Sessions: make(map[string]*ProxySession), Forwards: make(map[string]*ProxyForward)}
-	newClient := &ClientConn{ID: "device", Conn: newConn, Sessions: make(map[string]*ProxySession), Forwards: make(map[string]*ProxyForward)}
+	oldClient := &ClientConn{ID: "device", RequestedID: "device", InstanceID: "inst-1", Conn: oldConn, Sessions: make(map[string]*ProxySession), Forwards: make(map[string]*ProxyForward)}
+	newClient := &ClientConn{ID: "device", RequestedID: "device", InstanceID: "inst-1", Conn: newConn, Sessions: make(map[string]*ProxySession), Forwards: make(map[string]*ProxyForward)}
 
-	if old := s.registerClient(oldClient); old != nil {
-		t.Fatalf("first registration replaced %#v", old)
+	if old, assigned, duplicate := s.registerClient(oldClient); old != nil || assigned != "device" || duplicate {
+		t.Fatalf("first registration = (%#v, %q, %v), want nil device false", old, assigned, duplicate)
 	}
-	if old := s.registerClient(newClient); old != oldClient {
-		t.Fatalf("second registration old = %#v, want oldClient", old)
+	old, assigned, duplicate := s.registerClient(newClient)
+	if old != oldClient || assigned != "device" || duplicate {
+		t.Fatalf("same-instance reconnect = (%#v, %q, %v), want oldClient device false", old, assigned, duplicate)
 	}
 	if got := s.clients["device"]; got != newClient {
 		t.Fatalf("current client = %#v, want newClient", got)
 	}
 	if _, ok := s.clients["device-2"]; ok {
 		t.Fatal("same device reconnect should not allocate a suffixed ID")
+	}
+}
+
+func TestRegisterClientDuplicateIDGetsSuffix(t *testing.T) {
+	s := NewServer()
+	first := &ClientConn{ID: "device", RequestedID: "device", InstanceID: "inst-1", Conn: &gws.Conn{}, Sessions: make(map[string]*ProxySession), Forwards: make(map[string]*ProxyForward)}
+	second := &ClientConn{ID: "device", RequestedID: "device", InstanceID: "inst-2", Conn: &gws.Conn{}, Sessions: make(map[string]*ProxySession), Forwards: make(map[string]*ProxyForward)}
+
+	if old, assigned, duplicate := s.registerClient(first); old != nil || assigned != "device" || duplicate {
+		t.Fatalf("first registration = (%#v, %q, %v), want nil device false", old, assigned, duplicate)
+	}
+	old, assigned, duplicate := s.registerClient(second)
+	if old != nil || assigned != "device-2" || !duplicate {
+		t.Fatalf("duplicate registration = (%#v, %q, %v), want nil device-2 true", old, assigned, duplicate)
+	}
+	if got := s.clients["device"]; got != first {
+		t.Fatalf("original client = %#v, want first", got)
+	}
+	if got := s.clients["device-2"]; got != second {
+		t.Fatalf("duplicate client = %#v, want second", got)
 	}
 }
 

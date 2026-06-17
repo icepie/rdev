@@ -92,6 +92,10 @@ type Message struct {
 	ClientID  string      `json:"clientId,omitempty"`
 	SessionID string      `json:"sessionId,omitempty"`
 
+	// Client registration identity. InstanceID is a stable per-process token used
+	// to distinguish duplicate IDs from reconnects of the same running client.
+	InstanceID string `json:"instanceId,omitempty"`
+
 	// Session creation
 	Subsystem string           `json:"subsystem,omitempty"` // "", "sftp"
 	Command   string           `json:"command,omitempty"`

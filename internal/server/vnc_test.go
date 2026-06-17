@@ -193,3 +193,71 @@ func TestVNCRawFrameBGRX(t *testing.T) {
 		t.Fatalf("frame = %v, want %v", frame, want)
 	}
 }
+
+func TestVNCChangedRect(t *testing.T) {
+	prev := make([]byte, 4*3*4)
+	next := append([]byte(nil), prev...)
+	setTestPixel(next, 4, 1, 1, []byte{1, 2, 3, 0})
+	setTestPixel(next, 4, 2, 2, []byte{4, 5, 6, 0})
+	x, y, w, h, changed := vncChangedRect(prev, next, 4, 3)
+	if !changed || x != 1 || y != 1 || w != 2 || h != 2 {
+		t.Fatalf("changed rect = (%d,%d %dx%d changed=%v), want (1,1 2x2 true)", x, y, w, h, changed)
+	}
+	_, _, _, _, changed = vncChangedRect(next, next, 4, 3)
+	if changed {
+		t.Fatal("identical frames reported as changed")
+	}
+}
+
+func TestVNCRawSubrect(t *testing.T) {
+	frame := make([]byte, 4*3*4)
+	setTestPixel(frame, 4, 1, 1, []byte{1, 2, 3, 0})
+	setTestPixel(frame, 4, 2, 1, []byte{4, 5, 6, 0})
+	setTestPixel(frame, 4, 1, 2, []byte{7, 8, 9, 0})
+	setTestPixel(frame, 4, 2, 2, []byte{10, 11, 12, 0})
+	got := vncRawSubrect(frame, 4, 1, 1, 2, 2)
+	want := []byte{1, 2, 3, 0, 4, 5, 6, 0, 7, 8, 9, 0, 10, 11, 12, 0}
+	if string(got) != string(want) {
+		t.Fatalf("subrect = %v, want %v", got, want)
+	}
+}
+
+func TestVNCStreamKeySharesEquivalentRequests(t *testing.T) {
+	request := defaultVNCDesktopRequest()
+	request.FPS = 0
+	request.Quality = 0
+	request.Width = 0
+	request.Height = 0
+	normalized := defaultVNCDesktopRequest()
+	normalized.FPS = 4
+	normalized.Quality = 50
+	if vncStreamKey("pc", request) != vncStreamKey("pc", normalized) {
+		t.Fatal("equivalent normalized VNC requests should share one stream")
+	}
+}
+
+func TestVNCEncodeZRLECompressesRawTile(t *testing.T) {
+	frame := []byte{3, 2, 1, 0, 6, 5, 4, 0}
+	encoded := vncEncodeZRLE(frame, 2, 1)
+	if len(encoded) == 0 || len(encoded) >= len(frame)+32 {
+		t.Fatalf("unexpected ZRLE size %d", len(encoded))
+	}
+}
+
+func TestVNCEncodeZRLETileUsesPalette(t *testing.T) {
+	frame := make([]byte, 4*2*4)
+	setTestPixel(frame, 4, 0, 0, []byte{1, 2, 3, 0})
+	setTestPixel(frame, 4, 1, 0, []byte{1, 2, 3, 0})
+	setTestPixel(frame, 4, 0, 1, []byte{4, 5, 6, 0})
+	setTestPixel(frame, 4, 1, 1, []byte{4, 5, 6, 0})
+	got := vncEncodeZRLETile(frame, 4, 0, 0, 2, 2)
+	want := []byte{2, 1, 2, 3, 4, 5, 6, 0x00, 0xC0}
+	if string(got) != string(want) {
+		t.Fatalf("palette tile = %v, want %v", got, want)
+	}
+}
+
+func setTestPixel(frame []byte, width, x, y int, px []byte) {
+	off := (y*width + x) * 4
+	copy(frame[off:off+4], px)
+}

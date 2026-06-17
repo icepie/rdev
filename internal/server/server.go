@@ -27,6 +27,8 @@ const sessionHistoryLimit = 1024 * 1024
 // ClientConn represents a connected client device
 type ClientConn struct {
 	ID          string
+	RequestedID string
+	InstanceID  string
 	Conn        *gws.Conn
 	ConnectedAt time.Time
 	Password    string
@@ -410,6 +412,7 @@ type Server struct {
 	desktopMu    sync.RWMutex
 	vncMu        sync.RWMutex
 	vncSettings  map[string]protocol.Message
+	vncStreams   map[string]*vncDesktopStream
 	upgrader     *gws.Upgrader
 
 	// Public config (set by main) for API/UI
@@ -434,6 +437,7 @@ func NewServer() *Server {
 		fileTasks:        make(map[string]*fileTaskRoute),
 		desktops:         make(map[string]*desktopRoute),
 		vncSettings:      make(map[string]protocol.Message),
+		vncStreams:       make(map[string]*vncDesktopStream),
 		MaxSessions:      256,
 		MaxForwards:      1024,
 		BatchConcurrency: runtime.GOMAXPROCS(0) * 8,
@@ -552,9 +556,16 @@ func (h *wsHandler) handleRegister(socket *gws.Conn, msg *protocol.Message) {
 		return
 	}
 
-	clientID := msg.ClientID
+	clientID := strings.TrimSpace(msg.ClientID)
+	if clientID == "" {
+		socket.WriteClose(1000, nil)
+		return
+	}
+	instanceID := strings.TrimSpace(msg.InstanceID)
 	client := &ClientConn{
 		ID:          clientID,
+		RequestedID: clientID,
+		InstanceID:  instanceID,
 		Conn:        socket,
 		ConnectedAt: time.Now(),
 		Password:    msg.Password,
@@ -564,22 +575,26 @@ func (h *wsHandler) handleRegister(socket *gws.Conn, msg *protocol.Message) {
 	}
 
 	socket.Session().Store("clientID", clientID)
-	old := h.srv.registerClient(client)
+	old, assignedID, duplicate := h.srv.registerClient(client)
+	socket.Session().Store("clientID", assignedID)
 
 	if old != nil && old.Conn != socket {
-		log.Printf("client replaced: %s", clientID)
+		log.Printf("client reconnected: requested=%s assigned=%s", clientID, assignedID)
 		closeClientResources(h.srv, old)
 		if old.Conn != nil {
 			_ = old.Conn.WriteClose(1000, []byte("connection replaced"))
 		}
+	} else if duplicate {
+		log.Printf("client duplicate ID assigned: requested=%s assigned=%s", clientID, assignedID)
 	} else {
-		log.Printf("client registered: %s", clientID)
+		log.Printf("client registered: %s", assignedID)
 	}
 	client.Send(&protocol.Message{
-		Type:     protocol.MsgRegister,
-		ClientID: clientID,
-		SSHPort:  h.srv.SSHPort,
-		HTTPHost: h.srv.HTTPHost,
+		Type:       protocol.MsgRegister,
+		ClientID:   assignedID,
+		InstanceID: instanceID,
+		SSHPort:    h.srv.SSHPort,
+		HTTPHost:   h.srv.HTTPHost,
 	})
 }
 
@@ -607,12 +622,48 @@ func cloneDesktopCapabilities(caps *protocol.DesktopCapabilities) *protocol.Desk
 	return &clone
 }
 
-func (s *Server) registerClient(client *ClientConn) *ClientConn {
+func (s *Server) registerClient(client *ClientConn) (*ClientConn, string, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	old := s.clients[client.ID]
-	s.clients[client.ID] = client
-	return old
+	requestedID := strings.TrimSpace(client.RequestedID)
+	if requestedID == "" {
+		requestedID = strings.TrimSpace(client.ID)
+	}
+	client.RequestedID = requestedID
+
+	if client.InstanceID != "" {
+		for id, old := range s.clients {
+			if old.InstanceID == client.InstanceID {
+				client.ID = id
+				s.clients[id] = client
+				return old, id, id != requestedID
+			}
+		}
+	}
+
+	if old := s.clients[requestedID]; old == nil || (client.InstanceID != "" && old.InstanceID == client.InstanceID) {
+		client.ID = requestedID
+		s.clients[requestedID] = client
+		return old, requestedID, false
+	}
+
+	assignedID := s.nextAvailableClientID(requestedID)
+	client.ID = assignedID
+	s.clients[assignedID] = client
+	return nil, assignedID, true
+}
+
+func (s *Server) nextAvailableClientID(base string) string {
+	base = strings.TrimSpace(base)
+	if base == "" {
+		base = "device"
+	}
+	for i := 2; ; i++ {
+		candidate := base + "-" + strconv.Itoa(i)
+		if _, exists := s.clients[candidate]; !exists {
+			return candidate
+		}
+	}
 }
 
 func (s *Server) unregisterClient(id string, conn *gws.Conn) (*ClientConn, bool) {
@@ -994,6 +1045,8 @@ func (s *Server) HandleAPI(w http.ResponseWriter, r *http.Request) {
 
 	type clientInfo struct {
 		ID          string                        `json:"id"`
+		RequestedID string                        `json:"requestedId,omitempty"`
+		InstanceID  string                        `json:"instanceId,omitempty"`
 		ConnectedAt string                        `json:"connectedAt"`
 		Sessions    int                           `json:"sessions"`
 		Forwards    int                           `json:"forwards"`
@@ -1009,6 +1062,8 @@ func (s *Server) HandleAPI(w http.ResponseWriter, r *http.Request) {
 		c.mu.Unlock()
 		clients = append(clients, clientInfo{
 			ID:          c.ID,
+			RequestedID: c.RequestedID,
+			InstanceID:  c.InstanceID,
 			ConnectedAt: c.ConnectedAt.Format(time.RFC3339),
 			Sessions:    n,
 			Forwards:    f,
@@ -1049,6 +1104,7 @@ func (s *Server) HandleTerminalAPI(w http.ResponseWriter, r *http.Request) {
 
 	type deviceInfo struct {
 		ID          string                        `json:"id"`
+		RequestedID string                        `json:"requestedId,omitempty"`
 		ConnectedAt string                        `json:"connectedAt"`
 		HasPassword bool                          `json:"hasPassword"`
 		Desktop     *protocol.DesktopCapabilities `json:"desktop,omitempty"`
@@ -1058,6 +1114,7 @@ func (s *Server) HandleTerminalAPI(w http.ResponseWriter, r *http.Request) {
 	for _, c := range s.clients {
 		devices = append(devices, deviceInfo{
 			ID:          c.ID,
+			RequestedID: c.RequestedID,
 			ConnectedAt: c.ConnectedAt.Format(time.RFC3339),
 			HasPassword: c.Password != "",
 			Desktop:     cloneDesktopCapabilities(c.Desktop),

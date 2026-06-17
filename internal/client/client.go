@@ -2,6 +2,8 @@ package client
 
 import (
 	"bytes"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"log"
@@ -181,6 +183,8 @@ type managedUpload struct {
 type Client struct {
 	serverURL       string
 	clientID        string
+	requestedID     string
+	instanceID      string
 	password        string
 	shell           string
 	conn            *gws.Conn
@@ -209,6 +213,8 @@ func NewClient(serverURL, clientID, password, shell string) *Client {
 	return &Client{
 		serverURL:       serverURL,
 		clientID:        clientID,
+		requestedID:     clientID,
+		instanceID:      newClientInstanceID(),
 		password:        password,
 		shell:           shell,
 		sessions:        make(map[string]*clientSession),
@@ -223,6 +229,14 @@ func NewClient(serverURL, clientID, password, shell string) *Client {
 	}
 }
 
+func newClientInstanceID() string {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err == nil {
+		return hex.EncodeToString(b[:])
+	}
+	return fmt.Sprintf("%d-%d", time.Now().UnixNano(), os.Getpid())
+}
+
 // wsEventHandler implements gws.Event for the client
 type wsEventHandler struct {
 	gws.BuiltinEventHandler
@@ -230,17 +244,20 @@ type wsEventHandler struct {
 }
 
 func (h *wsEventHandler) OnOpen(socket *gws.Conn) {
+	h.client.mu.Lock()
 	h.client.conn = socket
+	h.client.mu.Unlock()
 	if err := h.client.send(&protocol.Message{
 		Type:                protocol.MsgRegister,
-		ClientID:            h.client.clientID,
+		ClientID:            h.client.requestedID,
+		InstanceID:          h.client.instanceID,
 		Password:            h.client.password,
 		DesktopCapabilities: desktopCapabilities(),
 	}); err != nil {
 		log.Printf("register send error: %v", err)
 		return
 	}
-	log.Printf("connected to %s as '%s'", h.client.serverURL, h.client.clientID)
+	log.Printf("connected to %s as '%s'", h.client.serverURL, h.client.requestedID)
 	// OnConnect will be called after receiving the register response
 	// (in handleMessage when MsgRegister response arrives with sshPort)
 }
@@ -248,6 +265,10 @@ func (h *wsEventHandler) OnOpen(socket *gws.Conn) {
 func (h *wsEventHandler) OnClose(socket *gws.Conn, err error) {
 	log.Printf("connection closed: %v", err)
 	h.client.mu.Lock()
+	if h.client.conn != socket {
+		h.client.mu.Unlock()
+		return
+	}
 	for sid, sess := range h.client.sessions {
 		sess.close()
 		delete(h.client.sessions, sid)
@@ -278,6 +299,9 @@ func (h *wsEventHandler) OnClose(socket *gws.Conn, err error) {
 
 func (h *wsEventHandler) OnMessage(socket *gws.Conn, message *gws.Message) {
 	defer message.Close()
+	if !h.client.isCurrentConn(socket) {
+		return
+	}
 
 	if message.Opcode == gws.OpcodeBinary {
 		h.handleBinaryMessage(message.Bytes())
@@ -290,6 +314,12 @@ func (h *wsEventHandler) OnMessage(socket *gws.Conn, message *gws.Message) {
 		return
 	}
 	h.client.handleMessage(msg)
+}
+
+func (c *Client) isCurrentConn(socket *gws.Conn) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.conn == socket
 }
 
 func (h *wsEventHandler) handleBinaryMessage(raw []byte) {
@@ -397,7 +427,11 @@ func (c *Client) handleMessage(msg *protocol.Message) {
 	switch msg.Type {
 	case protocol.MsgRegister:
 		if msg.ClientID != "" {
+			oldID := c.clientID
 			c.clientID = msg.ClientID
+			if oldID != "" && oldID != msg.ClientID {
+				log.Printf("server assigned device ID %q for requested ID %q", msg.ClientID, c.requestedID)
+			}
 		}
 		c.sshPort = msg.SSHPort
 		c.httpHost = msg.HTTPHost

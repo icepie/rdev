@@ -26,3 +26,35 @@ func TestDRMPixelConversion(t *testing.T) {
 		t.Fatalf("RGB565 pixel = %#v", pixel)
 	}
 }
+
+func TestDRMModifierHelpers(t *testing.T) {
+	if !drmModifierMappable(drmFormatModLinear) {
+		t.Fatal("linear modifier should be mappable")
+	}
+	if !drmModifierMappable(i915FormatModXTiled) {
+		t.Fatal("Intel X tiled modifier should be mappable")
+	}
+	if drmModifierMappable(uint64(drmFormatModVendorIntel)<<56 | 2) {
+		t.Fatal("unsupported Intel Y tiled modifier should not be mappable")
+	}
+	if got := drmMapLen(0, 7680, 1080, i915FormatModXTiled); got != 8294400 {
+		t.Fatalf("drmMapLen(X tiled) = %d, want 8294400", got)
+	}
+}
+
+func TestDRMPixelOffsetLinearAndIntelXTiled(t *testing.T) {
+	c := &drmKMSCapturer{mappedPitch: 7680, mappedOffset: 0, mappedModifier: drmFormatModLinear}
+	if got := c.pixelOffset(10, 3, 4); got != 3*7680+40 {
+		t.Fatalf("linear pixelOffset = %d", got)
+	}
+	c.mappedModifier = i915FormatModXTiled
+	if got := c.pixelOffset(127, 7, 4); got != 7*512+508 {
+		t.Fatalf("X tiled first tile offset = %d", got)
+	}
+	if got := c.pixelOffset(128, 0, 4); got != 4096 {
+		t.Fatalf("X tiled second tile offset = %d", got)
+	}
+	if got := c.pixelOffset(0, 8, 4); got != 7680*8 {
+		t.Fatalf("X tiled second tile row offset = %d", got)
+	}
+}

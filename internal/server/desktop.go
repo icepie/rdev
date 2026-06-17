@@ -52,6 +52,7 @@ type desktopRoute struct {
 	clientID string
 	conn     *desktopBrowserConn
 	vnc      *vncConn
+	stream   *vncDesktopStream
 }
 
 type desktopBrowserConn struct {
@@ -504,6 +505,10 @@ func (s *Server) handleDesktopMessage(msg *protocol.Message) {
 			route.vnc.handleReady(msg)
 			return
 		}
+		if route.stream != nil {
+			route.stream.handleReady(msg)
+			return
+		}
 		if route.conn == nil {
 			return
 		}
@@ -519,6 +524,10 @@ func (s *Server) handleDesktopMessage(msg *protocol.Message) {
 	case protocol.MsgDesktopClose:
 		if route.vnc != nil {
 			route.vnc.handleClose(msg)
+			return
+		}
+		if route.stream != nil {
+			route.stream.handleClose(msg)
 			return
 		}
 		if route.conn == nil {
@@ -540,6 +549,10 @@ func (s *Server) handleDesktopFrame(sessionID string, data []byte) {
 		route.vnc.enqueueFrame(data)
 		return
 	}
+	if route.stream != nil {
+		route.stream.enqueueFrame(data)
+		return
+	}
 	if route.conn == nil {
 		return
 	}
@@ -557,6 +570,10 @@ func (s *Server) closeDesktopForClient(clientID string) {
 	}
 	s.desktopMu.Unlock()
 	for _, route := range routes {
+		if route.stream != nil {
+			route.stream.closeDeviceDisconnected()
+			continue
+		}
 		if route.vnc != nil {
 			route.vnc.close()
 			continue

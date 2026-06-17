@@ -22,6 +22,8 @@ const (
 	drmModeFBModifiers      = 1 << 1
 	drmFormatModLinear      = 0
 	drmPrimeHandleToFDFlags = 0
+	drmFormatModVendorIntel = 0x01
+	i915FormatModXTiled     = uint64(drmFormatModVendorIntel)<<56 | 1
 )
 
 const (
@@ -136,6 +138,21 @@ type drmModeMapDumb struct {
 	Offset uint64
 }
 
+type drmGemFlink struct {
+	Handle uint32
+	Name   uint32
+}
+
+type drmGemOpen struct {
+	Name   uint32
+	Handle uint32
+	Size   uint64
+}
+
+type drmAMDGPUGemMmap struct {
+	AddrPtr uint64
+}
+
 type drmPrimeHandle struct {
 	Handle uint32
 	Flags  uint32
@@ -159,16 +176,19 @@ type drmCaptureSource struct {
 }
 
 type drmKMSCapturer struct {
-	file         *os.File
-	dmabufFD     int
-	data         []byte
-	mappedFBID   uint32
-	mappedHandle uint32
-	mappedPitch  int
-	mappedFormat uint32
-	fb           drmModeFBCmd2
-	selected     drmCaptureSource
-	bounds       image.Rectangle
+	file              *os.File
+	dmabufFD          int
+	data              []byte
+	mappedFBID        uint32
+	mappedHandle      uint32
+	mappedCloseHandle uint32
+	mappedPitch       int
+	mappedFormat      uint32
+	mappedOffset      int
+	mappedModifier    uint64
+	fb                drmModeFBCmd2
+	selected          drmCaptureSource
+	bounds            image.Rectangle
 }
 
 func enumerateDRMSources() []protocol.DesktopSource {
@@ -348,13 +368,11 @@ func (c *drmKMSCapturer) Capture() (image.Image, error) {
 	if bytesPerPixel <= 0 {
 		return nil, fmt.Errorf("unsupported DRM/KMS pixel format %s", drmFourCC(c.mappedFormat))
 	}
-	base := c.selected.captureY*c.mappedPitch + c.selected.captureX*bytesPerPixel
 	parallelDesktopRows(width, height, func(y0, y1 int) {
 		for y := y0; y < y1; y++ {
-			row := base + y*c.mappedPitch
 			dst := img.Pix[y*img.Stride:]
 			for x := 0; x < width; x++ {
-				off := row + x*bytesPerPixel
+				off := c.pixelOffset(c.selected.captureX+x, c.selected.captureY+y, bytesPerPixel)
 				if off+bytesPerPixel > len(c.data) {
 					break
 				}
@@ -368,6 +386,18 @@ func (c *drmKMSCapturer) Capture() (image.Image, error) {
 		}
 	})
 	return img, nil
+}
+
+func (c *drmKMSCapturer) pixelOffset(x, y, bytesPerPixel int) int {
+	if c.mappedModifier == i915FormatModXTiled {
+		byteX := x * bytesPerPixel
+		tileX := byteX / 512
+		innerX := byteX % 512
+		tileY := y / 8
+		innerY := y % 8
+		return c.mappedOffset + tileY*c.mappedPitch*8 + tileX*4096 + innerY*512 + innerX
+	}
+	return c.mappedOffset + y*c.mappedPitch + x*bytesPerPixel
 }
 
 func (c *drmKMSCapturer) refresh() error {
@@ -447,18 +477,32 @@ func (c *drmKMSCapturer) refresh() error {
 }
 
 func (c *drmKMSCapturer) mapFB(fb drmModeFBCmd2) error {
-	if (fb.Flags&drmModeFBModifiers) != 0 && fb.Modifiers[0] != drmFormatModLinear {
+	modifier := uint64(drmFormatModLinear)
+	if (fb.Flags & drmModeFBModifiers) != 0 {
+		modifier = fb.Modifiers[0]
+	}
+	if modifier != drmFormatModLinear && !drmModifierMappable(modifier) {
 		_ = drmGemCloseHandle(c.file, fb.Handles[0])
-		return c.mapFBLegacy(fb.FBID, fmt.Errorf("DRM/KMS framebuffer %d uses non-linear modifier 0x%x", fb.FBID, fb.Modifiers[0]))
+		return c.mapFBLegacy(fb.FBID, fmt.Errorf("DRM/KMS framebuffer %d uses unsupported modifier 0x%x", fb.FBID, modifier))
 	}
 	if fb.Handles[0] == 0 {
 		return c.mapFBLegacy(fb.FBID, fmt.Errorf("DRM/KMS framebuffer %d did not expose a GEM handle", fb.FBID))
 	}
-	mapLen := int(fb.Offsets[0]) + int(fb.Pitches[0])*int(fb.Height)
+	mapLen := drmMapLen(int(fb.Offsets[0]), int(fb.Pitches[0]), int(fb.Height), modifier)
 	if err := c.mapDumbHandle(fb.Handles[0], mapLen); err == nil {
 		c.mappedHandle = fb.Handles[0]
 		c.mappedPitch = int(fb.Pitches[0])
 		c.mappedFormat = fb.PixelFormat
+		c.mappedOffset = int(fb.Offsets[0])
+		c.mappedModifier = modifier
+		return nil
+	}
+	if err := c.mapAMDGPUHandle(fb.Handles[0], mapLen); err == nil {
+		c.mappedHandle = fb.Handles[0]
+		c.mappedPitch = int(fb.Pitches[0])
+		c.mappedFormat = fb.PixelFormat
+		c.mappedOffset = int(fb.Offsets[0])
+		c.mappedModifier = modifier
 		return nil
 	}
 	prime := drmPrimeHandle{Handle: fb.Handles[0], Flags: drmPrimeHandleToFDFlags, FD: -1}
@@ -477,6 +521,8 @@ func (c *drmKMSCapturer) mapFB(fb drmModeFBCmd2) error {
 	c.mappedHandle = fb.Handles[0]
 	c.mappedPitch = int(fb.Pitches[0])
 	c.mappedFormat = fb.PixelFormat
+	c.mappedOffset = int(fb.Offsets[0])
+	c.mappedModifier = modifier
 	return nil
 }
 
@@ -498,6 +544,16 @@ func (c *drmKMSCapturer) mapFBLegacy(fbID uint32, cause error) error {
 		c.mappedHandle = fb.Handle
 		c.mappedPitch = int(fb.Pitch)
 		c.mappedFormat = format
+		c.mappedOffset = 0
+		c.mappedModifier = drmFormatModLinear
+		return nil
+	}
+	if err := c.mapAMDGPUHandle(fb.Handle, mapLen); err == nil {
+		c.mappedHandle = fb.Handle
+		c.mappedPitch = int(fb.Pitch)
+		c.mappedFormat = format
+		c.mappedOffset = 0
+		c.mappedModifier = drmFormatModLinear
 		return nil
 	}
 	prime := drmPrimeHandle{Handle: fb.Handle, Flags: drmPrimeHandleToFDFlags, FD: -1}
@@ -516,24 +572,67 @@ func (c *drmKMSCapturer) mapFBLegacy(fbID uint32, cause error) error {
 	c.mappedHandle = fb.Handle
 	c.mappedPitch = int(fb.Pitch)
 	c.mappedFormat = format
+	c.mappedOffset = 0
+	c.mappedModifier = drmFormatModLinear
 	return nil
+}
+
+func drmModifierMappable(modifier uint64) bool {
+	return modifier == drmFormatModLinear || modifier == i915FormatModXTiled
+}
+
+func drmMapLen(offset, pitch, height int, modifier uint64) int {
+	if modifier == i915FormatModXTiled {
+		return offset + ((height+7)/8)*pitch*8
+	}
+	return offset + pitch*height
 }
 
 func (c *drmKMSCapturer) mapDumbHandle(handle uint32, mapLen int) error {
 	if handle == 0 || mapLen <= 0 {
 		return fmt.Errorf("invalid GEM handle or map length")
 	}
-	mapping := drmModeMapDumb{Handle: handle}
+	opened, err := drmReopenGEMHandle(c.file, handle)
+	if err != nil {
+		return err
+	}
+	mapping := drmModeMapDumb{Handle: opened.Handle}
 	if err := drmIoctl(c.file, drmIOWR(0xB3, unsafe.Sizeof(mapping)), unsafe.Pointer(&mapping)); err != nil {
+		_ = drmGemCloseHandle(c.file, opened.Handle)
 		return fmt.Errorf("DRM_IOCTL_MODE_MAP_DUMB: %w", err)
+	}
+	if opened.Size > 0 && int(opened.Size) > mapLen {
+		mapLen = int(opened.Size)
 	}
 	data, err := syscall.Mmap(int(c.file.Fd()), int64(mapping.Offset), mapLen, syscall.PROT_READ, syscall.MAP_SHARED)
 	if err != nil {
+		_ = drmGemCloseHandle(c.file, opened.Handle)
 		return fmt.Errorf("mmap DRM/KMS dumb buffer: %w", err)
 	}
-	_ = drmGemCloseHandle(c.file, handle)
 	c.data = data
 	c.dmabufFD = -1
+	c.mappedCloseHandle = opened.Handle
+	if opened.Handle != handle {
+		_ = drmGemCloseHandle(c.file, handle)
+	}
+	return nil
+}
+
+func (c *drmKMSCapturer) mapAMDGPUHandle(handle uint32, mapLen int) error {
+	if handle == 0 || mapLen <= 0 {
+		return fmt.Errorf("invalid AMDGPU GEM handle or map length")
+	}
+	req := drmAMDGPUGemMmap{AddrPtr: uint64(handle)}
+	if err := drmIoctl(c.file, drmIOWR(0x41, unsafe.Sizeof(req)), unsafe.Pointer(&req)); err != nil {
+		return fmt.Errorf("DRM_IOCTL_AMDGPU_GEM_MMAP: %w", err)
+	}
+	data, err := syscall.Mmap(int(c.file.Fd()), int64(req.AddrPtr), mapLen, syscall.PROT_READ, syscall.MAP_SHARED)
+	if err != nil {
+		return fmt.Errorf("mmap AMDGPU framebuffer: %w", err)
+	}
+	c.data = data
+	c.dmabufFD = -1
+	c.mappedCloseHandle = handle
 	return nil
 }
 
@@ -545,6 +644,10 @@ func (c *drmKMSCapturer) unmap() {
 	if c.dmabufFD >= 0 {
 		_ = syscall.Close(c.dmabufFD)
 		c.dmabufFD = -1
+	}
+	if c.mappedCloseHandle != 0 {
+		_ = drmGemCloseHandle(c.file, c.mappedCloseHandle)
+		c.mappedCloseHandle = 0
 	}
 	c.mappedFBID = 0
 	c.mappedHandle = 0
@@ -628,6 +731,18 @@ func drmFB2(file *os.File, fbID uint32) (drmModeFBCmd2, error) {
 		return drmModeFBCmd2{}, err
 	}
 	return fb, nil
+}
+
+func drmReopenGEMHandle(file *os.File, handle uint32) (drmGemOpen, error) {
+	flink := drmGemFlink{Handle: handle}
+	if err := drmIoctl(file, drmIOWR(0x0a, unsafe.Sizeof(flink)), unsafe.Pointer(&flink)); err != nil {
+		return drmGemOpen{}, fmt.Errorf("DRM_IOCTL_GEM_FLINK: %w", err)
+	}
+	opened := drmGemOpen{Name: flink.Name}
+	if err := drmIoctl(file, drmIOWR(0x0b, unsafe.Sizeof(opened)), unsafe.Pointer(&opened)); err != nil {
+		return drmGemOpen{}, fmt.Errorf("DRM_IOCTL_GEM_OPEN: %w", err)
+	}
+	return opened, nil
 }
 
 func drmFB(file *os.File, fbID uint32) (drmModeFBCmd, error) {

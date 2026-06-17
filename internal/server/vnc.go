@@ -3,6 +3,7 @@ package server
 import (
 	"bufio"
 	"bytes"
+	"compress/zlib"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -30,7 +31,8 @@ const (
 	rfbClientPointerEvent             = 5
 	rfbClientCutText                  = 6
 
-	rfbEncodingRaw = 0
+	rfbEncodingRaw  = 0
+	rfbEncodingZRLE = 16
 )
 
 type vncServer struct {
@@ -47,15 +49,36 @@ type vncConn struct {
 	session  string
 	request  protocol.Message
 
+	mu             sync.Mutex
+	closed         bool
+	readyCh        chan protocol.Message
+	frameCh        chan []byte
+	latestFrame    []byte
+	frameWidth     int
+	frameHeight    int
+	lastSentFrame  []byte
+	lastSentWidth  int
+	lastSentHeight int
+	supportsZRLE   bool
+	buttons        uint8
+	lastMouse      time.Time
+	stream         *vncDesktopStream
+}
+
+type vncDesktopStream struct {
+	srv         *Server
+	client      *ClientConn
+	deviceID    string
+	session     string
+	key         string
+	request     protocol.Message
 	mu          sync.Mutex
-	closed      bool
-	readyCh     chan protocol.Message
-	frameCh     chan []byte
+	subscribers map[*vncConn]struct{}
+	ready       *protocol.Message
 	latestFrame []byte
 	frameWidth  int
 	frameHeight int
-	buttons     uint8
-	lastMouse   time.Time
+	closed      bool
 }
 
 // StartVNCServer exposes connected RDev devices through the RFB/VNC protocol.
@@ -132,10 +155,12 @@ func (v *vncConn) run() {
 		return
 	}
 	_ = shared
-	if err := v.startDesktop(); err != nil {
+	stream, err := v.srv.acquireVNCStream(v)
+	if err != nil {
 		log.Printf("vnc desktop start failed for %s: %v", v.deviceID, err)
 		return
 	}
+	v.stream = stream
 	ready := <-v.readyCh
 	if ready.Error != "" || ready.Width <= 0 || ready.Height <= 0 {
 		return
@@ -258,15 +283,171 @@ func (v *vncConn) lookupClient(deviceID string) *ClientConn {
 	return client
 }
 
-func (v *vncConn) startDesktop() error {
-	v.session = generateID()
-	v.srv.desktopMu.Lock()
-	v.srv.desktops[v.session] = &desktopRoute{id: v.session, clientID: v.deviceID, vnc: v}
-	v.srv.desktopMu.Unlock()
-	startMsg := v.request
-	startMsg.Type = protocol.MsgDesktopStart
-	startMsg.SessionID = v.session
-	return v.client.Send(&startMsg)
+func vncStreamKey(deviceID string, request protocol.Message) string {
+	request = normalizeDesktopRequest(request)
+	return fmt.Sprintf("%s\x00%s\x00%d\x00%d\x00%d\x00%d\x00%s\x00%t", deviceID, request.Source, request.FPS, request.Quality, request.Width, request.Height, request.InputBackend, request.ShowCursor)
+}
+
+func (s *Server) acquireVNCStream(v *vncConn) (*vncDesktopStream, error) {
+	key := vncStreamKey(v.deviceID, v.request)
+	startStream := false
+	s.vncMu.Lock()
+	stream := s.vncStreams[key]
+	if stream != nil && stream.closed {
+		delete(s.vncStreams, key)
+		stream = nil
+	}
+	if stream == nil {
+		stream = &vncDesktopStream{srv: s, client: v.client, deviceID: v.deviceID, session: generateID(), key: key, request: v.request, subscribers: make(map[*vncConn]struct{})}
+		s.vncStreams[key] = stream
+		s.desktopMu.Lock()
+		s.desktops[stream.session] = &desktopRoute{id: stream.session, clientID: v.deviceID, stream: stream}
+		s.desktopMu.Unlock()
+		startStream = true
+	}
+	stream.addSubscriberLocked(v)
+	s.vncMu.Unlock()
+	if startStream {
+		startMsg := stream.request
+		startMsg.Type = protocol.MsgDesktopStart
+		startMsg.SessionID = stream.session
+		if err := stream.client.Send(&startMsg); err != nil {
+			stream.removeSubscriber(v)
+			return nil, err
+		}
+	}
+	return stream, nil
+}
+
+func (s *Server) releaseVNCStream(stream *vncDesktopStream) {
+	s.vncMu.Lock()
+	if current := s.vncStreams[stream.key]; current == stream {
+		delete(s.vncStreams, stream.key)
+	}
+	s.vncMu.Unlock()
+	s.desktopMu.Lock()
+	if route := s.desktops[stream.session]; route != nil && route.stream == stream {
+		delete(s.desktops, stream.session)
+	}
+	s.desktopMu.Unlock()
+}
+
+func (stream *vncDesktopStream) addSubscriberLocked(v *vncConn) {
+	stream.mu.Lock()
+	stream.subscribers[v] = struct{}{}
+	v.session = stream.session
+	ready := stream.ready
+	latest := append([]byte(nil), stream.latestFrame...)
+	width, height := stream.frameWidth, stream.frameHeight
+	stream.mu.Unlock()
+	if ready != nil {
+		v.handleReady(ready)
+	}
+	if len(latest) > 0 {
+		v.enqueueRawFrame(latest, width, height)
+	}
+}
+
+func (stream *vncDesktopStream) removeSubscriber(v *vncConn) {
+	stream.mu.Lock()
+	delete(stream.subscribers, v)
+	remaining := len(stream.subscribers)
+	closed := stream.closed
+	stream.mu.Unlock()
+	if closed || remaining != 0 {
+		return
+	}
+	stream.close()
+}
+
+func (stream *vncDesktopStream) handleReady(msg *protocol.Message) {
+	stream.mu.Lock()
+	copyMsg := *msg
+	stream.ready = &copyMsg
+	if msg.Width > 0 && msg.Height > 0 {
+		stream.frameWidth = msg.Width
+		stream.frameHeight = msg.Height
+	}
+	subscribers := make([]*vncConn, 0, len(stream.subscribers))
+	for sub := range stream.subscribers {
+		subscribers = append(subscribers, sub)
+	}
+	stream.mu.Unlock()
+	for _, sub := range subscribers {
+		sub.handleReady(msg)
+	}
+}
+
+func (stream *vncDesktopStream) handleClose(msg *protocol.Message) {
+	stream.mu.Lock()
+	if stream.closed {
+		stream.mu.Unlock()
+		return
+	}
+	stream.closed = true
+	subscribers := make([]*vncConn, 0, len(stream.subscribers))
+	for sub := range stream.subscribers {
+		subscribers = append(subscribers, sub)
+	}
+	stream.subscribers = make(map[*vncConn]struct{})
+	stream.mu.Unlock()
+	stream.srv.releaseVNCStream(stream)
+	for _, sub := range subscribers {
+		sub.handleClose(msg)
+	}
+}
+
+func (stream *vncDesktopStream) enqueueFrame(data []byte) {
+	img, err := jpeg.Decode(bytes.NewReader(data))
+	if err != nil {
+		return
+	}
+	stream.mu.Lock()
+	width, height := stream.frameWidth, stream.frameHeight
+	if width <= 0 || height <= 0 {
+		stream.mu.Unlock()
+		return
+	}
+	frame := vncRawFrame(img, width, height)
+	stream.latestFrame = frame
+	subscribers := make([]*vncConn, 0, len(stream.subscribers))
+	for sub := range stream.subscribers {
+		subscribers = append(subscribers, sub)
+	}
+	stream.mu.Unlock()
+	for _, sub := range subscribers {
+		sub.enqueueRawFrame(frame, width, height)
+	}
+}
+
+func (stream *vncDesktopStream) closeDeviceDisconnected() {
+	stream.closeWithMessage("device disconnected")
+}
+
+func (stream *vncDesktopStream) close() {
+	stream.closeWithMessage("")
+}
+
+func (stream *vncDesktopStream) closeWithMessage(message string) {
+	stream.mu.Lock()
+	if stream.closed {
+		stream.mu.Unlock()
+		return
+	}
+	stream.closed = true
+	subscribers := make([]*vncConn, 0, len(stream.subscribers))
+	for sub := range stream.subscribers {
+		subscribers = append(subscribers, sub)
+	}
+	stream.subscribers = make(map[*vncConn]struct{})
+	stream.mu.Unlock()
+	stream.srv.releaseVNCStream(stream)
+	if message == "" && stream.client != nil {
+		_ = stream.client.Send(&protocol.Message{Type: protocol.MsgDesktopClose, SessionID: stream.session})
+	}
+	for _, sub := range subscribers {
+		sub.close()
+	}
 }
 
 func (v *vncConn) writeServerInit(width, height int) error {
@@ -333,24 +514,49 @@ func (v *vncConn) handleSetEncodings() error {
 	if err != nil {
 		return err
 	}
-	return v.discard(int(count) * 4)
+	v.supportsZRLE = false
+	for i := 0; i < int(count); i++ {
+		encoding, err := v.readS32()
+		if err != nil {
+			return err
+		}
+		if encoding == rfbEncodingZRLE {
+			v.supportsZRLE = true
+		}
+	}
+	return nil
 }
 
 func (v *vncConn) handleFramebufferUpdateRequest() error {
-	if err := v.discard(1); err != nil {
+	incremental, err := v.reader.ReadByte()
+	if err != nil {
 		return err
 	}
-	_, _ = v.readU16()
-	_, _ = v.readU16()
-	_, _ = v.readU16()
-	_, _ = v.readU16()
-	return v.sendFramebuffer()
+	x, err := v.readU16()
+	if err != nil {
+		return err
+	}
+	y, err := v.readU16()
+	if err != nil {
+		return err
+	}
+	width, err := v.readU16()
+	if err != nil {
+		return err
+	}
+	height, err := v.readU16()
+	if err != nil {
+		return err
+	}
+	return v.sendFramebuffer(incremental != 0, int(x), int(y), int(width), int(height))
 }
 
-func (v *vncConn) sendFramebuffer() error {
+func (v *vncConn) sendFramebuffer(incremental bool, reqX, reqY, reqW, reqH int) error {
 	v.mu.Lock()
-	frame := append([]byte(nil), v.latestFrame...)
+	frame := v.latestFrame
+	last := v.lastSentFrame
 	width, height := v.frameWidth, v.frameHeight
+	lastWidth, lastHeight := v.lastSentWidth, v.lastSentHeight
 	v.mu.Unlock()
 	if width <= 0 || height <= 0 {
 		return nil
@@ -358,32 +564,135 @@ func (v *vncConn) sendFramebuffer() error {
 	if len(frame) == 0 {
 		frame = make([]byte, width*height*4)
 	}
+	reqX, reqY, reqW, reqH, ok := vncClampRect(reqX, reqY, reqW, reqH, width, height)
+	if !ok {
+		return v.writeFramebufferUpdate(nil)
+	}
+	x, y, w, h := reqX, reqY, reqW, reqH
+	if incremental && lastWidth == width && lastHeight == height && len(last) == len(frame) {
+		var changed bool
+		x, y, w, h, changed = vncChangedRect(last, frame, width, height)
+		if !changed {
+			return v.writeFramebufferUpdate(nil)
+		}
+		x, y, w, h, ok = vncIntersectRect(x, y, w, h, reqX, reqY, reqW, reqH)
+		if !ok {
+			return v.writeFramebufferUpdate(nil)
+		}
+	} else {
+		rect := v.makeRawRect(frame, width, x, y, w, h)
+		if err := v.writeFramebufferUpdate([]vncRawRect{rect}); err != nil {
+			return err
+		}
+		v.setLastSentFrame(frame, width, height)
+		return nil
+	}
+	rect := v.makeRawRect(frame, width, x, y, w, h)
+	if err := v.writeFramebufferUpdate([]vncRawRect{rect}); err != nil {
+		return err
+	}
+	v.setLastSentFrame(frame, width, height)
+	return nil
+}
+
+type vncRawRect struct {
+	x      int
+	y      int
+	width  int
+	height int
+	data   []byte
+}
+
+func (v *vncConn) makeRawRect(frame []byte, frameWidth, x, y, width, height int) vncRawRect {
+	return vncRawRect{x: x, y: y, width: width, height: height, data: vncRawSubrect(frame, frameWidth, x, y, width, height)}
+}
+
+func (v *vncConn) writeFramebufferUpdate(rects []vncRawRect) error {
+	if v.supportsZRLE {
+		return v.writeZRLEFramebufferUpdate(rects)
+	}
+	return v.writeRawFramebufferUpdate(rects)
+}
+
+func (v *vncConn) writeRawFramebufferUpdate(rects []vncRawRect) error {
 	if err := v.writeU8(0); err != nil { // FramebufferUpdate
 		return err
 	}
 	if err := v.writeU8(0); err != nil {
 		return err
 	}
-	if err := v.writeU16(1); err != nil {
+	if err := v.writeU16(len(rects)); err != nil {
 		return err
 	}
-	if err := v.writeU16(0); err != nil {
+	for _, rect := range rects {
+		if err := v.writeU16(rect.x); err != nil {
+			return err
+		}
+		if err := v.writeU16(rect.y); err != nil {
+			return err
+		}
+		if err := v.writeU16(rect.width); err != nil {
+			return err
+		}
+		if err := v.writeU16(rect.height); err != nil {
+			return err
+		}
+		if err := v.writeS32(rfbEncodingRaw); err != nil {
+			return err
+		}
+		if _, err := v.conn.Write(rect.data); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (v *vncConn) writeZRLEFramebufferUpdate(rects []vncRawRect) error {
+	encoded := make([][]byte, len(rects))
+	for i, rect := range rects {
+		encoded[i] = vncEncodeZRLE(rect.data, rect.width, rect.height)
+	}
+	if err := v.writeU8(0); err != nil { // FramebufferUpdate
 		return err
 	}
-	if err := v.writeU16(0); err != nil {
+	if err := v.writeU8(0); err != nil {
 		return err
 	}
-	if err := v.writeU16(width); err != nil {
+	if err := v.writeU16(len(rects)); err != nil {
 		return err
 	}
-	if err := v.writeU16(height); err != nil {
-		return err
+	for i, rect := range rects {
+		if err := v.writeU16(rect.x); err != nil {
+			return err
+		}
+		if err := v.writeU16(rect.y); err != nil {
+			return err
+		}
+		if err := v.writeU16(rect.width); err != nil {
+			return err
+		}
+		if err := v.writeU16(rect.height); err != nil {
+			return err
+		}
+		if err := v.writeS32(rfbEncodingZRLE); err != nil {
+			return err
+		}
+		if err := v.writeU32(uint32(len(encoded[i]))); err != nil {
+			return err
+		}
+		if _, err := v.conn.Write(encoded[i]); err != nil {
+			return err
+		}
 	}
-	if err := v.writeS32(rfbEncodingRaw); err != nil {
-		return err
-	}
-	_, err := v.conn.Write(frame)
-	return err
+	return nil
+}
+
+func (v *vncConn) setLastSentFrame(frame []byte, width, height int) {
+	v.mu.Lock()
+	v.lastSentFrame = append(v.lastSentFrame[:0], frame...)
+	v.lastSentWidth = width
+	v.lastSentHeight = height
+	v.mu.Unlock()
 }
 
 func (v *vncConn) handleKeyEvent() error {
@@ -560,9 +869,27 @@ func (v *vncConn) enqueueFrame(data []byte) {
 		return
 	}
 	frame := vncRawFrame(img, v.frameWidth, v.frameHeight)
+	v.enqueueRawFrame(frame, v.frameWidth, v.frameHeight)
+}
+
+func (v *vncConn) enqueueRawFrame(frame []byte, width, height int) {
+	if len(frame) == 0 || width <= 0 || height <= 0 {
+		return
+	}
 	v.mu.Lock()
 	v.latestFrame = frame
+	v.frameWidth = width
+	v.frameHeight = height
 	v.mu.Unlock()
+	select {
+	case v.frameCh <- frame:
+		return
+	default:
+	}
+	select {
+	case <-v.frameCh:
+	default:
+	}
 	select {
 	case v.frameCh <- frame:
 	default:
@@ -590,6 +917,204 @@ func vncRawFrame(img image.Image, width, height int) []byte {
 	return frame
 }
 
+func vncClampRect(x, y, width, height, maxWidth, maxHeight int) (int, int, int, int, bool) {
+	if maxWidth <= 0 || maxHeight <= 0 || width <= 0 || height <= 0 {
+		return 0, 0, 0, 0, false
+	}
+	if x < 0 {
+		width += x
+		x = 0
+	}
+	if y < 0 {
+		height += y
+		y = 0
+	}
+	if x >= maxWidth || y >= maxHeight || width <= 0 || height <= 0 {
+		return 0, 0, 0, 0, false
+	}
+	if x+width > maxWidth {
+		width = maxWidth - x
+	}
+	if y+height > maxHeight {
+		height = maxHeight - y
+	}
+	return x, y, width, height, width > 0 && height > 0
+}
+
+func vncIntersectRect(ax, ay, aw, ah, bx, by, bw, bh int) (int, int, int, int, bool) {
+	x1 := maxInt(ax, bx)
+	y1 := maxInt(ay, by)
+	x2 := minInt(ax+aw, bx+bw)
+	y2 := minInt(ay+ah, by+bh)
+	w, h := x2-x1, y2-y1
+	return x1, y1, w, h, w > 0 && h > 0
+}
+
+func vncChangedRect(prev, next []byte, width, height int) (int, int, int, int, bool) {
+	if width <= 0 || height <= 0 || len(prev) != len(next) || len(next) < width*height*4 {
+		return 0, 0, width, height, true
+	}
+	minX, minY := width, height
+	maxX, maxY := -1, -1
+	stride := width * 4
+	for y := 0; y < height; y++ {
+		rowStart := y * stride
+		rowEnd := rowStart + stride
+		if bytes.Equal(prev[rowStart:rowEnd], next[rowStart:rowEnd]) {
+			continue
+		}
+		left, right := -1, -1
+		for x := 0; x < width; x++ {
+			off := rowStart + x*4
+			if !bytes.Equal(prev[off:off+4], next[off:off+4]) {
+				left = x
+				break
+			}
+		}
+		for x := width - 1; x >= 0; x-- {
+			off := rowStart + x*4
+			if !bytes.Equal(prev[off:off+4], next[off:off+4]) {
+				right = x
+				break
+			}
+		}
+		if left >= 0 {
+			minX = minInt(minX, left)
+			maxX = maxInt(maxX, right)
+			minY = minInt(minY, y)
+			maxY = maxInt(maxY, y)
+		}
+	}
+	if maxX < minX || maxY < minY {
+		return 0, 0, 0, 0, false
+	}
+	return minX, minY, maxX - minX + 1, maxY - minY + 1, true
+}
+
+func vncRawSubrect(frame []byte, frameWidth, x, y, width, height int) []byte {
+	if width <= 0 || height <= 0 || frameWidth <= 0 {
+		return nil
+	}
+	stride := frameWidth * 4
+	rectStride := width * 4
+	out := make([]byte, rectStride*height)
+	for row := 0; row < height; row++ {
+		src := (y+row)*stride + x*4
+		copy(out[row*rectStride:(row+1)*rectStride], frame[src:src+rectStride])
+	}
+	return out
+}
+
+func vncEncodeZRLE(raw []byte, width, height int) []byte {
+	var plain bytes.Buffer
+	for y := 0; y < height; y += 64 {
+		tileH := minInt(64, height-y)
+		for x := 0; x < width; x += 64 {
+			tileW := minInt(64, width-x)
+			plain.Write(vncEncodeZRLETile(raw, width, x, y, tileW, tileH))
+		}
+	}
+	var compressed bytes.Buffer
+	zw, err := zlib.NewWriterLevel(&compressed, zlib.BestSpeed)
+	if err != nil {
+		zw = zlib.NewWriter(&compressed)
+	}
+	_, _ = zw.Write(plain.Bytes())
+	_ = zw.Close()
+	return compressed.Bytes()
+}
+
+func vncEncodeZRLETile(raw []byte, stridePixels, x, y, width, height int) []byte {
+	palette := make([][3]byte, 0, 16)
+	paletteIndex := make(map[[3]byte]byte, 16)
+	indices := make([]byte, 0, width*height)
+	paletteOverflow := false
+	for ty := 0; ty < height; ty++ {
+		row := ((y+ty)*stridePixels + x) * 4
+		for tx := 0; tx < width; tx++ {
+			px := row + tx*4
+			color := [3]byte{raw[px], raw[px+1], raw[px+2]}
+			idx, ok := paletteIndex[color]
+			if !ok {
+				if len(palette) >= 16 {
+					paletteOverflow = true
+					break
+				}
+				idx = byte(len(palette))
+				paletteIndex[color] = idx
+				palette = append(palette, color)
+			}
+			indices = append(indices, idx)
+		}
+		if paletteOverflow {
+			break
+		}
+	}
+	if len(palette) == 1 && !paletteOverflow {
+		return []byte{1, palette[0][0], palette[0][1], palette[0][2]}
+	}
+	if len(palette) >= 2 && !paletteOverflow {
+		return vncEncodeZRLEPackedPaletteTile(palette, indices, width, height)
+	}
+	var out bytes.Buffer
+	out.WriteByte(0) // raw truecolor tile
+	for ty := 0; ty < height; ty++ {
+		row := ((y+ty)*stridePixels + x) * 4
+		for tx := 0; tx < width; tx++ {
+			px := row + tx*4
+			out.Write(raw[px : px+3]) // 32bpp depth-24 little-endian CPIXEL omits X byte.
+		}
+	}
+	return out.Bytes()
+}
+
+func vncEncodeZRLEPackedPaletteTile(palette [][3]byte, indices []byte, width, height int) []byte {
+	bitsPerPixel := 1
+	if len(palette) > 4 {
+		bitsPerPixel = 4
+	} else if len(palette) > 2 {
+		bitsPerPixel = 2
+	}
+	var out bytes.Buffer
+	out.WriteByte(byte(len(palette)))
+	for _, color := range palette {
+		out.Write(color[:])
+	}
+	mask := byte((1 << bitsPerPixel) - 1)
+	for y := 0; y < height; y++ {
+		bitPos := 8
+		var packed byte
+		row := y * width
+		for x := 0; x < width; x++ {
+			bitPos -= bitsPerPixel
+			packed |= (indices[row+x] & mask) << bitPos
+			if bitPos == 0 {
+				out.WriteByte(packed)
+				packed = 0
+				bitPos = 8
+			}
+		}
+		if bitPos != 8 {
+			out.WriteByte(packed)
+		}
+	}
+	return out.Bytes()
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
 func (v *vncConn) close() {
 	v.mu.Lock()
 	if v.closed {
@@ -597,8 +1122,11 @@ func (v *vncConn) close() {
 		return
 	}
 	v.closed = true
+	stream := v.stream
 	v.mu.Unlock()
-	if v.session != "" {
+	if stream != nil {
+		stream.removeSubscriber(v)
+	} else if v.session != "" {
 		v.srv.desktopMu.Lock()
 		delete(v.srv.desktops, v.session)
 		v.srv.desktopMu.Unlock()
@@ -613,16 +1141,25 @@ func (s *Server) closeVNCForClient(clientID string) int {
 	s.desktopMu.Lock()
 	var routes []*desktopRoute
 	for id, route := range s.desktops {
-		if route.clientID == clientID && route.vnc != nil {
+		if route.clientID == clientID && (route.vnc != nil || route.stream != nil) {
 			routes = append(routes, route)
 			delete(s.desktops, id)
 		}
 	}
 	s.desktopMu.Unlock()
+	closed := 0
 	for _, route := range routes {
-		route.vnc.close()
+		if route.stream != nil {
+			route.stream.close()
+			closed++
+			continue
+		}
+		if route.vnc != nil {
+			route.vnc.close()
+			closed++
+		}
 	}
-	return len(routes)
+	return closed
 }
 
 func (v *vncConn) writeSecurityFailure(reason string) error {
@@ -649,6 +1186,12 @@ func (v *vncConn) readU16() (uint16, error) {
 
 func (v *vncConn) readU32() (uint32, error) {
 	var value uint32
+	err := binary.Read(v.reader, binary.BigEndian, &value)
+	return value, err
+}
+
+func (v *vncConn) readS32() (int32, error) {
+	var value int32
 	err := binary.Read(v.reader, binary.BigEndian, &value)
 	return value, err
 }

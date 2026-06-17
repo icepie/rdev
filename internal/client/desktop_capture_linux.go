@@ -83,10 +83,10 @@ func desktopSources() []protocol.DesktopSource {
 }
 
 func newDesktopCapturer(source string) (desktopCapturer, error) {
-	if strings.HasPrefix(source, "drm:") || (os.Getenv("DISPLAY") == "" && drmSourceAvailable(source)) {
+	if strings.HasPrefix(source, "drm:") {
 		return newDRMCapturer(source)
 	}
-	if strings.HasPrefix(source, "fbdev:") || (os.Getenv("DISPLAY") == "" && fbdevPath(source) != "") {
+	if strings.HasPrefix(source, "fbdev:") {
 		return newFBDevCapturer(source)
 	}
 	conn, _, err := linuxX11ConnectAny()
