@@ -15,6 +15,9 @@ APT_MIRROR=${RDEV_GPU_APT_MIRROR:-}
 CARGO_REGISTRY=${RDEV_GPU_CARGO_REGISTRY:-}
 RUSTUP_DIST_SERVER=${RDEV_GPU_RUSTUP_DIST_SERVER:-}
 RUSTUP_UPDATE_ROOT=${RDEV_GPU_RUSTUP_UPDATE_ROOT:-}
+case "$DISTRO" in
+  centos7|centos8) export RDEV_DISABLE_ASM=${RDEV_DISABLE_ASM:-y} ;;
+esac
 
 apply_proxy() {
   [ -n "$PROXY" ] || return 0
@@ -63,9 +66,13 @@ EOF
 
 install_rhel_deps() {
   asm_deps="nasm yasm"
-  case "$(uname -m)" in
-    aarch64|arm64) asm_deps="" ;;
-  esac
+  if [ "${RDEV_DISABLE_ASM:-n}" = "y" ]; then
+    asm_deps=""
+  else
+    case "$(uname -m)" in
+      aarch64|arm64) asm_deps="" ;;
+    esac
+  fi
   if [ -f /etc/centos-release ] && grep -q ' 7\.' /etc/centos-release; then
     sed -i 's|^mirrorlist=|#mirrorlist=|g; s|^#baseurl=http://mirror.centos.org/centos/$releasever|baseurl=http://vault.centos.org/7.9.2009|g' /etc/yum.repos.d/CentOS-*.repo || true
     yum install -y centos-release-scl epel-release || true
@@ -124,9 +131,13 @@ install_deps() {
   elif command -v dnf >/dev/null 2>&1; then
     dnf install -y epel-release || true
     asm_deps="nasm yasm"
-    case "$(uname -m)" in
-      aarch64|arm64) asm_deps="" ;;
-    esac
+    if [ "${RDEV_DISABLE_ASM:-n}" = "y" ]; then
+      asm_deps=""
+    else
+      case "$(uname -m)" in
+        aarch64|arm64) asm_deps="" ;;
+      esac
+    fi
     dnf install -y \
       ca-certificates curl git make pkgconf-pkg-config python3 \
       autoconf automake libtool \
@@ -207,9 +218,6 @@ export CARGO_NET_RETRY=${CARGO_NET_RETRY:-5}
 export ENABLE_VAAPI=${ENABLE_VAAPI:-n}
 export ENABLE_NVENC=${ENABLE_NVENC:-n}
 export ENABLE_VULKAN_VIDEO=${ENABLE_VULKAN_VIDEO:-n}
-case "$DISTRO" in
-  centos7) export RDEV_DISABLE_ASM=${RDEV_DISABLE_ASM:-y} ;;
-esac
 export TMPDIR=${TMPDIR:-/tmp}
 
 rm -rf "$DIST_DIR"
