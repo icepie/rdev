@@ -45,12 +45,19 @@ deb $APT_MIRROR $codename-security main restricted universe multiverse
 EOF
     fi
   fi
+  pipewire_deps=""
+  case ",$FEATURES," in
+    *embedded-rdev-desktop-wayland*|*rdev-desktop/pipewire*|*,pipewire,*)
+      pipewire_deps="libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev gstreamer1.0-pipewire gstreamer1.0-plugins-base gstreamer1.0-plugins-good pipewire xdg-desktop-portal"
+      ;;
+  esac
   apt-get update
   apt-get install -y --no-install-recommends \
     ca-certificates curl git build-essential pkg-config nasm yasm python3 make \
     autoconf automake libtool \
     libx11-dev libx11-xcb-dev libxext-dev libxrandr-dev libxfixes-dev libxcomposite-dev libxi-dev libxtst-dev libxv-dev \
-    libxcb1-dev libxcb-dri3-dev libdrm-dev libepoxy-dev libdbus-1-dev
+    libxcb1-dev libxcb-dri3-dev libdrm-dev libepoxy-dev libdbus-1-dev \
+    $pipewire_deps
   rm -rf /var/lib/apt/lists/*
 }
 

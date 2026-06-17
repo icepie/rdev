@@ -40,6 +40,7 @@ cc = "^1.1"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 dbus = "^0.9"
+dirs = "6.0"
 drm = "0.14"
 drm-ffi = "0.9"
 drm-fourcc = "2.2"

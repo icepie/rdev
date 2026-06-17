@@ -212,7 +212,7 @@ jobs:
             echo "::endgroup::"
           }
 
-          run_linux_package debian13 debian:13 "${{ matrix.asset }}" embedded-rdev-desktop-vaapi y
+          run_linux_package debian13 debian:13 "${{ matrix.asset }}" embedded-rdev-desktop-wayland y
           run_linux_package debian12 debian:12 "${{ matrix.asset }}-debian12" embedded-rdev-desktop n
           run_linux_package debian11 debian:11 "${{ matrix.asset }}-debian11" embedded-rdev-desktop n
           if [ "${{ matrix.arch }}" = "amd64" ]; then

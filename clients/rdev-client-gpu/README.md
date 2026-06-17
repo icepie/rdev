@@ -34,7 +34,7 @@ To build and stage the Linux release package, run:
 make rust-client-gpu-linux-desktop-package
 ```
 
-The package script installs the native build dependencies for the detected distro, builds vendored FFmpeg/x264/libva from source, and stages the result in `clients/rdev-client-gpu/dist/`. CI reuses one runner per Linux architecture and builds multiple distro-baseline packages in containers: the default `rdev-client-gpu-linux-<arch>.tar.gz` is Debian 13 with VAAPI enabled, while `*-debian12`, `*-debian11`, `*-centos8`, and amd64-only `*-centos7` are compatibility packages without VAAPI for older glibc/driver stacks. NVENC remains opt-in with `RDEV_GPU_FEATURES=embedded-rdev-desktop-hw ENABLE_NVENC=y`.
+The package script installs the native build dependencies for the detected distro, builds vendored FFmpeg/x264/libva from source, and stages the result in `clients/rdev-client-gpu/dist/`. CI reuses one runner per Linux architecture and builds multiple distro-baseline packages in containers: the default `rdev-client-gpu-linux-<arch>.tar.gz` is Debian 13 with VAAPI and Wayland/PipeWire enabled, while `*-debian12`, `*-debian11`, `*-centos8`, and amd64-only `*-centos7` are compatibility packages without VAAPI/PipeWire for older glibc/driver stacks. NVENC remains opt-in with `RDEV_GPU_FEATURES=embedded-rdev-desktop-hw ENABLE_NVENC=y`.
 
 For a direct embedded desktop build without staging:
 
