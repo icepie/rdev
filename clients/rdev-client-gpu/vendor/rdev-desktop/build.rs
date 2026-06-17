@@ -67,6 +67,7 @@ fn build_ffmpeg(dist_dir: &Path, enable_libnpp: bool, enable_nvenc: bool, enable
 fn main() {
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap();
     let target_arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
+    let target_abi = env::var("CARGO_CFG_TARGET_ABI").unwrap_or_default();
     let vaapi_enabled = env::var("CARGO_FEATURE_VAAPI").is_ok();
     let nvenc_enabled = env::var("CARGO_FEATURE_NVENC").is_ok();
     let vulkan_video_enabled = env::var("CARGO_FEATURE_VULKAN_VIDEO").is_ok();
@@ -78,6 +79,10 @@ fn main() {
         if target_os == "windows" && !target_arch.is_empty() {
             name.push('_');
             name.push_str(&target_arch);
+            if !target_abi.is_empty() {
+                name.push('_');
+                name.push_str(&target_abi);
+            }
         }
         if nvenc_enabled {
             name.push_str("_nvenc");

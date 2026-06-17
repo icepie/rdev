@@ -37,8 +37,11 @@ def main() -> None:
 
     root = Path(__file__).resolve().parent
     out_dir = Path(args.out_dir)
-    use_mcrtdll = supports_mcrtdll(args.gcc)
-    if use_mcrtdll:
+    default_crt = os.environ.get("RDEV_MINGW_CRT") == "msvcrt"
+    use_mcrtdll = False if default_crt else supports_mcrtdll(args.gcc)
+    if default_crt:
+        print("building Win7 shims with toolchain default MSVCRT")
+    elif use_mcrtdll:
         print("building Win7 shims with -mcrtdll=msvcrt-os")
     else:
         print("building Win7 shims without -mcrtdll=msvcrt-os (unsupported by this MinGW)")

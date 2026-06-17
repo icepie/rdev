@@ -6,7 +6,7 @@ LDFLAGS = -s -w -X main.version=$(VERSION)
 GO_WIN7 ?= go
 WIN7_SERVICE_DIST = target/win7-service
 RUST_CLIENT_GPU_MANIFEST = clients/rdev-client-gpu/Cargo.toml
-RUST_CLIENT_GPU_WIN7_DIR = clients/rdev-client-gpu/target/x86_64-pc-windows-gnu/release
+RUST_CLIENT_GPU_WIN7_DIR = clients/rdev-client-gpu/target/x86_64-pc-windows-gnullvm/release
 RUST_CLIENT_GPU_WIN7_DIST = clients/rdev-client-gpu/target/win7-dist
 RUST_CLIENT_GPU_WIN7_RDEV_DESKTOP_DIST = clients/rdev-client-gpu/target/win7-rdev-desktop-dist
 
@@ -49,11 +49,11 @@ rust-client-gpu-windows-arm64-package:
 	cargo build --release --manifest-path $(RUST_CLIENT_GPU_MANIFEST) --target aarch64-pc-windows-gnullvm --features embedded-rdev-desktop
 
 rust-client-gpu-win7-package:
-	cargo build --release --manifest-path $(RUST_CLIENT_GPU_MANIFEST) --target x86_64-pc-windows-gnu
+	cargo build --release --manifest-path $(RUST_CLIENT_GPU_MANIFEST) --target x86_64-pc-windows-gnullvm
 	$(MAKE) rust-client-gpu-win7-stage WIN7_STAGE_DIST=$(RUST_CLIENT_GPU_WIN7_DIST)
 
 rust-client-gpu-win7-rdev-desktop-package:
-	cargo build --release --manifest-path $(RUST_CLIENT_GPU_MANIFEST) --target x86_64-pc-windows-gnu --features embedded-rdev-desktop
+	cargo build --release --manifest-path $(RUST_CLIENT_GPU_MANIFEST) --target x86_64-pc-windows-gnullvm --features embedded-rdev-desktop
 	$(MAKE) rust-client-gpu-win7-stage WIN7_STAGE_DIST=$(RUST_CLIENT_GPU_WIN7_RDEV_DESKTOP_DIST)
 
 rust-client-gpu-win7-stage:

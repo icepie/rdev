@@ -42,7 +42,7 @@ For a direct embedded desktop build without staging:
 cargo build --release --manifest-path clients/rdev-client-gpu/Cargo.toml --features embedded-rdev-desktop
 ```
 
-The Windows 7 package keeps the normal Windows GNU build, then applies PE import patches and ships compatibility shim DLLs for Win8+ imports such as `GetSystemTimePreciseAsFileTime`, `WaitOnAddress`, and `ProcessPrng`.
+The Windows packages are cross-compiled from Linux with `llvm-mingw`. Windows amd64 and Windows 7 amd64 use `x86_64-pc-windows-gnullvm`; Windows ARM64 uses `aarch64-pc-windows-gnullvm`. The Windows 7 package then applies PE import patches and ships compatibility shim DLLs for Win8+ imports such as `GetSystemTimePreciseAsFileTime`, `WaitOnAddress`, and `ProcessPrng`.
 
 For a Windows ARM64 artifact from a Linux host, install an LLVM MinGW toolchain that provides `aarch64-w64-mingw32-clang`, then run:
 
@@ -51,14 +51,14 @@ rustup target add aarch64-pc-windows-gnullvm
 make rust-client-gpu-windows-arm64-package
 ```
 
-For a Windows 7-compatible amd64 artifact:
+For a Windows 7-compatible amd64 artifact, install an LLVM MinGW toolchain that provides `x86_64-w64-mingw32-clang`, then run:
 
 ```bash
-rustup target add x86_64-pc-windows-gnu
+rustup target add x86_64-pc-windows-gnullvm
 make rust-client-gpu-win7-package
 ```
 
-This uses the normal `x86_64-pc-windows-gnu` release build, patches known Win8+ PE import names, builds compatibility shim DLLs, auto-copies WinPTY runtime files when they can be found, and places everything in `clients/rdev-client-gpu/target/win7-dist/`.
+This uses the normal `x86_64-pc-windows-gnullvm` release build, patches known Win8+ PE import names, builds compatibility shim DLLs, auto-copies WinPTY runtime files when they can be found, and places everything in `clients/rdev-client-gpu/target/win7-dist/`.
 
 ## Run
 
@@ -91,7 +91,7 @@ The smoke test starts a local Go `rdev-server`, connects this Rust client, then 
 
 Windows 7 notes:
 
-- Use the normal `x86_64-pc-windows-gnu` release build, then package with `make rust-client-gpu-win7-package`.
+- Use the normal `x86_64-pc-windows-gnullvm` release build, then package with `make rust-client-gpu-win7-package`.
 - Deploy all files from `target/win7-dist` into the same directory: `rdev-client-gpu.exe`, `rdev-waitonaddress-shim.dll`, `rdev-bcprng.dll`, `rdevws.dll`, and optional `winpty.dll`/`winpty-agent.exe`.
 - Packaging auto-detects WinPTY from `RDEV_WINPTY_DIR`, `WINPTY_DIR`, common local Node/Git-Bash locations, and `PATH`; missing WinPTY only warns because pipe fallback remains available.
 - Runtime PTY order is Win7/Win8: WinPTY then pipe fallback; Win10/Win11: `portable-pty`/ConPTY then pipe fallback.

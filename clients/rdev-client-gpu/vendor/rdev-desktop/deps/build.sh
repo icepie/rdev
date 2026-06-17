@@ -31,31 +31,40 @@ export NPROCS="$(nproc || echo 4)"
 
 if [ "$TARGET_OS" == "windows" ]; then
     if [ "$HOST_OS" == "linux" ] && [ "$TARGET_ARCH" == "aarch64" ]; then
-        export CC="aarch64-w64-mingw32-clang"
-        export CXX="aarch64-w64-mingw32-clang++"
-        export LD="aarch64-w64-mingw32-clang"
+        export MINGW_PREFIX="aarch64-w64-mingw32-"
+        export MINGW_CC="${RDEV_MINGW_CC:-aarch64-w64-mingw32-clang}"
+        export MINGW_CXX="${RDEV_MINGW_CXX:-aarch64-w64-mingw32-clang++}"
+        export MINGW_ARCH="aarch64"
+        export MINGW_DISABLE_ASM="--disable-asm"
+        export MINGW_HOST="aarch64-w64-mingw32"
+    elif [ "$HOST_OS" == "linux" ]; then
+        export MINGW_PREFIX="x86_64-w64-mingw32-"
+        export MINGW_CC="${RDEV_MINGW_CC:-x86_64-w64-mingw32-clang}"
+        export MINGW_CXX="${RDEV_MINGW_CXX:-x86_64-w64-mingw32-clang++}"
+        export MINGW_ARCH="x86_64"
+        export MINGW_DISABLE_ASM=""
+        export MINGW_HOST="x86_64-w64-mingw32"
+    fi
+
+    if [ "$HOST_OS" == "linux" ]; then
+        export CROSS_COMPILE="$MINGW_PREFIX"
+        export CC="$MINGW_CC"
+        export CXX="$MINGW_CXX"
+        export LD="$MINGW_CC"
         export AR="llvm-ar"
         export RANLIB="llvm-ranlib"
         export NM="llvm-nm"
         export STRIP="llvm-strip"
-        export FFMPEG_EXTRA_ARGS="--arch=aarch64 --target-os=mingw64 \
-            --enable-cross-compile --disable-asm --disable-nvenc --disable-ffnvcodec \
-            --enable-mediafoundation --enable-d3d11va \
-            --cc=aarch64-w64-mingw32-clang --cxx=aarch64-w64-mingw32-clang++ --ld=aarch64-w64-mingw32-clang \
-            --ar=llvm-ar --ranlib=llvm-ranlib --nm=llvm-nm --strip=llvm-strip"
-        export FFMPEG_CFLAGS="-I$DIST/include"
-        export FFMPEG_LIBRARY_PATH="-L$DIST/lib"
-        export X264_EXTRA_ARGS="--host=aarch64-w64-mingw32 --disable-asm"
-    elif [ "$HOST_OS" == "linux" ]; then
-        export CROSS_COMPILE="x86_64-w64-mingw32-"
         export MINGW_CRT_FLAGS=""
-        if printf 'int main(void){return 0;}\n' | x86_64-w64-mingw32-gcc -x c - -mcrtdll=msvcrt-os -c -o /tmp/rdev-mingw-crt-test.o >/dev/null 2>&1; then
+        if [ "${RDEV_MINGW_CRT:-}" != "msvcrt" ] && printf 'int main(void){return 0;}\n' | "$MINGW_CC" -x c - -mcrtdll=msvcrt-os -c -o /tmp/rdev-mingw-crt-test.o >/dev/null 2>&1; then
             export MINGW_CRT_FLAGS="-mcrtdll=msvcrt-os"
             rm -f /tmp/rdev-mingw-crt-test.o
         fi
-        export FFMPEG_EXTRA_ARGS="--arch=x86_64 --target-os=mingw64 \
-            --cross-prefix=x86_64-w64-mingw32- --disable-nvenc --disable-ffnvcodec \
-            --enable-mediafoundation --pkg-config=pkg-config --enable-d3d11va"
+        export FFMPEG_EXTRA_ARGS="--arch=$MINGW_ARCH --target-os=mingw64 \
+            --enable-cross-compile $MINGW_DISABLE_ASM --disable-nvenc --disable-ffnvcodec \
+            --enable-mediafoundation --enable-d3d11va --pkg-config=pkg-config \
+            --cc=$MINGW_CC --cxx=$MINGW_CXX --ld=$MINGW_CC \
+            --ar=llvm-ar --ranlib=llvm-ranlib --nm=llvm-nm --strip=llvm-strip"
         export FFMPEG_CFLAGS="-I$DIST/include $MINGW_CRT_FLAGS"
         export FFMPEG_LIBRARY_PATH="-L$DIST/lib $MINGW_CRT_FLAGS"
     elif [ "$TARGET_ENV" != "msvc" ]; then
@@ -130,8 +139,11 @@ if [ "$ENABLE_LIBNPP" == "y" ]; then
     export FFMPEG_EXTRA_ARGS="$FFMPEG_EXTRA_ARGS --enable-libnpp --enable-nonfree"
 fi
 
-if [ "$TARGET_OS" == "windows" ] && [ "$HOST_OS" == "linux" ] && [ "$TARGET_ARCH" != "aarch64" ]; then
-    export X264_EXTRA_ARGS="--cross-prefix=x86_64-w64-mingw32- --host=x86_64-w64-mingw32"
+if [ "$TARGET_OS" == "windows" ] && [ "$HOST_OS" == "linux" ]; then
+    export X264_EXTRA_ARGS="--host=$MINGW_HOST --disable-cli"
+    if [ "$TARGET_ARCH" == "aarch64" ]; then
+        export X264_EXTRA_ARGS="$X264_EXTRA_ARGS --disable-asm"
+    fi
     if [ -n "${MINGW_CRT_FLAGS:-}" ]; then
         export X264_EXTRA_ARGS="$X264_EXTRA_ARGS --extra-cflags=$MINGW_CRT_FLAGS --extra-ldflags=$MINGW_CRT_FLAGS"
     fi
