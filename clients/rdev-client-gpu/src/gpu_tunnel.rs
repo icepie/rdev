@@ -18,6 +18,7 @@ const FRAME_OPEN: u8 = 1;
 const FRAME_DATA: u8 = 2;
 const FRAME_CLOSE: u8 = 3;
 const CHUNK_SIZE: usize = 64 * 1024;
+const TUNNEL_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -53,8 +54,9 @@ async fn run_once(args: &Args, instance_id: &str) -> Result<()> {
         .parse()
         .with_context(|| format!("invalid --gpu-desktop-local {}", args.gpu_desktop_local))?;
     info!("connecting gpu desktop tunnel to {tunnel_url}; local={local_addr}");
-    let (ws, _) = connect_async(tunnel_url.as_str())
+    let (ws, _) = tokio::time::timeout(TUNNEL_CONNECT_TIMEOUT, connect_async(tunnel_url.as_str()))
         .await
+        .context("gpu desktop tunnel websocket connect timed out")?
         .context("connect gpu desktop tunnel websocket")?;
     let (mut ws_write, mut ws_read) = ws.split();
     let (out_tx, mut out_rx) = mpsc::channel::<TunnelFrame>(1024);

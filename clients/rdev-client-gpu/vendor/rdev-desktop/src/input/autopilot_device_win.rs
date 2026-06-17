@@ -2,6 +2,7 @@ use std::collections::HashSet;
 use std::iter;
 use std::os::windows::ffi::OsStrExt;
 use std::ptr;
+use std::sync::OnceLock;
 
 use winapi::shared::basetsd::{UINT32, ULONG_PTR};
 use winapi::shared::minwindef::{BOOL, DWORD, FALSE, LPARAM, TRUE, ULONG, WORD};
@@ -610,17 +611,87 @@ fn send_mouse_event_fallback(flags: DWORD, data: DWORD) {
     unsafe { mouse_event(flags, 0, 0, data, 0) };
 }
 
-/// Sends a mouse event through `SendInput(INPUT_MOUSE)`, the primary path. Only when SendInput
-/// reports failure does it fall back to the legacy `mouse_event` API. Returns whether the primary
-/// path succeeded and whether the `mouse_event` fallback was triggered, so callers can surface both
-/// in their status logs instead of hiding the fallback behind a success.
+fn windows_legacy_mouse_preferred() -> bool {
+    if let Some(value) = windows_mouse_legacy_env() {
+        return value;
+    }
+    windows_major_version().is_some_and(|version| version < 10)
+}
+
+fn windows_mouse_legacy_env() -> Option<bool> {
+    std::env::var("RDEV_WINDOWS_MOUSE_LEGACY").ok().map(|value| {
+        matches!(
+            value.to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        )
+    })
+}
+
+fn windows_major_version() -> Option<u32> {
+    static VERSION: OnceLock<Option<u32>> = OnceLock::new();
+    *VERSION.get_or_init(query_windows_major_version)
+}
+
+fn query_windows_major_version() -> Option<u32> {
+    #[repr(C)]
+    struct RtlOsVersionInfoExW {
+        dw_os_version_info_size: u32,
+        dw_major_version: u32,
+        dw_minor_version: u32,
+        dw_build_number: u32,
+        dw_platform_id: u32,
+        sz_csd_version: [u16; 128],
+    }
+
+    type RtlGetVersion = unsafe extern "system" fn(*mut RtlOsVersionInfoExW) -> i32;
+
+    unsafe {
+        let ntdll = GetModuleHandleW(wide("ntdll.dll").as_ptr());
+        if ntdll.is_null() {
+            return None;
+        }
+        let proc = GetProcAddress(ntdll, b"RtlGetVersion\0".as_ptr() as *const i8);
+        if proc.is_null() {
+            return None;
+        }
+        let rtl_get_version: RtlGetVersion = std::mem::transmute(proc);
+        let mut info = RtlOsVersionInfoExW {
+            dw_os_version_info_size: std::mem::size_of::<RtlOsVersionInfoExW>() as u32,
+            dw_major_version: 0,
+            dw_minor_version: 0,
+            dw_build_number: 0,
+            dw_platform_id: 0,
+            sz_csd_version: [0; 128],
+        };
+        if rtl_get_version(&mut info) == 0 {
+            Some(info.dw_major_version)
+        } else {
+            None
+        }
+    }
+}
+
+/// Sends a mouse event through `SendInput(INPUT_MOUSE)` on modern Windows, but uses the legacy
+/// `mouse_event` path by default on Win7/Win8 where it is more reliable from service-launched agents.
 fn dispatch_mouse_input(flags: DWORD, data: DWORD) -> (bool, bool) {
+    if windows_legacy_mouse_preferred() {
+        send_mouse_event_fallback(flags, data);
+        return (true, true);
+    }
     if send_mouse_input(flags, data) {
         (true, false)
     } else {
         send_mouse_event_fallback(flags, data);
         (false, true)
     }
+}
+
+fn set_cursor_pos_for_mouse(screen_x: i32, screen_y: i32) -> bool {
+    let cursor_ok = unsafe { SetCursorPos(screen_x, screen_y) != FALSE };
+    if windows_legacy_mouse_preferred() {
+        send_mouse_event_fallback(MOUSEEVENTF_MOVE, 0);
+    }
+    cursor_ok
 }
 
 fn mouse_dispatch_status(
@@ -668,9 +739,10 @@ fn send_mouse_pointer_event(event: &PointerEvent, screen_x: i32, screen_y: i32) 
         focus_window_at_point(screen_x, screen_y);
     }
     let mut lines = Vec::new();
-    let cursor_ok = unsafe { SetCursorPos(screen_x, screen_y) != FALSE };
+    let cursor_ok = set_cursor_pos_for_mouse(screen_x, screen_y);
     lines.push(format!(
-        "pointer SetCursorPos x={screen_x} y={screen_y} ok={cursor_ok}"
+        "pointer SetCursorPos x={screen_x} y={screen_y} ok={cursor_ok} legacy_mouse={}",
+        windows_legacy_mouse_preferred()
     ));
     if dw_flags != 0 {
         let (ok, fallback) = dispatch_mouse_input(dw_flags, 0);
@@ -700,9 +772,10 @@ pub fn diagnose_input_probe(
 
     if let Some((x, y)) = click {
         let (screen_x, screen_y) = normalized_virtual_screen_point(x, y);
-        let cursor_ok = unsafe { SetCursorPos(screen_x, screen_y) != FALSE };
+        let cursor_ok = set_cursor_pos_for_mouse(screen_x, screen_y);
         lines.push(format!(
-            "probe click point={x:.4},{y:.4} screen={screen_x},{screen_y} set_cursor={cursor_ok}"
+            "probe click point={x:.4},{y:.4} screen={screen_x},{screen_y} set_cursor={cursor_ok} legacy_mouse={}",
+            windows_legacy_mouse_preferred()
         ));
         let (down_ok, down_fb) = dispatch_mouse_input(MOUSEEVENTF_LEFTDOWN, 0);
         lines.push(mouse_dispatch_status(

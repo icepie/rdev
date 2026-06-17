@@ -157,9 +157,22 @@ async fn run_exec(
     let mut stdin = Some(child.stdin.take().context("child stdin unavailable")?);
     let stdout = child.stdout.take().context("child stdout unavailable")?;
     let stderr = child.stderr.take().context("child stderr unavailable")?;
+    let decode_terminal_output = cfg!(windows) && msg.pty;
 
-    pipe_async_reader(session_id.clone(), BIN_DATA, &outbound, stdout);
-    pipe_async_reader(session_id.clone(), BIN_STDERR, &outbound, stderr);
+    pipe_async_reader(
+        session_id.clone(),
+        BIN_DATA,
+        &outbound,
+        stdout,
+        decode_terminal_output,
+    );
+    pipe_async_reader(
+        session_id.clone(),
+        BIN_STDERR,
+        &outbound,
+        stderr,
+        decode_terminal_output,
+    );
 
     let mut tick = tokio::time::interval(std::time::Duration::from_millis(100));
     loop {
@@ -208,6 +221,7 @@ fn pipe_async_reader<R>(
     typ: u8,
     outbound: &mpsc::Sender<OutboundEvent>,
     mut reader: R,
+    decode_terminal_output: bool,
 ) where
     R: AsyncRead + Unpin + Send + 'static,
 {
@@ -222,7 +236,7 @@ fn pipe_async_reader<R>(
                         .send(OutboundEvent::Binary {
                             typ,
                             id: session_id.clone(),
-                            payload: buf[..n].to_vec(),
+                            payload: terminal_output_payload(&buf[..n], decode_terminal_output),
                         })
                         .await
                         .is_err()
@@ -234,6 +248,56 @@ fn pipe_async_reader<R>(
             }
         }
     });
+}
+
+fn terminal_output_payload(bytes: &[u8], decode_terminal_output: bool) -> Vec<u8> {
+    if !decode_terminal_output {
+        return bytes.to_vec();
+    }
+    decode_terminal_output_bytes(bytes).into_bytes()
+}
+
+fn decode_terminal_output_bytes(bytes: &[u8]) -> String {
+    if let Ok(output) = std::str::from_utf8(bytes) {
+        return output.to_string();
+    }
+    decode_windows_oem_output(bytes)
+}
+
+#[cfg(windows)]
+fn decode_windows_oem_output(bytes: &[u8]) -> String {
+    use windows_sys::Win32::Globalization::{GetOEMCP, MultiByteToWideChar, MB_ERR_INVALID_CHARS};
+
+    if bytes.is_empty() {
+        return String::new();
+    }
+    unsafe {
+        let code_page = GetOEMCP();
+        let src_len = bytes.len().min(i32::MAX as usize) as i32;
+        let src = bytes.as_ptr();
+        let mut flags = MB_ERR_INVALID_CHARS;
+        let mut wide_len =
+            MultiByteToWideChar(code_page, flags, src, src_len, std::ptr::null_mut(), 0);
+        if wide_len <= 0 {
+            flags = 0;
+            wide_len = MultiByteToWideChar(code_page, flags, src, src_len, std::ptr::null_mut(), 0);
+        }
+        if wide_len <= 0 {
+            return String::from_utf8_lossy(bytes).to_string();
+        }
+        let mut wide = vec![0u16; wide_len as usize];
+        let written =
+            MultiByteToWideChar(code_page, flags, src, src_len, wide.as_mut_ptr(), wide_len);
+        if written <= 0 {
+            return String::from_utf8_lossy(bytes).to_string();
+        }
+        String::from_utf16_lossy(&wide[..written as usize])
+    }
+}
+
+#[cfg(not(windows))]
+fn decode_windows_oem_output(bytes: &[u8]) -> String {
+    String::from_utf8_lossy(bytes).to_string()
 }
 
 async fn run_sftp(
