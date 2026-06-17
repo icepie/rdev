@@ -221,8 +221,10 @@ linux_rs_asset_suffix() {
         if [ "$ARCH" = "amd64" ]; then echo "-centos7"; else echo "-centos8"; fi
     elif [ "$major" -eq 2 ] 2>/dev/null && [ "$minor" -lt 31 ] 2>/dev/null; then
         echo "-centos8"
-    elif [ "$major" -eq 2 ] 2>/dev/null && [ "$minor" -lt 39 ] 2>/dev/null; then
+    elif [ "$major" -eq 2 ] 2>/dev/null && [ "$minor" -lt 36 ] 2>/dev/null; then
         echo "-ubuntu2004"
+    elif [ "$major" -eq 2 ] 2>/dev/null && [ "$minor" -lt 41 ] 2>/dev/null; then
+        echo "-debian12"
     else
         echo ""
     fi

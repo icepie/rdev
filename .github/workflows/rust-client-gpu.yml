@@ -212,11 +212,8 @@ jobs:
             echo "::endgroup::"
           }
 
-          if [ "${{ matrix.arch }}" = "amd64" ]; then
-            run_linux_package archlinux archlinux:latest "${{ matrix.asset }}" embedded-rdev-desktop-vaapi y
-          else
-            run_linux_package ubuntu2404 ubuntu:24.04 "${{ matrix.asset }}" embedded-rdev-desktop-vaapi y
-          fi
+          run_linux_package debian13 debian:13 "${{ matrix.asset }}" embedded-rdev-desktop-vaapi y
+          run_linux_package debian12 debian:12 "${{ matrix.asset }}-debian12" embedded-rdev-desktop n
           run_linux_package ubuntu2004 ubuntu:20.04 "${{ matrix.asset }}-ubuntu2004" embedded-rdev-desktop n
           if [ "${{ matrix.arch }}" = "amd64" ]; then
             run_linux_package centos7 centos:7 "${{ matrix.asset }}-centos7" embedded-rdev-desktop n
