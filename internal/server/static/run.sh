@@ -261,6 +261,10 @@ else
 fi
 
 # ── Build args & run ───────────────────────────────────────
+if [ "$RDEV_CLIENT" = "rs" ] && [ -z "$RDEV_ID" ]; then
+    RDEV_ID="$(hostname 2>/dev/null || uname -n 2>/dev/null || echo rdev-client-gpu)"
+fi
+
 if [ "$RDEV_CLIENT" = "rs" ]; then
     set -- -s "$RDEV_SERVER"
     [ -n "$RDEV_ID" ] && set -- "$@" -i "$RDEV_ID"

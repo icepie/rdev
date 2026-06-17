@@ -68,14 +68,20 @@ jobs:
             target: x86_64-unknown-linux-gnu
             artifact: rdev-client-gpu
             asset: rdev-client-gpu-linux-amd64
+            package_linux: true
+            distro: ubuntu2204
+            arch: amd64
           - name: linux-arm64
-            os: ubuntu-latest
+            os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
             artifact: rdev-client-gpu
             asset: rdev-client-gpu-linux-arm64
+            package_linux: true
+            distro: ubuntu2204
+            arch: arm64
           - name: windows-amd64
-            os: windows-latest
-            target: x86_64-pc-windows-msvc
+            os: ubuntu-latest
+            target: x86_64-pc-windows-gnu
             artifact: rdev-client-gpu.exe
             asset: rdev-client-gpu-windows-amd64
           - name: windows-win7-amd64
@@ -83,179 +89,18 @@ jobs:
             target: x86_64-pc-windows-gnu
             artifact: rdev-client-gpu.exe
             asset: rdev-client-gpu-windows-win7-amd64
+            win7: true
           - name: darwin-amd64
             os: macos-14
             target: x86_64-apple-darwin
             artifact: rdev-client-gpu
             asset: rdev-client-gpu-darwin-amd64
+            deployment_target: '10.13'
           - name: darwin-arm64
             os: macos-14
             target: aarch64-apple-darwin
             artifact: rdev-client-gpu
             asset: rdev-client-gpu-darwin-arm64
-    defaults:
-      run:
-        working-directory: clients/rdev-client-gpu
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
-
-      - name: Install Windows GNU linker
-        if: matrix.target == 'x86_64-pc-windows-gnu'
-        run: sudo apt-get update && sudo apt-get install -y gcc-mingw-w64-x86-64
-
-      - name: Install Linux arm64 linker
-        if: matrix.target == 'aarch64-unknown-linux-gnu'
-        run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
-
-      - name: Cache Cargo
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: clients/rdev-client-gpu -> target
-          key: ${{ matrix.target }}
-
-      - name: Build release
-        env:
-          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
-        run: cargo build --release --target ${{ matrix.target }}
-
-      - name: Stage artifact
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p "dist/${{ matrix.asset }}"
-          if [ "${{ matrix.target }}" = "x86_64-pc-windows-gnu" ]; then
-            python3 win7/patch_imports.py \
-              "target/${{ matrix.target }}/release/${{ matrix.artifact }}" \
-              "dist/${{ matrix.asset }}/rdev-client-gpu.exe"
-            python3 win7/build_shims.py "dist/${{ matrix.asset }}"
-            python3 win7/copy_winpty_runtime.py "dist/${{ matrix.asset }}"
-            (cd dist && python3 -m zipfile -c "${{ matrix.asset }}.zip" "${{ matrix.asset }}")
-          elif [[ "${{ matrix.target }}" == *windows* ]]; then
-            cp "target/${{ matrix.target }}/release/${{ matrix.artifact }}" "dist/${{ matrix.asset }}/rdev-client-gpu.exe"
-            (cd dist && python3 -m zipfile -c "${{ matrix.asset }}.zip" "${{ matrix.asset }}")
-          else
-            cp "target/${{ matrix.target }}/release/${{ matrix.artifact }}" "dist/${{ matrix.asset }}/rdev-client-gpu"
-            chmod +x "dist/${{ matrix.asset }}/rdev-client-gpu"
-            tar -C dist -czf "dist/${{ matrix.asset }}.tar.gz" "${{ matrix.asset }}"
-          fi
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.asset }}
-          path: |
-            clients/rdev-client-gpu/dist/${{ matrix.asset }}.tar.gz
-            clients/rdev-client-gpu/dist/${{ matrix.asset }}.zip
-          if-no-files-found: error
-
-  package-linux-desktop:
-    name: Package Linux desktop ${{ matrix.name }}
-    needs: test
-    if: github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: glibc2.17-amd64
-            image: quay.io/pypa/manylinux2014_x86_64
-            distro: manylinux2014
-            target: x86_64-unknown-linux-gnu
-            arch: amd64
-            asset: rdev-client-gpu-linux-amd64-glibc2.17-desktop
-          - name: glibc2.28-amd64
-            image: rockylinux:8
-            distro: rocky8
-            target: x86_64-unknown-linux-gnu
-            arch: amd64
-            asset: rdev-client-gpu-linux-amd64-glibc2.28-desktop
-          - name: ubuntu20.04-amd64
-            image: ubuntu:20.04
-            distro: ubuntu2004
-            target: x86_64-unknown-linux-gnu
-            arch: amd64
-            asset: rdev-client-gpu-linux-amd64-glibc2.31-desktop
-          - name: ubuntu22.04-amd64
-            image: ubuntu:22.04
-            distro: ubuntu2204
-            target: x86_64-unknown-linux-gnu
-            arch: amd64
-            asset: rdev-client-gpu-linux-amd64-glibc2.35-desktop
-          - name: ubuntu24.04-amd64
-            image: ubuntu:24.04
-            distro: ubuntu2404
-            target: x86_64-unknown-linux-gnu
-            arch: amd64
-            asset: rdev-client-gpu-linux-amd64-glibc2.39-desktop
-          - name: debian11-amd64
-            image: debian:11
-            distro: debian11
-            target: x86_64-unknown-linux-gnu
-            arch: amd64
-            asset: rdev-client-gpu-linux-amd64-debian11-desktop
-          - name: debian12-amd64
-            image: debian:12
-            distro: debian12
-            target: x86_64-unknown-linux-gnu
-            arch: amd64
-            asset: rdev-client-gpu-linux-amd64-debian12-desktop
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Build in distro container
-        run: |
-          docker run --rm \
-            -v "$PWD:/work" \
-            -w /work \
-            -e CARGO_NET_RETRY=5 \
-            -e RDEV_GPU_PROXY='${{ vars.RDEV_GPU_PROXY }}' \
-            -e RDEV_GPU_APT_MIRROR='${{ vars.RDEV_GPU_APT_MIRROR }}' \
-            -e RDEV_GPU_CARGO_REGISTRY='${{ vars.RDEV_GPU_CARGO_REGISTRY }}' \
-            -e RDEV_GPU_RUSTUP_DIST_SERVER='${{ vars.RDEV_GPU_RUSTUP_DIST_SERVER }}' \
-            -e RDEV_GPU_RUSTUP_UPDATE_ROOT='${{ vars.RDEV_GPU_RUSTUP_UPDATE_ROOT }}' \
-            -e RDEV_GPU_TARGET='${{ matrix.target }}' \
-            -e RDEV_GPU_ARCH='${{ matrix.arch }}' \
-            -e RDEV_GPU_ASSET='${{ matrix.asset }}' \
-            -e RDEV_GPU_RUST_TOOLCHAIN='stable' \
-            -e TMPDIR=/tmp \
-            '${{ matrix.image }}' \
-            bash clients/rdev-client-gpu/scripts/package-linux-desktop.sh '${{ matrix.distro }}'
-
-      - name: Pack artifact
-        run: |
-          tar -C clients/rdev-client-gpu/dist -czf \
-            clients/rdev-client-gpu/dist/${{ matrix.asset }}.tar.gz \
-            ${{ matrix.asset }}
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.asset }}
-          path: clients/rdev-client-gpu/dist/${{ matrix.asset }}.tar.gz
-
-  package-macos-desktop:
-    name: Package macOS desktop ${{ matrix.name }}
-    needs: test
-    if: github.event_name == 'workflow_dispatch'
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: amd64
-            os: macos-14
-            target: x86_64-apple-darwin
-            asset: rdev-client-gpu-darwin-amd64-desktop
-            deployment_target: '10.13'
-          - name: arm64
-            os: macos-14
-            target: aarch64-apple-darwin
-            asset: rdev-client-gpu-darwin-arm64-desktop
             deployment_target: '11.0'
     defaults:
       run:
@@ -268,34 +113,97 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - name: Install build dependencies
+      - name: Install Windows GNU dependencies
+        if: matrix.target == 'x86_64-pc-windows-gnu'
+        run: sudo apt-get update && sudo apt-get install -y gcc-mingw-w64-x86-64 nasm yasm pkg-config make python3
+
+      - name: Install macOS build dependencies
+        if: startsWith(matrix.target, 'x86_64-apple') || startsWith(matrix.target, 'aarch64-apple')
         run: brew install nasm yasm pkg-config
 
       - name: Cache Cargo
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: clients/rdev-client-gpu -> target
-          key: desktop-${{ matrix.target }}
+          key: desktop-${{ matrix.target }}-${{ matrix.name }}
+
+      - name: Build Linux embedded desktop package
+        if: matrix.package_linux == true
+        working-directory: .
+        env:
+          CARGO_NET_RETRY: 5
+          RDEV_GPU_PROXY: ${{ vars.RDEV_GPU_PROXY }}
+          RDEV_GPU_APT_MIRROR: ${{ vars.RDEV_GPU_APT_MIRROR }}
+          RDEV_GPU_CARGO_REGISTRY: ${{ vars.RDEV_GPU_CARGO_REGISTRY }}
+          RDEV_GPU_RUSTUP_DIST_SERVER: ${{ vars.RDEV_GPU_RUSTUP_DIST_SERVER }}
+          RDEV_GPU_RUSTUP_UPDATE_ROOT: ${{ vars.RDEV_GPU_RUSTUP_UPDATE_ROOT }}
+          RDEV_GPU_TARGET: ${{ matrix.target }}
+          RDEV_GPU_ARCH: ${{ matrix.arch }}
+          RDEV_GPU_ASSET: ${{ matrix.asset }}
+          RDEV_GPU_RUST_TOOLCHAIN: stable
+          TMPDIR: /tmp
+        run: |
+          docker run --rm \
+            -v "$PWD:/work" \
+            -w /work \
+            -e CARGO_NET_RETRY \
+            -e RDEV_GPU_PROXY \
+            -e RDEV_GPU_APT_MIRROR \
+            -e RDEV_GPU_CARGO_REGISTRY \
+            -e RDEV_GPU_RUSTUP_DIST_SERVER \
+            -e RDEV_GPU_RUSTUP_UPDATE_ROOT \
+            -e RDEV_GPU_TARGET \
+            -e RDEV_GPU_ARCH \
+            -e RDEV_GPU_ASSET \
+            -e RDEV_GPU_RUST_TOOLCHAIN \
+            -e TMPDIR \
+            ubuntu:22.04 \
+            bash clients/rdev-client-gpu/scripts/package-linux-desktop.sh '${{ matrix.distro }}'
 
       - name: Build embedded desktop release
+        if: matrix.package_linux != true
         env:
           MACOSX_DEPLOYMENT_TARGET: ${{ matrix.deployment_target }}
         run: cargo build --release --features embedded-rdev-desktop --target ${{ matrix.target }}
 
       - name: Stage artifact
+        shell: bash
         run: |
+          set -euo pipefail
           mkdir -p "dist/${{ matrix.asset }}"
-          cp "target/${{ matrix.target }}/release/rdev-client-gpu" "dist/${{ matrix.asset }}/rdev-client-gpu"
-          chmod +x "dist/${{ matrix.asset }}/rdev-client-gpu"
-          "dist/${{ matrix.asset }}/rdev-client-gpu" --version > "dist/${{ matrix.asset }}/VERSION.txt"
-          otool -L "dist/${{ matrix.asset }}/rdev-client-gpu" > "dist/${{ matrix.asset }}/BUILD_INFO.txt" || true
-          tar -C dist -czf "dist/${{ matrix.asset }}.tar.gz" "${{ matrix.asset }}"
+          if [ "${{ matrix.package_linux }}" = "true" ]; then
+            "dist/${{ matrix.asset }}/rdev-client-gpu" --version > "dist/${{ matrix.asset }}/VERSION.txt"
+            tar -C dist -czf "dist/${{ matrix.asset }}.tar.gz" "${{ matrix.asset }}"
+          elif [ "${{ matrix.win7 }}" = "true" ]; then
+            python3 win7/patch_imports.py \
+              "target/${{ matrix.target }}/release/${{ matrix.artifact }}" \
+              "dist/${{ matrix.asset }}/rdev-client-gpu.exe"
+            python3 win7/build_shims.py "dist/${{ matrix.asset }}"
+            python3 win7/copy_winpty_runtime.py "dist/${{ matrix.asset }}"
+            "dist/${{ matrix.asset }}/rdev-client-gpu.exe" --version > "dist/${{ matrix.asset }}/VERSION.txt" || true
+            (cd dist && python3 -m zipfile -c "${{ matrix.asset }}.zip" "${{ matrix.asset }}")
+          elif [[ "${{ matrix.target }}" == *windows* ]]; then
+            cp "target/${{ matrix.target }}/release/${{ matrix.artifact }}" "dist/${{ matrix.asset }}/rdev-client-gpu.exe"
+            "dist/${{ matrix.asset }}/rdev-client-gpu.exe" --version > "dist/${{ matrix.asset }}/VERSION.txt" || true
+            (cd dist && python3 -m zipfile -c "${{ matrix.asset }}.zip" "${{ matrix.asset }}")
+          else
+            cp "target/${{ matrix.target }}/release/${{ matrix.artifact }}" "dist/${{ matrix.asset }}/rdev-client-gpu"
+            chmod +x "dist/${{ matrix.asset }}/rdev-client-gpu"
+            "dist/${{ matrix.asset }}/rdev-client-gpu" --version > "dist/${{ matrix.asset }}/VERSION.txt"
+            if command -v otool >/dev/null 2>&1; then
+              otool -L "dist/${{ matrix.asset }}/rdev-client-gpu" > "dist/${{ matrix.asset }}/BUILD_INFO.txt" || true
+            fi
+            tar -C dist -czf "dist/${{ matrix.asset }}.tar.gz" "${{ matrix.asset }}"
+          fi
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.asset }}
-          path: clients/rdev-client-gpu/dist/${{ matrix.asset }}.tar.gz
+          path: |
+            clients/rdev-client-gpu/dist/${{ matrix.asset }}.tar.gz
+            clients/rdev-client-gpu/dist/${{ matrix.asset }}.zip
+          if-no-files-found: error
 
   release:
     name: Release Rust GPU client

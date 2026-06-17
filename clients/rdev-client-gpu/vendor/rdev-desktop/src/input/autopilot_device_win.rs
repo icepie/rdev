@@ -296,14 +296,28 @@ impl InputDevice for WindowsInput {
                 .push(format!("wheel before_input failed: {err}"));
             return;
         }
-        let (ok, fallback) = dispatch_mouse_input(MOUSEEVENTF_WHEEL, event.dy as DWORD);
-        self.pending_keyboard_status.push(mouse_dispatch_status(
-            "wheel",
-            MOUSEEVENTF_WHEEL,
-            event.dy as DWORD,
-            ok,
-            fallback,
-        ));
+        if event.dy != 0 {
+            let data = event.dy as DWORD;
+            let (ok, fallback) = dispatch_mouse_input(MOUSEEVENTF_WHEEL, data);
+            self.pending_keyboard_status.push(mouse_dispatch_status(
+                "wheel-y",
+                MOUSEEVENTF_WHEEL,
+                data,
+                ok,
+                fallback,
+            ));
+        }
+        if event.dx != 0 {
+            let data = event.dx as DWORD;
+            let (ok, fallback) = dispatch_mouse_input(MOUSEEVENTF_HWHEEL, data);
+            self.pending_keyboard_status.push(mouse_dispatch_status(
+                "wheel-x",
+                MOUSEEVENTF_HWHEEL,
+                data,
+                ok,
+                fallback,
+            ));
+        }
     }
 
     fn send_pointer_event(&mut self, event: &PointerEvent) {
@@ -701,19 +715,26 @@ fn mouse_dispatch_status(
     ok: bool,
     fallback: bool,
 ) -> String {
-    format!(
-        "{prefix} SendInput flags=0x{flags:x} data={data} ok={ok} fallback={}",
-        if fallback { "mouse_event" } else { "false" }
-    )
+    let backend = if fallback { "mouse_event" } else { "SendInput" };
+    format!("{prefix} {backend} flags=0x{flags:x} data={data} ok={ok} fallback={fallback}")
 }
 
 fn send_mouse_pointer_event(event: &PointerEvent, screen_x: i32, screen_y: i32) -> Vec<String> {
     let mut dw_flags = 0;
+    let mut mouse_data = 0;
     match event.event_type {
         PointerEventType::DOWN => match event.button {
             Button::PRIMARY => dw_flags |= MOUSEEVENTF_LEFTDOWN,
             Button::SECONDARY => dw_flags |= MOUSEEVENTF_RIGHTDOWN,
             Button::AUXILARY => dw_flags |= MOUSEEVENTF_MIDDLEDOWN,
+            Button::FOURTH => {
+                dw_flags |= MOUSEEVENTF_XDOWN;
+                mouse_data = XBUTTON1 as DWORD;
+            }
+            Button::FIFTH => {
+                dw_flags |= MOUSEEVENTF_XDOWN;
+                mouse_data = XBUTTON2 as DWORD;
+            }
             _ => {}
         },
         PointerEventType::MOVE | PointerEventType::OVER | PointerEventType::ENTER => {}
@@ -721,6 +742,14 @@ fn send_mouse_pointer_event(event: &PointerEvent, screen_x: i32, screen_y: i32) 
             Button::PRIMARY => dw_flags |= MOUSEEVENTF_LEFTUP,
             Button::SECONDARY => dw_flags |= MOUSEEVENTF_RIGHTUP,
             Button::AUXILARY => dw_flags |= MOUSEEVENTF_MIDDLEUP,
+            Button::FOURTH => {
+                dw_flags |= MOUSEEVENTF_XUP;
+                mouse_data = XBUTTON1 as DWORD;
+            }
+            Button::FIFTH => {
+                dw_flags |= MOUSEEVENTF_XUP;
+                mouse_data = XBUTTON2 as DWORD;
+            }
             _ => {}
         },
         PointerEventType::CANCEL | PointerEventType::LEAVE | PointerEventType::OUT => {
@@ -732,6 +761,14 @@ fn send_mouse_pointer_event(event: &PointerEvent, screen_x: i32, screen_y: i32) 
             }
             if event.buttons.contains(Button::AUXILARY) || event.button == Button::AUXILARY {
                 dw_flags |= MOUSEEVENTF_MIDDLEUP;
+            }
+            if event.buttons.contains(Button::FOURTH) || event.button == Button::FOURTH {
+                dw_flags |= MOUSEEVENTF_XUP;
+                mouse_data |= XBUTTON1 as DWORD;
+            }
+            if event.buttons.contains(Button::FIFTH) || event.button == Button::FIFTH {
+                dw_flags |= MOUSEEVENTF_XUP;
+                mouse_data |= XBUTTON2 as DWORD;
             }
         }
     }
@@ -745,8 +782,10 @@ fn send_mouse_pointer_event(event: &PointerEvent, screen_x: i32, screen_y: i32) 
         windows_legacy_mouse_preferred()
     ));
     if dw_flags != 0 {
-        let (ok, fallback) = dispatch_mouse_input(dw_flags, 0);
-        lines.push(mouse_dispatch_status("pointer", dw_flags, 0, ok, fallback));
+        let (ok, fallback) = dispatch_mouse_input(dw_flags, mouse_data);
+        lines.push(mouse_dispatch_status(
+            "pointer", dw_flags, mouse_data, ok, fallback,
+        ));
     }
     lines
 }
@@ -971,7 +1010,9 @@ fn force_foreground_window(hwnd: HWND) -> BOOL {
         if target_thread != 0 && target_thread != current_thread {
             AttachThreadInput(current_thread, target_thread, TRUE);
         }
-        ShowWindow(hwnd, SW_RESTORE);
+        if IsIconic(hwnd) != 0 {
+            ShowWindow(hwnd, SW_RESTORE);
+        }
         let ok = SetForegroundWindow(hwnd);
         BringWindowToTop(hwnd);
         SetActiveWindow(hwnd);

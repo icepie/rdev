@@ -4,6 +4,9 @@ set -ex
 
 cd ffmpeg
 
+make distclean >/dev/null 2>&1 || make clean >/dev/null 2>&1 || true
+git clean -fdX >/dev/null 2>&1 || true
+
 PKG_CONFIG_DIST="$DIST"
 if command -v cygpath >/dev/null 2>&1; then
 	PKG_CONFIG_DIST="$(cygpath -u "$DIST")"

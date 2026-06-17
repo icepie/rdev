@@ -6,9 +6,9 @@ CRATE_DIR="$ROOT/clients/rdev-client-gpu"
 DISTRO=${1:-${RDEV_GPU_LINUX_DISTRO:-linux}}
 TARGET=${RDEV_GPU_TARGET:-x86_64-unknown-linux-gnu}
 ARCH=${RDEV_GPU_ARCH:-$(uname -m)}
-ASSET=${RDEV_GPU_ASSET:-rdev-client-gpu-${DISTRO}-${ARCH}-desktop}
+ASSET=${RDEV_GPU_ASSET:-rdev-client-gpu-${DISTRO}-${ARCH}}
 DIST_DIR=${RDEV_GPU_DIST:-$CRATE_DIR/dist/$ASSET}
-FEATURES=${RDEV_GPU_FEATURES:-embedded-rdev-desktop-hw}
+FEATURES=${RDEV_GPU_FEATURES:-embedded-rdev-desktop-vaapi}
 RUST_TOOLCHAIN=${RDEV_GPU_RUST_TOOLCHAIN:-stable}
 PROXY=${RDEV_GPU_PROXY:-${HTTPS_PROXY:-${https_proxy:-}}}
 APT_MIRROR=${RDEV_GPU_APT_MIRROR:-}
@@ -155,7 +155,7 @@ git config --global --add safe.directory '*' >/dev/null 2>&1 || true
 
 export CARGO_NET_RETRY=${CARGO_NET_RETRY:-5}
 export ENABLE_VAAPI=${ENABLE_VAAPI:-y}
-export ENABLE_NVENC=${ENABLE_NVENC:-y}
+export ENABLE_NVENC=${ENABLE_NVENC:-n}
 export ENABLE_VULKAN_VIDEO=${ENABLE_VULKAN_VIDEO:-n}
 export TMPDIR=${TMPDIR:-/tmp}
 

@@ -14,7 +14,7 @@ Current milestone:
 - Supports batch file distribution binary frames (`file_put`/streamed file writes).
 - Supports an RDev/Weylus-style GPU desktop tunnel: `/gpu-desktop-tunnel` proxies browser HTTP/WebSocket streams to the embedded RDev desktop service when built with `embedded-rdev-desktop`.
 
-The Go `rdev-client` remains the default portable client. This Rust client is intended to coexist with it and can take on heavier platform/GPU dependencies over time.
+The Go `rdev-client` remains the default portable client. Release builds of this Rust client are the optional performance flavor and include the embedded desktop path by default.
 
 ## Build
 
@@ -26,20 +26,20 @@ make rust-client-gpu
 cargo build --release --manifest-path clients/rdev-client-gpu/Cargo.toml
 ```
 
-The regular Rust client uses current crate releases within the `rust-version` declared in `Cargo.toml`. The default build stays lightweight and does not include RDev encoder/capture dependencies.
+The regular Cargo build uses current crate releases within the `rust-version` declared in `Cargo.toml`. The release/package targets enable embedded desktop support for the performance client.
 
-To build and stage the embedded GPU desktop service on Linux, run:
+To build and stage the Linux release package, run:
 
 ```bash
 make rust-client-gpu-linux-desktop-package
 ```
 
-The package script installs the native build dependencies for the detected distro, builds vendored FFmpeg/x264/libva/nv-codec-headers from source, enables `embedded-rdev-desktop-hw` by default, and stages the result in `clients/rdev-client-gpu/dist/`. CI uses the same script inside distro containers to produce glibc-specific Linux packages. Hardware encoders are optional at runtime: systems without VAAPI or NVIDIA support fall back to software x264.
+The package script installs the native build dependencies for the detected distro, builds vendored FFmpeg/x264/libva from source, enables `embedded-rdev-desktop-vaapi` by default, and stages the result in `clients/rdev-client-gpu/dist/`. CI uses the same script inside distro containers to produce Linux packages. Linux packages default to VAAPI+x264; NVENC can be enabled explicitly with `RDEV_GPU_FEATURES=embedded-rdev-desktop-hw ENABLE_NVENC=y`.
 
 For a direct embedded desktop build without staging:
 
 ```bash
-cargo build --release --manifest-path clients/rdev-client-gpu/Cargo.toml --features embedded-rdev-desktop-hw
+cargo build --release --manifest-path clients/rdev-client-gpu/Cargo.toml --features embedded-rdev-desktop
 ```
 
 The Windows 7 package keeps the normal Windows GNU build, then applies PE import patches and ships compatibility shim DLLs for Win8+ imports such as `GetSystemTimePreciseAsFileTime`, `WaitOnAddress`, and `ProcessPrng`.
@@ -99,9 +99,9 @@ The server does not decode desktop video. It opens `/gpu-desktop/<device>/` for 
 
 The `Rust Client GPU` GitHub Actions workflow publishes artifacts on normal pushes and uploads them to GitHub Releases on `v*` tags.
 
-- Lightweight packages: Linux amd64, Windows amd64, Windows 7 amd64, macOS amd64, and macOS arm64.
-- Embedded desktop packages: Linux amd64 glibc 2.17/2.28/2.31/2.35/2.39 plus Debian 11/12 labels with VAAPI/NVENC/x264 enabled, and macOS amd64/arm64.
-- Linux embedded desktop packages are built in containerized distro images to avoid accidentally requiring the newest runner glibc.
+- Public `rdev-client-gpu-*` packages are the performance flavor and include embedded desktop support by default.
+- Linux packages use VAAPI+x264 by default and can opt into NVENC for dedicated NVIDIA builds.
+- Linux release packages are built in distro environments to avoid accidentally requiring the newest runner glibc.
 
 ## Next
 

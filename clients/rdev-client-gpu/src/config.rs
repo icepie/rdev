@@ -15,7 +15,7 @@ pub struct Args {
     )]
     pub server: String,
 
-    #[arg(short = 'i', long = "id", env = "RDEV_ID")]
+    #[arg(short = 'i', long = "id", env = "RDEV_ID", default_value = "")]
     pub id: String,
 
     #[arg(

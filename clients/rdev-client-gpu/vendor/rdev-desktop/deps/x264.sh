@@ -3,6 +3,10 @@
 set -ex
 
 cd x264
+
+make distclean >/dev/null 2>&1 || make clean >/dev/null 2>&1 || true
+git clean -fdX >/dev/null 2>&1 || true
+
 ./configure \
 	--prefix="$DIST" \
 	--exec-prefix="$DIST" \

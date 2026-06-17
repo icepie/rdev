@@ -40,7 +40,7 @@ win7-service-wrapper:
 	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 $(GO_WIN7) build -ldflags "$(LDFLAGS)" -o $(WIN7_SERVICE_DIST)/rdev-service-wrapper.exe ./cmd/rdev-service-wrapper
 
 rust-client-gpu:
-	cargo build --release --manifest-path $(RUST_CLIENT_GPU_MANIFEST)
+	cargo build --release --manifest-path $(RUST_CLIENT_GPU_MANIFEST) --features embedded-rdev-desktop
 
 rust-client-gpu-linux-desktop-package:
 	clients/rdev-client-gpu/scripts/package-linux-desktop.sh linux

@@ -23,15 +23,17 @@ use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    install_default_tls_provider();
+
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
         )
         .init();
 
-    let args = Args::parse();
+    let mut args = Args::parse();
     if args.id.trim().is_empty() {
-        anyhow::bail!("--id is required");
+        args.id = default_device_id();
     }
     let instance_id = args.instance_id.clone().unwrap_or_else(new_instance_id);
     let rdev_desktop_service = rdev_desktop_service::start(&args);
@@ -211,6 +213,24 @@ async fn handle_binary(
         other => debug!("ignored binary frame type {other:#x} id={id}"),
     }
     Ok(())
+}
+
+#[cfg(not(windows))]
+fn install_default_tls_provider() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+}
+
+#[cfg(windows)]
+fn install_default_tls_provider() {}
+
+fn default_device_id() -> String {
+    std::env::var("RDEV_ID")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| std::env::var("HOSTNAME").ok())
+        .or_else(|| std::env::var("COMPUTERNAME").ok())
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "rdev-client-gpu".to_string())
 }
 
 fn websocket_url(server: &str) -> Result<String> {
