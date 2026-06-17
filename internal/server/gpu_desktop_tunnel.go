@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"io"
 	"log"
 	"net/http"
@@ -337,6 +338,10 @@ func (s *Server) HandleGPUDesktopProxy(w http.ResponseWriter, r *http.Request) {
 		proxyGPUDesktopWebSocket(w, r, tunnel, deviceID)
 		return
 	}
+	if gpuDesktopIsServerFrontendPath(r.URL.Path, deviceID) {
+		serveGPUDesktopFrontend(w, r, deviceID)
+		return
+	}
 	proxyGPUDesktopHTTP(w, r, tunnel, deviceID)
 }
 
@@ -349,6 +354,24 @@ func gpuDesktopDeviceFromPath(path string) (string, bool) {
 	deviceID, _, _ := strings.Cut(path, "/")
 	deviceID = strings.TrimSpace(deviceID)
 	return deviceID, deviceID != ""
+}
+
+func gpuDesktopIsServerFrontendPath(path, deviceID string) bool {
+	targetPath := strings.TrimPrefix(path, gpuDesktopProxyPrefix+"/"+deviceID)
+	return targetPath == "" || targetPath == "/" || targetPath == "/index.html"
+}
+
+func serveGPUDesktopFrontend(w http.ResponseWriter, r *http.Request, deviceID string) {
+	tmpl, err := templateFS.ReadFile("static/gpu-desktop.html")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	deviceJSON, _ := json.Marshal(deviceID)
+	page := strings.ReplaceAll(string(tmpl), "{{DEVICE_ID_HTML}}", html.EscapeString(deviceID))
+	page = strings.ReplaceAll(page, "{{DEVICE_ID_JS}}", string(deviceJSON))
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_, _ = io.WriteString(w, page)
 }
 
 func proxyGPUDesktopHTTP(w http.ResponseWriter, r *http.Request, tunnel *gpuDesktopTunnel, deviceID string) {

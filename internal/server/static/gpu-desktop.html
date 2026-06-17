@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>RDev GPU Desktop - {{DEVICE_ID_HTML}}</title>
+<style>
+:root{color-scheme:dark;background:#0f172a;color:#e5e7eb;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}*{box-sizing:border-box}body{margin:0;height:100vh;display:flex;flex-direction:column}header{display:flex;gap:10px;align-items:center;padding:10px 12px;background:#111827;border-bottom:1px solid #273449;flex-wrap:wrap}strong{color:#fff}select,button,label{background:#1f2937;color:#e5e7eb;border:1px solid #374151;border-radius:8px;padding:7px 9px}button{cursor:pointer}button:hover{background:#334155}label{display:flex;gap:6px;align-items:center}#status{margin-left:auto;color:#93c5fd;min-width:180px;text-align:right}.stage{position:relative;flex:1;min-height:0;background:#020617;overflow:hidden}#video{width:100%;height:100%;object-fit:contain;background:#000;display:block}#overlay{position:absolute;inset:0;outline:none;touch-action:none;cursor:crosshair}#empty{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;color:#94a3b8;padding:24px;pointer-events:none}#log{max-height:110px;overflow:auto;margin:0;padding:8px 12px;background:#020617;border-top:1px solid #273449;color:#cbd5e1;font:12px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre-wrap}.ok{color:#86efac}.warn{color:#fde68a}.err{color:#fca5a5}
+</style>
+</head>
+<body>
+<header>
+<strong>RDev GPU Desktop</strong>
+<span>{{DEVICE_ID_HTML}}</span>
+<select id="source"><option value="">正在读取画面来源...</option></select>
+<select id="encoder"><option value="auto">编码: 自动</option></select>
+<label><input id="cursor" type="checkbox">捕获指针</label>
+<button id="refresh">刷新来源</button>
+<button id="reconnect">重连</button>
+<span id="status">未连接</span>
+</header>
+<div class="stage">
+<video id="video" autoplay muted playsinline></video>
+<div id="overlay" tabindex="0"></div>
+<div id="empty">等待视频流...</div>
+</div>
+<pre id="log"></pre>
+<script>
+(() => {
+  const deviceId = {{DEVICE_ID_JS}};
+  const source = document.getElementById('source');
+  const encoder = document.getElementById('encoder');
+  const cursor = document.getElementById('cursor');
+  const refresh = document.getElementById('refresh');
+  const reconnect = document.getElementById('reconnect');
+  const status = document.getElementById('status');
+  const logBox = document.getElementById('log');
+  const video = document.getElementById('video');
+  const overlay = document.getElementById('overlay');
+  const empty = document.getElementById('empty');
+  let ws = null, mediaSource = null, sourceBuffer = null, queue = [], connected = false;
+  let lastPointer = new Map();
+  function log(message, cls) {
+    const line = document.createElement('div');
+    line.textContent = new Date().toLocaleTimeString() + ' ' + message;
+    if (cls) line.className = cls;
+    logBox.appendChild(line);
+    logBox.scrollTop = logBox.scrollHeight;
+  }
+  function setStatus(message, cls) { status.textContent = message; status.className = cls || ''; }
+  function wsURL() {
+    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    return proto + '//' + location.host + '/gpu-desktop/' + encodeURIComponent(deviceId) + '/ws' + location.search;
+  }
+  function send(message) {
+    if (ws && ws.readyState === WebSocket.OPEN) ws.send(typeof message === 'string' ? JSON.stringify(message) : JSON.stringify(message));
+  }
+  function sendConfig() {
+    if (!source.value) return;
+    const rect = overlay.getBoundingClientRect();
+    send({Config:{capturable_id:Number(source.value),capture_cursor:cursor.checked,max_width:Math.max(640,Math.round(rect.width*devicePixelRatio)),max_height:Math.max(480,Math.round(rect.height*devicePixelRatio)),client_name:'rdev-browser',frame_rate:30,encoder:encoder.value||'auto',pointer_backend:'auto',keyboard_backend:'auto'}});
+  }
+  function updateBuffer() {
+    if (!sourceBuffer || sourceBuffer.updating || mediaSource.readyState !== 'open' || queue.length === 0) return;
+    try { sourceBuffer.appendBuffer(queue.shift()); } catch (err) { log('视频缓冲错误: ' + err, 'err'); queue = []; }
+  }
+  function startMedia() {
+    const MS = window.ManagedMediaSource || window.MediaSource;
+    if (!MS) { log('浏览器不支持 MediaSource，无法播放 GPU 视频流', 'err'); return; }
+    mediaSource = new MS(); sourceBuffer = null; queue = [];
+    video.src = URL.createObjectURL(mediaSource);
+    mediaSource.addEventListener('sourceopen', () => {
+      let mime = 'video/mp4; codecs="avc1.4D403D"';
+      if (!MS.isTypeSupported(mime)) mime = 'video/mp4';
+      sourceBuffer = mediaSource.addSourceBuffer(mime);
+      sourceBuffer.addEventListener('updateend', updateBuffer);
+    }, {once:true});
+  }
+  function onSources(list) {
+    const previous = source.selectedOptions[0] ? source.selectedOptions[0].textContent : '';
+    source.textContent = '';
+    if (!list || list.length === 0) {
+      const option = document.createElement('option'); option.value = ''; option.textContent = '无可用画面来源'; source.appendChild(option);
+      empty.textContent = '客户端没有返回可捕获画面来源。请确认 Win7 已登录到真实桌面，或稍后刷新。';
+      setStatus('来源为空', 'err'); log('画面来源列表为空', 'err'); return;
+    }
+    list.forEach((name, index) => { const option = document.createElement('option'); option.value = String(index); option.textContent = name; source.appendChild(option); });
+    const same = [...source.options].find(o => o.textContent === previous);
+    if (same) source.value = same.value; else source.value = '0';
+    log('画面来源: ' + list.join(', '), 'ok');
+    sendConfig();
+  }
+  function onEncoderCapabilities(options) {
+    const current = encoder.value || 'auto'; encoder.textContent = '';
+    (options || []).forEach(opt => { if (!opt || !opt.value) return; const option = document.createElement('option'); option.value = opt.value; option.textContent = opt.label || opt.value; encoder.appendChild(option); });
+    if (![...encoder.options].some(o => o.value === current)) { const option = document.createElement('option'); option.value = 'auto'; option.textContent = '编码: 自动'; encoder.insertBefore(option, encoder.firstChild); }
+    encoder.value = [...encoder.options].some(o => o.value === current) ? current : 'auto';
+  }
+  function connect() {
+    if (ws) ws.close();
+    connected = false; setStatus('连接中...'); empty.textContent = '正在连接 GPU 桌面...';
+    ws = new WebSocket(wsURL()); ws.binaryType = 'arraybuffer';
+    ws.onopen = () => { setStatus('已连接', 'ok'); log('WS 已连接', 'ok'); send('GetCapturableList'); sendConfig(); };
+    ws.onerror = () => { setStatus('连接错误', 'err'); log('WS 连接错误', 'err'); };
+    ws.onclose = () => { setStatus('已断开', 'warn'); log('WS 已断开', 'warn'); };
+    ws.onmessage = event => {
+      if (typeof event.data === 'string') {
+        let msg; try { msg = JSON.parse(event.data); } catch { return; }
+        if (msg === 'NewVideo') { startMedia(); empty.textContent = ''; }
+        else if (msg === 'ConfigOk') { connected = true; empty.textContent = ''; setStatus('播放中', 'ok'); }
+        else if (msg && msg.CapturableList) onSources(msg.CapturableList);
+        else if (msg && msg.EncoderCapabilities) onEncoderCapabilities(msg.EncoderCapabilities.options || []);
+        else if (msg && msg.RuntimeStatus) log('运行状态: ' + JSON.stringify(msg.RuntimeStatus), 'ok');
+        else if (msg && msg.ConfigError) { setStatus('配置错误', 'err'); log(msg.ConfigError, 'err'); }
+        else if (msg && msg.Error) { setStatus('错误', 'err'); log(msg.Error, 'err'); }
+        return;
+      }
+      queue.push(event.data); updateBuffer();
+      if (video.seekable.length > 0) {
+        const end = video.seekable.end(video.seekable.length - 1);
+        if (Number.isFinite(end) && (video.readyState >= 3 || end - video.currentTime > 2)) video.currentTime = end;
+      }
+    };
+  }
+  function pointerBits(button) { return button === 0 ? 1 : button === 2 ? 2 : button === 1 ? 4 : 0; }
+  function pointerMessage(event) {
+    const rect = overlay.getBoundingClientRect();
+    const x = Math.max(0, Math.min(1, (event.clientX - rect.left) / Math.max(1, rect.width)));
+    const y = Math.max(0, Math.min(1, (event.clientY - rect.top) / Math.max(1, rect.height)));
+    const previous = lastPointer.get(event.pointerId) || {x:event.clientX,y:event.clientY};
+    lastPointer.set(event.pointerId, {x:event.clientX,y:event.clientY});
+    return {PointerEvent:{event_type:event.type,pointer_id:event.pointerId,timestamp:Math.round(event.timeStamp),is_primary:event.isPrimary,pointer_type:event.pointerType||'mouse',button:pointerBits(event.button),buttons:event.buttons,x:x,y:y,movement_x:Math.round(event.movementX || event.clientX - previous.x),movement_y:Math.round(event.movementY || event.clientY - previous.y),pressure:event.pressure || (event.buttons ? 0.5 : 0),tilt_x:event.tiltX || 0,tilt_y:event.tiltY || 0,twist:event.twist || 0,width:event.width || 1,height:event.height || 1}};
+  }
+  ['pointerdown','pointermove','pointerup','pointercancel','pointerover','pointerenter','pointerleave','pointerout'].forEach(type => overlay.addEventListener(type, event => {
+    if (!connected && type !== 'pointermove') return;
+    overlay.focus(); if (type === 'pointerdown') overlay.setPointerCapture(event.pointerId);
+    send(pointerMessage(event)); event.preventDefault();
+  }));
+  overlay.addEventListener('wheel', event => { send({WheelEvent:{dx:Math.round(event.deltaX),dy:Math.round(event.deltaY),timestamp:Math.round(event.timeStamp)}}); event.preventDefault(); }, {passive:false});
+  function keyMessage(event, eventType) { return {KeyboardEvent:{event_type:eventType,code:event.code,key:event.key,location:event.location,alt:event.altKey,ctrl:event.ctrlKey,shift:event.shiftKey,meta:event.metaKey}}; }
+  overlay.addEventListener('keydown', event => { send(keyMessage(event, event.repeat ? 'repeat' : 'down')); event.preventDefault(); });
+  overlay.addEventListener('keyup', event => { send(keyMessage(event, 'up')); event.preventDefault(); });
+  source.onchange = sendConfig; encoder.onchange = sendConfig; cursor.onchange = sendConfig; refresh.onclick = () => send('GetCapturableList'); reconnect.onclick = connect; window.onresize = sendConfig;
+  connect();
+})();
+</script>
+</body>
+</html>
