@@ -1,0 +1,116 @@
+name: Rust Client GPU
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rust-client-gpu-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: clients/rdev-client-gpu
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: clients/rdev-client-gpu -> target
+
+      - name: Format check
+        run: cargo fmt --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test
+
+      - name: Smoke test
+        working-directory: .
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y sshpass rsync openssh-sftp-server
+          make rust-client-gpu-smoke
+
+  build:
+    name: Build ${{ matrix.name }}
+    needs: test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-amd64
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact: rdev-client-gpu
+            asset: rdev-client-gpu-linux-amd64
+          - name: windows-amd64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact: rdev-client-gpu.exe
+            asset: rdev-client-gpu-windows-amd64.exe
+          - name: darwin-amd64
+            os: macos-latest
+            target: x86_64-apple-darwin
+            artifact: rdev-client-gpu
+            asset: rdev-client-gpu-darwin-amd64
+          - name: darwin-arm64
+            os: macos-latest
+            target: aarch64-apple-darwin
+            artifact: rdev-client-gpu
+            asset: rdev-client-gpu-darwin-arm64
+    defaults:
+      run:
+        working-directory: clients/rdev-client-gpu
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: clients/rdev-client-gpu -> target
+          key: ${{ matrix.target }}
+
+      - name: Build release
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Stage artifact
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp "target/${{ matrix.target }}/release/${{ matrix.artifact }}" "dist/${{ matrix.asset }}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: clients/rdev-client-gpu/dist/${{ matrix.asset }}

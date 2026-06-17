@@ -1,8 +1,9 @@
-.PHONY: all build clean cross server client web web-install test vet fmt
+.PHONY: all build clean cross server client web web-install test vet fmt rust-client-gpu rust-client-gpu-check rust-client-gpu-fmt rust-client-gpu-clippy rust-client-gpu-test rust-client-gpu-smoke
 
 BINS = rdev-server rdev-client
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 LDFLAGS = -s -w -X main.version=$(VERSION)
+RUST_CLIENT_GPU_MANIFEST = clients/rdev-client-gpu/Cargo.toml
 
 all: build
 
@@ -23,6 +24,24 @@ client:
 
 clean:
 	rm -f $(BINS) $(BINS)-*
+	rm -rf clients/rdev-client-gpu/target
+
+rust-client-gpu:
+	cargo build --release --manifest-path $(RUST_CLIENT_GPU_MANIFEST)
+
+rust-client-gpu-check: rust-client-gpu-fmt rust-client-gpu-clippy rust-client-gpu-test
+
+rust-client-gpu-fmt:
+	cargo fmt --manifest-path $(RUST_CLIENT_GPU_MANIFEST) --check
+
+rust-client-gpu-clippy:
+	cargo clippy --manifest-path $(RUST_CLIENT_GPU_MANIFEST) --all-targets -- -D warnings
+
+rust-client-gpu-test:
+	cargo test --manifest-path $(RUST_CLIENT_GPU_MANIFEST)
+
+rust-client-gpu-smoke:
+	clients/rdev-client-gpu/scripts/smoke.sh
 
 cross: cross-linux cross-darwin cross-windows
 

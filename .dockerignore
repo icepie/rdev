@@ -13,6 +13,7 @@ tmp
 /rdev-server-gui
 /rdev-server-nocgo
 *.exe
+/clients/rdev-client-gpu/target
 
 # Runtime data/secrets
 *.pem

@@ -15,6 +15,9 @@
 # Web
 node_modules/
 
+# Rust
+/clients/rdev-client-gpu/target/
+
 # OS
 .DS_Store
 Thumbs.db

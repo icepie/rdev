@@ -35,6 +35,7 @@
 | 跨平台 | Unix (creack/pty) / Windows (ConPty) / 其他 (pipe) |
 | Terminal Modes | SSH pty-req modes 完整转发 (ECHO, ONLCR, etc.) |
 | Remote Desktop | 已支持浏览器远程屏幕查看与输入控制 MVP（Linux X11/DRM/fbdev、Windows GDI/DXGI、macOS Quartz/CoreGraphics no-cgo 截屏；输入后端含 XTEST、可选 uinput、Win32、可选 Win8+ Touch Injection、macOS Quartz mouse/keyboard；默认 CGO_ENABLED=0），设计见 `docs/remote-desktop.md` |
+| Rust GPU Client | 可选实验版 `clients/rdev-client-gpu`，优先补齐 SSH/session/SFTP/Rsync/TCP/file 基础能力，后续承载 GPU 视频编码/WebCodecs 桌面路径 |
 | VNC/RFB Bridge | 服务端可选 `--vnc` 暴露现代 VNC 入口，使用 VeNCrypt Plain 用户名/密码认证，`username=deviceId` 选择设备 |
 
 ## 快速开始
@@ -177,6 +178,11 @@ go test ./...
 ```bash
 # 标准构建
 make build
+
+# 可选 Rust GPU 客户端（实验版，不替代默认 Go 客户端）
+make rust-client-gpu
+make rust-client-gpu-check
+make rust-client-gpu-smoke
 
 # 交叉编译 (无 CGO)
 make cross
