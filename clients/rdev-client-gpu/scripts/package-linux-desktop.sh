@@ -207,6 +207,9 @@ export CARGO_NET_RETRY=${CARGO_NET_RETRY:-5}
 export ENABLE_VAAPI=${ENABLE_VAAPI:-n}
 export ENABLE_NVENC=${ENABLE_NVENC:-n}
 export ENABLE_VULKAN_VIDEO=${ENABLE_VULKAN_VIDEO:-n}
+case "$DISTRO" in
+  centos7) export RDEV_DISABLE_ASM=${RDEV_DISABLE_ASM:-y} ;;
+esac
 export TMPDIR=${TMPDIR:-/tmp}
 
 rm -rf "$DIST_DIR"

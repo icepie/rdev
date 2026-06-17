@@ -163,6 +163,10 @@ if [ "$TARGET_OS" == "windows" ] && [ "$HOST_OS" == "linux" ]; then
         export X264_EXTRA_ARGS="$X264_EXTRA_ARGS --extra-cflags=$MINGW_CRT_FLAGS --extra-ldflags=$MINGW_CRT_FLAGS"
     fi
 fi
+if [ "${RDEV_DISABLE_ASM:-n}" == "y" ]; then
+    export FFMPEG_EXTRA_ARGS="$FFMPEG_EXTRA_ARGS --disable-asm"
+    export X264_EXTRA_ARGS="${X264_EXTRA_ARGS:-} --disable-asm"
+fi
 ./x264.sh
 if [ "$TARGET_OS" == "windows" ] && [ "$HOST_OS" == "windows" ]; then
     if [ -f "$DIST/lib/libx264.lib" ]; then
