@@ -69,7 +69,7 @@ jobs:
             artifact: rdev-client-gpu
             asset: rdev-client-gpu-linux-amd64
             package_linux: true
-            distro: ubuntu2004
+            distro: debian11
             arch: amd64
           - name: linux-arm64
             os: ubuntu-24.04-arm
@@ -77,7 +77,7 @@ jobs:
             artifact: rdev-client-gpu
             asset: rdev-client-gpu-linux-arm64
             package_linux: true
-            distro: ubuntu2004
+            distro: debian11
             arch: arm64
           - name: windows-amd64
             os: ubuntu-latest
@@ -214,7 +214,7 @@ jobs:
 
           run_linux_package debian13 debian:13 "${{ matrix.asset }}" embedded-rdev-desktop-vaapi y
           run_linux_package debian12 debian:12 "${{ matrix.asset }}-debian12" embedded-rdev-desktop n
-          run_linux_package ubuntu2004 ubuntu:20.04 "${{ matrix.asset }}-ubuntu2004" embedded-rdev-desktop n
+          run_linux_package debian11 debian:11 "${{ matrix.asset }}-debian11" embedded-rdev-desktop n
           if [ "${{ matrix.arch }}" = "amd64" ]; then
             run_linux_package centos7 centos:7 "${{ matrix.asset }}-centos7" embedded-rdev-desktop n
           fi

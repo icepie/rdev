@@ -213,7 +213,7 @@ linux_rs_asset_suffix() {
     [ -n "$ver" ] || ver="$(ldd --version 2>/dev/null | sed -n '1s/.* //p')"
     case "$ver" in
         [0-9]*.[0-9]*) ;;
-        *) echo "-ubuntu2004"; return ;;
+        *) echo "-debian11"; return ;;
     esac
     major=${ver%%.*}
     minor=${ver#*.}; minor=${minor%%.*}
@@ -222,7 +222,7 @@ linux_rs_asset_suffix() {
     elif [ "$major" -eq 2 ] 2>/dev/null && [ "$minor" -lt 31 ] 2>/dev/null; then
         echo "-centos8"
     elif [ "$major" -eq 2 ] 2>/dev/null && [ "$minor" -lt 36 ] 2>/dev/null; then
-        echo "-ubuntu2004"
+        echo "-debian11"
     elif [ "$major" -eq 2 ] 2>/dev/null && [ "$minor" -lt 41 ] 2>/dev/null; then
         echo "-debian12"
     else
