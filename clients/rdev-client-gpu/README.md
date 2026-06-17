@@ -12,7 +12,7 @@ Current milestone:
 - Supports TCP forwarding protocol (`tcp_connect` and device-side listeners for reverse forwarding).
 - Supports Web file manager list/upload/download with offset binary frames.
 - Supports batch file distribution binary frames (`file_put`/streamed file writes).
-- Keeps the desktop video pipeline disabled until the H.264/WebCodecs work lands.
+- Supports an AuroraOps/Weylus-style GPU desktop tunnel: `/gpu-desktop-tunnel` proxies browser HTTP/WebSocket streams to a local desktop service such as `127.0.0.1:1701`.
 
 The Go `rdev-client` remains the default portable client. This Rust client is intended to coexist with it and can take on heavier platform/GPU dependencies over time.
 
@@ -52,7 +52,9 @@ Useful flags:
 
 - `--shell /bin/bash` selects the shell used for exec/shell sessions.
 - `--instance-id <id>` pins the reconnect identity for tests.
-- `--no-desktop` registers without staged desktop capabilities.
+- `--no-desktop` registers without staged desktop capabilities and disables the GPU desktop tunnel.
+- `--gpu-desktop-local 127.0.0.1:1701` selects the local AuroraOps/Weylus-compatible desktop service to proxy.
+- `--no-gpu-desktop-tunnel` disables only the GPU desktop tunnel while keeping other client features.
 - `--reconnect-delay 2s` controls reconnect backoff.
 
 ## Validation
@@ -73,8 +75,12 @@ Windows 7 notes:
 - Use `make rust-client-gpu-win7-smoke` for real Win7 E2E validation; set `RDEV_GPU_WIN7_HOST`, `RDEV_GPU_WIN7_PASSWORD`, and optional `RDEV_GPU_WIN7_PORT`/`RDEV_GPU_WIN7_USER` first.
 - Use `ws://` for direct client-server tests. `wss://` is configured to use Windows Schannel instead of Rustls on Windows, but older Win7 TLS root/cipher support can still vary by host patch level.
 
+## GPU desktop direction
+
+The server does not decode desktop video. It opens `/gpu-desktop/<device>/` for browsers and multiplexes raw HTTP/WebSocket streams over `/gpu-desktop-tunnel` to the Rust client. The Rust client proxies those streams to the local desktop service, so AuroraOps/Weylus capture, input, encoder selection, and browser control protocol can move over as a self-contained desktop stack.
+
 ## Next
 
-1. Harden Rust client validation across Windows and macOS hosts.
-2. Import the AuroraOps capture/encoder pipeline behind optional features.
-3. Add H.264 video frame protocol and browser WebCodecs playback.
+1. Embed/start the AuroraOps/Weylus local desktop service from `rdev-client-gpu`.
+2. Harden Rust client validation across Windows and macOS hosts.
+3. Package GPU desktop assets and encoder dependencies behind optional features.

@@ -7,6 +7,7 @@ use rdev_client_gpu::{
     fileput::FilePutManager,
     files::FileManager,
     forward::ForwardManager,
+    gpu_tunnel,
     identity::new_instance_id,
     protocol::{
         self, Message, MessageType, BIN_DATA, BIN_FILE_CHUNK, BIN_FILE_END, BIN_FILE_PUT,
@@ -32,6 +33,7 @@ async fn main() -> Result<()> {
         anyhow::bail!("--id is required");
     }
     let instance_id = args.instance_id.clone().unwrap_or_else(new_instance_id);
+    gpu_tunnel::spawn(args.clone(), instance_id.clone());
 
     loop {
         match run_once(&args, &instance_id).await {

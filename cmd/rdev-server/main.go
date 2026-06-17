@@ -191,6 +191,8 @@ Examples:
 	mux.HandleFunc("/ws", srv.HandleWS)
 	mux.HandleFunc("/terminal", srv.HandleTerminalWS)
 	mux.HandleFunc("/desktop", srv.HandleDesktopWS)
+	mux.HandleFunc("/gpu-desktop-tunnel", srv.HandleGPUDesktopTunnel)
+	mux.HandleFunc("/gpu-desktop/", srv.HandleGPUDesktopProxy)
 	mux.HandleFunc("/session", srv.HandleSessionAttachWS)
 	mux.HandleFunc("/batch", srv.HandleBatchWS)
 	mux.HandleFunc("/files", srv.HandleFilesWS)

@@ -37,6 +37,16 @@ pub struct Args {
 
     #[arg(long = "no-desktop", env = "RDEV_NO_DESKTOP")]
     pub no_desktop: bool,
+
+    #[arg(
+        long = "gpu-desktop-local",
+        env = "RDEV_GPU_DESKTOP_LOCAL",
+        default_value = "127.0.0.1:1701"
+    )]
+    pub gpu_desktop_local: String,
+
+    #[arg(long = "no-gpu-desktop-tunnel", env = "RDEV_NO_GPU_DESKTOP_TUNNEL")]
+    pub no_gpu_desktop_tunnel: bool,
 }
 
 pub fn parse_duration(value: &str) -> Result<std::time::Duration, String> {

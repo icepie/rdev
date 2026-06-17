@@ -396,24 +396,26 @@ func (f *ReverseForward) Result() (uint32, string) {
 
 // Server manages WebSocket clients and SSH proxy
 type Server struct {
-	clients      map[string]*ClientConn
-	mu           sync.RWMutex
-	sessions     map[string]*ProxySession
-	sessMu       sync.RWMutex
-	forwards     map[string]*ProxyForward
-	fwdMu        sync.RWMutex
-	revForwards  map[string]*ReverseForward
-	revMu        sync.RWMutex
-	fileResults  map[string]chan *protocol.Message
-	fileRequests map[string]*fileSocket
-	fileTasks    map[string]*fileTaskRoute
-	fileMu       sync.RWMutex
-	desktops     map[string]*desktopRoute
-	desktopMu    sync.RWMutex
-	vncMu        sync.RWMutex
-	vncSettings  map[string]protocol.Message
-	vncStreams   map[string]*vncDesktopStream
-	upgrader     *gws.Upgrader
+	clients           map[string]*ClientConn
+	mu                sync.RWMutex
+	sessions          map[string]*ProxySession
+	sessMu            sync.RWMutex
+	forwards          map[string]*ProxyForward
+	fwdMu             sync.RWMutex
+	revForwards       map[string]*ReverseForward
+	revMu             sync.RWMutex
+	fileResults       map[string]chan *protocol.Message
+	fileRequests      map[string]*fileSocket
+	fileTasks         map[string]*fileTaskRoute
+	fileMu            sync.RWMutex
+	desktops          map[string]*desktopRoute
+	desktopMu         sync.RWMutex
+	vncMu             sync.RWMutex
+	vncSettings       map[string]protocol.Message
+	vncStreams        map[string]*vncDesktopStream
+	gpuDesktopMu      sync.RWMutex
+	gpuDesktopTunnels map[string]*gpuDesktopTunnel
+	upgrader          *gws.Upgrader
 
 	// Public config (set by main) for API/UI
 	SSHPort          string // e.g. "2222"
@@ -428,19 +430,20 @@ type Server struct {
 // NewServer creates a new Server
 func NewServer() *Server {
 	s := &Server{
-		clients:          make(map[string]*ClientConn),
-		sessions:         make(map[string]*ProxySession),
-		forwards:         make(map[string]*ProxyForward),
-		revForwards:      make(map[string]*ReverseForward),
-		fileResults:      make(map[string]chan *protocol.Message),
-		fileRequests:     make(map[string]*fileSocket),
-		fileTasks:        make(map[string]*fileTaskRoute),
-		desktops:         make(map[string]*desktopRoute),
-		vncSettings:      make(map[string]protocol.Message),
-		vncStreams:       make(map[string]*vncDesktopStream),
-		MaxSessions:      256,
-		MaxForwards:      1024,
-		BatchConcurrency: runtime.GOMAXPROCS(0) * 8,
+		clients:           make(map[string]*ClientConn),
+		sessions:          make(map[string]*ProxySession),
+		forwards:          make(map[string]*ProxyForward),
+		revForwards:       make(map[string]*ReverseForward),
+		fileResults:       make(map[string]chan *protocol.Message),
+		fileRequests:      make(map[string]*fileSocket),
+		fileTasks:         make(map[string]*fileTaskRoute),
+		desktops:          make(map[string]*desktopRoute),
+		vncSettings:       make(map[string]protocol.Message),
+		vncStreams:        make(map[string]*vncDesktopStream),
+		gpuDesktopTunnels: make(map[string]*gpuDesktopTunnel),
+		MaxSessions:       256,
+		MaxForwards:       1024,
+		BatchConcurrency:  runtime.GOMAXPROCS(0) * 8,
 	}
 	s.upgrader = gws.NewUpgrader(&wsHandler{srv: s}, &gws.ServerOption{
 		ReadMaxPayloadSize: 16 * 1024 * 1024,
@@ -491,6 +494,14 @@ func closeClientResources(s *Server, client *ClientConn) {
 		cancel()
 	}
 	s.closeDesktopForClient(client.ID)
+	s.closeGPUDesktopTunnelForClient(client.ID)
+}
+
+func (s *Server) clientByID(id string) *ClientConn {
+	s.mu.RLock()
+	client := s.clients[id]
+	s.mu.RUnlock()
+	return client
 }
 
 func (h *wsHandler) OnOpen(socket *gws.Conn) {}
@@ -1052,6 +1063,7 @@ func (s *Server) HandleAPI(w http.ResponseWriter, r *http.Request) {
 		Forwards    int                           `json:"forwards"`
 		HasPassword bool                          `json:"hasPassword"`
 		Desktop     *protocol.DesktopCapabilities `json:"desktop,omitempty"`
+		GPUDesktop  bool                          `json:"gpuDesktop,omitempty"`
 	}
 
 	var clients []clientInfo
@@ -1069,6 +1081,7 @@ func (s *Server) HandleAPI(w http.ResponseWriter, r *http.Request) {
 			Forwards:    f,
 			HasPassword: c.Password != "",
 			Desktop:     cloneDesktopCapabilities(c.Desktop),
+			GPUDesktop:  s.gpuDesktopTunnel(c.ID) != nil,
 		})
 	}
 
@@ -1108,6 +1121,7 @@ func (s *Server) HandleTerminalAPI(w http.ResponseWriter, r *http.Request) {
 		ConnectedAt string                        `json:"connectedAt"`
 		HasPassword bool                          `json:"hasPassword"`
 		Desktop     *protocol.DesktopCapabilities `json:"desktop,omitempty"`
+		GPUDesktop  bool                          `json:"gpuDesktop,omitempty"`
 	}
 
 	var devices []deviceInfo
@@ -1118,6 +1132,7 @@ func (s *Server) HandleTerminalAPI(w http.ResponseWriter, r *http.Request) {
 			ConnectedAt: c.ConnectedAt.Format(time.RFC3339),
 			HasPassword: c.Password != "",
 			Desktop:     cloneDesktopCapabilities(c.Desktop),
+			GPUDesktop:  s.gpuDesktopTunnel(c.ID) != nil,
 		})
 	}
 
