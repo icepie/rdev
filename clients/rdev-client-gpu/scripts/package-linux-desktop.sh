@@ -69,13 +69,23 @@ install_rhel_deps() {
   if [ -f /etc/centos-release ] && grep -q ' 7\.' /etc/centos-release; then
     sed -i 's|^mirrorlist=|#mirrorlist=|g; s|^#baseurl=http://mirror.centos.org/centos/$releasever|baseurl=http://vault.centos.org/7.9.2009|g' /etc/yum.repos.d/CentOS-*.repo || true
     yum install -y centos-release-scl epel-release || true
-    if ls /etc/yum.repos.d/CentOS-SCLo-*.repo >/dev/null 2>&1; then
-      sed -i \
-        -e 's|^mirrorlist=|#mirrorlist=|g' \
-        -e 's|^#baseurl=http://mirror.centos.org/centos/7/sclo/$basearch/sclo/|baseurl=http://vault.centos.org/7.9.2009/sclo/$basearch/sclo/|g' \
-        -e 's|^#baseurl=http://mirror.centos.org/centos/7/sclo/$basearch/rh/|baseurl=http://vault.centos.org/7.9.2009/sclo/$basearch/rh/|g' \
-        /etc/yum.repos.d/CentOS-SCLo-*.repo || true
-    fi
+    rm -f /etc/yum.repos.d/CentOS-SCLo-*.repo
+    cat > /etc/yum.repos.d/CentOS-SCLo-sclo.repo <<'EOF'
+[centos-sclo-sclo]
+name=CentOS-7 - SCLo sclo
+baseurl=https://vault.centos.org/7.9.2009/sclo/$basearch/sclo/
+gpgcheck=1
+enabled=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-CentOS-SIG-SCLo
+EOF
+    cat > /etc/yum.repos.d/CentOS-SCLo-rh.repo <<'EOF'
+[centos-sclo-rh]
+name=CentOS-7 - SCLo rh
+baseurl=https://vault.centos.org/7.9.2009/sclo/$basearch/rh/
+gpgcheck=1
+enabled=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-CentOS-SIG-SCLo
+EOF
     yum install -y devtoolset-10-gcc devtoolset-10-gcc-c++ devtoolset-10-binutils || true
   else
     yum install -y epel-release || true
