@@ -173,6 +173,7 @@ ensure_rust() {
 }
 
 activate_legacy_toolchain() {
+  set +u
   if [ -f /opt/rh/devtoolset-10/enable ]; then
     # shellcheck source=/dev/null
     . /opt/rh/devtoolset-10/enable
@@ -180,6 +181,7 @@ activate_legacy_toolchain() {
     # shellcheck source=/dev/null
     . /opt/rh/devtoolset-9/enable
   fi
+  set -u
 }
 
 apply_proxy
