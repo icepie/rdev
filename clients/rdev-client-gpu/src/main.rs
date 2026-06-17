@@ -7,12 +7,13 @@ use rdev_client_gpu::{
     fileput::FilePutManager,
     files::FileManager,
     forward::ForwardManager,
-    gpu_desktop_service, gpu_tunnel,
+    gpu_tunnel,
     identity::new_instance_id,
     protocol::{
         self, Message, MessageType, BIN_DATA, BIN_FILE_CHUNK, BIN_FILE_END, BIN_FILE_PUT,
         BIN_FILE_START, BIN_TCP_DATA,
     },
+    rdev_desktop_service,
     session::{OutboundEvent, SessionManager},
 };
 use tokio::sync::mpsc;
@@ -33,13 +34,13 @@ async fn main() -> Result<()> {
         anyhow::bail!("--id is required");
     }
     let instance_id = args.instance_id.clone().unwrap_or_else(new_instance_id);
-    let gpu_desktop_service = gpu_desktop_service::start(&args);
+    let rdev_desktop_service = rdev_desktop_service::start(&args);
     gpu_tunnel::spawn(
         args.clone(),
         instance_id.clone(),
-        gpu_desktop_service.is_some(),
+        rdev_desktop_service.is_some(),
     );
-    let _gpu_desktop_service = gpu_desktop_service;
+    let _rdev_desktop_service = rdev_desktop_service;
 
     loop {
         match run_once(&args, &instance_id).await {

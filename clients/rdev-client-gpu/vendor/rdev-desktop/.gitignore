@@ -1,0 +1,5 @@
+/deps/dist_*/
+/deps/ffmpeg/
+/deps/x264/
+/deps/nv-codec-headers/
+/deps/libva/

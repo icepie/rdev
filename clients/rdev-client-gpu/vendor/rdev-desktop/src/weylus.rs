@@ -55,7 +55,7 @@ impl Weylus {
         #[cfg(target_os = "windows")]
         {
             std::env::set_var(
-                "AURORAOPS_WINDOWS_CAPTURE",
+                "RDEV_DESKTOP_WINDOWS_CAPTURE",
                 crate::capturable::captrs_capture::WindowsCaptureSource::parse(
                     &config.windows_capture_source,
                 )

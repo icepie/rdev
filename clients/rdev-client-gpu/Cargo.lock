@@ -89,43 +89,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 
 [[package]]
-name = "auroraops-client"
-version = "0.11.4"
-dependencies = [
- "base64 0.22.1",
- "bitflags 2.13.0",
- "bytes",
- "captrs",
- "cc",
- "core-foundation",
- "core-graphics",
- "dbus",
- "drm",
- "drm-ffi",
- "drm-fourcc",
- "fastwebsockets",
- "handlebars",
- "http-body-util",
- "hyper",
- "hyper-util",
- "image",
- "libc",
- "linux-raw-sys 0.4.15",
- "percent-encoding",
- "rand 0.8.6",
- "rustix 0.38.44",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
- "tungstenite 0.24.0",
- "url",
- "winapi",
- "wio",
- "x11",
-]
-
-[[package]]
 name = "autocfg"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1664,7 +1627,6 @@ name = "rdev-client-gpu"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "auroraops-client",
  "chrono",
  "clap",
  "futures-util",
@@ -1672,6 +1634,7 @@ dependencies = [
  "native-tls",
  "portable-pty",
  "rand 0.10.1",
+ "rdev-desktop",
  "russh-sftp",
  "serde",
  "serde_json",
@@ -1683,6 +1646,43 @@ dependencies = [
  "url",
  "windows-sys 0.61.2",
  "zeroize",
+]
+
+[[package]]
+name = "rdev-desktop"
+version = "0.11.4"
+dependencies = [
+ "base64 0.22.1",
+ "bitflags 2.13.0",
+ "bytes",
+ "captrs",
+ "cc",
+ "core-foundation",
+ "core-graphics",
+ "dbus",
+ "drm",
+ "drm-ffi",
+ "drm-fourcc",
+ "fastwebsockets",
+ "handlebars",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "image",
+ "libc",
+ "linux-raw-sys 0.4.15",
+ "percent-encoding",
+ "rand 0.8.6",
+ "rustix 0.38.44",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tungstenite 0.24.0",
+ "url",
+ "winapi",
+ "wio",
+ "x11",
 ]
 
 [[package]]

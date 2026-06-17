@@ -2,7 +2,7 @@
   Derived from ful1e5/apple_cursor svg/left_ptr.svg.
   Source: https://github.com/ful1e5/apple_cursor
   License: GPL-3.0. The template colors were replaced with a macOS-style black
-  pointer and white outline for AuroraOps' browser-side virtual cursor.
+  pointer and white outline for RDev' browser-side virtual cursor.
 -->
 <svg width="256" height="256" viewBox="0 0 256 256" fill="none" xmlns="http://www.w3.org/2000/svg">
 <g filter="url(#filter0_d_40_365)">

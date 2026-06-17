@@ -199,7 +199,7 @@ pub fn get_capturables(
             get_window_capturables, DesktopCapturable, WindowsCaptureSource,
         };
         use crate::capturable::win_ctx::WinCtx;
-        let configured_source = std::env::var("AURORAOPS_WINDOWS_CAPTURE")
+        let configured_source = std::env::var("RDEV_DESKTOP_WINDOWS_CAPTURE")
             .map(|value| WindowsCaptureSource::parse(&value))
             .unwrap_or(WindowsCaptureSource::Auto);
         let sources: Vec<WindowsCaptureSource> = if configured_source == WindowsCaptureSource::Auto

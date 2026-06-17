@@ -1,14 +1,14 @@
 use crate::config::Args;
 
-#[cfg(feature = "embedded-gpu-desktop")]
+#[cfg(feature = "embedded-rdev-desktop")]
 pub struct GpuDesktopService {
-    _weylus: auroraops_client::Weylus,
+    _weylus: rdev_desktop::Weylus,
 }
 
-#[cfg(not(feature = "embedded-gpu-desktop"))]
+#[cfg(not(feature = "embedded-rdev-desktop"))]
 pub struct GpuDesktopService;
 
-#[cfg(feature = "embedded-gpu-desktop")]
+#[cfg(feature = "embedded-rdev-desktop")]
 pub fn start(args: &Args) -> Option<GpuDesktopService> {
     if args.no_desktop || args.no_gpu_desktop_tunnel {
         return None;
@@ -23,7 +23,7 @@ pub fn start(args: &Args) -> Option<GpuDesktopService> {
             return None;
         }
     };
-    let config = auroraops_client::DesktopServiceConfig {
+    let config = rdev_desktop::DesktopServiceConfig {
         bind_addr,
         no_gui: true,
         #[cfg(target_os = "linux")]
@@ -48,7 +48,7 @@ pub fn start(args: &Args) -> Option<GpuDesktopService> {
         windows_capture_source: args.gpu_desktop_windows_capture_source.clone(),
         ..Default::default()
     };
-    match tokio::task::block_in_place(|| auroraops_client::start_desktop_service(config)) {
+    match tokio::task::block_in_place(|| rdev_desktop::start_desktop_service(config)) {
         Some(weylus) => {
             tracing::info!("embedded GPU desktop service listening on {bind_addr}");
             Some(GpuDesktopService { _weylus: weylus })
@@ -60,11 +60,11 @@ pub fn start(args: &Args) -> Option<GpuDesktopService> {
     }
 }
 
-#[cfg(not(feature = "embedded-gpu-desktop"))]
+#[cfg(not(feature = "embedded-rdev-desktop"))]
 pub fn start(args: &Args) -> Option<GpuDesktopService> {
     if !args.no_desktop && !args.no_gpu_desktop_tunnel {
         tracing::warn!(
-            "embedded GPU desktop service is not included in this build; rebuild with --features embedded-gpu-desktop"
+            "embedded GPU desktop service is not included in this build; rebuild with --features embedded-rdev-desktop"
         );
     }
     None

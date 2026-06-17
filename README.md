@@ -35,7 +35,7 @@
 | 跨平台 | Unix (creack/pty) / Windows (ConPty) / 其他 (pipe) |
 | Terminal Modes | SSH pty-req modes 完整转发 (ECHO, ONLCR, etc.) |
 | Remote Desktop | 已支持浏览器远程屏幕查看与输入控制 MVP（Linux X11/DRM/fbdev、Windows GDI/DXGI、macOS Quartz/CoreGraphics no-cgo 截屏；输入后端含 XTEST、可选 uinput、Win32、可选 Win8+ Touch Injection、macOS Quartz mouse/keyboard；默认 CGO_ENABLED=0），设计见 `docs/remote-desktop.md` |
-| Rust GPU Client | 可选实验版 `clients/rdev-client-gpu`，优先补齐 SSH/session/内置 SFTP/Rsync/TCP/file 基础能力，并提供可选内置 AuroraOps/Weylus 风格 GPU 桌面隧道；Win7 包使用普通 Windows GNU 构建加 PE import patch 和兼容 shim DLL |
+| Rust GPU Client | 可选实验版 `clients/rdev-client-gpu`，优先补齐 SSH/session/内置 SFTP/Rsync/TCP/file 基础能力，并提供可选内置 RDev/Weylus 风格 GPU 桌面隧道；Win7 包使用普通 Windows GNU 构建加 PE import patch 和兼容 shim DLL |
 | VNC/RFB Bridge | 服务端可选 `--vnc` 暴露现代 VNC 入口，使用 VeNCrypt Plain 用户名/密码认证，`username=deviceId` 选择设备 |
 
 ## 快速开始
@@ -174,7 +174,7 @@ go test ./...
 - Win7/Win8 上 Rust PTY 优先 WinPTY，失败后退回 pipe shell；Win10/Win11 上优先 ConPTY，失败后退回 pipe shell。
 - Win7 运行 Go 客户端请使用 XTLS `go-win7` 工具链构建，例如 `GO_WIN7=/path/to/go-win7/bin/go make win7-go-client win7-service-wrapper`。
 - Windows 服务不要直接托管客户端 EXE；使用 `rdev-service-wrapper.exe`，并在配置中设置 `interactive: true`，让服务在活动登录用户桌面启动客户端，避免桌面截图出现 Session 0 的 `Access is denied`。
-- GPU 桌面采用 AuroraOps/Weylus 风格：`rdev-client-gpu` 可通过 `embedded-gpu-desktop` feature 内置启动 vendored AuroraOps 桌面 HTTP/WS 服务并连接 `/gpu-desktop-tunnel`，服务端通过 `/gpu-desktop/<device>/` 代理浏览器流量；服务端只做鉴权和隧道转发。
+- GPU 桌面采用 RDev/Weylus 风格：`rdev-client-gpu` 可通过 `embedded-rdev-desktop` feature 内置启动 vendored RDev 桌面 HTTP/WS 服务并连接 `/gpu-desktop-tunnel`，服务端通过 `/gpu-desktop/<device>/` 代理浏览器流量；服务端只做鉴权和隧道转发。
 
 服务 wrapper 配置示例：
 

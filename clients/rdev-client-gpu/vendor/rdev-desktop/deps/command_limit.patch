@@ -1,0 +1,9 @@
+diff --git a/ffbuild/library.mak b/ffbuild/library.mak
+index ad09f20..e63196d 100644
+--- a/ffbuild/library.mak
++++ b/ffbuild/library.mak
+@@ -37 +37,3 @@ $(SUBDIR)$(LIBNAME): $(OBJS) $(STLIBOBJS)
+-	$(AR) $(ARFLAGS) $(AR_O) $^
++	$(file >$@.ar.txt, $^)
++	$(AR) $(ARFLAGS) $(AR_O) @$@.ar.txt
++	$(RM) $@.ar.txt

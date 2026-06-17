@@ -1,13 +1,13 @@
 [package]
-name = "auroraops-client"
+name = "rdev-desktop"
 version = "0.11.4"
 authors = ["HMH <henry@freedesk.net>"]
 license = "AGPL-3.0-or-later"
 edition = "2021"
-description = "Vendored AuroraOps/Weylus desktop service for rdev-client-gpu."
+description = "Vendored RDev/Weylus desktop service for rdev-client-gpu."
 
 [lib]
-name = "auroraops_client"
+name = "rdev_desktop"
 path = "src/lib.rs"
 
 [dependencies]
@@ -59,11 +59,12 @@ core-foundation = "^0.10"
 core-graphics = "^0.24"
 
 [features]
-default = ["ffmpeg-system"]
+default = []
 ffmpeg-system = []
 pipewire = ["gstreamer", "gstreamer-app", "gstreamer-video", "wayland-client", "wayland-protocols-wlr"]
 pipewire-drm-prime = ["pipewire", "gstreamer-video/v1_24"]
 vaapi = []
 va-static = ["vaapi"]
 nvfbc = ["nvfbc-crate", "nvfbc-sys"]
+nvenc = []
 vulkan-video = []

@@ -1,4 +1,4 @@
-.PHONY: all build clean cross server client web web-install test vet fmt win7-go-client win7-service-wrapper rust-client-gpu rust-client-gpu-check rust-client-gpu-fmt rust-client-gpu-clippy rust-client-gpu-test rust-client-gpu-smoke rust-client-gpu-win7-package rust-client-gpu-win7-smoke
+.PHONY: all build clean cross server client web web-install test vet fmt win7-go-client win7-service-wrapper rust-client-gpu rust-client-gpu-check rust-client-gpu-fmt rust-client-gpu-clippy rust-client-gpu-test rust-client-gpu-smoke rust-client-gpu-win7-package rust-client-gpu-win7-rdev-desktop-package rust-client-gpu-win7-stage rust-client-gpu-win7-smoke
 
 BINS = rdev-server rdev-client
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
@@ -8,6 +8,7 @@ WIN7_SERVICE_DIST = target/win7-service
 RUST_CLIENT_GPU_MANIFEST = clients/rdev-client-gpu/Cargo.toml
 RUST_CLIENT_GPU_WIN7_DIR = clients/rdev-client-gpu/target/x86_64-pc-windows-gnu/release
 RUST_CLIENT_GPU_WIN7_DIST = clients/rdev-client-gpu/target/win7-dist
+RUST_CLIENT_GPU_WIN7_RDEV_DESKTOP_DIST = clients/rdev-client-gpu/target/win7-rdev-desktop-dist
 
 all: build
 
@@ -43,13 +44,21 @@ rust-client-gpu:
 
 rust-client-gpu-win7-package:
 	cargo build --release --manifest-path $(RUST_CLIENT_GPU_MANIFEST) --target x86_64-pc-windows-gnu
-	rm -rf $(RUST_CLIENT_GPU_WIN7_DIST)
-	mkdir -p $(RUST_CLIENT_GPU_WIN7_DIST)
+	$(MAKE) rust-client-gpu-win7-stage WIN7_STAGE_DIST=$(RUST_CLIENT_GPU_WIN7_DIST)
+
+rust-client-gpu-win7-rdev-desktop-package:
+	cargo build --release --manifest-path $(RUST_CLIENT_GPU_MANIFEST) --target x86_64-pc-windows-gnu --features embedded-rdev-desktop
+	$(MAKE) rust-client-gpu-win7-stage WIN7_STAGE_DIST=$(RUST_CLIENT_GPU_WIN7_RDEV_DESKTOP_DIST)
+
+rust-client-gpu-win7-stage:
+	test -n "$(WIN7_STAGE_DIST)"
+	rm -rf $(WIN7_STAGE_DIST)
+	mkdir -p $(WIN7_STAGE_DIST)
 	python3 clients/rdev-client-gpu/win7/patch_imports.py \
 		$(RUST_CLIENT_GPU_WIN7_DIR)/rdev-client-gpu.exe \
-		$(RUST_CLIENT_GPU_WIN7_DIST)/rdev-client-gpu.exe
-	python3 clients/rdev-client-gpu/win7/build_shims.py $(RUST_CLIENT_GPU_WIN7_DIST)
-	python3 clients/rdev-client-gpu/win7/copy_winpty_runtime.py $(RUST_CLIENT_GPU_WIN7_DIST)
+		$(WIN7_STAGE_DIST)/rdev-client-gpu.exe
+	python3 clients/rdev-client-gpu/win7/build_shims.py $(WIN7_STAGE_DIST)
+	python3 clients/rdev-client-gpu/win7/copy_winpty_runtime.py $(WIN7_STAGE_DIST)
 
 rust-client-gpu-check: rust-client-gpu-fmt rust-client-gpu-clippy rust-client-gpu-test
 

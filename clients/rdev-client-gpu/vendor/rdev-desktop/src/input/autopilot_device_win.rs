@@ -745,7 +745,7 @@ pub fn diagnose_input_probe(
 pub fn diagnose_notepad_keyboard_input() -> Vec<String> {
     let mut lines = diagnose_keyboard_context();
     unsafe {
-        let probe_text = "AuroraOpsInput";
+        let probe_text = "RDevInput";
         let mut command = wide("notepad.exe");
         let mut desktop = wide("winsta0\\default");
         let mut startup: STARTUPINFOW = std::mem::zeroed();
