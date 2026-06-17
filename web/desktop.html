@@ -39,13 +39,22 @@
         .status.warn { color:var(--yellow); }
         .status.err { color:var(--red); }
         .stage { flex:1; min-height:0; display:flex; align-items:center; justify-content:center; padding:12px; overflow:auto; }
-        .gpu-frame { width:100%; height:100%; min-height:calc(100vh - 170px); border:0; background:#05070b; display:none; }
+        .settings[data-gpu-device="true"] .legacy-setting { display:none; }
+        .gpu-setting { display:none !important; }
+        .settings[data-gpu-device="true"] .gpu-setting { display:inline-flex !important; }
+        .stage[data-gpu="true"] { align-items:stretch; justify-content:stretch; overflow:hidden; flex-direction:column; gap:8px; }
         .stage[data-fit="actual"] { align-items:flex-start; justify-content:flex-start; }
-        .stage[data-control="true"] canvas { cursor:crosshair; }
+        .stage[data-gpu="true"][data-fit="actual"] { align-items:stretch; justify-content:stretch; }
+        .stage[data-control="true"] canvas, .stage[data-control="true"] .gpu-overlay { cursor:crosshair; }
         .stage[data-cursor="true"] canvas { cursor:none; }
         canvas { background:#000; border:1px solid var(--border); border-radius:10px; image-rendering:auto; outline:none; }
         .stage[data-fit="fit"] canvas { max-width:100%; max-height:100%; }
         .stage[data-fit="actual"] canvas { max-width:none; max-height:none; }
+        .gpu-viewer { position:relative; flex:1; min-height:0; width:100%; border:1px solid var(--border); border-radius:10px; background:#000; overflow:hidden; box-shadow:0 16px 40px rgba(0,0,0,.20); }
+        .gpu-viewer video { width:100%; height:100%; object-fit:contain; background:#000; display:block; }
+        .gpu-overlay { position:absolute; inset:0; outline:none; touch-action:none; }
+        .gpu-empty { position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; color:var(--muted); line-height:1.8; padding:24px; pointer-events:none; background:radial-gradient(circle at center, rgba(34,211,238,.07), transparent 42%); }
+        .gpu-empty strong { color:var(--text); font-size:1rem; margin-bottom:4px; }
         .empty { color:var(--muted); text-align:center; line-height:1.8; }
         @media (max-width:720px) { .toolbar { flex-wrap:wrap; } .nav { width:100%; overflow-x:auto; } .controls > * { flex:1 1 auto; } }
     </style>
@@ -70,27 +79,34 @@
         <button class="btn" id="disconnect" data-i18n="desktop.disconnect">断开</button>
         <span id="status" class="status" data-i18n="desktop.idle">Idle</span>
     </div>
-    <div class="settings">
-        <label><span data-i18n="desktop.mode">Mode</span><select id="mode"><option value="auto" data-i18n="desktop.modeAuto">Auto</option><option value="manual" data-i18n="desktop.modeManual">Manual</option></select></label>
-        <label><span data-i18n="desktop.source">Source</span><select id="source"><option value="auto" data-i18n="desktop.sourceAuto">Auto</option><option value="screen:all" data-i18n="desktop.sourceAll">All screens</option></select></label>
-        <span class="manual-settings" id="manual-settings">
+    <div class="settings" id="settings">
+        <label class="legacy-setting"><span data-i18n="desktop.mode">Mode</span><select id="mode"><option value="auto" data-i18n="desktop.modeAuto">Auto</option><option value="manual" data-i18n="desktop.modeManual">Manual</option></select></label>
+        <label class="legacy-setting"><span data-i18n="desktop.source">Source</span><select id="source"><option value="auto" data-i18n="desktop.sourceAuto">Auto</option><option value="screen:all" data-i18n="desktop.sourceAll">All screens</option></select></label>
+        <span class="manual-settings legacy-setting" id="manual-settings">
             <label><span data-i18n="desktop.fps">FPS</span><input id="fps" type="number" min="1" max="12" value="4"></label>
             <label><span data-i18n="desktop.quality">Quality</span><input id="quality" type="number" min="25" max="90" value="50"></label>
             <label><span data-i18n="desktop.maxWidth">Max W</span><input id="maxWidth" type="number" min="320" max="3840" value="1600"></label>
             <label><span data-i18n="desktop.maxHeight">Max H</span><input id="maxHeight" type="number" min="240" max="2160" value="1000"></label>
         </span>
+        <label class="gpu-setting"><span data-i18n="desktop.source">Source</span><select id="gpuSource"><option value="">正在读取画面来源...</option></select></label>
+        <label class="gpu-setting"><span>Video</span><select id="gpuEncoder"><option value="auto">自动</option></select></label>
+        <button class="btn gpu-setting" id="gpuRefresh">刷新来源</button>
         <label><input id="controlInput" type="checkbox" style="width:auto"> <span data-i18n="desktop.control">Control</span></label>
         <label><input id="showCursor" type="checkbox" style="width:auto"> <span data-i18n="desktop.showCursor">Show cursor</span></label>
-        <label><span data-i18n="desktop.inputBackend">Input</span><select id="inputBackend" class="fit-select"><option value="auto" data-i18n="desktop.inputAuto">Auto</option></select></label>
+        <label class="legacy-setting"><span data-i18n="desktop.inputBackend">Input</span><select id="inputBackend" class="fit-select"><option value="auto" data-i18n="desktop.inputAuto">Auto</option></select></label>
         <label><span data-i18n="desktop.view">View</span><select id="fitMode" class="fit-select"><option value="fit" data-i18n="desktop.fit">Fit</option><option value="actual" data-i18n="desktop.actual">Actual</option></select></label>
-        <button class="btn" id="syncVNC" data-i18n="desktop.syncVNC">Sync to VNC</button>
+        <button class="btn legacy-setting" id="syncVNC" data-i18n="desktop.syncVNC">Sync to VNC</button>
         <button class="btn" id="screenshot" data-i18n="desktop.screenshot">Screenshot</button>
         <button class="btn" id="fullscreen" data-i18n="desktop.fullscreen">Fullscreen</button>
         <span id="frameInfo" class="status"></span>
     </div>
-    <div class="stage" id="stage" data-fit="fit">
+    <div class="stage" id="stage" data-fit="fit" data-gpu="false">
         <canvas id="screen" style="display:none" tabindex="0"></canvas>
-        <iframe id="gpuFrame" class="gpu-frame" allow="clipboard-read; clipboard-write; fullscreen; pointer-lock"></iframe>
+        <div id="gpuViewer" class="gpu-viewer" style="display:none">
+            <video id="gpuVideo" autoplay muted playsinline></video>
+            <div id="gpuOverlay" class="gpu-overlay" tabindex="0" aria-label="remote desktop input area"></div>
+            <div id="gpuEmpty" class="gpu-empty"><strong>等待远程桌面画面</strong><span>连接后会自动读取画面来源并开始播放。</span></div>
+        </div>
         <div id="empty" class="empty" data-i18n="desktop.empty">Select a device and connect.</div>
     </div>
 
@@ -106,6 +122,7 @@
     document.querySelectorAll('[data-auth-link]').forEach(a => a.href = authURL(a.getAttribute('href')));
 
     const params = new URLSearchParams(location.search);
+    const settings = document.getElementById('settings');
     const deviceSelect = document.getElementById('device');
     const passwordInput = document.getElementById('password');
     const modeSelect = document.getElementById('mode');
@@ -119,16 +136,24 @@
     const controlInput = document.getElementById('controlInput');
     const showCursorInput = document.getElementById('showCursor');
     const manualSettings = document.getElementById('manual-settings');
+    const gpuSourceSelect = document.getElementById('gpuSource');
+    const gpuEncoderSelect = document.getElementById('gpuEncoder');
+    const gpuRefreshButton = document.getElementById('gpuRefresh');
     const frameInfo = document.getElementById('frameInfo');
     const statusEl = document.getElementById('status');
     const stage = document.getElementById('stage');
     const canvas = document.getElementById('screen');
     const ctx = canvas.getContext('2d');
-    const gpuFrame = document.getElementById('gpuFrame');
+    const gpuViewer = document.getElementById('gpuViewer');
+    const gpuVideo = document.getElementById('gpuVideo');
+    const gpuOverlay = document.getElementById('gpuOverlay');
+    const gpuEmpty = document.getElementById('gpuEmpty');
     const empty = document.getElementById('empty');
     const storagePrefix = 'rdevDesktop.';
-    let ws = null, drawing = false, pendingFrame = null, deviceCache = [], lastCloseMessage = '', connectionSeq = 0;
+    const gpuStoragePrefix = 'rdevGpuDesktop.';
+    let ws = null, drawing = false, pendingFrame = null, deviceCache = [], lastCloseMessage = '', connectionSeq = 0, connectionMode = '';
     let frameCount = 0, frameBytes = 0, statsStartedAt = 0, lastFrameAt = 0, currentSource = '', remoteInput = false, resizeTimer = null, reconnectTimer = null, lastMouseSent = 0;
+    let gpuMediaSource = null, gpuSourceBuffer = null, gpuQueue = [], gpuLastPointer = new Map();
     let controlPreferenceSet = false;
 
     function loadSavedDesktopSettings() {
@@ -147,6 +172,8 @@
         if (control === 'true') controlInput.checked = true;
         if (control === 'false') controlInput.checked = false;
         showCursorInput.checked = localStorage.getItem(storagePrefix + 'showCursor') === 'true';
+        gpuSourceSelect.value = localStorage.getItem(gpuStoragePrefix + 'source') || '';
+        gpuEncoderSelect.value = localStorage.getItem(gpuStoragePrefix + 'encoder') || 'auto';
         stage.dataset.control = String(controlInput.checked);
         stage.dataset.cursor = String(showCursorInput.checked);
     }
@@ -165,6 +192,7 @@
     }
     function updateSourceOptions() {
         const device = deviceCache.find(d => d.id === deviceSelect.value) || {};
+        settings.dataset.gpuDevice = String(!!device.gpuDesktop);
         const sources = (device.desktop && device.desktop.sources && device.desktop.sources.length) ? device.desktop.sources : [
             {id:'auto', label:t('desktop.sourceAuto'), kind:'screen'},
             {id:'screen:all', label:t('desktop.sourceAll'), kind:'screen'},
@@ -280,7 +308,7 @@
         const selected = params.get('device') || deviceSelect.value || localStorage.getItem(storagePrefix + 'device');
         deviceSelect.innerHTML = '<option value="">' + t('terminal.devicePlaceholder') + '</option>' + devices.map(d => {
             const desktop = d.desktop || {};
-            const desktopState = d.gpuDesktop ? 'GPU tunnel' : (desktop.supported ? t('index.desktopReady') : (desktop.reason || t('index.desktopUnavailable')));
+            const desktopState = (d.gpuDesktop || desktop.supported) ? t('index.desktopReady') : (desktop.reason || t('index.desktopUnavailable'));
             const label = `${d.id} · ${desktopState}`;
             return `<option value="${esc(d.id)}" ${d.id === selected ? 'selected' : ''}>${esc(label)}</option>`;
         }).join('');
@@ -290,23 +318,168 @@
     function esc(s) { const d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
     function scheduleReconnectIfActive() {
         if (!ws) return;
+        if (connectionMode === 'gpu') { gpuSendConfig(); return; }
         clearTimeout(reconnectTimer);
         reconnectTimer = setTimeout(() => connect(), 150);
     }
-    function disconnect() { connectionSeq++; clearTimeout(reconnectTimer); if (ws) { ws.close(); ws = null; } gpuFrame.removeAttribute('src'); gpuFrame.style.display = 'none'; canvas.style.display = 'none'; empty.style.display = 'flex'; lastCloseMessage = ''; resetFrameStats(); setStatus(t('desktop.closed'), 'warn'); }
-    function connectGPUDesktop(device) {
+    function closeGPUVideo() {
+        gpuQueue = [];
+        gpuSourceBuffer = null;
+        if (gpuMediaSource && gpuMediaSource.readyState === 'open') {
+            try { gpuMediaSource.endOfStream(); } catch (_) {}
+        }
+        gpuMediaSource = null;
+        if (gpuVideo.src) URL.revokeObjectURL(gpuVideo.src);
+        gpuVideo.removeAttribute('src');
+        gpuVideo.load();
+    }
+    function disconnect() {
+        connectionSeq++;
+        clearTimeout(reconnectTimer);
+        if (ws) { ws.close(); ws = null; }
+        closeGPUVideo();
+        connectionMode = '';
         remoteInput = false;
-        controlInput.disabled = true;
+        controlInput.disabled = false;
+        stage.dataset.gpu = 'false';
+        gpuViewer.style.display = 'none';
         canvas.style.display = 'none';
-        empty.style.display = 'none';
+        empty.style.display = 'flex';
+        lastCloseMessage = '';
         resetFrameStats();
-        const query = new URLSearchParams();
-        if (passwordInput.value) query.set('password', passwordInput.value);
-        let path = `/gpu-desktop/${encodeURIComponent(device)}/`;
-        if (query.toString()) path += '?' + query.toString();
-        gpuFrame.src = authURL(path);
-        gpuFrame.style.display = 'block';
-        setStatus(`GPU tunnel · ${device}`, 'ok');
+        setStatus(t('desktop.closed'), 'warn');
+    }
+    function gpuURL(device) {
+        const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const params = new URLSearchParams();
+        if (passwordInput.value) params.set('password', passwordInput.value);
+        const path = `/gpu-desktop/${encodeURIComponent(device)}/ws`;
+        const url = `${proto}//${location.host}${authURL(path + (params.toString() ? '?' + params.toString() : ''))}`;
+        return url;
+    }
+    function gpuSend(message) {
+        if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(message));
+    }
+    function gpuSendConfig() {
+        if (connectionMode !== 'gpu' || !gpuSourceSelect.value) return;
+        localStorage.setItem(gpuStoragePrefix + 'source', gpuSourceSelect.value);
+        localStorage.setItem(gpuStoragePrefix + 'encoder', gpuEncoderSelect.value || 'auto');
+        const rect = gpuOverlay.getBoundingClientRect();
+        gpuSend({Config:{
+            capturable_id:Number(gpuSourceSelect.value),
+            capture_cursor:showCursorInput.checked,
+            max_width:Math.max(640, Math.round(rect.width * devicePixelRatio)),
+            max_height:Math.max(480, Math.round(rect.height * devicePixelRatio)),
+            client_name:'rdev-browser',
+            frame_rate:30,
+            encoder:gpuEncoderSelect.value || 'auto',
+            pointer_backend:'auto',
+            keyboard_backend:'auto'
+        }});
+    }
+    function gpuUpdateFrameInfo() {
+        const elapsed = statsStartedAt ? Math.max(0.001, (performance.now() - statsStartedAt) / 1000) : 0;
+        const fps = elapsed ? (frameCount / elapsed).toFixed(1) : '0.0';
+        const kbps = elapsed ? ((frameBytes * 8 / elapsed) / 1024).toFixed(0) : '0';
+        const size = gpuVideo.videoWidth && gpuVideo.videoHeight ? `${gpuVideo.videoWidth}×${gpuVideo.videoHeight}` : 'video';
+        const source = currentSource ? ` · ${currentSource}` : '';
+        frameInfo.textContent = `${size}${source} · ${fps} fps · ${kbps} kbps · ${formatBytes(frameBytes)}`;
+    }
+    function gpuUpdateBuffer() {
+        if (!gpuSourceBuffer || gpuSourceBuffer.updating || !gpuMediaSource || gpuMediaSource.readyState !== 'open' || gpuQueue.length === 0) return;
+        try { gpuSourceBuffer.appendBuffer(gpuQueue.shift()); } catch (err) { gpuQueue = []; setStatus(err.message || String(err), 'err'); }
+    }
+    function gpuStartMedia() {
+        const MS = window.ManagedMediaSource || window.MediaSource;
+        if (!MS) { setStatus('MediaSource unsupported', 'err'); return; }
+        closeGPUVideo();
+        gpuMediaSource = new MS();
+        frameCount = 0; frameBytes = 0; statsStartedAt = performance.now(); lastFrameAt = 0;
+        gpuVideo.src = URL.createObjectURL(gpuMediaSource);
+        gpuMediaSource.addEventListener('sourceopen', () => {
+            let mime = 'video/mp4; codecs="avc1.4D403D"';
+            if (!MS.isTypeSupported(mime)) mime = 'video/mp4';
+            gpuSourceBuffer = gpuMediaSource.addSourceBuffer(mime);
+            gpuSourceBuffer.addEventListener('updateend', gpuUpdateBuffer);
+        }, {once:true});
+    }
+    function gpuSetSources(list) {
+        const saved = localStorage.getItem(gpuStoragePrefix + 'source') || gpuSourceSelect.value || '';
+        const previousName = gpuSourceSelect.selectedOptions[0] ? gpuSourceSelect.selectedOptions[0].textContent : '';
+        gpuSourceSelect.textContent = '';
+        if (!list || list.length === 0) {
+            const option = document.createElement('option'); option.value = ''; option.textContent = '无可用画面来源'; gpuSourceSelect.appendChild(option);
+            gpuEmpty.innerHTML = '<strong>没有可用画面来源</strong><span>请确认远程设备已登录到真实桌面，或点击刷新重试。</span>';
+            setStatus('No desktop source', 'err');
+            return;
+        }
+        list.forEach((name, index) => {
+            const option = document.createElement('option'); option.value = String(index); option.textContent = name; gpuSourceSelect.appendChild(option);
+        });
+        const same = [...gpuSourceSelect.options].find(o => o.textContent === previousName);
+        if (saved && [...gpuSourceSelect.options].some(o => o.value === saved)) gpuSourceSelect.value = saved;
+        else if (same) gpuSourceSelect.value = same.value;
+        else gpuSourceSelect.value = String(Math.max(0, list.findIndex(name => /\(GDI\)/.test(name))));
+        currentSource = gpuSourceSelect.selectedOptions[0] ? gpuSourceSelect.selectedOptions[0].textContent : '';
+        gpuSendConfig();
+    }
+    function gpuSetEncoders(options) {
+        const current = localStorage.getItem(gpuStoragePrefix + 'encoder') || gpuEncoderSelect.value || 'auto';
+        gpuEncoderSelect.textContent = '';
+        (options || []).forEach(opt => {
+            if (!opt || !opt.value) return;
+            const option = document.createElement('option'); option.value = opt.value; option.textContent = opt.label || opt.value; gpuEncoderSelect.appendChild(option);
+        });
+        if (![...gpuEncoderSelect.options].some(o => o.value === current)) {
+            const option = document.createElement('option'); option.value = 'auto'; option.textContent = '自动'; gpuEncoderSelect.insertBefore(option, gpuEncoderSelect.firstChild);
+        }
+        gpuEncoderSelect.value = [...gpuEncoderSelect.options].some(o => o.value === current) ? current : 'auto';
+    }
+    function connectGPUDesktop(device) {
+        connectionMode = 'gpu';
+        remoteInput = true;
+        controlInput.disabled = false;
+        if (!controlPreferenceSet) controlInput.checked = true;
+        stage.dataset.control = String(controlInput.checked);
+        stage.dataset.cursor = String(showCursorInput.checked);
+        stage.dataset.gpu = 'true';
+        canvas.style.display = 'none';
+        gpuViewer.style.display = 'block';
+        empty.style.display = 'none';
+        gpuEmpty.innerHTML = '<strong>正在连接远程桌面</strong><span>连接建立后会自动读取画面来源。</span>';
+        resetFrameStats();
+        ws = RDevUI.socket(gpuURL(device));
+        const connID = ++connectionSeq;
+        lastCloseMessage = '';
+        ws.binaryType = 'arraybuffer';
+        setStatus(t('common.connecting'));
+        ws.onopen = () => { if (connID !== connectionSeq) return; setStatus(t('desktop.starting')); gpuSend('GetCapturableList'); gpuSendConfig(); };
+        ws.onerror = () => { if (connID !== connectionSeq) return; setStatus(t('common.error'), 'err'); };
+        ws.onclose = () => { if (connID !== connectionSeq) return; ws = null; setStatus(lastCloseMessage || t('desktop.closed'), lastCloseMessage ? 'err' : 'warn'); };
+        ws.onmessage = evt => {
+            if (connID !== connectionSeq) return;
+            if (evt.data instanceof ArrayBuffer) {
+                frameCount++;
+                frameBytes += evt.data.byteLength || 0;
+                lastFrameAt = performance.now();
+                gpuQueue.push(evt.data);
+                gpuUpdateBuffer();
+                gpuUpdateFrameInfo();
+                if (gpuVideo.seekable.length > 0) {
+                    const end = gpuVideo.seekable.end(gpuVideo.seekable.length - 1);
+                    if (Number.isFinite(end) && (gpuVideo.readyState >= 3 || end - gpuVideo.currentTime > 2)) gpuVideo.currentTime = end;
+                }
+                return;
+            }
+            const msg = JSON.parse(evt.data);
+            if (msg === 'NewVideo') { gpuStartMedia(); gpuEmpty.textContent = ''; }
+            else if (msg === 'ConfigOk') { gpuEmpty.textContent = ''; setStatus(t('index.desktopReady'), 'ok'); }
+            else if (msg && msg.CapturableList) gpuSetSources(msg.CapturableList);
+            else if (msg && msg.EncoderCapabilities) gpuSetEncoders(msg.EncoderCapabilities.options || []);
+            else if (msg && msg.RuntimeStatus) gpuUpdateFrameInfo();
+            else if (msg && msg.ConfigError) { lastCloseMessage = msg.ConfigError; setStatus(msg.ConfigError, 'err'); }
+            else if (msg && msg.Error) { lastCloseMessage = msg.Error; setStatus(msg.Error, 'err'); }
+        };
     }
     async function connect() {
         disconnect();
@@ -443,14 +616,35 @@
         event.preventDefault();
         sendInput({inputType:type, key:event.key, code:event.code, ctrlKey:event.ctrlKey, altKey:event.altKey, shiftKey:event.shiftKey, metaKey:event.metaKey});
     }
+    function gpuPointerBits(button) { return button === 0 ? 1 : button === 2 ? 2 : button === 1 ? 4 : 0; }
+    function gpuPointerMessage(event) {
+        const rect = gpuOverlay.getBoundingClientRect();
+        const x = Math.max(0, Math.min(1, (event.clientX - rect.left) / Math.max(1, rect.width)));
+        const y = Math.max(0, Math.min(1, (event.clientY - rect.top) / Math.max(1, rect.height)));
+        const previous = gpuLastPointer.get(event.pointerId) || {x:event.clientX,y:event.clientY};
+        gpuLastPointer.set(event.pointerId, {x:event.clientX,y:event.clientY});
+        return {PointerEvent:{event_type:event.type,pointer_id:event.pointerId,timestamp:Math.round(event.timeStamp),is_primary:event.isPrimary,pointer_type:event.pointerType||'mouse',button:gpuPointerBits(event.button),buttons:event.buttons,x:x,y:y,movement_x:Math.round(event.movementX || event.clientX - previous.x),movement_y:Math.round(event.movementY || event.clientY - previous.y),pressure:event.pressure || (event.buttons ? 0.5 : 0),tilt_x:event.tiltX || 0,tilt_y:event.tiltY || 0,twist:event.twist || 0,width:event.width || 1,height:event.height || 1}};
+    }
+    function gpuKeyMessage(event, eventType) { return {KeyboardEvent:{event_type:eventType,code:event.code,key:event.key,location:event.location,alt:event.altKey,ctrl:event.ctrlKey,shift:event.shiftKey,meta:event.metaKey}}; }
     function scheduleAdaptiveReconnect() {
-        if (!ws || modeSelect.value !== 'auto') return;
+        if (!ws) return;
+        if (connectionMode === 'gpu') { clearTimeout(resizeTimer); resizeTimer = setTimeout(gpuSendConfig, 300); return; }
+        if (modeSelect.value !== 'auto') return;
         clearTimeout(resizeTimer);
         resizeTimer = setTimeout(() => connect(), 500);
     }
     function saveScreenshot() {
+        if (connectionMode === 'gpu' && gpuVideo.videoWidth && gpuVideo.videoHeight) {
+            const shot = document.createElement('canvas');
+            shot.width = gpuVideo.videoWidth; shot.height = gpuVideo.videoHeight;
+            shot.getContext('2d').drawImage(gpuVideo, 0, 0, shot.width, shot.height);
+            return saveCanvasBlob(shot);
+        }
         if (!canvas.width || !canvas.height || canvas.style.display === 'none') return;
-        canvas.toBlob(blob => {
+        saveCanvasBlob(canvas);
+    }
+    function saveCanvasBlob(targetCanvas) {
+        targetCanvas.toBlob(blob => {
             if (!blob) return;
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
@@ -464,7 +658,7 @@
         if (document.fullscreenElement) { document.exitFullscreen && document.exitFullscreen(); return; }
         if (stage.requestFullscreen) stage.requestFullscreen();
     }
-    controlInput.addEventListener('change', () => { controlPreferenceSet = true; stage.dataset.control = String(controlInput.checked && remoteInput); if (controlInput.checked) canvas.focus(); saveDesktopSettings(); });
+    controlInput.addEventListener('change', () => { controlPreferenceSet = true; stage.dataset.control = String(controlInput.checked && remoteInput); if (controlInput.checked) (connectionMode === 'gpu' ? gpuOverlay : canvas).focus(); saveDesktopSettings(); });
     showCursorInput.addEventListener('change', () => { stage.dataset.cursor = String(showCursorInput.checked); saveDesktopSettings(); scheduleReconnectIfActive(); });
     canvas.addEventListener('contextmenu', e => e.preventDefault());
     canvas.addEventListener('auxclick', e => e.preventDefault());
@@ -474,12 +668,27 @@
     canvas.addEventListener('wheel', e => { if (!controlInput.checked || !remoteInput) return; e.preventDefault(); const point = canvasPoint(e); sendInput({inputType:'wheel', x:point.x, y:point.y, deltaX:Math.round(e.deltaX), deltaY:Math.round(e.deltaY)}); }, {passive:false});
     canvas.addEventListener('keydown', e => sendKey('key_down', e));
     canvas.addEventListener('keyup', e => sendKey('key_up', e));
+    gpuOverlay.addEventListener('contextmenu', e => e.preventDefault());
+    gpuOverlay.addEventListener('auxclick', e => e.preventDefault());
+    ['pointerdown','pointermove','pointerup','pointercancel','pointerover','pointerenter','pointerleave','pointerout'].forEach(type => gpuOverlay.addEventListener(type, e => {
+        if (connectionMode !== 'gpu' || !controlInput.checked || !remoteInput) return;
+        gpuOverlay.focus();
+        if (type === 'pointerdown') gpuOverlay.setPointerCapture && gpuOverlay.setPointerCapture(e.pointerId);
+        gpuSend(gpuPointerMessage(e));
+        e.preventDefault();
+    }));
+    gpuOverlay.addEventListener('wheel', e => { if (connectionMode !== 'gpu' || !controlInput.checked || !remoteInput) return; gpuSend({WheelEvent:{dx:Math.round(e.deltaX),dy:Math.round(e.deltaY),timestamp:Math.round(e.timeStamp)}}); e.preventDefault(); }, {passive:false});
+    gpuOverlay.addEventListener('keydown', e => { if (connectionMode !== 'gpu' || !controlInput.checked || !remoteInput) return; gpuSend(gpuKeyMessage(e, e.repeat ? 'repeat' : 'down')); e.preventDefault(); });
+    gpuOverlay.addEventListener('keyup', e => { if (connectionMode !== 'gpu' || !controlInput.checked || !remoteInput) return; gpuSend(gpuKeyMessage(e, 'up')); e.preventDefault(); });
     window.addEventListener('resize', scheduleAdaptiveReconnect);
     document.getElementById('connect').addEventListener('click', connect);
     document.getElementById('disconnect').addEventListener('click', disconnect);
     document.getElementById('screenshot').addEventListener('click', saveScreenshot);
     document.getElementById('syncVNC').addEventListener('click', syncVNCSettings);
     document.getElementById('fullscreen').addEventListener('click', toggleFullscreen);
+    gpuSourceSelect.addEventListener('change', gpuSendConfig);
+    gpuEncoderSelect.addEventListener('change', gpuSendConfig);
+    gpuRefreshButton.addEventListener('click', () => gpuSend('GetCapturableList'));
     deviceSelect.addEventListener('change', () => { updateSourceOptions(); saveDesktopSettings(); scheduleReconnectIfActive(); });
     modeSelect.addEventListener('change', () => { updateMode(); saveDesktopSettings(); scheduleReconnectIfActive(); });
     sourceSelect.addEventListener('change', () => { saveDesktopSettings(); scheduleReconnectIfActive(); });

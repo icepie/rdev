@@ -366,7 +366,7 @@
         function esc(s) { const d=document.createElement('div'); d.textContent=s; return d.innerHTML; }
         function desktopBadge(device) {
             const desktop = device && device.desktop;
-            if (device && device.gpuDesktop) return '<span class="badge green" title="GPU tunnel">' + t('index.gpuDesktopReady') + '</span>';
+            if (device && device.gpuDesktop) return '<span class="badge green" title="">' + t('index.desktopReady') + '</span>';
             if (!desktop) return '<span class="badge yellow" title="">' + t('index.desktopUnavailable') + '</span>';
             const title = esc([desktop.platform, desktop.displayServer, desktop.backends && desktop.backends.join(','), desktop.reason].filter(Boolean).join(' · '));
             if (desktop.supported) return '<span class="badge green" title="' + title + '">' + t('index.desktopReady') + '</span>';

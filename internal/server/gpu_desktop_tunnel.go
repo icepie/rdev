@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"html"
 	"io"
 	"log"
 	"net/http"
@@ -329,17 +328,17 @@ func (s *Server) HandleGPUDesktopProxy(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "wrong device password", http.StatusUnauthorized)
 		return
 	}
+	if gpuDesktopIsServerFrontendPath(r.URL.Path, deviceID) {
+		serveGPUDesktopFrontend(w, r, deviceID)
+		return
+	}
 	tunnel := s.gpuDesktopTunnel(deviceID)
 	if tunnel == nil {
-		http.Error(w, "device gpu desktop tunnel is not connected", http.StatusBadGateway)
+		http.Error(w, "remote desktop transport is not connected", http.StatusBadGateway)
 		return
 	}
 	if strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
 		proxyGPUDesktopWebSocket(w, r, tunnel, deviceID)
-		return
-	}
-	if gpuDesktopIsServerFrontendPath(r.URL.Path, deviceID) {
-		serveGPUDesktopFrontend(w, r, deviceID)
 		return
 	}
 	proxyGPUDesktopHTTP(w, r, tunnel, deviceID)
@@ -362,16 +361,9 @@ func gpuDesktopIsServerFrontendPath(path, deviceID string) bool {
 }
 
 func serveGPUDesktopFrontend(w http.ResponseWriter, r *http.Request, deviceID string) {
-	tmpl, err := templateFS.ReadFile("static/gpu-desktop.html")
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	deviceJSON, _ := json.Marshal(deviceID)
-	page := strings.ReplaceAll(string(tmpl), "{{DEVICE_ID_HTML}}", html.EscapeString(deviceID))
-	page = strings.ReplaceAll(page, "{{DEVICE_ID_JS}}", string(deviceJSON))
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_, _ = io.WriteString(w, page)
+	query := r.URL.Query()
+	query.Set("device", deviceID)
+	http.Redirect(w, r, "/desktop.html?"+query.Encode(), http.StatusFound)
 }
 
 func proxyGPUDesktopHTTP(w http.ResponseWriter, r *http.Request, tunnel *gpuDesktopTunnel, deviceID string) {
