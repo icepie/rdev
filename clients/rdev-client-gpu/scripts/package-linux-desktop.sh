@@ -62,6 +62,10 @@ EOF
 }
 
 install_rhel_deps() {
+  asm_deps="nasm yasm"
+  case "$(uname -m)" in
+    aarch64|arm64) asm_deps="" ;;
+  esac
   if [ -f /etc/centos-release ] && grep -q ' 7\.' /etc/centos-release; then
     sed -i 's|^mirrorlist=|#mirrorlist=|g; s|^#baseurl=http://mirror.centos.org/centos/$releasever|baseurl=http://vault.centos.org/7.9.2009|g' /etc/yum.repos.d/CentOS-*.repo || true
     yum install -y centos-release-scl epel-release || true
@@ -70,9 +74,10 @@ install_rhel_deps() {
     yum install -y epel-release || true
   fi
   yum install -y \
-    ca-certificates curl git make pkgconfig nasm yasm python3 \
+    ca-certificates curl git make pkgconfig python3 \
     autoconf automake libtool \
     gcc gcc-c++ clang \
+    $asm_deps \
     libX11-devel libxcb-devel libXext-devel libXrandr-devel libXfixes-devel libXcomposite-devel libXi-devel libXtst-devel libXv-devel \
     libdrm-devel libepoxy-devel dbus-devel
   yum clean all || true
@@ -101,10 +106,15 @@ install_deps() {
     install_rhel_deps
   elif command -v dnf >/dev/null 2>&1; then
     dnf install -y epel-release || true
+    asm_deps="nasm yasm"
+    case "$(uname -m)" in
+      aarch64|arm64) asm_deps="" ;;
+    esac
     dnf install -y \
-      ca-certificates curl git make pkgconf-pkg-config nasm yasm python3 \
+      ca-certificates curl git make pkgconf-pkg-config python3 \
       autoconf automake libtool \
       gcc gcc-c++ clang \
+      $asm_deps \
       libX11-devel libxcb-devel libXext-devel libXrandr-devel libXfixes-devel libXcomposite-devel libXi-devel libXtst-devel libXv-devel \
       libdrm-devel libepoxy-devel dbus-devel
     dnf clean all || true
