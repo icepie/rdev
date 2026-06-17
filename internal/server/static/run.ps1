@@ -185,7 +185,13 @@ function global:RDev {
 
     $Base = "https://github.com/$script:Repo/releases"
     if ($Client -eq 'rs') {
-        $Asset = if ($WindowsMajor -gt 0 -and $WindowsMajor -lt 10) { 'rdev-client-gpu-windows-win7-amd64.zip' } else { 'rdev-client-gpu-windows-amd64.zip' }
+        if ($WindowsMajor -gt 0 -and $WindowsMajor -lt 10) {
+            $Asset = 'rdev-client-gpu-windows-win7-amd64.zip'
+        } elseif ($Arch -eq 'arm64') {
+            $Asset = 'rdev-client-gpu-windows-arm64.zip'
+        } else {
+            $Asset = 'rdev-client-gpu-windows-amd64.zip'
+        }
         $PackageKind = 'zip'
     } else {
         $Asset = "rdev-client-windows-$Arch.exe"
