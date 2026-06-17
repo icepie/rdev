@@ -69,7 +69,7 @@ jobs:
             artifact: rdev-client-gpu
             asset: rdev-client-gpu-linux-amd64
             package_linux: true
-            distro: ubuntu2204
+            distro: ubuntu2004
             arch: amd64
           - name: linux-arm64
             os: ubuntu-24.04-arm
@@ -77,7 +77,7 @@ jobs:
             artifact: rdev-client-gpu
             asset: rdev-client-gpu-linux-arm64
             package_linux: true
-            distro: ubuntu2204
+            distro: ubuntu2004
             arch: arm64
           - name: windows-amd64
             os: ubuntu-latest
@@ -165,7 +165,7 @@ jobs:
           workspaces: clients/rdev-client-gpu -> target
           key: desktop-${{ matrix.target }}-${{ matrix.name }}
 
-      - name: Build Linux embedded desktop package
+      - name: Build Linux embedded desktop packages
         if: matrix.package_linux == true
         working-directory: .
         env:
@@ -177,27 +177,47 @@ jobs:
           RDEV_GPU_RUSTUP_UPDATE_ROOT: ${{ vars.RDEV_GPU_RUSTUP_UPDATE_ROOT }}
           RDEV_GPU_TARGET: ${{ matrix.target }}
           RDEV_GPU_ARCH: ${{ matrix.arch }}
-          RDEV_GPU_ASSET: ${{ matrix.asset }}
           RDEV_GPU_RUST_TOOLCHAIN: stable
           TMPDIR: /tmp
         run: |
-          docker run --rm \
-            -v "$PWD:/work" \
-            -w /work \
-            -e CARGO_NET_RETRY \
-            -e RDEV_GPU_PROXY \
-            -e RDEV_GPU_APT_MIRROR \
-            -e RDEV_GPU_CARGO_REGISTRY \
-            -e RDEV_GPU_RUSTUP_DIST_SERVER \
-            -e RDEV_GPU_RUSTUP_UPDATE_ROOT \
-            -e RDEV_GPU_TARGET \
-            -e RDEV_GPU_ARCH \
-            -e RDEV_GPU_ASSET \
-            -e RDEV_GPU_RUST_TOOLCHAIN \
-            -e TMPDIR \
-            ubuntu:22.04 \
-            bash clients/rdev-client-gpu/scripts/package-linux-desktop.sh '${{ matrix.distro }}'
-          sudo chown -R "$USER:$USER" clients/rdev-client-gpu/dist
+          set -euo pipefail
+
+          run_linux_package() {
+            local distro="$1"
+            local image="$2"
+            local asset="$3"
+            local features="$4"
+            local enable_vaapi="$5"
+            echo "::group::${asset} (${image})"
+            docker run --rm \
+              -v "$PWD:/work" \
+              -w /work \
+              -e CARGO_NET_RETRY \
+              -e RDEV_GPU_PROXY \
+              -e RDEV_GPU_APT_MIRROR \
+              -e RDEV_GPU_CARGO_REGISTRY \
+              -e RDEV_GPU_RUSTUP_DIST_SERVER \
+              -e RDEV_GPU_RUSTUP_UPDATE_ROOT \
+              -e RDEV_GPU_TARGET \
+              -e RDEV_GPU_ARCH \
+              -e RDEV_GPU_RUST_TOOLCHAIN \
+              -e TMPDIR \
+              -e RDEV_GPU_ASSET="$asset" \
+              -e RDEV_GPU_FEATURES="$features" \
+              -e ENABLE_VAAPI="$enable_vaapi" \
+              -e ENABLE_NVENC=n \
+              "$image" \
+              bash clients/rdev-client-gpu/scripts/package-linux-desktop.sh "$distro"
+            sudo chown -R "$USER:$USER" clients/rdev-client-gpu/dist
+            echo "::endgroup::"
+          }
+
+          run_linux_package archlinux archlinux:latest "${{ matrix.asset }}" embedded-rdev-desktop-vaapi y
+          run_linux_package ubuntu2004 ubuntu:20.04 "${{ matrix.asset }}-ubuntu2004" embedded-rdev-desktop n
+          if [ "${{ matrix.arch }}" = "amd64" ]; then
+            run_linux_package centos7 centos:7 "${{ matrix.asset }}-centos7" embedded-rdev-desktop n
+          fi
+          run_linux_package centos8 rockylinux:8 "${{ matrix.asset }}-centos8" embedded-rdev-desktop n
 
       - name: Build embedded desktop release
         if: matrix.package_linux != true
@@ -209,11 +229,19 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p "dist/${{ matrix.asset }}"
+          mkdir -p dist
           if [ "${{ matrix.package_linux }}" = "true" ]; then
-            "dist/${{ matrix.asset }}/rdev-client-gpu" --version > "dist/${{ matrix.asset }}/VERSION.txt"
-            tar -C dist -czf "dist/${{ matrix.asset }}.tar.gz" "${{ matrix.asset }}"
+            found=0
+            for package_dir in dist/${{ matrix.asset }}*; do
+              [ -d "$package_dir" ] || continue
+              found=1
+              package_name="$(basename "$package_dir")"
+              "$package_dir/rdev-client-gpu" --version > "$package_dir/VERSION.txt"
+              tar -C dist -czf "dist/${package_name}.tar.gz" "$package_name"
+            done
+            [ "$found" = "1" ] || { echo "no Linux packages found for ${{ matrix.asset }}" >&2; exit 1; }
           elif [ "${{ matrix.win7 }}" = "true" ]; then
+            mkdir -p "dist/${{ matrix.asset }}"
             python3 win7/patch_imports.py \
               "target/${{ matrix.target }}/release/${{ matrix.artifact }}" \
               "dist/${{ matrix.asset }}/rdev-client-gpu.exe"
@@ -230,6 +258,7 @@ jobs:
             "dist/${{ matrix.asset }}/rdev-client-gpu.exe" --version > "dist/${{ matrix.asset }}/VERSION.txt" || true
             (cd dist && python3 -m zipfile -c "${{ matrix.asset }}.zip" "${{ matrix.asset }}")
           elif [[ "${{ matrix.target }}" == *windows* ]]; then
+            mkdir -p "dist/${{ matrix.asset }}"
             cp "target/${{ matrix.target }}/release/${{ matrix.artifact }}" "dist/${{ matrix.asset }}/rdev-client-gpu.exe"
             case "${{ matrix.target }}" in
               aarch64-*) runtime_arch="aarch64" ;;
@@ -242,6 +271,7 @@ jobs:
             "dist/${{ matrix.asset }}/rdev-client-gpu.exe" --version > "dist/${{ matrix.asset }}/VERSION.txt" || true
             (cd dist && python3 -m zipfile -c "${{ matrix.asset }}.zip" "${{ matrix.asset }}")
           else
+            mkdir -p "dist/${{ matrix.asset }}"
             cp "target/${{ matrix.target }}/release/${{ matrix.artifact }}" "dist/${{ matrix.asset }}/rdev-client-gpu"
             chmod +x "dist/${{ matrix.asset }}/rdev-client-gpu"
             "dist/${{ matrix.asset }}/rdev-client-gpu" --version > "dist/${{ matrix.asset }}/VERSION.txt"
@@ -256,8 +286,8 @@ jobs:
         with:
           name: ${{ matrix.asset }}
           path: |
-            clients/rdev-client-gpu/dist/${{ matrix.asset }}.tar.gz
-            clients/rdev-client-gpu/dist/${{ matrix.asset }}.zip
+            clients/rdev-client-gpu/dist/${{ matrix.asset }}*.tar.gz
+            clients/rdev-client-gpu/dist/${{ matrix.asset }}*.zip
           if-no-files-found: error
 
   release:

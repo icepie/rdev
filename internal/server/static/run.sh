@@ -200,6 +200,34 @@ download_with_fallback() {
     [ "$ok" = "1" ]
 }
 
+linux_rs_asset_suffix() {
+    [ "$OS" = "linux" ] || { echo ""; return; }
+    if [ -r /etc/os-release ] && grep -Eq '^ID=(arch|"arch")$' /etc/os-release 2>/dev/null; then
+        echo ""
+        return
+    fi
+    ver=""
+    if command -v getconf >/dev/null 2>&1; then
+        ver="$(getconf GNU_LIBC_VERSION 2>/dev/null | awk '{print $2}')"
+    fi
+    [ -n "$ver" ] || ver="$(ldd --version 2>/dev/null | sed -n '1s/.* //p')"
+    case "$ver" in
+        [0-9]*.[0-9]*) ;;
+        *) echo "-ubuntu2004"; return ;;
+    esac
+    major=${ver%%.*}
+    minor=${ver#*.}; minor=${minor%%.*}
+    if [ "$major" -lt 2 ] 2>/dev/null || { [ "$major" -eq 2 ] 2>/dev/null && [ "$minor" -lt 28 ] 2>/dev/null; }; then
+        if [ "$ARCH" = "amd64" ]; then echo "-centos7"; else echo "-centos8"; fi
+    elif [ "$major" -eq 2 ] 2>/dev/null && [ "$minor" -lt 31 ] 2>/dev/null; then
+        echo "-centos8"
+    elif [ "$major" -eq 2 ] 2>/dev/null && [ "$minor" -lt 39 ] 2>/dev/null; then
+        echo "-ubuntu2004"
+    else
+        echo ""
+    fi
+}
+
 # ── Resolve asset and download ─────────────────────────────
 TMPBASE="${TMPDIR:-/tmp}"
 RUN_BIN=""
@@ -208,7 +236,11 @@ CLIENT_LABEL="rdev-client"
 if [ "$RDEV_CLIENT" = "rs" ]; then
     CLIENT_LABEL="rdev-client-gpu"
     case "$OS/$ARCH" in
-        linux/amd64|linux/arm64|darwin/amd64|darwin/arm64)
+        linux/amd64|linux/arm64)
+            ASSET="rdev-client-gpu-${OS}-${ARCH}$(linux_rs_asset_suffix).tar.gz"
+            ARCHIVE="$TMPBASE/rdev-client-gpu-${TAG}-${OS}-${ARCH}-$$.tar.gz"
+            ;;
+        darwin/amd64|darwin/arm64)
             ASSET="rdev-client-gpu-${OS}-${ARCH}.tar.gz"
             ARCHIVE="$TMPBASE/rdev-client-gpu-${TAG}-${OS}-${ARCH}-$$.tar.gz"
             ;;

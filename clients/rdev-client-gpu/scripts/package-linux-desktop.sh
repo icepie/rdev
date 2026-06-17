@@ -8,7 +8,7 @@ TARGET=${RDEV_GPU_TARGET:-x86_64-unknown-linux-gnu}
 ARCH=${RDEV_GPU_ARCH:-$(uname -m)}
 ASSET=${RDEV_GPU_ASSET:-rdev-client-gpu-${DISTRO}-${ARCH}}
 DIST_DIR=${RDEV_GPU_DIST:-$CRATE_DIR/dist/$ASSET}
-FEATURES=${RDEV_GPU_FEATURES:-embedded-rdev-desktop-vaapi}
+FEATURES=${RDEV_GPU_FEATURES:-embedded-rdev-desktop}
 RUST_TOOLCHAIN=${RDEV_GPU_RUST_TOOLCHAIN:-stable}
 PROXY=${RDEV_GPU_PROXY:-${HTTPS_PROXY:-${https_proxy:-}}}
 APT_MIRROR=${RDEV_GPU_APT_MIRROR:-}
@@ -79,6 +79,14 @@ install_alpine_deps() {
     libdrm-dev libepoxy-dev dbus-dev
 }
 
+install_arch_deps() {
+  pacman -Syu --noconfirm --needed \
+    base-devel ca-certificates curl git pkgconf nasm yasm python make \
+    autoconf automake libtool \
+    libx11 libxext libxrandr libxfixes libxcomposite libxi libxtst libxv \
+    libdrm libepoxy dbus
+}
+
 install_deps() {
   if command -v apt-get >/dev/null 2>&1; then
     install_debian_deps
@@ -95,6 +103,8 @@ install_deps() {
     dnf clean all || true
   elif command -v apk >/dev/null 2>&1; then
     install_alpine_deps
+  elif command -v pacman >/dev/null 2>&1; then
+    install_arch_deps
   else
     echo "unsupported package manager" >&2
     exit 1
@@ -154,7 +164,7 @@ activate_legacy_toolchain
 git config --global --add safe.directory '*' >/dev/null 2>&1 || true
 
 export CARGO_NET_RETRY=${CARGO_NET_RETRY:-5}
-export ENABLE_VAAPI=${ENABLE_VAAPI:-y}
+export ENABLE_VAAPI=${ENABLE_VAAPI:-n}
 export ENABLE_NVENC=${ENABLE_NVENC:-n}
 export ENABLE_VULKAN_VIDEO=${ENABLE_VULKAN_VIDEO:-n}
 export TMPDIR=${TMPDIR:-/tmp}
