@@ -138,6 +138,9 @@ function global:RDev {
     .PARAMETER Version
     Client version to download (default: latest)
 
+    .PARAMETER Client
+    Client flavor: go compatible client or rs performance client (default: go)
+
     .PARAMETER Mirror
     Download mirror: auto|none|host (default: auto)
     #>
@@ -151,6 +154,8 @@ function global:RDev {
         [string]$Shell = '',
         [string]$SshPort = '',
         [string]$Version = '',
+        [ValidateSet('go','rs')]
+        [string]$Client = 'go',
         [string]$Mirror = 'auto'
     )
 
@@ -169,7 +174,7 @@ function global:RDev {
     if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64' -or $env:PROCESSOR_ARCHITEW6432 -eq 'ARM64') { $Arch = 'arm64' }
 
     # ── Resolve version & URL ───────────────────────────────
-    $Binary = "rdev-client-windows-$Arch.exe"
+    $WindowsMajor = Get-WindowsMajorVersion
     if ($Version) { if ($Version -like 'v*') { $Tag = $Version } else { $Tag = "v$Version" } } else {
         $Tag = 'latest'
         try {
@@ -179,7 +184,14 @@ function global:RDev {
     }
 
     $Base = "https://github.com/$script:Repo/releases"
-    $GH_URL = if ($Tag -eq 'latest') { "$Base/latest/download/$Binary" } else { "$Base/download/$Tag/$Binary" }
+    if ($Client -eq 'rs') {
+        $Asset = if ($WindowsMajor -gt 0 -and $WindowsMajor -lt 10) { 'rdev-client-gpu-windows-win7-amd64.zip' } else { 'rdev-client-gpu-windows-amd64.zip' }
+        $PackageKind = 'zip'
+    } else {
+        $Asset = "rdev-client-windows-$Arch.exe"
+        $PackageKind = 'exe'
+    }
+    $GH_URL = if ($Tag -eq 'latest') { "$Base/latest/download/$Asset" } else { "$Base/download/$Tag/$Asset" }
 
     # ── Download helper ──────────────────────────────────────
     function Dl([string]$Url, [string]$Out) {
@@ -197,10 +209,11 @@ function global:RDev {
 
     # ── Download (mirror → github) ────────────────────────────
     $SafeTag = $Tag -replace '[^A-Za-z0-9_.-]', '-'
-    $OutPath = Join-Path $env:TEMP "rdev-client-$SafeTag-windows-$Arch.exe"
+    $OutPath = if ($PackageKind -eq 'zip') { Join-Path $env:TEMP "rdev-client-gpu-$SafeTag-windows-amd64.zip" } else { Join-Path $env:TEMP "rdev-client-$SafeTag-windows-$Arch.exe" }
     $OK = $false
 
-    Write-Host "  Downloading rdev-client (windows/$Arch)..." -ForegroundColor Cyan
+    $ClientName = if ($Client -eq 'rs') { 'rdev-client-gpu' } else { 'rdev-client' }
+    Write-Host "  Downloading $ClientName package (windows/$Arch)..." -ForegroundColor Cyan
 
     if ($Mirror -eq 'auto' -and $Tag -ne 'latest') {
         foreach ($M in $script:Mirrors) {
@@ -228,32 +241,42 @@ function global:RDev {
 
     if (-not $OK) { Write-Error "Download failed"; return }
 
+    if ($PackageKind -eq 'zip') {
+        $ExtractDir = Join-Path $env:TEMP "rdev-client-gpu-$SafeTag-windows-amd64"
+        if (-not (Expand-ZipLegacy $OutPath $ExtractDir)) { Write-Error "Package unzip failed"; return }
+        $Exe = Get-ChildItem -Path $ExtractDir -Recurse -Filter 'rdev-client-gpu.exe' -EA SilentlyContinue | Select-Object -First 1
+        if (-not $Exe) { Write-Error "rdev-client-gpu.exe not found in package"; return }
+        $RunPath = $Exe.FullName
+    } else {
+        $RunPath = $OutPath
+    }
+
     $WinPTYDir = Install-WinPTYIfLegacy $Arch $Mirror
 
     # ── Run ──────────────────────────────────────────────────
     $A = @("-s", $Server)
     if ($Id)       { $A += @("-i", $Id) }
     if ($Password)  { $A += @("-p", $Password) }
-    if ($Shell)     { $A += @("-S", $Shell) }
-    if ($SshPort)   { $A += @("--ssh-port", $SshPort) }
+    if ($Shell)     { if ($Client -eq 'rs') { $A += @("--shell", $Shell) } else { $A += @("-S", $Shell) } }
+    if ($SshPort -and $Client -ne 'rs')   { $A += @("--ssh-port", $SshPort) }
 
     if ($WinPTYDir) { $env:RDEV_WINPTY_DIR = $WinPTYDir }
 
     Write-Host ""
-    Write-Host "  Starting rdev-client..." -ForegroundColor Cyan
-    Write-Host "  $OutPath $($A -join ' ')" -ForegroundColor Gray
+    Write-Host "  Starting $ClientName..." -ForegroundColor Cyan
+    Write-Host "  $RunPath $($A -join ' ')" -ForegroundColor Gray
     Write-Host ""
 
     if ($Elevate) {
         try {
-            Start-Process -FilePath $OutPath -ArgumentList $A -Verb RunAs | Out-Null
+            Start-Process -FilePath $RunPath -ArgumentList $A -Verb RunAs | Out-Null
             return
         } catch {
             Write-Warning "Elevation failed; continuing in normal user mode: $($_.Exception.Message)"
         }
     }
 
-    & $OutPath @A
+    & $RunPath @A
 }
 
 # ── Banner: show usage hint when piped via iex ──────────────

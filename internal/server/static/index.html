@@ -56,7 +56,12 @@
         .term-btn { display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px; border-radius: 6px; font-size: 0.8rem; cursor: pointer; border: 1px solid rgba(34,211,238,0.3); background: rgba(34,211,238,0.08); color: var(--accent); text-decoration: none; transition: all 0.15s; white-space: nowrap; }
         .term-btn:hover { background: rgba(34,211,238,0.18); border-color: var(--accent); }
         .install { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 1.5rem; margin-top: 2rem; }
-        .install h3 { font-size: 1rem; color: var(--accent); margin-bottom: 1rem; }
+        .install-head { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: 1rem; }
+        .install h3 { font-size: 1rem; color: var(--accent); margin: 0; }
+        .client-switch { display: inline-flex; gap: 4px; padding: 3px; border: 1px solid var(--border); border-radius: 999px; background: rgba(255,255,255,0.03); flex-shrink: 0; }
+        .client-tag { border: 0; border-radius: 999px; padding: 4px 10px; font-size: 0.75rem; cursor: pointer; color: var(--muted); background: transparent; transition: all 0.15s; }
+        .client-tag:hover { color: var(--text); }
+        .client-tag.active { color: #001014; background: var(--accent); font-weight: 700; }
         .install-tabs { display: flex; gap: 0; border-bottom: 1px solid var(--border); margin-bottom: 1rem; }
         .install-tab { padding: 0.5rem 1rem; font-size: 0.85rem; cursor: pointer; color: var(--muted); border: 1px solid transparent; border-bottom: none; border-radius: 8px 8px 0 0; background: transparent; transition: all 0.15s; }
         .install-tab:hover { color: var(--text); }
@@ -100,6 +105,7 @@
             .row-actions { justify-content: stretch; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: 0.3rem; }
             .term-btn { width: 100%; justify-content: center; padding: 8px 10px; }
             .install, .hint { padding: 1rem; margin-top: 1rem; }
+            .install-head { align-items: flex-start; flex-direction: column; gap: 0.7rem; }
             .install-tabs { overflow-x: auto; }
             .install-tab { flex: 0 0 auto; }
             .cmd-row { flex-direction: column; align-items: stretch; }
@@ -139,7 +145,13 @@
         </table>
 
         <div class="install">
-            <h3 class="icon-inline"><span data-icon="rocket"></span><span data-i18n="index.installTitle">一键启动客户端</span></h3>
+            <div class="install-head">
+                <h3 class="icon-inline"><span data-icon="rocket"></span><span data-i18n="index.installTitle">一键启动客户端</span></h3>
+                <div class="client-switch" aria-label="Client flavor">
+                    <button type="button" class="client-tag active" data-client="go" onclick="setClientFlavor('go')" data-i18n="index.clientCompat">兼容版(go)</button>
+                    <button type="button" class="client-tag" data-client="rs" onclick="setClientFlavor('rs')" data-i18n="index.clientPerf">性能版(rs)</button>
+                </div>
+            </div>
             <div class="install-tabs">
                 <div class="install-tab active" onclick="sw(this,'linux')" data-i18n="index.tabLinux">Linux / macOS</div>
                 <div class="install-tab" onclick="sw(this,'win')" data-i18n="index.tabWindows">Windows</div>
@@ -150,21 +162,21 @@
                 <div class="cmd-group">
                     <div class="cmd-label icon-inline"><span data-icon="package"></span><span data-i18n="index.curlLabel">curl 一键启动（替换 {password} 为你的密码）</span></div>
                     <div class="cmd-row">
-                        <div class="cmd-code" data-tpl="curl -sL {{HTTP}}{{H}}/run.sh | sh -s -- {{WS}}{{H}} -p {{PW}}"></div>
+                        <div class="cmd-code" data-tpl="curl -sL {{HTTP}}{{H}}/run.sh | sh -s -- {{WS}}{{H}} -p {{PW}}{{CLIENT_ARG}}"></div>
                         <button class="copy-btn" onclick="cp(this)"><span data-i18n="common.copy">复制</span></button>
                     </div>
                 </div>
                 <div class="cmd-group">
                     <div class="cmd-label" data-i18n="index.wgetLabel">wget 版</div>
                     <div class="cmd-row">
-                        <div class="cmd-code" data-tpl="wget -qO- {{HTTP}}{{H}}/run.sh | sh -s -- {{WS}}{{H}} -p {{PW}}"></div>
+                        <div class="cmd-code" data-tpl="wget -qO- {{HTTP}}{{H}}/run.sh | sh -s -- {{WS}}{{H}} -p {{PW}}{{CLIENT_ARG}}"></div>
                         <button class="copy-btn" onclick="cp(this)"><span data-i18n="common.copy">复制</span></button>
                     </div>
                 </div>
                 <div class="cmd-group">
                     <div class="cmd-label icon-inline"><span data-icon="lockOpen"></span><span data-i18n="index.openMode">开放模式（无密码，仅限内网）</span></div>
                     <div class="cmd-row">
-                        <div class="cmd-code" data-tpl="curl -sL {{HTTP}}{{H}}/run.sh | sh -s -- {{WS}}{{H}}"></div>
+                        <div class="cmd-code" data-tpl="curl -sL {{HTTP}}{{H}}/run.sh | sh -s -- {{WS}}{{H}}{{CLIENT_ARG}}"></div>
                         <button class="copy-btn" onclick="cp(this)"><span data-i18n="common.copy">复制</span></button>
                     </div>
                 </div>
@@ -174,14 +186,14 @@
                 <div class="cmd-group">
                     <div class="cmd-label icon-inline"><span data-icon="package"></span><span data-i18n="index.psLabel">PowerShell 一键启动（替换 {password} 为你的密码）</span></div>
                     <div class="cmd-row">
-                        <div class="cmd-code" data-tpl='powershell -Command "iwr -useb {{HTTP}}{{H}}/run.ps1 | iex; RDev {{WS}}{{H}} -Password {{PW}}"'></div>
+                        <div class="cmd-code" data-tpl='powershell -Command "iwr -useb {{HTTP}}{{H}}/run.ps1 | iex; RDev {{WS}}{{H}} -Password {{PW}}{{CLIENT_PS_ARG}}"'></div>
                         <button class="copy-btn" onclick="cp(this)"><span data-i18n="common.copy">复制</span></button>
                     </div>
                 </div>
                 <div class="cmd-group">
                     <div class="cmd-label icon-inline"><span data-icon="lockOpen"></span><span data-i18n="index.openMode">开放模式（无密码，仅限内网）</span></div>
                     <div class="cmd-row">
-                        <div class="cmd-code" data-tpl='powershell -Command "iwr -useb {{HTTP}}{{H}}/run.ps1 | iex; RDev {{WS}}{{H}}"'></div>
+                        <div class="cmd-code" data-tpl='powershell -Command "iwr -useb {{HTTP}}{{H}}/run.ps1 | iex; RDev {{WS}}{{H}}{{CLIENT_PS_ARG}}"'></div>
                         <button class="copy-btn" onclick="cp(this)"><span data-i18n="common.copy">复制</span></button>
                     </div>
                 </div>
@@ -267,6 +279,7 @@
         const HTTP = isHTTPS ? 'https://' : 'http://';
         let SP = '2222';
         let VP = '';
+        let clientFlavor = 'go';
 
         function vncDisplayAddr(addr) {
             if (!addr) return '';
@@ -282,12 +295,15 @@
                 setCmdCode(el, el.dataset.tpl
                     .replace(/\{\{WS\}\}/g, WS).replace(/\{\{HTTP\}\}/g, HTTP)
                     .replace(/\{\{H\}\}/g, H).replace(/\{\{SP\}\}/g, SP).replace(/\{\{VP\}\}/g, VP || t('index.vncUnavailable'))
+                    .replace(/\{\{CLIENT_ARG\}\}/g, clientFlavor === 'rs' ? ' --client rs' : '')
+                    .replace(/\{\{CLIENT_PS_ARG\}\}/g, clientFlavor === 'rs' ? ' -Client rs' : '')
                     .replace(/\{\{PW\}\}/g, passwordPlaceholder));
             });
             // Win7/8 PS2.0 commands (nested quotes break data-tpl, render via JS)
             const el = id => document.getElementById(id);
-            if (el('c-w7-pw'))   setCmdCode(el('c-w7-pw'), `[Net.ServicePointManager]::SecurityProtocol=[Enum]::ToObject([Net.SecurityProtocolType],3072); $wc=New-Object Net.WebClient; $wc.DownloadString('${HTTP}${H}/run.ps1') | iex; RDev ${WS}${H} -Password ${passwordPlaceholder}`);
-            if (el('c-w7-open')) setCmdCode(el('c-w7-open'), `[Net.ServicePointManager]::SecurityProtocol=[Enum]::ToObject([Net.SecurityProtocolType],3072); $wc=New-Object Net.WebClient; $wc.DownloadString('${HTTP}${H}/run.ps1') | iex; RDev ${WS}${H}`);
+            const clientPSArg = clientFlavor === 'rs' ? ' -Client rs' : '';
+            if (el('c-w7-pw'))   setCmdCode(el('c-w7-pw'), `[Net.ServicePointManager]::SecurityProtocol=[Enum]::ToObject([Net.SecurityProtocolType],3072); $wc=New-Object Net.WebClient; $wc.DownloadString('${HTTP}${H}/run.ps1') | iex; RDev ${WS}${H} -Password ${passwordPlaceholder}${clientPSArg}`);
+            if (el('c-w7-open')) setCmdCode(el('c-w7-open'), `[Net.ServicePointManager]::SecurityProtocol=[Enum]::ToObject([Net.SecurityProtocolType],3072); $wc=New-Object Net.WebClient; $wc.DownloadString('${HTTP}${H}/run.ps1') | iex; RDev ${WS}${H}${clientPSArg}`);
             document.querySelectorAll('[data-vnc-only]').forEach(el => { el.style.display = VP ? '' : 'none'; });
             document.querySelectorAll('.hint code[id]').forEach(el => {
                 el.innerHTML = el.innerHTML
@@ -329,6 +345,12 @@
             tab.classList.add('active');
             document.querySelectorAll('.install-panel').forEach(p => p.classList.remove('active'));
             document.getElementById('p-' + id).classList.add('active');
+        }
+
+        function setClientFlavor(flavor) {
+            clientFlavor = flavor === 'rs' ? 'rs' : 'go';
+            document.querySelectorAll('.client-tag').forEach(btn => btn.classList.toggle('active', btn.dataset.client === clientFlavor));
+            render();
         }
 
         function cp(btn) {

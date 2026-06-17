@@ -5,6 +5,7 @@
 #
 # Usage:
 #   curl -sL http://SERVER:PORT/run.sh | sh -s -- ws://SERVER:PORT
+#   curl -sL http://SERVER:PORT/run.sh | sh -s -- ws://SERVER:PORT --client rs
 #   wget -qO- http://SERVER:PORT/run.sh | sh -s -- ws://SERVER:PORT
 
 set -e
@@ -16,6 +17,7 @@ RDEV_PASSWORD=""
 RDEV_SHELL=""
 RDEV_SSH_PORT=""
 RDEV_VERSION=""
+RDEV_CLIENT="go"
 RDEV_REPO="icepie/rdev"
 
 # CN GitHub mirrors (tried first, fallback to direct)
@@ -30,31 +32,44 @@ while [ $# -gt 0 ]; do
         -S|--shell)    RDEV_SHELL="$2"; shift 2 ;;
         --ssh-port)    RDEV_SSH_PORT="$2"; shift 2 ;;
         -v|--version)  RDEV_VERSION="$2"; shift 2 ;;
+        --client)      RDEV_CLIENT="$2"; shift 2 ;;
+        --go)          RDEV_CLIENT="go"; shift ;;
+        --rs)          RDEV_CLIENT="rs"; shift ;;
         --no-mirror)   MIRRORS=""; shift ;;
         -h|--help)
             echo "Usage: sh run.sh SERVER_URL [options]"
             echo ""
-            echo "  Downloads rdev-client to /tmp and runs it directly."
+            echo "  Downloads a client to /tmp and runs it directly."
+            echo "  Default client is compatible Go; use --client rs for performance Rust."
             echo "  No installation or root required."
             echo ""
             echo "Options:"
             echo "  -s, --server URL     Server WebSocket URL"
             echo "  -i, --id ID          Device ID (default: hostname)"
-            echo "  -p, --password PW   Password for SSH auth"
-            echo "  -S, --shell PATH    Shell path (e.g. /bin/bash)"
-            echo "  --ssh-port PORT      Server SSH port (for hint display)"
+            echo "  -p, --password PW    Password for SSH auth"
+            echo "  -S, --shell PATH     Shell path (e.g. /bin/bash)"
+            echo "  --ssh-port PORT      Server SSH port hint (Go client only)"
             echo "  -v, --version VER    Client version (default: latest)"
+            echo "  --client go|rs       Client flavor: compatible Go or performance Rust"
+            echo "  --go, --rs           Shorthand for --client go|rs"
             echo "  --no-mirror          Skip CN mirrors, use github.com"
             echo ""
             echo "Examples:"
             echo "  curl -sL http://SERVER/run.sh | sh -s -- ws://SERVER:8080"
             echo "  curl -sL http://SERVER/run.sh | sh -s -- ws://SERVER:8080 -i my-pc -p secret"
+            echo "  curl -sL http://SERVER/run.sh | sh -s -- ws://SERVER:8080 --client rs"
             exit 0 ;;
         ws://*|wss://*) RDEV_SERVER="$1"; shift ;;
         http://*|https://*) RDEV_SERVER="$1"; shift ;;
         *) echo "Unknown option: $1" >&2; exit 1 ;;
     esac
 done
+
+case "$RDEV_CLIENT" in
+    go|GO|Go) RDEV_CLIENT="go" ;;
+    rs|RS|Rust|rust) RDEV_CLIENT="rs" ;;
+    *) echo "Error: unsupported client: $RDEV_CLIENT (expected go or rs)" >&2; exit 1 ;;
+esac
 
 if [ -z "$RDEV_SERVER" ]; then
     echo "Error: server URL required" >&2
@@ -95,7 +110,7 @@ wait_elevation_key() {
 if [ "$(id -u 2>/dev/null || echo 1)" != "0" ]; then
     if wait_elevation_key; then
         RDEV_ELEVATE=1
-        echo "  Elevation requested; will start rdev-client with sudo/doas after download." >&2
+        echo "  Elevation requested; will start client with sudo/doas after download." >&2
     else
         echo "  Continuing in normal user mode." >&2
     fi
@@ -142,9 +157,9 @@ dl() {
     esac
 }
 
-# ── Determine version & URL ────────────────────────────────
+# ── Determine version ──────────────────────────────────────
 if [ -n "$RDEV_VERSION" ]; then
-    TAG="v${RDEV_VERSION}"
+    case "$RDEV_VERSION" in v*) TAG="$RDEV_VERSION" ;; *) TAG="v${RDEV_VERSION}" ;; esac
 else
     TAG=""
     if [ "$DL_TOOL" = "curl" ]; then
@@ -156,61 +171,123 @@ else
     [ -z "$TAG" ] && TAG="latest"
 fi
 
-BINARY="rdev-client-${OS}-${ARCH}"
-[ "$OS" = "windows" ] && BINARY="${BINARY}.exe"
-
-if [ "$TAG" = "latest" ]; then
-    GH_URL="https://github.com/${RDEV_REPO}/releases/latest/download/${BINARY}"
-else
-    GH_URL="https://github.com/${RDEV_REPO}/releases/download/${TAG}/${BINARY}"
-fi
-
-# ── Download to /tmp (mirror → github fallback) ───────────
-TMPFILE="${TMPDIR:-/tmp}/rdev-client-$$"
-
-echo "  Downloading rdev-client (${OS}/${ARCH})..." >&2
-
-OK=0
-for M in $MIRRORS; do
-    [ -z "$M" ] && continue
-    echo "  Trying ${M}..." >&2
-    if dl "https://${M}/${GH_URL}" "$TMPFILE" 2>/dev/null && [ -s "$TMPFILE" ]; then
-        OK=1; echo "  ok via ${M}" >&2; break
+release_url() {
+    if [ "$TAG" = "latest" ]; then
+        echo "https://github.com/${RDEV_REPO}/releases/latest/download/$1"
+    else
+        echo "https://github.com/${RDEV_REPO}/releases/download/${TAG}/$1"
     fi
-    rm -f "$TMPFILE" 2>/dev/null
-done
+}
 
-if [ "$OK" = "0" ]; then
-    echo "  Trying github.com..." >&2
-    if dl "$GH_URL" "$TMPFILE"; then OK=1; echo "  ok via github.com" >&2; fi
+download_with_fallback() {
+    url="$1"
+    out="$2"
+    ok=0
+    for m in $MIRRORS; do
+        [ -z "$m" ] && continue
+        echo "  Trying ${m}..." >&2
+        if dl "https://${m}/${url}" "$out" 2>/dev/null && [ -s "$out" ]; then
+            ok=1
+            echo "  ok via ${m}" >&2
+            break
+        fi
+        rm -f "$out" 2>/dev/null
+    done
+    if [ "$ok" = "0" ]; then
+        echo "  Trying github.com..." >&2
+        if dl "$url" "$out" && [ -s "$out" ]; then ok=1; echo "  ok via github.com" >&2; fi
+    fi
+    [ "$ok" = "1" ]
+}
+
+# ── Resolve asset and download ─────────────────────────────
+TMPBASE="${TMPDIR:-/tmp}"
+RUN_BIN=""
+CLIENT_LABEL="rdev-client"
+
+if [ "$RDEV_CLIENT" = "rs" ]; then
+    CLIENT_LABEL="rdev-client-gpu"
+    case "$OS/$ARCH" in
+        linux/amd64|linux/arm64|darwin/amd64|darwin/arm64)
+            ASSET="rdev-client-gpu-${OS}-${ARCH}.tar.gz"
+            ARCHIVE="$TMPBASE/rdev-client-gpu-${TAG}-${OS}-${ARCH}-$$.tar.gz"
+            ;;
+        windows/amd64)
+            ASSET="rdev-client-gpu-windows-amd64.zip"
+            ARCHIVE="$TMPBASE/rdev-client-gpu-${TAG}-windows-${ARCH}-$$.zip"
+            ;;
+        *)
+            echo "Error: performance Rust client is not published for ${OS}/${ARCH}" >&2
+            exit 1
+            ;;
+    esac
+    GH_URL="$(release_url "$ASSET")"
+    echo "  Downloading ${CLIENT_LABEL} package (${OS}/${ARCH})..." >&2
+    if ! download_with_fallback "$GH_URL" "$ARCHIVE"; then
+        echo "Error: download failed" >&2
+        rm -f "$ARCHIVE" 2>/dev/null
+        exit 1
+    fi
+
+    EXTRACT_DIR="$TMPBASE/rdev-client-gpu-${TAG}-${OS}-${ARCH}-$$"
+    rm -rf "$EXTRACT_DIR" 2>/dev/null
+    mkdir -p "$EXTRACT_DIR"
+    case "$ASSET" in
+        *.tar.gz)
+            command -v tar >/dev/null 2>&1 || { echo "Error: tar is required for Rust client package" >&2; exit 1; }
+            tar -xzf "$ARCHIVE" -C "$EXTRACT_DIR"
+            RUN_BIN="$(find "$EXTRACT_DIR" -type f -name rdev-client-gpu | head -1)"
+            ;;
+        *.zip)
+            command -v unzip >/dev/null 2>&1 || { echo "Error: unzip is required for Rust client package" >&2; exit 1; }
+            unzip -q "$ARCHIVE" -d "$EXTRACT_DIR"
+            RUN_BIN="$(find "$EXTRACT_DIR" -type f -name rdev-client-gpu.exe | head -1)"
+            ;;
+    esac
+    [ -n "$RUN_BIN" ] || { echo "Error: rdev-client-gpu binary not found in package" >&2; exit 1; }
+    chmod +x "$RUN_BIN" 2>/dev/null || true
+else
+    BINARY="rdev-client-${OS}-${ARCH}"
+    [ "$OS" = "windows" ] && BINARY="${BINARY}.exe"
+    GH_URL="$(release_url "$BINARY")"
+    RUN_BIN="$TMPBASE/rdev-client-${TAG}-${OS}-${ARCH}-$$"
+    echo "  Downloading rdev-client (${OS}/${ARCH})..." >&2
+    if ! download_with_fallback "$GH_URL" "$RUN_BIN"; then
+        echo "Error: download failed" >&2
+        rm -f "$RUN_BIN" 2>/dev/null
+        exit 1
+    fi
+    chmod +x "$RUN_BIN"
 fi
-
-if [ "$OK" = "0" ] || [ ! -s "$TMPFILE" ]; then
-    echo "Error: download failed" >&2; rm -f "$TMPFILE" 2>/dev/null; exit 1
-fi
-
-chmod +x "$TMPFILE"
 
 # ── Build args & run ───────────────────────────────────────
-ARGS="-s $RDEV_SERVER"
-[ -n "$RDEV_ID" ] && ARGS="$ARGS -i $RDEV_ID"
-[ -n "$RDEV_PASSWORD" ] && ARGS="$ARGS -p $RDEV_PASSWORD"
-[ -n "$RDEV_SHELL" ] && ARGS="$ARGS -S $RDEV_SHELL"
-[ -n "$RDEV_SSH_PORT" ] && ARGS="$ARGS --ssh-port $RDEV_SSH_PORT"
+if [ "$RDEV_CLIENT" = "rs" ]; then
+    set -- -s "$RDEV_SERVER"
+    [ -n "$RDEV_ID" ] && set -- "$@" -i "$RDEV_ID"
+    [ -n "$RDEV_PASSWORD" ] && set -- "$@" -p "$RDEV_PASSWORD"
+    [ -n "$RDEV_SHELL" ] && set -- "$@" --shell "$RDEV_SHELL"
+else
+    set -- -s "$RDEV_SERVER"
+    [ -n "$RDEV_ID" ] && set -- "$@" -i "$RDEV_ID"
+    [ -n "$RDEV_PASSWORD" ] && set -- "$@" -p "$RDEV_PASSWORD"
+    [ -n "$RDEV_SHELL" ] && set -- "$@" -S "$RDEV_SHELL"
+    [ -n "$RDEV_SSH_PORT" ] && set -- "$@" --ssh-port "$RDEV_SSH_PORT"
+fi
 
 echo "" >&2
-echo "  Starting rdev-client..." >&2
-echo "  $TMPFILE $ARGS" >&2
-echo "" >&2
+echo "  Starting ${CLIENT_LABEL}..." >&2
+printf '  %s' "$RUN_BIN" >&2
+for arg in "$@"; do printf ' %s' "$arg" >&2; done
+printf '\n\n' >&2
 
 if [ "$RDEV_ELEVATE" = "1" ]; then
     if command -v sudo >/dev/null 2>&1; then
-        exec sudo "$TMPFILE" $ARGS
+        exec sudo "$RUN_BIN" "$@"
     elif command -v doas >/dev/null 2>&1; then
-        exec doas "$TMPFILE" $ARGS
+        exec doas "$RUN_BIN" "$@"
     else
         echo "  sudo/doas not found; continuing in normal user mode." >&2
     fi
 fi
 
-exec "$TMPFILE" $ARGS
+exec "$RUN_BIN" "$@"
