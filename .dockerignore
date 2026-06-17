@@ -1,0 +1,20 @@
+.git
+.github
+node_modules
+.tmp
+tmp
+*.log
+
+# Local build outputs
+/rdev-server
+/rdev-client
+/rdev-server-*
+/rdev-client-*
+/rdev-server-gui
+/rdev-server-nocgo
+*.exe
+
+# Runtime data/secrets
+*.pem
+host_key
+authorized_keys
