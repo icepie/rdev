@@ -35,7 +35,7 @@
 | 跨平台 | Unix (creack/pty) / Windows (ConPty) / 其他 (pipe) |
 | Terminal Modes | SSH pty-req modes 完整转发 (ECHO, ONLCR, etc.) |
 | Remote Desktop | 已支持浏览器远程屏幕查看与输入控制 MVP（Linux X11/DRM/fbdev、Windows GDI/DXGI、macOS Quartz/CoreGraphics no-cgo 截屏；输入后端含 XTEST、可选 uinput、Win32、可选 Win8+ Touch Injection、macOS Quartz mouse/keyboard；默认 CGO_ENABLED=0），设计见 `docs/remote-desktop.md` |
-| Rust GPU Client | 可选实验版 `clients/rdev-client-gpu`，优先补齐 SSH/session/SFTP/Rsync/TCP/file 基础能力，后续承载 GPU 视频编码/WebCodecs 桌面路径 |
+| Rust GPU Client | 可选实验版 `clients/rdev-client-gpu`，优先补齐 SSH/session/内置 SFTP/Rsync/TCP/file 基础能力，后续承载 GPU 视频编码/WebCodecs 桌面路径；Win7 包使用普通 Windows GNU 构建加 PE import patch 和兼容 shim DLL |
 | VNC/RFB Bridge | 服务端可选 `--vnc` 暴露现代 VNC 入口，使用 VeNCrypt Plain 用户名/密码认证，`username=deviceId` 选择设备 |
 
 ## 快速开始
@@ -168,10 +168,23 @@ go test ./...
 
 ## Windows 兼容性
 
-- Windows 10 1809+ 使用系统 ConPTY，不需要额外组件。
-- Windows 7/8/8.1 的 `run.ps1` 会自动下载 WinPTY 运行时，并通过同一套 GitHub 代理前缀重试。
-- WinPTY 文件默认放在 `%TEMP%\rdev-winpty`，客户端也可通过 `RDEV_WINPTY_DIR` 指定 `winpty.dll` 和 `winpty-agent.exe` 所在目录。
-- 如果 WinPTY 不可用，客户端会退回 pipe shell，普通命令仍可执行，但完整交互体验会弱一些。
+- Windows 10/11 的实验 Rust 客户端优先使用 `portable-pty`/ConPTY，失败后退回 pipe shell。
+- Windows 7/8/8.1 的 Go `run.ps1` 会自动下载 WinPTY 运行时，并通过同一套 GitHub 代理前缀重试。
+- Rust `rdev-client-gpu` 的 Win7 包会自动探测并打包 `winpty.dll`/`winpty-agent.exe`；运行时也会从 `RDEV_WINPTY_DIR`、程序目录和 `PATH` 探测 WinPTY。
+- Win7/Win8 上 Rust PTY 优先 WinPTY，失败后退回 pipe shell；Win10/Win11 上优先 ConPTY，失败后退回 pipe shell。
+- Win7 运行 Go 客户端请使用 XTLS `go-win7` 工具链构建，例如 `GO_WIN7=/path/to/go-win7/bin/go make win7-go-client win7-service-wrapper`。
+- Windows 服务不要直接托管客户端 EXE；使用 `rdev-service-wrapper.exe`，并在配置中设置 `interactive: true`，让服务在活动登录用户桌面启动客户端，避免桌面截图出现 Session 0 的 `Access is denied`。
+
+服务 wrapper 配置示例：
+
+```json
+{
+  "workDir": "C:\\Windows\\Temp\\rdev-services\\go",
+  "log": "C:\\Windows\\Temp\\rdev-services\\go-service.log",
+  "interactive": true,
+  "command": ["C:\\Windows\\Temp\\rdev-services\\go\\rdev-client.exe", "--server", "wss://rdev.singzer.cn", "--id", "win7-go-svc", "--password", "123", "--no-auto-update"]
+}
+```
 
 ## 构建
 
@@ -183,6 +196,13 @@ make build
 make rust-client-gpu
 make rust-client-gpu-check
 make rust-client-gpu-smoke
+# Windows 7-compatible Rust package, requires MinGW gcc
+make rust-client-gpu-win7-package
+# Optional real Win7 E2E smoke; set RDEV_GPU_WIN7_HOST/PASSWORD first
+make rust-client-gpu-win7-smoke
+
+# Win7 Go client/service wrapper, requires XTLS go-win7
+GO_WIN7=/path/to/go-win7/bin/go make win7-go-client win7-service-wrapper
 
 # 交叉编译 (无 CGO)
 make cross

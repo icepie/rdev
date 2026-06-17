@@ -52,7 +52,7 @@ jobs:
         working-directory: .
         run: |
           sudo apt-get update
-          sudo apt-get install -y sshpass rsync openssh-sftp-server
+          sudo apt-get install -y sshpass rsync
           make rust-client-gpu-smoke
 
   build:
@@ -73,6 +73,11 @@ jobs:
             target: x86_64-pc-windows-msvc
             artifact: rdev-client-gpu.exe
             asset: rdev-client-gpu-windows-amd64.exe
+          - name: windows-win7-amd64
+            os: ubuntu-latest
+            target: x86_64-pc-windows-gnu
+            artifact: rdev-client-gpu.exe
+            asset: rdev-client-gpu-windows-win7-amd64.exe
           - name: darwin-amd64
             os: macos-latest
             target: x86_64-apple-darwin
@@ -94,6 +99,10 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      - name: Install Windows GNU linker
+        if: matrix.target == 'x86_64-pc-windows-gnu'
+        run: sudo apt-get update && sudo apt-get install -y gcc-mingw-w64-x86-64
+
       - name: Cache Cargo
         uses: Swatinem/rust-cache@v2
         with:
@@ -106,8 +115,18 @@ jobs:
       - name: Stage artifact
         shell: bash
         run: |
-          mkdir -p dist
-          cp "target/${{ matrix.target }}/release/${{ matrix.artifact }}" "dist/${{ matrix.asset }}"
+          mkdir -p "dist/${{ matrix.asset }}"
+          if [ "${{ matrix.target }}" = "x86_64-pc-windows-gnu" ]; then
+            python3 win7/patch_imports.py \
+              "target/${{ matrix.target }}/release/${{ matrix.artifact }}" \
+              "dist/${{ matrix.asset }}/rdev-client-gpu.exe"
+            x86_64-w64-mingw32-gcc -shared -Os -mcrtdll=msvcrt-os -o "dist/${{ matrix.asset }}/rdev-waitonaddress-shim.dll" win7/waitonaddress_shim.c
+            x86_64-w64-mingw32-gcc -shared -Os -mcrtdll=msvcrt-os -o "dist/${{ matrix.asset }}/rdev-bcprng.dll" win7/bcprng_shim.c
+            x86_64-w64-mingw32-gcc -shared -Os -mcrtdll=msvcrt-os -o "dist/${{ matrix.asset }}/rdevws.dll" win7/ws2_32_shim.c -lws2_32
+            python3 win7/copy_winpty_runtime.py "dist/${{ matrix.asset }}"
+          else
+            cp "target/${{ matrix.target }}/release/${{ matrix.artifact }}" "dist/${{ matrix.asset }}/${{ matrix.artifact }}"
+          fi
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

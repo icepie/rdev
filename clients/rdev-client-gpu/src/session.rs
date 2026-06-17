@@ -1,10 +1,13 @@
 use anyhow::{anyhow, Context, Result};
+#[cfg(not(windows))]
+use std::io::Read;
+use std::io::Write;
+#[cfg(not(windows))]
+use std::thread;
 use std::{
     collections::HashMap,
-    io::{Read, Write},
     process::Stdio,
     sync::{Arc, Mutex},
-    thread,
 };
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWriteExt},
@@ -13,7 +16,10 @@ use tokio::{
 };
 use tracing::warn;
 
-use crate::protocol::{Message, MessageType, BIN_DATA, BIN_STDERR};
+use crate::{
+    protocol::{Message, MessageType, BIN_DATA, BIN_STDERR},
+    sftp::run_sftp_session,
+};
 
 #[derive(Debug, Clone)]
 #[allow(clippy::large_enum_variant)]
@@ -235,18 +241,244 @@ async fn run_sftp(
     rx: mpsc::Receiver<SessionInput>,
     outbound: mpsc::Sender<OutboundEvent>,
 ) -> Result<()> {
-    let server = find_sftp_server().ok_or_else(|| {
-        anyhow!("sftp subsystem requires sftp-server in PATH or a common OpenSSH path")
-    })?;
-    let mut command = Message {
-        command: server,
-        ..msg
-    };
-    command.subsystem.clear();
-    run_exec(command, None, rx, outbound).await
+    let session_id = msg.session_id.clone();
+    run_sftp_session(msg.session_id, rx, outbound.clone()).await?;
+    send_exit_and_close(&outbound, &session_id, 0).await;
+    Ok(())
 }
 
 async fn run_pty(
+    msg: Message,
+    shell: Option<String>,
+    rx: mpsc::Receiver<SessionInput>,
+    outbound: mpsc::Sender<OutboundEvent>,
+) -> Result<()> {
+    run_pty_platform(msg, shell, rx, outbound).await
+}
+
+#[cfg(windows)]
+async fn run_pty_platform(
+    msg: Message,
+    shell: Option<String>,
+    rx: mpsc::Receiver<SessionInput>,
+    outbound: mpsc::Sender<OutboundEvent>,
+) -> Result<()> {
+    let shell_for_fallback = shell.clone();
+    if crate::winpty::is_legacy_windows() {
+        match run_winpty_pty(msg.clone(), shell, rx, outbound.clone()).await {
+            Ok(()) => Ok(()),
+            Err((msg, rx, err)) => {
+                warn!("WinPTY terminal start failed, falling back to pipe shell: {err:#}");
+                run_exec(msg, shell_for_fallback, rx, outbound).await
+            }
+        }
+    } else {
+        match run_conpty_pty(msg.clone(), shell, rx, outbound.clone()).await {
+            Ok(()) => Ok(()),
+            Err((msg, rx, err)) => {
+                warn!("ConPTY terminal start failed, falling back to pipe shell: {err:#}");
+                run_exec(msg, shell_for_fallback, rx, outbound).await
+            }
+        }
+    }
+}
+
+#[cfg(windows)]
+async fn run_conpty_pty(
+    msg: Message,
+    shell: Option<String>,
+    mut rx: mpsc::Receiver<SessionInput>,
+    outbound: mpsc::Sender<OutboundEvent>,
+) -> std::result::Result<(), (Message, mpsc::Receiver<SessionInput>, anyhow::Error)> {
+    use portable_pty::{native_pty_system, CommandBuilder, PtySize};
+
+    let session_id = msg.session_id.clone();
+    let result = (|| -> Result<_> {
+        let pty_system = native_pty_system();
+        let pair = pty_system.openpty(PtySize {
+            rows: nonzero(msg.rows, 24),
+            cols: nonzero(msg.cols, 80),
+            pixel_width: 0,
+            pixel_height: 0,
+        })?;
+        let mut builder = if msg.command.is_empty() {
+            CommandBuilder::new(default_shell(shell))
+        } else {
+            let mut b = CommandBuilder::new(default_shell(shell));
+            b.arg("/c");
+            b.arg(&msg.command);
+            b
+        };
+        for (k, v) in parse_env(&msg.env) {
+            builder.env(k, v);
+        }
+        if !msg.term.is_empty() {
+            builder.env("TERM", msg.term.clone());
+        }
+
+        let child = pair.slave.spawn_command(builder)?;
+        drop(pair.slave);
+        let reader = pair.master.try_clone_reader()?;
+        let writer = pair.master.take_writer()?;
+        Ok((pair.master, child, writer, reader))
+    })();
+
+    let (master, mut child, mut writer, reader) = match result {
+        Ok(parts) => parts,
+        Err(err) => return Err((msg, rx, err)),
+    };
+    tracing::info!("Windows PTY started via ConPTY/portable-pty");
+    pipe_blocking_reader(session_id.clone(), BIN_DATA, &outbound, reader);
+
+    let mut tick = tokio::time::interval(std::time::Duration::from_millis(100));
+    loop {
+        tokio::select! {
+            _ = tick.tick() => {
+                match child.try_wait() {
+                    Ok(Some(status)) => {
+                        send_exit_and_close(&outbound, &session_id, status.exit_code() as i32).await;
+                        return Ok(());
+                    }
+                    Ok(None) => {}
+                    Err(err) => {
+                        warn!("ConPTY exit status failed: {err:#}");
+                        send_exit_and_close(&outbound, &session_id, -1).await;
+                        return Ok(());
+                    }
+                }
+            }
+            input = rx.recv() => {
+                match input {
+                    Some(SessionInput::Data(data)) => {
+                        let _ = writer.write_all(&data);
+                        let _ = writer.flush();
+                    }
+                    Some(SessionInput::StdinClose) => {}
+                    Some(SessionInput::Close) => {
+                        let _ = child.kill();
+                        send_exit_and_close(&outbound, &session_id, -1).await;
+                        return Ok(());
+                    }
+                    Some(SessionInput::Resize { rows, cols }) => {
+                        let _ = master.resize(PtySize {
+                            rows: nonzero(rows, 24),
+                            cols: nonzero(cols, 80),
+                            pixel_width: 0,
+                            pixel_height: 0,
+                        });
+                    }
+                    None => return Ok(()),
+                }
+            }
+        }
+    }
+}
+
+#[cfg(windows)]
+async fn run_winpty_pty(
+    msg: Message,
+    shell: Option<String>,
+    mut rx: mpsc::Receiver<SessionInput>,
+    outbound: mpsc::Sender<OutboundEvent>,
+) -> std::result::Result<(), (Message, mpsc::Receiver<SessionInput>, anyhow::Error)> {
+    let session_id = msg.session_id.clone();
+    let shell = default_shell(shell);
+    let command = if msg.command.is_empty() {
+        None
+    } else {
+        Some(msg.command.clone())
+    };
+    let pty = match crate::winpty::spawn(
+        &shell,
+        command.as_deref(),
+        nonzero(msg.cols, 80) as i32,
+        nonzero(msg.rows, 24) as i32,
+    ) {
+        Ok(pty) => pty,
+        Err(err) => return Err((msg, rx, err)),
+    };
+    tracing::info!("Windows PTY started via winpty");
+
+    let pty = Arc::new(pty);
+    let output = match pty.take_output() {
+        Some(output) => output,
+        None => return Err((msg, rx, anyhow!("winpty output pipe unavailable"))),
+    };
+    pipe_blocking_reader(session_id.clone(), BIN_DATA, &outbound, output);
+
+    let mut tick = tokio::time::interval(std::time::Duration::from_millis(100));
+    loop {
+        tokio::select! {
+            _ = tick.tick() => {
+                match pty.exit_status() {
+                    Ok(Some(code)) => {
+                        send_exit_and_close(&outbound, &session_id, code).await;
+                        return Ok(());
+                    }
+                    Ok(None) => {}
+                    Err(err) => {
+                        warn!("winpty exit status failed: {err:#}");
+                        send_exit_and_close(&outbound, &session_id, -1).await;
+                        return Ok(());
+                    }
+                }
+            }
+            input = rx.recv() => {
+                match input {
+                    Some(SessionInput::Data(data)) => {
+                        let _ = pty.write(&data);
+                    }
+                    Some(SessionInput::StdinClose) => {}
+                    Some(SessionInput::Close) => {
+                        pty.terminate();
+                        send_exit_and_close(&outbound, &session_id, -1).await;
+                        return Ok(());
+                    }
+                    Some(SessionInput::Resize { rows, cols }) => {
+                        let _ = pty.resize(nonzero(cols, 80) as i32, nonzero(rows, 24) as i32);
+                    }
+                    None => return Ok(()),
+                }
+            }
+        }
+    }
+}
+
+#[cfg(windows)]
+fn pipe_blocking_reader<R>(
+    session_id: String,
+    typ: u8,
+    outbound: &mpsc::Sender<OutboundEvent>,
+    mut reader: R,
+) where
+    R: std::io::Read + Send + 'static,
+{
+    let outbound = outbound.clone();
+    std::thread::spawn(move || {
+        let mut buf = vec![0u8; 32 * 1024];
+        loop {
+            match reader.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                    if outbound
+                        .blocking_send(OutboundEvent::Binary {
+                            typ,
+                            id: session_id.clone(),
+                            payload: buf[..n].to_vec(),
+                        })
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+    });
+}
+
+#[cfg(not(windows))]
+async fn run_pty_platform(
     msg: Message,
     shell: Option<String>,
     mut rx: mpsc::Receiver<SessionInput>,
@@ -289,6 +521,7 @@ async fn run_pty(
     Ok(())
 }
 
+#[cfg(not(windows))]
 fn run_pty_blocking(
     msg: Message,
     shell: Option<String>,
@@ -416,34 +649,6 @@ fn parse_env(env: &[String]) -> Vec<(String, String)> {
                 .map(|(k, v)| (k.to_string(), v.to_string()))
         })
         .collect()
-}
-
-fn find_sftp_server() -> Option<String> {
-    let mut candidates = Vec::new();
-    if cfg!(windows) {
-        candidates.push("sftp-server.exe".to_string());
-    } else {
-        candidates.extend(
-            [
-                "/usr/lib/openssh/sftp-server",
-                "/usr/lib/ssh/sftp-server",
-                "/usr/libexec/openssh/sftp-server",
-                "sftp-server",
-            ]
-            .iter()
-            .map(|s| s.to_string()),
-        );
-    }
-    candidates.into_iter().find(|path| which_like(path))
-}
-
-fn which_like(path: &str) -> bool {
-    if path.contains(std::path::MAIN_SEPARATOR) {
-        return std::path::Path::new(path).is_file();
-    }
-    std::env::var_os("PATH")
-        .and_then(|paths| std::env::split_paths(&paths).find(|dir| dir.join(path).is_file()))
-        .is_some()
 }
 
 fn nonzero(value: u16, fallback: u16) -> u16 {

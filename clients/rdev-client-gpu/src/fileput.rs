@@ -1,7 +1,7 @@
 use anyhow::{anyhow, Result};
 use std::{
     collections::HashMap,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
 use tokio::{
@@ -155,7 +155,7 @@ async fn open_file_for_write(path: &str, mode: i32) -> Result<File> {
 }
 
 #[cfg(unix)]
-async fn set_file_mode(path: &PathBuf, mode: i32) -> Result<()> {
+async fn set_file_mode(path: &Path, mode: i32) -> Result<()> {
     if mode <= 0 {
         return Ok(());
     }
@@ -165,7 +165,7 @@ async fn set_file_mode(path: &PathBuf, mode: i32) -> Result<()> {
 }
 
 #[cfg(not(unix))]
-async fn set_file_mode(_path: &PathBuf, _mode: i32) -> Result<()> {
+async fn set_file_mode(_path: &Path, _mode: i32) -> Result<()> {
     Ok(())
 }
 

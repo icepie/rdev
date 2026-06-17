@@ -54,8 +54,13 @@ SERVER_PID=$!
 "$CLIENT_BIN" --server "ws://127.0.0.1:$HTTP_PORT" --id "$DEVICE_ID" --password "$PASSWORD" --no-desktop >"$CLIENT_LOG" 2>&1 &
 CLIENT_PID=$!
 HTTPD_PID=""
+FWD_SSH_PID=""
 
 cleanup() {
+  if [ -n "$FWD_SSH_PID" ]; then
+    kill "$FWD_SSH_PID" 2>/dev/null || true
+    wait "$FWD_SSH_PID" 2>/dev/null || true
+  fi
   if [ -n "$HTTPD_PID" ]; then
     kill "$HTTPD_PID" 2>/dev/null || true
     wait "$HTTPD_PID" 2>/dev/null || true
@@ -113,7 +118,7 @@ timeout 30 sshpass -p "$PASSWORD" rsync -az --delete \
 }
 
 printf 'hello-scp' >"$BASE/scp-src.txt"
-timeout 30 sshpass -p "$PASSWORD" scp \
+timeout 30 sshpass -p "$PASSWORD" scp -O \
   -P "$SSH_PORT" \
   -o BatchMode=no \
   -o ConnectTimeout=5 \
@@ -123,7 +128,7 @@ timeout 30 sshpass -p "$PASSWORD" scp \
   -o StrictHostKeyChecking=no \
   -o UserKnownHostsFile="$KNOWN_HOSTS" \
   "$BASE/scp-src.txt" "$DEVICE_ID@127.0.0.1:$BASE/scp-remote.txt"
-timeout 30 sshpass -p "$PASSWORD" scp \
+timeout 30 sshpass -p "$PASSWORD" scp -O \
   -P "$SSH_PORT" \
   -o BatchMode=no \
   -o ConnectTimeout=5 \
@@ -305,7 +310,7 @@ send_frame(0x8, b"")
 sock.close()
 PY
 
-if command -v sftp >/dev/null 2>&1 && { command -v sftp-server >/dev/null 2>&1 || [ -x /usr/lib/openssh/sftp-server ] || [ -x /usr/lib/ssh/sftp-server ] || [ -x /usr/libexec/openssh/sftp-server ]; }; then
+if command -v sftp >/dev/null 2>&1; then
   printf 'hello-sftp' >"$BASE/sftp-src.txt"
   timeout 30 sh -c 'printf "%s\n" "put $1 $2" "get $2 $3" bye | sshpass -p "$4" sftp \
     -P "$5" \
@@ -329,14 +334,15 @@ if command -v sftp >/dev/null 2>&1 && { command -v sftp-server >/dev/null 2>&1 |
     exit 1
   }
 else
-  echo "sftp smoke skipped: sftp client or sftp-server not found"
+  echo "sftp smoke skipped: sftp client not found"
 fi
 
 python3 -m http.server "$WEB_PORT" --bind 127.0.0.1 --directory "$BASE" >"$BASE/http.log" 2>&1 &
 HTTPD_PID=$!
-timeout 20 sshpass -p "$PASSWORD" ssh "${SSH_OPTS[@]}" -f -N -L "127.0.0.1:$FWD_PORT:127.0.0.1:$WEB_PORT"
+sshpass -p "$PASSWORD" ssh -N -L "127.0.0.1:$FWD_PORT:127.0.0.1:$WEB_PORT" "${SSH_OPTS[@]}" >"$BASE/forward.log" 2>&1 &
+FWD_SSH_PID=$!
 for _ in $(seq 1 40); do
-  if curl -fsS "http://127.0.0.1:$FWD_PORT/rsync-src/file.txt" | grep -q hello-rsync; then
+  if curl -fsS "http://127.0.0.1:$FWD_PORT/rsync-src/file.txt" 2>/dev/null | grep -q hello-rsync; then
     echo "rdev-client-gpu smoke ok"
     exit 0
   fi

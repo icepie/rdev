@@ -267,10 +267,15 @@ impl ForwardManager {
 }
 
 fn new_forward_id() -> String {
-    use rand::RngCore;
+    use rand::RngExt;
+    use std::fmt::Write;
+
     let mut bytes = [0u8; 8];
-    rand::thread_rng().fill_bytes(&mut bytes);
-    let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+    rand::rng().fill(&mut bytes);
+    let mut hex = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        let _ = write!(hex, "{byte:02x}");
+    }
     format!("rgpu-{hex}")
 }
 

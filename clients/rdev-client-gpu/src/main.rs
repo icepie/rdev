@@ -69,7 +69,7 @@ async fn run_once(args: &Args, instance_id: &str) -> Result<()> {
         ..Default::default()
     };
     write
-        .send(WsMessage::Text(protocol::encode_message(&register)?))
+        .send(WsMessage::Text(protocol::encode_message(&register)?.into()))
         .await?;
 
     loop {
@@ -77,13 +77,13 @@ async fn run_once(args: &Args, instance_id: &str) -> Result<()> {
             outbound = out_rx.recv() => {
                 match outbound {
                     Some(OutboundEvent::Message(msg)) => {
-                        write.send(WsMessage::Text(protocol::encode_message(&msg)?)).await?;
+                        write.send(WsMessage::Text(protocol::encode_message(&msg)?.into())).await?;
                     }
                     Some(OutboundEvent::Binary { typ, id, payload }) => {
-                        write.send(WsMessage::Binary(protocol::encode_bin_frame(typ, &id, &payload)?)).await?;
+                        write.send(WsMessage::Binary(protocol::encode_bin_frame(typ, &id, &payload)?.into())).await?;
                     }
                     Some(OutboundEvent::BinaryOffset { typ, id, offset, payload }) => {
-                        write.send(WsMessage::Binary(protocol::encode_bin_frame_offset(typ, &id, offset, &payload)?)).await?;
+                        write.send(WsMessage::Binary(protocol::encode_bin_frame_offset(typ, &id, offset, &payload)?.into())).await?;
                     }
                     None => break,
                 }
