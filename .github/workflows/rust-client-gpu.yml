@@ -197,6 +197,7 @@ jobs:
             -e TMPDIR \
             ubuntu:22.04 \
             bash clients/rdev-client-gpu/scripts/package-linux-desktop.sh '${{ matrix.distro }}'
+          sudo chown -R "$USER:$USER" clients/rdev-client-gpu/dist
 
       - name: Build embedded desktop release
         if: matrix.package_linux != true

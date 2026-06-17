@@ -132,6 +132,21 @@ else
     fi
     if [ "$TARGET_OS" == "macos" ]; then
         export FFMPEG_EXTRA_ARGS="--enable-videotoolbox"
+        if [ -n "${TARGET_ARCH:-}" ]; then
+            export MACOS_CLANG_ARCH="$TARGET_ARCH"
+            if [ "$TARGET_ARCH" == "aarch64" ]; then
+                export MACOS_CLANG_ARCH="arm64"
+            fi
+            export FFMPEG_CFLAGS="$FFMPEG_CFLAGS -arch $MACOS_CLANG_ARCH"
+            export FFMPEG_LIBRARY_PATH="$FFMPEG_LIBRARY_PATH -arch $MACOS_CLANG_ARCH"
+            if [ "$TARGET_ARCH" == "x86_64" ]; then
+                export FFMPEG_EXTRA_ARGS="$FFMPEG_EXTRA_ARGS --arch=x86_64 --target-os=darwin"
+                export X264_EXTRA_ARGS="--host=x86_64-apple-darwin --extra-cflags=-arch\ x86_64 --extra-ldflags=-arch\ x86_64"
+            elif [ "$TARGET_ARCH" == "aarch64" ]; then
+                export FFMPEG_EXTRA_ARGS="$FFMPEG_EXTRA_ARGS --arch=aarch64 --target-os=darwin"
+                export X264_EXTRA_ARGS="--host=aarch64-apple-darwin --extra-cflags=-arch\ arm64 --extra-ldflags=-arch\ arm64"
+            fi
+        fi
     fi
 fi
 

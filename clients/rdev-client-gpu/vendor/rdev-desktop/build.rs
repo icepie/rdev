@@ -76,10 +76,10 @@ fn main() {
     let deps_dir = Path::new("deps").canonicalize().expect("deps directory exists");
     let dist_dir = deps_dir.join({
         let mut name = format!("dist_{}", target_os);
-        if target_os == "windows" && !target_arch.is_empty() {
+        if (target_os == "windows" || target_os == "macos") && !target_arch.is_empty() {
             name.push('_');
             name.push_str(&target_arch);
-            if !target_abi.is_empty() {
+            if target_os == "windows" && !target_abi.is_empty() {
                 name.push('_');
                 name.push_str(&target_abi);
             }
