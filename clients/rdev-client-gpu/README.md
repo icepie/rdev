@@ -26,7 +26,17 @@ make rust-client-gpu
 cargo build --release --manifest-path clients/rdev-client-gpu/Cargo.toml
 ```
 
-The regular Rust client uses current crate releases within the `rust-version` declared in `Cargo.toml`. The default build stays lightweight and does not include RDev encoder/capture dependencies. To build the embedded GPU desktop service, install system FFmpeg/X11/DRM development libraries and run:
+The regular Rust client uses current crate releases within the `rust-version` declared in `Cargo.toml`. The default build stays lightweight and does not include RDev encoder/capture dependencies.
+
+To build and stage the embedded GPU desktop service on Linux, run:
+
+```bash
+make rust-client-gpu-linux-desktop-package
+```
+
+The package script installs the native build dependencies for the detected distro, builds vendored FFmpeg/x264 from source, enables `embedded-rdev-desktop`, and stages the result in `clients/rdev-client-gpu/dist/`. CI uses the same script inside distro containers to produce glibc-specific Linux packages.
+
+For a direct embedded desktop build without staging:
 
 ```bash
 cargo build --release --manifest-path clients/rdev-client-gpu/Cargo.toml --features embedded-rdev-desktop
@@ -85,8 +95,16 @@ Windows 7 notes:
 
 The server does not decode desktop video. It opens `/gpu-desktop/<device>/` for browsers and multiplexes raw HTTP/WebSocket streams over `/gpu-desktop-tunnel` to the Rust client. With `embedded-rdev-desktop`, the Rust client starts vendored RDev/Weylus web, capture, input, and H.264 encoder code in-process and tunnels browser traffic to that local service. Builds without the feature do not register the GPU desktop tunnel.
 
+## Release packages
+
+The `Rust Client GPU` GitHub Actions workflow publishes artifacts on normal pushes and uploads them to GitHub Releases on `v*` tags.
+
+- Lightweight packages: Linux amd64, Windows amd64, Windows 7 amd64, macOS amd64, and macOS arm64.
+- Embedded desktop packages: Linux amd64 glibc 2.17/2.28/2.31/2.35/2.39 plus Debian 11/12 labels, and macOS amd64/arm64.
+- Linux embedded desktop packages are built in containerized distro images to avoid accidentally requiring the newest runner glibc.
+
 ## Next
 
-1. Add CI/package jobs for `embedded-rdev-desktop` on supported Linux runners.
-2. Harden Rust client validation across Windows and macOS hosts.
-3. Package GPU desktop runtime library dependencies per platform.
+1. Harden Rust client validation across Windows and macOS hosts.
+2. Add signed/notarized macOS packaging when distribution requires it.
+3. Add optional VAAPI/NVENC Linux desktop package variants after runtime testing.

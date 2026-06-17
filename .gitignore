@@ -17,6 +17,7 @@ node_modules/
 
 # Rust
 /clients/rdev-client-gpu/target/
+/clients/rdev-client-gpu/dist/
 
 # OS
 .DS_Store
