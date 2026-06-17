@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=AuroraOps 客户端
+Comment=AuroraOps client and remote desktop service manager
+Exec=/opt/auroraops/auroraops-client-launcher
+Terminal=false
+Categories=Network;RemoteAccess;

@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+set -u
+
+URL="${AURORAOPS_LOCAL_URL:-http://127.0.0.1:18765/}"
+STATUS_URL="${URL%/}/api/status"
+SERVICE_NAME="${AURORAOPS_SERVICE_NAME:-auroraops-agent.service}"
+CONFIG_TOOL="${AURORAOPS_CONFIG_TOOL:-/opt/auroraops/auroraops-client-config}"
+LOG_PREFIX="[AuroraOps 客户端]"
+
+log() {
+  printf '%s %s\n' "$LOG_PREFIX" "$*" >&2
+}
+
+service_active() {
+  command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet "$SERVICE_NAME"
+}
+
+start_service() {
+  command -v systemctl >/dev/null 2>&1 || return 0
+  service_active && return 0
+
+  if [ "$(id -u)" -eq 0 ]; then
+    systemctl enable --now "$SERVICE_NAME" >/dev/null 2>&1 || true
+    return 0
+  fi
+
+  if command -v pkexec >/dev/null 2>&1; then
+    pkexec systemctl enable --now "$SERVICE_NAME" >/dev/null 2>&1 || true
+  else
+    log "pkexec 不存在，无法自动提权启动 $SERVICE_NAME"
+  fi
+}
+
+wait_local_page() {
+  command -v curl >/dev/null 2>&1 || return 0
+  for _ in $(seq 1 30); do
+    curl -fsS "$STATUS_URL" >/dev/null 2>&1 && return 0
+    sleep 0.3
+  done
+  return 1
+}
+
+open_url() {
+  if command -v xdg-open >/dev/null 2>&1; then
+    xdg-open "$URL" >/dev/null 2>&1 &
+    return 0
+  fi
+  for browser in qaxbrowser-safe-stable qaxbrowser firefox google-chrome chromium chromium-browser; do
+    if command -v "$browser" >/dev/null 2>&1; then
+      "$browser" "$URL" >/dev/null 2>&1 &
+      return 0
+    fi
+  done
+  log "没有找到可用浏览器，请手动打开：$URL"
+  if [ -x "$CONFIG_TOOL" ]; then
+    log "也可以运行交互式配置：$CONFIG_TOOL"
+  fi
+  return 1
+}
+
+start_service
+wait_local_page || log "本地管理服务暂未响应，仍尝试打开页面：$URL"
+open_url

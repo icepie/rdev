@@ -3,6 +3,7 @@ pub mod desktop;
 pub mod fileput;
 pub mod files;
 pub mod forward;
+pub mod gpu_desktop_service;
 pub mod gpu_tunnel;
 pub mod identity;
 pub mod protocol;

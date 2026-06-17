@@ -7,7 +7,7 @@ use rdev_client_gpu::{
     fileput::FilePutManager,
     files::FileManager,
     forward::ForwardManager,
-    gpu_tunnel,
+    gpu_desktop_service, gpu_tunnel,
     identity::new_instance_id,
     protocol::{
         self, Message, MessageType, BIN_DATA, BIN_FILE_CHUNK, BIN_FILE_END, BIN_FILE_PUT,
@@ -33,7 +33,13 @@ async fn main() -> Result<()> {
         anyhow::bail!("--id is required");
     }
     let instance_id = args.instance_id.clone().unwrap_or_else(new_instance_id);
-    gpu_tunnel::spawn(args.clone(), instance_id.clone());
+    let gpu_desktop_service = gpu_desktop_service::start(&args);
+    gpu_tunnel::spawn(
+        args.clone(),
+        instance_id.clone(),
+        gpu_desktop_service.is_some(),
+    );
+    let _gpu_desktop_service = gpu_desktop_service;
 
     loop {
         match run_once(&args, &instance_id).await {
@@ -66,7 +72,7 @@ async fn run_once(args: &Args, instance_id: &str) -> Result<()> {
         ty: Some(MessageType::Register),
         client_id: args.id.clone(),
         instance_id: instance_id.to_string(),
-        client_version: format!("rust-gpu/{}", env!("CARGO_PKG_VERSION")),
+        client_version: format!("rs/{}", env!("CARGO_PKG_VERSION")),
         password: args.password.clone(),
         desktop: Some(desktop::capabilities(!args.no_desktop)),
         ..Default::default()

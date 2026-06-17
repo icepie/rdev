@@ -47,6 +47,59 @@ pub struct Args {
 
     #[arg(long = "no-gpu-desktop-tunnel", env = "RDEV_NO_GPU_DESKTOP_TUNNEL")]
     pub no_gpu_desktop_tunnel: bool,
+
+    #[cfg(target_os = "linux")]
+    #[arg(long = "gpu-desktop-wayland", env = "RDEV_GPU_DESKTOP_WAYLAND")]
+    pub gpu_desktop_wayland: bool,
+
+    #[cfg(target_os = "linux")]
+    #[arg(long = "gpu-desktop-kms", env = "RDEV_GPU_DESKTOP_KMS")]
+    pub gpu_desktop_kms: bool,
+
+    #[cfg(target_os = "linux")]
+    #[arg(long = "gpu-desktop-kms-device", env = "RDEV_GPU_DESKTOP_KMS_DEVICE")]
+    pub gpu_desktop_kms_device: Option<String>,
+
+    #[cfg(target_os = "linux")]
+    #[arg(long = "gpu-desktop-nvfbc", env = "RDEV_GPU_DESKTOP_NVFBC")]
+    pub gpu_desktop_nvfbc: bool,
+
+    #[cfg(target_os = "linux")]
+    #[arg(long = "gpu-desktop-vaapi", env = "RDEV_GPU_DESKTOP_VAAPI")]
+    pub gpu_desktop_vaapi: bool,
+
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    #[arg(long = "gpu-desktop-nvenc", env = "RDEV_GPU_DESKTOP_NVENC")]
+    pub gpu_desktop_nvenc: bool,
+
+    #[cfg(target_os = "linux")]
+    #[arg(
+        long = "gpu-desktop-vulkan-video",
+        env = "RDEV_GPU_DESKTOP_VULKAN_VIDEO"
+    )]
+    pub gpu_desktop_vulkan_video: bool,
+
+    #[cfg(target_os = "macos")]
+    #[arg(
+        long = "gpu-desktop-videotoolbox",
+        env = "RDEV_GPU_DESKTOP_VIDEOTOOLBOX"
+    )]
+    pub gpu_desktop_videotoolbox: bool,
+
+    #[cfg(target_os = "windows")]
+    #[arg(
+        long = "gpu-desktop-mediafoundation",
+        env = "RDEV_GPU_DESKTOP_MEDIAFOUNDATION"
+    )]
+    pub gpu_desktop_mediafoundation: bool,
+
+    #[cfg(target_os = "windows")]
+    #[arg(
+        long = "gpu-desktop-windows-capture-source",
+        env = "RDEV_GPU_DESKTOP_WINDOWS_CAPTURE_SOURCE",
+        default_value = "auto"
+    )]
+    pub gpu_desktop_windows_capture_source: String,
 }
 
 pub fn parse_duration(value: &str) -> Result<std::time::Duration, String> {

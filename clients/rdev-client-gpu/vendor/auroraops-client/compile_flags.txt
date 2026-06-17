@@ -1,0 +1,8 @@
+-lX11
+-lXext
+-Wall
+-Wextra
+-Ideps/dist/include
+-DHAS_NVENC
+-DHAS_LIBNPP
+-DHAS_VAAPI

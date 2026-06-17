@@ -1,0 +1,59 @@
+# 使用Ubuntu 20.04作为基础镜像，提供GLIBC 2.31兼容性
+FROM ubuntu:20.04
+
+# 设置代理参数（可选）
+ARG http_proxy
+ARG https_proxy
+ENV http_proxy=${http_proxy}
+ENV https_proxy=${https_proxy}
+
+# 设置非交互模式
+ENV DEBIAN_FRONTEND=noninteractive
+
+# 使用国内镜像源加速（可选，注释掉以使用默认源）
+# RUN sed -i 's|archive.ubuntu.com|mirrors.tuna.tsinghua.edu.cn|g' /etc/apt/sources.list
+
+# 安装必要的依赖
+RUN apt-get update && apt-get install -y \
+    curl \
+    build-essential \
+    pkg-config \
+    libx11-dev \
+    libxtst-dev \
+    libglib2.0-dev \
+    libgstreamer1.0-dev \
+    libgstreamer-plugins-base1.0-dev \
+    libdbus-1-dev \
+    libxft-dev \
+    libpango1.0-dev \
+    libcairo2-dev \
+    git \
+    nasm \
+    yasm \
+    cmake \
+    libva-dev \
+    libdrm-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# 安装Rust
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+ENV PATH="/root/.cargo/bin:${PATH}"
+
+# 配置Rust国内镜像（可选）
+# RUN mkdir -p /root/.cargo && \
+#     echo '[source.crates-io]' > /root/.cargo/config.toml && \
+#     echo 'replace-with = "ustc"' >> /root/.cargo/config.toml && \
+#     echo '[source.ustc]' >> /root/.cargo/config.toml && \
+#     echo 'registry = "sparse+https://mirrors.ustc.edu.cn/crates.io-index/"' >> /root/.cargo/config.toml
+
+# 设置工作目录
+WORKDIR /build
+
+# 复制源代码
+COPY . .
+
+# 编译
+RUN cargo build --release
+
+# 输出编译结果
+CMD ["cp", "/build/target/release/weylus", "/output/weylus"]

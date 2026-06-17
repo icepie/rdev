@@ -32,8 +32,8 @@ struct TunnelFrame {
     payload: Vec<u8>,
 }
 
-pub fn spawn(args: Args, instance_id: String) {
-    if args.no_desktop || args.no_gpu_desktop_tunnel {
+pub fn spawn(args: Args, instance_id: String, local_desktop_ready: bool) {
+    if args.no_desktop || args.no_gpu_desktop_tunnel || !local_desktop_ready {
         return;
     }
     tokio::spawn(async move {

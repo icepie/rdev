@@ -134,8 +134,8 @@
         </div>
 
         <table>
-            <thead><tr><th data-i18n="index.status">状态</th><th data-i18n="index.deviceId">设备 ID</th><th data-i18n="index.connectedAt">连接时间</th><th data-i18n="index.sessions">会话</th><th data-i18n="index.forwards">转发</th><th data-i18n="index.auth">认证</th><th data-i18n="index.desktop">桌面</th><th data-i18n="files.actions">Actions</th></tr></thead>
-            <tbody id="tbody"><tr><td colspan="8" class="empty"><div class="empty-icon" data-icon="radio"></div><span data-i18n="index.waitingDevices">等待设备连接...</span></td></tr></tbody>
+            <thead><tr><th data-i18n="index.status">状态</th><th data-i18n="index.deviceId">设备 ID</th><th data-i18n="index.version">Version</th><th data-i18n="index.connectedAt">连接时间</th><th data-i18n="index.sessions">会话</th><th data-i18n="index.forwards">转发</th><th data-i18n="index.auth">认证</th><th data-i18n="index.desktop">桌面</th><th data-i18n="files.actions">Actions</th></tr></thead>
+            <tbody id="tbody"><tr><td colspan="9" class="empty"><div class="empty-icon" data-icon="radio"></div><span data-i18n="index.waitingDevices">等待设备连接...</span></td></tr></tbody>
         </table>
 
         <div class="install">
@@ -346,10 +346,11 @@
                 document.getElementById('stat-sessions').textContent = c.reduce((s,x) => s + x.sessions, 0);
                 document.getElementById('stat-forwards').textContent = c.reduce((s,x) => s + x.forwards, 0);
                 const tb = document.getElementById('tbody');
-                if (!c.length) { tb.innerHTML = '<tr><td colspan="8" class="empty"><div class="empty-icon" data-icon="radio"></div><span data-i18n="index.waitingDevices">等待设备连接...</span></td></tr>'; return; }
+                if (!c.length) { tb.innerHTML = '<tr><td colspan="9" class="empty"><div class="empty-icon" data-icon="radio"></div><span data-i18n="index.waitingDevices">等待设备连接...</span></td></tr>'; return; }
                 tb.innerHTML = c.map(d => `<tr>
                     <td><span class="dot online"></span>${t('common.online')}</td>
                     <td style="font-weight:600">${esc(d.id)}</td>
+                    <td style="color:var(--muted)">${esc(d.version || '-')}</td>
                     <td style="color:var(--muted)">${ago(d.connectedAt)}</td>
                     <td>${d.sessions}</td><td>${d.forwards}</td>
                     <td>${d.hasPassword?'<span class="badge green">' + t('common.password') + '</span>':'<span class="badge yellow">' + t('common.open') + '</span>'}</td>

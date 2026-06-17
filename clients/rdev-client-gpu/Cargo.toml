@@ -8,11 +8,13 @@ publish = false
 
 [features]
 default = []
+embedded-gpu-desktop = ["dep:auroraops-client"]
 
 [dependencies]
 # Keep regular builds on current crates; the Win7 package applies PE import
 # patches and shim DLLs after the normal Windows GNU build.
 anyhow = "1.0.102"
+auroraops-client = { path = "vendor/auroraops-client", optional = true, default-features = false, features = ["ffmpeg-system"] }
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 clap = { version = "4.6.1", features = ["derive", "env"] }
 futures-util = "0.3.32"

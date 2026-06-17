@@ -5,14 +5,14 @@ Experimental Rust client for the future GPU-friendly RDev desktop path.
 Current milestone:
 
 - Connects to an RDev server over `/ws`.
-- Registers with `clientId`, `instanceId`, optional password, and staged GPU desktop capabilities.
+- Registers with `clientId`, `instanceId`, optional password, `clientVersion` (`rs/<version>`), and staged GPU desktop capabilities.
 - Supports SSH shell/exec session transport with stdout/stderr binary frames.
 - Supports PTY sessions via `portable-pty`.
 - Supports `sftp` subsystem via embedded SFTP v3 handling built on `russh-sftp`.
 - Supports TCP forwarding protocol (`tcp_connect` and device-side listeners for reverse forwarding).
 - Supports Web file manager list/upload/download with offset binary frames.
 - Supports batch file distribution binary frames (`file_put`/streamed file writes).
-- Supports an AuroraOps/Weylus-style GPU desktop tunnel: `/gpu-desktop-tunnel` proxies browser HTTP/WebSocket streams to a local desktop service such as `127.0.0.1:1701`.
+- Supports an AuroraOps/Weylus-style GPU desktop tunnel: `/gpu-desktop-tunnel` proxies browser HTTP/WebSocket streams to the embedded AuroraOps desktop service when built with `embedded-gpu-desktop`.
 
 The Go `rdev-client` remains the default portable client. This Rust client is intended to coexist with it and can take on heavier platform/GPU dependencies over time.
 
@@ -26,7 +26,13 @@ make rust-client-gpu
 cargo build --release --manifest-path clients/rdev-client-gpu/Cargo.toml
 ```
 
-The regular Rust client uses current crate releases within the `rust-version` declared in `Cargo.toml`. The Windows 7 package keeps the normal Windows GNU build, then applies PE import patches and ships compatibility shim DLLs for Win8+ imports such as `GetSystemTimePreciseAsFileTime`, `WaitOnAddress`, and `ProcessPrng`.
+The regular Rust client uses current crate releases within the `rust-version` declared in `Cargo.toml`. The default build stays lightweight and does not include AuroraOps encoder/capture dependencies. To build the embedded GPU desktop service, install system FFmpeg/X11/DRM development libraries and run:
+
+```bash
+cargo build --release --manifest-path clients/rdev-client-gpu/Cargo.toml --features embedded-gpu-desktop
+```
+
+The Windows 7 package keeps the normal Windows GNU build, then applies PE import patches and ships compatibility shim DLLs for Win8+ imports such as `GetSystemTimePreciseAsFileTime`, `WaitOnAddress`, and `ProcessPrng`.
 
 For a Windows 7-compatible amd64 artifact:
 
@@ -53,7 +59,7 @@ Useful flags:
 - `--shell /bin/bash` selects the shell used for exec/shell sessions.
 - `--instance-id <id>` pins the reconnect identity for tests.
 - `--no-desktop` registers without staged desktop capabilities and disables the GPU desktop tunnel.
-- `--gpu-desktop-local 127.0.0.1:1701` selects the local AuroraOps/Weylus-compatible desktop service to proxy.
+- `--gpu-desktop-local 127.0.0.1:1701` selects where the embedded AuroraOps-compatible desktop service listens.
 - `--no-gpu-desktop-tunnel` disables only the GPU desktop tunnel while keeping other client features.
 - `--reconnect-delay 2s` controls reconnect backoff.
 
@@ -77,10 +83,10 @@ Windows 7 notes:
 
 ## GPU desktop direction
 
-The server does not decode desktop video. It opens `/gpu-desktop/<device>/` for browsers and multiplexes raw HTTP/WebSocket streams over `/gpu-desktop-tunnel` to the Rust client. The Rust client proxies those streams to the local desktop service, so AuroraOps/Weylus capture, input, encoder selection, and browser control protocol can move over as a self-contained desktop stack.
+The server does not decode desktop video. It opens `/gpu-desktop/<device>/` for browsers and multiplexes raw HTTP/WebSocket streams over `/gpu-desktop-tunnel` to the Rust client. With `embedded-gpu-desktop`, the Rust client starts vendored AuroraOps/Weylus web, capture, input, and H.264 encoder code in-process and tunnels browser traffic to that local service. Builds without the feature do not register the GPU desktop tunnel.
 
 ## Next
 
-1. Embed/start the AuroraOps/Weylus local desktop service from `rdev-client-gpu`.
+1. Add CI/package jobs for `embedded-gpu-desktop` on supported Linux runners.
 2. Harden Rust client validation across Windows and macOS hosts.
-3. Package GPU desktop assets and encoder dependencies behind optional features.
+3. Package GPU desktop runtime library dependencies per platform.

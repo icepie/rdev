@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+set -u
+
+RULE_FILE="/etc/udev/rules.d/60-auroraops-uinput.rules"
+GROUP_NAME="${AURORAOPS_UINPUT_GROUP:-uinput}"
+
+log() {
+  printf '[AuroraOps uinput] %s\n' "$*" >&2
+}
+
+run_root() {
+  if [ "$(id -u)" -eq 0 ]; then
+    "$@"
+  elif command -v pkexec >/dev/null 2>&1; then
+    pkexec "$@"
+  elif command -v sudo >/dev/null 2>&1; then
+    sudo "$@"
+  else
+    return 1
+  fi
+}
+
+ensure_group() {
+  getent group "$GROUP_NAME" >/dev/null 2>&1 && return 0
+  run_root groupadd -r "$GROUP_NAME" >/dev/null 2>&1 || true
+}
+
+ensure_rule() {
+  local tmp
+  tmp="$(mktemp)"
+  cat > "$tmp" <<EOF
+KERNEL=="uinput", MODE="0660", GROUP="$GROUP_NAME", OPTIONS+="static_node=uinput"
+EOF
+  run_root install -m 0644 "$tmp" "$RULE_FILE" >/dev/null 2>&1 || true
+  rm -f "$tmp"
+}
+
+load_module() {
+  if command -v modprobe >/dev/null 2>&1; then
+    run_root modprobe uinput >/dev/null 2>&1 || true
+  fi
+}
+
+reload_udev() {
+  if command -v udevadm >/dev/null 2>&1; then
+    run_root udevadm control --reload-rules >/dev/null 2>&1 || true
+    run_root udevadm trigger --subsystem-match=misc --attr-match=name=uinput >/dev/null 2>&1 || true
+  fi
+}
+
+fix_node_permissions() {
+  [ -e /dev/uinput ] || return 0
+  run_root chgrp "$GROUP_NAME" /dev/uinput >/dev/null 2>&1 || true
+  run_root chmod 0660 /dev/uinput >/dev/null 2>&1 || true
+}
+
+main() {
+  case "$(uname -s 2>/dev/null || true)" in
+    Linux) ;;
+    *) exit 0 ;;
+  esac
+
+  ensure_group
+  ensure_rule
+  load_module
+  reload_udev
+  fix_node_permissions
+
+  if [ -e /dev/uinput ]; then
+    log "/dev/uinput is present."
+  else
+    log "/dev/uinput is still missing; input will fall back when possible."
+  fi
+}
+
+main "$@"

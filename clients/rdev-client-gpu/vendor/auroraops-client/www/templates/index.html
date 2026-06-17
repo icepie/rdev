@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="mobile-web-app-capable" content="yes">
+    <title>AuroraOps 远程桌面</title>
+    <link rel="stylesheet" href="style.css">
+    <script src="lib.js"></script>
+    <script>
+        run("{{log_level}}");
+    </script>
+</head>
+
+<body>
+    <main id="main">
+        <video id="video" autoplay muted defaultMuted playsinline disablePictureInPicture></video>
+        <canvas id="canvas" class="vanish"></canvas>
+        <div id="debug_overlay" class="hide"></div>
+    </main>
+    <div id="settings">
+        <div id="handle">⠿</div>
+        <div id="settings_scroll">
+            <h2>AuroraOps 控制</h2>
+            <section>
+                <label for="window">画面来源</label>
+                <select id="window"></select>
+                <button id="refresh">刷新列表</button>
+            </section>
+            <h3>视频</h3>
+            <section>
+                <label><input type="checkbox" id="enable_video" checked /> <span>启用视频</span></label>
+                <label><input type="checkbox" id="energysaving" /> <span>节能模式（无视频，黑屏）</span></label>
+                <label><input type="checkbox" id="stretch" /> <span>拉伸画面</span></label>
+                <label>编码方式<br>
+                    <select id="encoder">
+                        <option value="auto">自动</option>
+                        <option value="libx264">libx264</option>
+                    </select>
+                </label>
+                <label>画面旋转<br>
+                    <select id="display_rotation">
+                        <option value="0">不旋转</option>
+                        <option value="90">顺时针 90°</option>
+                        <option value="180">180°</option>
+                        <option value="270">逆时针 90°</option>
+                    </select>
+                </label>
+                <label>输入旋转<br>
+                    <select id="input_rotation">
+                        <option value="0">不旋转</option>
+                        <option value="90">顺时针 90°</option>
+                        <option value="180">180°</option>
+                        <option value="270">逆时针 90°</option>
+                    </select>
+                </label>
+                <button id="fullscreen">切换全屏</button>
+                <label {{#if (not capture_cursor_enabled)}}class="hide" {{/if}}>
+                    <input type="checkbox" id="capture_cursor" />
+                    <span>显示光标</span>
+                </label>
+                <label><input type="checkbox" id="aggressive_seeking" checked /> <span>低延迟模式<br>（可能卡顿）</span></label>
+                <label>最大视频分辨率<br><input type="range" id="scale_video" min="0.1" max="2" step="0.01"
+                        value="1.8" /><output></output></label>
+                <label>帧率<br><input type="range" id="frame_rate" value="0" /><output>30</output> fps</label>
+            </section>
+            <h3>输入</h3>
+            <section>
+                <label><input type="checkbox" id="enable_mouse" checked /> <span>启用鼠标</span></label>
+                <label><input type="checkbox" id="enable_stylus" checked /> <span>启用手写笔</span></label>
+                <label><input type="checkbox" id="enable_touch" checked /> <span>启用触控</span></label>
+                <label>鼠标输入<br>
+                    <select id="pointer_backend_select">
+                        <option value="auto">自动</option>
+                        <option value="platform">系统原生</option>
+                        <option value="portal" data-platform="linux">Wayland Portal</option>
+                        <option value="wlroots-pointer" data-platform="linux">wlroots 指针</option>
+                        <option value="uinput" data-platform="linux">uinput</option>
+                        <option value="xtest" data-platform="linux">XTest</option>
+                        <option value="autopilot" data-platform="macos">AutoPilot</option>
+                        <option value="none">禁用</option>
+                    </select>
+                </label>
+                <label>键盘输入<br>
+                    <select id="keyboard_backend_select">
+                        <option value="auto">自动</option>
+                        <option value="platform">系统原生</option>
+                        <option value="portal" data-platform="linux">Wayland Portal</option>
+                        <option value="uinput" data-platform="linux">uinput</option>
+                        <option value="xtest" data-platform="linux">XTest</option>
+                        <option value="autopilot" data-platform="macos">AutoPilot</option>
+                        <option value="none">禁用</option>
+                    </select>
+                </label>
+                <label><input type="checkbox" id="virtual_cursor" checked /> <span>虚拟光标</span></label>
+                <label>最小压感阈值<br><input type="range" id="min_pressure" min="0" max="1" step="0.01"
+                        value="0" /></label>
+                <div class="input-capture-group">
+                    <button id="keyboard_capture_toggle" title="Ctrl+Alt+Shift+K">捕获键盘</button>
+                    <button id="pointer_capture_toggle" title="Ctrl+Alt+Shift+K">捕获鼠标</button>
+                    <button id="input_capture_toggle" title="Ctrl+Alt+Shift+K">同时捕获</button>
+                </div>
+                {{!-- Custom input areas are disabled for now. The original backend selector UI was removed
+                with the FLTK GUI, and the remaining checkbox only affects coordinate remapping. --}}
+            </section>
+            <section {{#if (not uinput_enabled)}}class="hide" {{/if}}>
+                <label><span>客户端名称</span><br><input type="text" id="client_name" /><br><span>可选，用于区分多个控制端。</span></label>
+            </section>
+            <section id="displayoptions">
+                <label id="leftylabel"><input type="checkbox" id="lefty" />换边</label>
+                <label id="vanish">隐藏到刷新</label>
+            </section>
+            <section id="stats_section">
+                <label><span>接收 FPS：</span><output id="fps">0</output></label>
+            </section>
+            <section id="runtime_status_section">
+                <label><span>抓取方式：</span><output id="capture_backend">未启动</output></label>
+                <label><span>编码方式：</span><output id="encoder_backend">未启动</output></label>
+                <label><span>输入方式：</span><output id="input_backend_status">未启动</output></label>
+                <label><span>指针状态：</span><output id="pointer_backend">未启动</output></label>
+                <label><span>键盘状态：</span><output id="keyboard_backend">未启动</output></label>
+            </section>
+            <section id="debug_section">
+                <label><input type="checkbox" id="enable_debug_overlay" /> <span>调试信息</span></label>
+            </section>
+            <section id="log_section" class="hide">
+                <label>日志
+                    <pre class="log" id="log" />
+                </label>
+            </section>
+        </div>
+    </div>
+</body>
+
+</html>

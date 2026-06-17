@@ -1,0 +1,69 @@
+[package]
+name = "auroraops-client"
+version = "0.11.4"
+authors = ["HMH <henry@freedesk.net>"]
+license = "AGPL-3.0-or-later"
+edition = "2021"
+description = "Vendored AuroraOps/Weylus desktop service for rdev-client-gpu."
+
+[lib]
+name = "auroraops_client"
+path = "src/lib.rs"
+
+[dependencies]
+base64 = "0.22"
+bitflags = { version = "^2.6", features = ["serde"] }
+bytes = "1.7.1"
+fastwebsockets = { version = "0.8.0", features = ["upgrade", "unstable-split"] }
+handlebars = "^6.1"
+http-body-util = "0.1.2"
+hyper = { version = "^1.4", features = ["server", "http1", "http2"] }
+hyper-util = { version = "0.1.8", features = ["tokio"] }
+image = { version = "^0.25", features = ["png"], default-features = false }
+libc = "0.2"
+percent-encoding = "2.1.0"
+rand = "0.8.5"
+serde = { version = "^1.0", features = ["derive"] }
+serde_json = "^1.0"
+tokio = { version = "^1", features = ["fs", "macros", "rt-multi-thread", "sync", "net"] }
+tracing = "^0.1"
+tungstenite = "0.24"
+url = "^2.5"
+
+[target.'cfg(windows)'.dependencies]
+winapi = { version = "0.3.9", features = ["d3d11", "d3dcommon", "dxgi", "dxgi1_2", "dxgitype", "errhandlingapi", "handleapi", "minwindef", "processthreadsapi", "securitybaseapi", "shellapi", "stringapiset", "synchapi", "userenv", "winbase", "wingdi", "winnls", "winnt", "winuser", "winsvc", "wtsapi32"] }
+wio = "0.2.2"
+captrs = "^0.3.1"
+
+[build-dependencies]
+cc = "^1.1"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+dbus = "^0.9"
+drm = "0.14"
+drm-ffi = "0.9"
+drm-fourcc = "2.2"
+gstreamer = { version = "^0.24", optional = true }
+gstreamer-app = { version = "^0.24", optional = true, features = ["v1_16"] }
+gstreamer-video = { version = "^0.24", optional = true, features = ["v1_16"] }
+linux-raw-sys = "0.4"
+nvfbc-crate = { package = "nvfbc", version = "0.2", optional = true }
+nvfbc-sys = { version = "0.2", optional = true }
+rustix = { version = "0.38", features = ["mm"] }
+wayland-client = { version = "0.31", optional = true }
+wayland-protocols-wlr = { version = "0.3", features = ["client"], optional = true }
+x11 = { version = "2.21", features = ["xlib", "xtest"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation = "^0.10"
+core-graphics = "^0.24"
+
+[features]
+default = ["ffmpeg-system"]
+ffmpeg-system = []
+pipewire = ["gstreamer", "gstreamer-app", "gstreamer-video", "wayland-client", "wayland-protocols-wlr"]
+pipewire-drm-prime = ["pipewire", "gstreamer-video/v1_24"]
+vaapi = []
+va-static = ["vaapi"]
+nvfbc = ["nvfbc-crate", "nvfbc-sys"]
+vulkan-video = []
