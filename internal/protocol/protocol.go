@@ -88,9 +88,10 @@ const (
 
 // Message is the WebSocket protocol message (for text/JSON frames)
 type Message struct {
-	Type      MessageType `json:"type"`
-	ClientID  string      `json:"clientId,omitempty"`
-	SessionID string      `json:"sessionId,omitempty"`
+	Type          MessageType `json:"type"`
+	ClientID      string      `json:"clientId,omitempty"`
+	SessionID     string      `json:"sessionId,omitempty"`
+	ClientVersion string      `json:"clientVersion,omitempty"`
 
 	// Client registration identity. InstanceID is a stable per-process token used
 	// to distinguish duplicate IDs from reconnects of the same running client.

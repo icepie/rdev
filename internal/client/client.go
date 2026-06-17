@@ -187,6 +187,7 @@ type Client struct {
 	instanceID      string
 	password        string
 	shell           string
+	version         string
 	conn            *gws.Conn
 	writeMu         sync.Mutex
 	sessions        map[string]*clientSession
@@ -229,6 +230,11 @@ func NewClient(serverURL, clientID, password, shell string) *Client {
 	}
 }
 
+// SetVersion sets the version string reported during registration.
+func (c *Client) SetVersion(version string) {
+	c.version = version
+}
+
 func newClientInstanceID() string {
 	var b [16]byte
 	if _, err := rand.Read(b[:]); err == nil {
@@ -251,6 +257,7 @@ func (h *wsEventHandler) OnOpen(socket *gws.Conn) {
 		Type:                protocol.MsgRegister,
 		ClientID:            h.client.requestedID,
 		InstanceID:          h.client.instanceID,
+		ClientVersion:       h.client.version,
 		Password:            h.client.password,
 		DesktopCapabilities: desktopCapabilities(),
 	}); err != nil {

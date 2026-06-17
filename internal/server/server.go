@@ -29,6 +29,7 @@ type ClientConn struct {
 	ID          string
 	RequestedID string
 	InstanceID  string
+	Version     string
 	Conn        *gws.Conn
 	ConnectedAt time.Time
 	Password    string
@@ -577,6 +578,7 @@ func (h *wsHandler) handleRegister(socket *gws.Conn, msg *protocol.Message) {
 		ID:          clientID,
 		RequestedID: clientID,
 		InstanceID:  instanceID,
+		Version:     msg.ClientVersion,
 		Conn:        socket,
 		ConnectedAt: time.Now(),
 		Password:    msg.Password,
@@ -1058,6 +1060,7 @@ func (s *Server) HandleAPI(w http.ResponseWriter, r *http.Request) {
 		ID          string                        `json:"id"`
 		RequestedID string                        `json:"requestedId,omitempty"`
 		InstanceID  string                        `json:"instanceId,omitempty"`
+		Version     string                        `json:"version,omitempty"`
 		ConnectedAt string                        `json:"connectedAt"`
 		Sessions    int                           `json:"sessions"`
 		Forwards    int                           `json:"forwards"`
@@ -1066,7 +1069,7 @@ func (s *Server) HandleAPI(w http.ResponseWriter, r *http.Request) {
 		GPUDesktop  bool                          `json:"gpuDesktop,omitempty"`
 	}
 
-	var clients []clientInfo
+	clients := make([]clientInfo, 0, len(s.clients))
 	for _, c := range s.clients {
 		c.mu.Lock()
 		n := len(c.Sessions)
@@ -1076,6 +1079,7 @@ func (s *Server) HandleAPI(w http.ResponseWriter, r *http.Request) {
 			ID:          c.ID,
 			RequestedID: c.RequestedID,
 			InstanceID:  c.InstanceID,
+			Version:     c.Version,
 			ConnectedAt: c.ConnectedAt.Format(time.RFC3339),
 			Sessions:    n,
 			Forwards:    f,
@@ -1119,17 +1123,19 @@ func (s *Server) HandleTerminalAPI(w http.ResponseWriter, r *http.Request) {
 		ID          string                        `json:"id"`
 		RequestedID string                        `json:"requestedId,omitempty"`
 		ConnectedAt string                        `json:"connectedAt"`
+		Version     string                        `json:"version,omitempty"`
 		HasPassword bool                          `json:"hasPassword"`
 		Desktop     *protocol.DesktopCapabilities `json:"desktop,omitempty"`
 		GPUDesktop  bool                          `json:"gpuDesktop,omitempty"`
 	}
 
-	var devices []deviceInfo
+	devices := make([]deviceInfo, 0, len(s.clients))
 	for _, c := range s.clients {
 		devices = append(devices, deviceInfo{
 			ID:          c.ID,
 			RequestedID: c.RequestedID,
 			ConnectedAt: c.ConnectedAt.Format(time.RFC3339),
+			Version:     c.Version,
 			HasPassword: c.Password != "",
 			Desktop:     cloneDesktopCapabilities(c.Desktop),
 			GPUDesktop:  s.gpuDesktopTunnel(c.ID) != nil,

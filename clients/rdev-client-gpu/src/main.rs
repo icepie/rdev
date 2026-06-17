@@ -66,6 +66,7 @@ async fn run_once(args: &Args, instance_id: &str) -> Result<()> {
         ty: Some(MessageType::Register),
         client_id: args.id.clone(),
         instance_id: instance_id.to_string(),
+        client_version: format!("rust-gpu/{}", env!("CARGO_PKG_VERSION")),
         password: args.password.clone(),
         desktop: Some(desktop::capabilities(!args.no_desktop)),
         ..Default::default()

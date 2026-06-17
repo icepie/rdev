@@ -86,6 +86,8 @@ pub struct Message {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub session_id: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub client_version: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub instance_id: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub subsystem: String,

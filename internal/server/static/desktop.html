@@ -39,6 +39,7 @@
         .status.warn { color:var(--yellow); }
         .status.err { color:var(--red); }
         .stage { flex:1; min-height:0; display:flex; align-items:center; justify-content:center; padding:12px; overflow:auto; }
+        .gpu-frame { width:100%; height:100%; min-height:calc(100vh - 170px); border:0; background:#05070b; display:none; }
         .stage[data-fit="actual"] { align-items:flex-start; justify-content:flex-start; }
         .stage[data-control="true"] canvas { cursor:crosshair; }
         .stage[data-cursor="true"] canvas { cursor:none; }
@@ -89,6 +90,7 @@
     </div>
     <div class="stage" id="stage" data-fit="fit">
         <canvas id="screen" style="display:none" tabindex="0"></canvas>
+        <iframe id="gpuFrame" class="gpu-frame" allow="clipboard-read; clipboard-write; fullscreen; pointer-lock"></iframe>
         <div id="empty" class="empty" data-i18n="desktop.empty">Select a device and connect.</div>
     </div>
 
@@ -122,6 +124,7 @@
     const stage = document.getElementById('stage');
     const canvas = document.getElementById('screen');
     const ctx = canvas.getContext('2d');
+    const gpuFrame = document.getElementById('gpuFrame');
     const empty = document.getElementById('empty');
     const storagePrefix = 'rdevDesktop.';
     let ws = null, drawing = false, pendingFrame = null, deviceCache = [], lastCloseMessage = '', connectionSeq = 0;
@@ -277,7 +280,8 @@
         const selected = params.get('device') || deviceSelect.value || localStorage.getItem(storagePrefix + 'device');
         deviceSelect.innerHTML = '<option value="">' + t('terminal.devicePlaceholder') + '</option>' + devices.map(d => {
             const desktop = d.desktop || {};
-            const label = `${d.id} · ${desktop.supported ? t('index.desktopReady') : (desktop.reason || t('index.desktopUnavailable'))}`;
+            const desktopState = d.gpuDesktop ? 'GPU tunnel' : (desktop.supported ? t('index.desktopReady') : (desktop.reason || t('index.desktopUnavailable')));
+            const label = `${d.id} · ${desktopState}`;
             return `<option value="${esc(d.id)}" ${d.id === selected ? 'selected' : ''}>${esc(label)}</option>`;
         }).join('');
         if (selected) deviceSelect.value = selected;
@@ -289,12 +293,28 @@
         clearTimeout(reconnectTimer);
         reconnectTimer = setTimeout(() => connect(), 150);
     }
-    function disconnect() { connectionSeq++; clearTimeout(reconnectTimer); if (ws) { ws.close(); ws = null; } lastCloseMessage = ''; resetFrameStats(); setStatus(t('desktop.closed'), 'warn'); }
+    function disconnect() { connectionSeq++; clearTimeout(reconnectTimer); if (ws) { ws.close(); ws = null; } gpuFrame.removeAttribute('src'); gpuFrame.style.display = 'none'; canvas.style.display = 'none'; empty.style.display = 'flex'; lastCloseMessage = ''; resetFrameStats(); setStatus(t('desktop.closed'), 'warn'); }
+    function connectGPUDesktop(device) {
+        remoteInput = false;
+        controlInput.disabled = true;
+        canvas.style.display = 'none';
+        empty.style.display = 'none';
+        resetFrameStats();
+        const query = new URLSearchParams();
+        if (passwordInput.value) query.set('password', passwordInput.value);
+        let path = `/gpu-desktop/${encodeURIComponent(device)}/`;
+        if (query.toString()) path += '?' + query.toString();
+        gpuFrame.src = authURL(path);
+        gpuFrame.style.display = 'block';
+        setStatus(`GPU tunnel · ${device}`, 'ok');
+    }
     async function connect() {
         disconnect();
         saveDesktopSettings();
         const device = deviceSelect.value;
         if (!device) return setStatus(t('common.noDevices'), 'err');
+        const selectedDevice = deviceCache.find(d => d.id === device) || {};
+        if (selectedDevice.gpuDesktop) return connectGPUDesktop(device);
         const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
         remoteInput = false;
         resetFrameStats();

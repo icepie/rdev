@@ -160,6 +160,7 @@ Environment variables:
 	fmt.Println()
 
 	c := client.NewClient(serverURL, clientID, password, shell)
+	c.SetVersion("go/" + version)
 
 	// Print connection hints after successful connect
 	connectPrinted := false
