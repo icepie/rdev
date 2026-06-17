@@ -75,6 +75,10 @@ fn main() {
     let deps_dir = Path::new("deps").canonicalize().expect("deps directory exists");
     let dist_dir = deps_dir.join({
         let mut name = format!("dist_{}", target_os);
+        if target_os == "windows" && !target_arch.is_empty() {
+            name.push('_');
+            name.push_str(&target_arch);
+        }
         if nvenc_enabled {
             name.push_str("_nvenc");
         }

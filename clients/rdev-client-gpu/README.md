@@ -44,6 +44,13 @@ cargo build --release --manifest-path clients/rdev-client-gpu/Cargo.toml --featu
 
 The Windows 7 package keeps the normal Windows GNU build, then applies PE import patches and ships compatibility shim DLLs for Win8+ imports such as `GetSystemTimePreciseAsFileTime`, `WaitOnAddress`, and `ProcessPrng`.
 
+For a Windows ARM64 artifact from a Linux host, install an LLVM MinGW toolchain that provides `aarch64-w64-mingw32-clang`, then run:
+
+```bash
+rustup target add aarch64-pc-windows-gnullvm
+make rust-client-gpu-windows-arm64-package
+```
+
 For a Windows 7-compatible amd64 artifact:
 
 ```bash
@@ -99,7 +106,7 @@ The server does not decode desktop video. It opens `/gpu-desktop/<device>/` for 
 
 The `Rust Client GPU` GitHub Actions workflow publishes artifacts on normal pushes and uploads them to GitHub Releases on `v*` tags.
 
-- Public `rdev-client-gpu-*` packages are the performance flavor and include embedded desktop support by default.
+- Public `rdev-client-gpu-*` packages are the performance flavor and include embedded desktop support by default, including Windows amd64, Windows ARM64, and Windows 7 amd64.
 - Linux packages use VAAPI+x264 by default and can opt into NVENC for dedicated NVIDIA builds.
 - Linux release packages are built in distro environments to avoid accidentally requiring the newest runner glibc.
 

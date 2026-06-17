@@ -1,4 +1,4 @@
-.PHONY: all build clean cross server client web web-install test vet fmt win7-go-client win7-service-wrapper rust-client-gpu rust-client-gpu-check rust-client-gpu-fmt rust-client-gpu-clippy rust-client-gpu-test rust-client-gpu-smoke rust-client-gpu-linux-desktop-package rust-client-gpu-win7-package rust-client-gpu-win7-rdev-desktop-package rust-client-gpu-win7-stage rust-client-gpu-win7-smoke
+.PHONY: all build clean cross server client web web-install test vet fmt win7-go-client win7-service-wrapper rust-client-gpu rust-client-gpu-check rust-client-gpu-fmt rust-client-gpu-clippy rust-client-gpu-test rust-client-gpu-smoke rust-client-gpu-linux-desktop-package rust-client-gpu-windows-arm64-package rust-client-gpu-win7-package rust-client-gpu-win7-rdev-desktop-package rust-client-gpu-win7-stage rust-client-gpu-win7-smoke
 
 BINS = rdev-server rdev-client
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
@@ -44,6 +44,9 @@ rust-client-gpu:
 
 rust-client-gpu-linux-desktop-package:
 	clients/rdev-client-gpu/scripts/package-linux-desktop.sh linux
+
+rust-client-gpu-windows-arm64-package:
+	cargo build --release --manifest-path $(RUST_CLIENT_GPU_MANIFEST) --target aarch64-pc-windows-gnullvm --features embedded-rdev-desktop
 
 rust-client-gpu-win7-package:
 	cargo build --release --manifest-path $(RUST_CLIENT_GPU_MANIFEST) --target x86_64-pc-windows-gnu

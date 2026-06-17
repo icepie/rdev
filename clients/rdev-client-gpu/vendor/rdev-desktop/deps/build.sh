@@ -20,6 +20,7 @@ fi
 [ -z "$TARGET_OS" ] && export TARGET_OS="$HOST_OS"
 [ -z "$TARGET_ARCH" ] && export TARGET_ARCH="$CARGO_CFG_TARGET_ARCH"
 [ -z "$TARGET_ENV" ] && export TARGET_ENV="$CARGO_CFG_TARGET_ENV"
+[ -z "$TARGET_ABI" ] && export TARGET_ABI="$CARGO_CFG_TARGET_ABI"
 [ -z "$ENABLE_VAAPI" ] && export ENABLE_VAAPI="n"
 [ -z "$ENABLE_NVENC" ] && export ENABLE_NVENC="n"
 [ -z "$ENABLE_VULKAN_VIDEO" ] && export ENABLE_VULKAN_VIDEO="n"
@@ -29,13 +30,34 @@ export NPROCS="$(nproc || echo 4)"
 ./download.sh
 
 if [ "$TARGET_OS" == "windows" ]; then
-    if [ "$HOST_OS" == "linux" ]; then
+    if [ "$HOST_OS" == "linux" ] && [ "$TARGET_ARCH" == "aarch64" ]; then
+        export CC="aarch64-w64-mingw32-clang"
+        export CXX="aarch64-w64-mingw32-clang++"
+        export LD="aarch64-w64-mingw32-clang"
+        export AR="llvm-ar"
+        export RANLIB="llvm-ranlib"
+        export NM="llvm-nm"
+        export STRIP="llvm-strip"
+        export FFMPEG_EXTRA_ARGS="--arch=aarch64 --target-os=mingw64 \
+            --enable-cross-compile --disable-asm --disable-nvenc --disable-ffnvcodec \
+            --enable-mediafoundation --enable-d3d11va \
+            --cc=aarch64-w64-mingw32-clang --cxx=aarch64-w64-mingw32-clang++ --ld=aarch64-w64-mingw32-clang \
+            --ar=llvm-ar --ranlib=llvm-ranlib --nm=llvm-nm --strip=llvm-strip"
+        export FFMPEG_CFLAGS="-I$DIST/include"
+        export FFMPEG_LIBRARY_PATH="-L$DIST/lib"
+        export X264_EXTRA_ARGS="--host=aarch64-w64-mingw32 --disable-asm"
+    elif [ "$HOST_OS" == "linux" ]; then
         export CROSS_COMPILE="x86_64-w64-mingw32-"
+        export MINGW_CRT_FLAGS=""
+        if printf 'int main(void){return 0;}\n' | x86_64-w64-mingw32-gcc -x c - -mcrtdll=msvcrt-os -c -o /tmp/rdev-mingw-crt-test.o >/dev/null 2>&1; then
+            export MINGW_CRT_FLAGS="-mcrtdll=msvcrt-os"
+            rm -f /tmp/rdev-mingw-crt-test.o
+        fi
         export FFMPEG_EXTRA_ARGS="--arch=x86_64 --target-os=mingw64 \
             --cross-prefix=x86_64-w64-mingw32- --disable-nvenc --disable-ffnvcodec \
             --enable-mediafoundation --pkg-config=pkg-config --enable-d3d11va"
-        export FFMPEG_CFLAGS="-I$DIST/include -mcrtdll=msvcrt-os"
-        export FFMPEG_LIBRARY_PATH="-L$DIST/lib -mcrtdll=msvcrt-os"
+        export FFMPEG_CFLAGS="-I$DIST/include $MINGW_CRT_FLAGS"
+        export FFMPEG_LIBRARY_PATH="-L$DIST/lib $MINGW_CRT_FLAGS"
     elif [ "$TARGET_ENV" != "msvc" ]; then
         export CC="clang"
         export CXX="clang++"
@@ -108,8 +130,11 @@ if [ "$ENABLE_LIBNPP" == "y" ]; then
     export FFMPEG_EXTRA_ARGS="$FFMPEG_EXTRA_ARGS --enable-libnpp --enable-nonfree"
 fi
 
-if [ "$TARGET_OS" == "windows" ] && [ "$HOST_OS" == "linux" ]; then
-    export X264_EXTRA_ARGS="--cross-prefix=x86_64-w64-mingw32- --host=x86_64-w64-mingw32 --extra-cflags=-mcrtdll=msvcrt-os --extra-ldflags=-mcrtdll=msvcrt-os"
+if [ "$TARGET_OS" == "windows" ] && [ "$HOST_OS" == "linux" ] && [ "$TARGET_ARCH" != "aarch64" ]; then
+    export X264_EXTRA_ARGS="--cross-prefix=x86_64-w64-mingw32- --host=x86_64-w64-mingw32"
+    if [ -n "${MINGW_CRT_FLAGS:-}" ]; then
+        export X264_EXTRA_ARGS="$X264_EXTRA_ARGS --extra-cflags=$MINGW_CRT_FLAGS --extra-ldflags=$MINGW_CRT_FLAGS"
+    fi
 fi
 ./x264.sh
 if [ "$TARGET_OS" == "windows" ] && [ "$HOST_OS" == "windows" ]; then
