@@ -34,12 +34,12 @@ To build and stage the embedded GPU desktop service on Linux, run:
 make rust-client-gpu-linux-desktop-package
 ```
 
-The package script installs the native build dependencies for the detected distro, builds vendored FFmpeg/x264 from source, enables `embedded-rdev-desktop`, and stages the result in `clients/rdev-client-gpu/dist/`. CI uses the same script inside distro containers to produce glibc-specific Linux packages.
+The package script installs the native build dependencies for the detected distro, builds vendored FFmpeg/x264/libva/nv-codec-headers from source, enables `embedded-rdev-desktop-hw` by default, and stages the result in `clients/rdev-client-gpu/dist/`. CI uses the same script inside distro containers to produce glibc-specific Linux packages. Hardware encoders are optional at runtime: systems without VAAPI or NVIDIA support fall back to software x264.
 
 For a direct embedded desktop build without staging:
 
 ```bash
-cargo build --release --manifest-path clients/rdev-client-gpu/Cargo.toml --features embedded-rdev-desktop
+cargo build --release --manifest-path clients/rdev-client-gpu/Cargo.toml --features embedded-rdev-desktop-hw
 ```
 
 The Windows 7 package keeps the normal Windows GNU build, then applies PE import patches and ships compatibility shim DLLs for Win8+ imports such as `GetSystemTimePreciseAsFileTime`, `WaitOnAddress`, and `ProcessPrng`.
@@ -100,11 +100,11 @@ The server does not decode desktop video. It opens `/gpu-desktop/<device>/` for 
 The `Rust Client GPU` GitHub Actions workflow publishes artifacts on normal pushes and uploads them to GitHub Releases on `v*` tags.
 
 - Lightweight packages: Linux amd64, Windows amd64, Windows 7 amd64, macOS amd64, and macOS arm64.
-- Embedded desktop packages: Linux amd64 glibc 2.17/2.28/2.31/2.35/2.39 plus Debian 11/12 labels, and macOS amd64/arm64.
+- Embedded desktop packages: Linux amd64 glibc 2.17/2.28/2.31/2.35/2.39 plus Debian 11/12 labels with VAAPI/NVENC/x264 enabled, and macOS amd64/arm64.
 - Linux embedded desktop packages are built in containerized distro images to avoid accidentally requiring the newest runner glibc.
 
 ## Next
 
 1. Harden Rust client validation across Windows and macOS hosts.
 2. Add signed/notarized macOS packaging when distribution requires it.
-3. Add optional VAAPI/NVENC Linux desktop package variants after runtime testing.
+3. Add signed/notarized Windows/macOS installers when distribution requires them.

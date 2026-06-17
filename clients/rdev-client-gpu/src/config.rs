@@ -65,11 +65,19 @@ pub struct Args {
     pub gpu_desktop_nvfbc: bool,
 
     #[cfg(target_os = "linux")]
-    #[arg(long = "gpu-desktop-vaapi", env = "RDEV_GPU_DESKTOP_VAAPI")]
+    #[arg(
+        long = "gpu-desktop-vaapi",
+        env = "RDEV_GPU_DESKTOP_VAAPI",
+        default_value_t = cfg!(feature = "embedded-rdev-desktop-vaapi")
+    )]
     pub gpu_desktop_vaapi: bool,
 
     #[cfg(any(target_os = "linux", target_os = "windows"))]
-    #[arg(long = "gpu-desktop-nvenc", env = "RDEV_GPU_DESKTOP_NVENC")]
+    #[arg(
+        long = "gpu-desktop-nvenc",
+        env = "RDEV_GPU_DESKTOP_NVENC",
+        default_value_t = cfg!(feature = "embedded-rdev-desktop-hw")
+    )]
     pub gpu_desktop_nvenc: bool,
 
     #[cfg(target_os = "linux")]

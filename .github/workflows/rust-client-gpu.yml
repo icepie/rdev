@@ -63,36 +63,36 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: linux-amd64-lite
+          - name: linux-amd64
             os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             artifact: rdev-client-gpu
-            asset: rdev-client-gpu-linux-amd64-lite
-          - name: linux-arm64-lite
+            asset: rdev-client-gpu-linux-amd64
+          - name: linux-arm64
             os: ubuntu-latest
             target: aarch64-unknown-linux-gnu
             artifact: rdev-client-gpu
-            asset: rdev-client-gpu-linux-arm64-lite
-          - name: windows-amd64-lite
+            asset: rdev-client-gpu-linux-arm64
+          - name: windows-amd64
             os: windows-latest
             target: x86_64-pc-windows-msvc
             artifact: rdev-client-gpu.exe
-            asset: rdev-client-gpu-windows-amd64-lite
+            asset: rdev-client-gpu-windows-amd64
           - name: windows-win7-amd64
             os: ubuntu-latest
             target: x86_64-pc-windows-gnu
             artifact: rdev-client-gpu.exe
             asset: rdev-client-gpu-windows-win7-amd64
-          - name: darwin-amd64-lite
+          - name: darwin-amd64
             os: macos-13
             target: x86_64-apple-darwin
             artifact: rdev-client-gpu
-            asset: rdev-client-gpu-darwin-amd64-lite
-          - name: darwin-arm64-lite
+            asset: rdev-client-gpu-darwin-amd64
+          - name: darwin-arm64
             os: macos-14
             target: aarch64-apple-darwin
             artifact: rdev-client-gpu
-            asset: rdev-client-gpu-darwin-arm64-lite
+            asset: rdev-client-gpu-darwin-arm64
     defaults:
       run:
         working-directory: clients/rdev-client-gpu
@@ -213,10 +213,15 @@ jobs:
             -v "$PWD:/work" \
             -w /work \
             -e CARGO_NET_RETRY=5 \
+            -e RDEV_GPU_PROXY='${{ vars.RDEV_GPU_PROXY }}' \
+            -e RDEV_GPU_APT_MIRROR='${{ vars.RDEV_GPU_APT_MIRROR }}' \
+            -e RDEV_GPU_CARGO_REGISTRY='${{ vars.RDEV_GPU_CARGO_REGISTRY }}' \
+            -e RDEV_GPU_RUSTUP_DIST_SERVER='${{ vars.RDEV_GPU_RUSTUP_DIST_SERVER }}' \
+            -e RDEV_GPU_RUSTUP_UPDATE_ROOT='${{ vars.RDEV_GPU_RUSTUP_UPDATE_ROOT }}' \
             -e RDEV_GPU_TARGET='${{ matrix.target }}' \
             -e RDEV_GPU_ARCH='${{ matrix.arch }}' \
             -e RDEV_GPU_ASSET='${{ matrix.asset }}' \
-            -e RDEV_GPU_RUST_TOOLCHAIN='1.85.1' \
+            -e RDEV_GPU_RUST_TOOLCHAIN='stable' \
             -e TMPDIR=/tmp \
             '${{ matrix.image }}' \
             bash clients/rdev-client-gpu/scripts/package-linux-desktop.sh '${{ matrix.distro }}'

@@ -7,7 +7,13 @@ clone_repo() {
     local branch="$2"
     shift 2
 
-    [ -d "$dir" ] && return 0
+    if [ -d "$dir" ]; then
+        if git -C "$dir" rev-parse --is-inside-work-tree >/dev/null 2>&1 && \
+           find "$dir" -mindepth 1 -maxdepth 2 ! -path "$dir/.git" ! -path "$dir/.git/*" | grep -q .; then
+            return 0
+        fi
+        rm -rf "$dir"
+    fi
 
     local url attempt
     for url in "$@"; do
