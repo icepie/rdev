@@ -48,9 +48,7 @@ rust-client-gpu-win7-package:
 	python3 clients/rdev-client-gpu/win7/patch_imports.py \
 		$(RUST_CLIENT_GPU_WIN7_DIR)/rdev-client-gpu.exe \
 		$(RUST_CLIENT_GPU_WIN7_DIST)/rdev-client-gpu.exe
-	x86_64-w64-mingw32-gcc -shared -Os -mcrtdll=msvcrt-os -o $(RUST_CLIENT_GPU_WIN7_DIST)/rdev-waitonaddress-shim.dll clients/rdev-client-gpu/win7/waitonaddress_shim.c
-	x86_64-w64-mingw32-gcc -shared -Os -mcrtdll=msvcrt-os -o $(RUST_CLIENT_GPU_WIN7_DIST)/rdev-bcprng.dll clients/rdev-client-gpu/win7/bcprng_shim.c
-	x86_64-w64-mingw32-gcc -shared -Os -mcrtdll=msvcrt-os -o $(RUST_CLIENT_GPU_WIN7_DIST)/rdevws.dll clients/rdev-client-gpu/win7/ws2_32_shim.c -lws2_32
+	python3 clients/rdev-client-gpu/win7/build_shims.py $(RUST_CLIENT_GPU_WIN7_DIST)
 	python3 clients/rdev-client-gpu/win7/copy_winpty_runtime.py $(RUST_CLIENT_GPU_WIN7_DIST)
 
 rust-client-gpu-check: rust-client-gpu-fmt rust-client-gpu-clippy rust-client-gpu-test

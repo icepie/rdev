@@ -120,9 +120,7 @@ jobs:
             python3 win7/patch_imports.py \
               "target/${{ matrix.target }}/release/${{ matrix.artifact }}" \
               "dist/${{ matrix.asset }}/rdev-client-gpu.exe"
-            x86_64-w64-mingw32-gcc -shared -Os -mcrtdll=msvcrt-os -o "dist/${{ matrix.asset }}/rdev-waitonaddress-shim.dll" win7/waitonaddress_shim.c
-            x86_64-w64-mingw32-gcc -shared -Os -mcrtdll=msvcrt-os -o "dist/${{ matrix.asset }}/rdev-bcprng.dll" win7/bcprng_shim.c
-            x86_64-w64-mingw32-gcc -shared -Os -mcrtdll=msvcrt-os -o "dist/${{ matrix.asset }}/rdevws.dll" win7/ws2_32_shim.c -lws2_32
+            python3 win7/build_shims.py "dist/${{ matrix.asset }}"
             python3 win7/copy_winpty_runtime.py "dist/${{ matrix.asset }}"
           else
             cp "target/${{ matrix.target }}/release/${{ matrix.artifact }}" "dist/${{ matrix.asset }}/${{ matrix.artifact }}"
