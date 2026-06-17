@@ -168,6 +168,10 @@ fi
 ensure_rust
 activate_legacy_toolchain
 
+build_suffix=$(printf '%s-%s-%s' "$DISTRO" "$ARCH" "$TARGET" | tr -c 'A-Za-z0-9_.-' '_')
+export CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-$CRATE_DIR/target/linux-package-$build_suffix}
+export RDEV_DESKTOP_DIST_SUFFIX=${RDEV_DESKTOP_DIST_SUFFIX:-$build_suffix}
+
 git config --global --add safe.directory '*' >/dev/null 2>&1 || true
 
 export CARGO_NET_RETRY=${CARGO_NET_RETRY:-5}
@@ -185,7 +189,7 @@ cargo build \
   --features "$FEATURES" \
   --target "$TARGET"
 
-cp "$CRATE_DIR/target/$TARGET/release/rdev-client-gpu" "$DIST_DIR/rdev-client-gpu"
+cp "$CARGO_TARGET_DIR/$TARGET/release/rdev-client-gpu" "$DIST_DIR/rdev-client-gpu"
 chmod +x "$DIST_DIR/rdev-client-gpu"
 "$DIST_DIR/rdev-client-gpu" --version > "$DIST_DIR/VERSION.txt"
 {
@@ -194,6 +198,8 @@ chmod +x "$DIST_DIR/rdev-client-gpu"
   echo "distro=$DISTRO"
   echo "arch=$ARCH"
   echo "features=$FEATURES"
+  echo "cargo_target_dir=$CARGO_TARGET_DIR"
+  echo "native_dist_suffix=$RDEV_DESKTOP_DIST_SUFFIX"
   echo "enable_vaapi=$ENABLE_VAAPI"
   echo "enable_nvenc=$ENABLE_NVENC"
   if command -v ldd >/dev/null 2>&1; then

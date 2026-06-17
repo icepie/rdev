@@ -93,6 +93,14 @@ fn main() {
         if target_os == "linux" && vulkan_video_enabled {
             name.push_str("_vulkan_video");
         }
+        if target_os == "linux" {
+            if let Ok(suffix) = env::var("RDEV_DESKTOP_DIST_SUFFIX") {
+                if !suffix.is_empty() {
+                    name.push('_');
+                    name.push_str(&suffix);
+                }
+            }
+        }
         name
     });
 
