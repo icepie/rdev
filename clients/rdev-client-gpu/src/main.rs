@@ -37,15 +37,12 @@ async fn main() -> Result<()> {
     }
     let instance_id = args.instance_id.clone().unwrap_or_else(new_instance_id);
     let rdev_desktop_service = rdev_desktop_service::start(&args);
-    gpu_tunnel::spawn(
-        args.clone(),
-        instance_id.clone(),
-        rdev_desktop_service.is_some(),
-    );
+    let desktop_enabled = rdev_desktop_service.is_some();
+    gpu_tunnel::spawn(args.clone(), instance_id.clone(), desktop_enabled);
     let _rdev_desktop_service = rdev_desktop_service;
 
     loop {
-        match run_once(&args, &instance_id).await {
+        match run_once(&args, &instance_id, desktop_enabled).await {
             Ok(()) => info!("connection closed"),
             Err(err) => warn!("connection failed: {err:#}"),
         }
@@ -60,7 +57,7 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-async fn run_once(args: &Args, instance_id: &str) -> Result<()> {
+async fn run_once(args: &Args, instance_id: &str, desktop_enabled: bool) -> Result<()> {
     let ws_url = websocket_url(&args.server)?;
     info!("connecting to {ws_url} as {}", args.id);
     let (ws, _) = connect_async(ws_url).await.context("connect websocket")?;
@@ -77,7 +74,7 @@ async fn run_once(args: &Args, instance_id: &str) -> Result<()> {
         instance_id: instance_id.to_string(),
         client_version: format!("rs/{}", env!("CARGO_PKG_VERSION")),
         password: args.password.clone(),
-        desktop: Some(desktop::capabilities(!args.no_desktop)),
+        desktop: Some(desktop::capabilities(!args.no_desktop && desktop_enabled)),
         ..Default::default()
     };
     write
@@ -102,7 +99,7 @@ async fn run_once(args: &Args, instance_id: &str) -> Result<()> {
             }
             inbound = read.next() => {
                 match inbound {
-                    Some(Ok(WsMessage::Text(text))) => handle_text(&text, args, &sessions, &forwards, &files, &out_tx).await?,
+                    Some(Ok(WsMessage::Text(text))) => handle_text(&text, args, desktop_enabled, &sessions, &forwards, &files, &out_tx).await?,
                     Some(Ok(WsMessage::Binary(raw))) => handle_binary(&raw, &sessions, &forwards, &files, &fileputs, &out_tx).await?,
                     Some(Ok(WsMessage::Close(frame))) => {
                         info!("websocket closed by server: {:?}", frame);
@@ -127,6 +124,7 @@ async fn run_once(args: &Args, instance_id: &str) -> Result<()> {
 async fn handle_text(
     text: &str,
     args: &Args,
+    desktop_enabled: bool,
     sessions: &SessionManager,
     forwards: &ForwardManager,
     files: &FileManager,
@@ -171,12 +169,19 @@ async fn handle_text(
         Some(MessageType::FileDownloadStart) => files.download_start(msg, out_tx.clone()).await,
         Some(MessageType::FileTransferCancel) => files.cancel(&msg.task_id).await,
         Some(MessageType::DesktopStart) => {
-            warn!("desktop_start received but GPU desktop pipeline is not enabled yet");
+            let error = if desktop_enabled {
+                info!("desktop_start received; embedded GPU desktop is served through the GPU desktop tunnel");
+                "embedded GPU desktop is available through the GPU desktop tunnel; refresh the device list if the browser did not switch automatically"
+            } else {
+                warn!("desktop_start received but embedded GPU desktop service is not active");
+                "embedded GPU desktop service is not active"
+            };
             let _ = out_tx
                 .send(OutboundEvent::Message(Message {
                     ty: Some(MessageType::DesktopReady),
                     session_id: msg.session_id,
-                    error: "rdev-client-gpu desktop pipeline is not implemented yet".into(),
+                    error: error.into(),
+                    desktop: Some(desktop::capabilities(desktop_enabled)),
                     ..Default::default()
                 }))
                 .await;

@@ -182,17 +182,19 @@ type Message struct {
 
 // DesktopCapabilities describes remote desktop support reported by a device.
 type DesktopCapabilities struct {
-	Platform      string                `json:"platform"`
-	DisplayServer string                `json:"displayServer,omitempty"`
-	Supported     bool                  `json:"supported"`
-	ViewOnly      bool                  `json:"viewOnly"`
-	Input         bool                  `json:"input"`
-	Clipboard     bool                  `json:"clipboard"`
-	Backends      []string              `json:"backends,omitempty"`
-	InputBackends []string              `json:"inputBackends,omitempty"`
-	InputOptions  []DesktopInputBackend `json:"inputOptions,omitempty"`
-	Reason        string                `json:"reason,omitempty"`
-	Sources       []DesktopSource       `json:"sources,omitempty"`
+	Platform        string                `json:"platform"`
+	DisplayServer   string                `json:"displayServer,omitempty"`
+	Supported       bool                  `json:"supported"`
+	ViewOnly        bool                  `json:"viewOnly"`
+	Input           bool                  `json:"input"`
+	Clipboard       bool                  `json:"clipboard"`
+	Backends        []string              `json:"backends,omitempty"`
+	InputBackends   []string              `json:"inputBackends,omitempty"`
+	InputOptions    []DesktopInputBackend `json:"inputOptions,omitempty"`
+	VideoCodecs     []string              `json:"videoCodecs,omitempty"`
+	EncoderBackends []string              `json:"encoderBackends,omitempty"`
+	Reason          string                `json:"reason,omitempty"`
+	Sources         []DesktopSource       `json:"sources,omitempty"`
 }
 
 // DesktopInputBackend describes one selectable desktop input backend.

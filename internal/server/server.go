@@ -629,10 +629,39 @@ func cloneDesktopCapabilities(caps *protocol.DesktopCapabilities) *protocol.Desk
 			clone.InputOptions[i].Requires = append([]string(nil), caps.InputOptions[i].Requires...)
 		}
 	}
+	if caps.VideoCodecs != nil {
+		clone.VideoCodecs = append([]string(nil), caps.VideoCodecs...)
+	}
+	if caps.EncoderBackends != nil {
+		clone.EncoderBackends = append([]string(nil), caps.EncoderBackends...)
+	}
 	if caps.Sources != nil {
 		clone.Sources = append([]protocol.DesktopSource(nil), caps.Sources...)
 	}
 	return &clone
+}
+
+func (s *Server) clientGPUDesktopAvailable(client *ClientConn) bool {
+	if client == nil {
+		return false
+	}
+	if s.gpuDesktopTunnel(client.ID) != nil {
+		return true
+	}
+	return desktopCapabilitiesIncludeGPUTunnel(client.Desktop)
+}
+
+func desktopCapabilitiesIncludeGPUTunnel(caps *protocol.DesktopCapabilities) bool {
+	if caps == nil || !caps.Supported {
+		return false
+	}
+	for _, backend := range caps.Backends {
+		switch strings.ToLower(strings.TrimSpace(backend)) {
+		case "gpu-desktop-tunnel", "rdev-desktop", "pipewire":
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) registerClient(client *ClientConn) (*ClientConn, string, bool) {
@@ -1085,7 +1114,7 @@ func (s *Server) HandleAPI(w http.ResponseWriter, r *http.Request) {
 			Forwards:    f,
 			HasPassword: c.Password != "",
 			Desktop:     cloneDesktopCapabilities(c.Desktop),
-			GPUDesktop:  s.gpuDesktopTunnel(c.ID) != nil,
+			GPUDesktop:  s.clientGPUDesktopAvailable(c),
 		})
 	}
 
@@ -1138,7 +1167,7 @@ func (s *Server) HandleTerminalAPI(w http.ResponseWriter, r *http.Request) {
 			Version:     c.Version,
 			HasPassword: c.Password != "",
 			Desktop:     cloneDesktopCapabilities(c.Desktop),
-			GPUDesktop:  s.gpuDesktopTunnel(c.ID) != nil,
+			GPUDesktop:  s.clientGPUDesktopAvailable(c),
 		})
 	}
 
