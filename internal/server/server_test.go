@@ -96,6 +96,36 @@ func TestRegisterClientDuplicateIDGetsSuffix(t *testing.T) {
 	}
 }
 
+func TestClientGPUDesktopAvailableFromCapabilities(t *testing.T) {
+	s := NewServer()
+	for _, backend := range []string{"rdev-desktop", "gpu-desktop-tunnel", "pipewire"} {
+		client := &ClientConn{
+			ID: "device-" + backend,
+			Desktop: &protocol.DesktopCapabilities{
+				Supported: true,
+				Backends:  []string{backend},
+			},
+		}
+		if !s.clientGPUDesktopAvailable(client) {
+			t.Fatalf("clientGPUDesktopAvailable(%q) = false, want true", backend)
+		}
+	}
+}
+
+func TestClientGPUDesktopAvailableRequiresSupportedCapability(t *testing.T) {
+	s := NewServer()
+	client := &ClientConn{
+		ID: "device",
+		Desktop: &protocol.DesktopCapabilities{
+			Supported: false,
+			Backends:  []string{"rdev-desktop"},
+		},
+	}
+	if s.clientGPUDesktopAvailable(client) {
+		t.Fatal("clientGPUDesktopAvailable should ignore unsupported desktop capability")
+	}
+}
+
 func TestUnregisterClientIgnoresStaleSocket(t *testing.T) {
 	s := NewServer()
 	oldConn := &gws.Conn{}
