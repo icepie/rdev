@@ -38,6 +38,9 @@ async fn main() -> Result<()> {
     let instance_id = args.instance_id.clone().unwrap_or_else(new_instance_id);
     let rdev_desktop_service = rdev_desktop_service::start(&args);
     let desktop_enabled = rdev_desktop_service.is_some();
+    if let Some(service) = rdev_desktop_service.as_ref() {
+        args.gpu_desktop_local = service.bind_addr().to_string();
+    }
     gpu_tunnel::spawn(args.clone(), instance_id.clone(), desktop_enabled);
     let _rdev_desktop_service = rdev_desktop_service;
 
