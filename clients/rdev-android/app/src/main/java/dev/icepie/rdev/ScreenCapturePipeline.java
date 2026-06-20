@@ -1,4 +1,4 @@
-package cn.singzer.rdev.android;
+package dev.icepie.rdev;
 
 import android.content.Context;
 import android.hardware.display.DisplayManager;

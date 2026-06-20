@@ -1,4 +1,4 @@
-package cn.singzer.rdev.android;
+package dev.icepie.rdev;
 
 import android.media.MediaCodec;
 import android.media.MediaCodecInfo;
@@ -9,6 +9,7 @@ import android.util.Log;
 import android.view.Surface;
 
 import java.nio.ByteBuffer;
+import java.util.Locale;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 final class VideoEncoderPipeline {
@@ -162,7 +163,7 @@ final class VideoEncoderPipeline {
                     }
                     if (!surface) continue;
                     String name = info.getName();
-                    String lower = name.toLowerCase();
+                    String lower = name.toLowerCase(Locale.ROOT);
                     if (!lower.contains("google") && !lower.contains("android")) return name;
                     if (software == null) software = name;
                 } catch (Throwable ignored) {}

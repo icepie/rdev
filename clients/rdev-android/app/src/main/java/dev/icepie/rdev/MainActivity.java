@@ -1,11 +1,14 @@
-package cn.singzer.rdev.android;
+package dev.icepie.rdev;
 
 import android.app.Activity;
+import android.Manifest;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.content.pm.PackageManager;
 import android.media.projection.MediaProjectionManager;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.provider.Settings;
 import android.view.Gravity;
@@ -28,6 +31,7 @@ public class MainActivity extends Activity {
         super.onCreate(state);
         prefs = getSharedPreferences("rdev", MODE_PRIVATE);
         setContentView(createContentView());
+        requestNotificationPermissionIfNeeded();
     }
 
     private View createContentView() {
@@ -121,8 +125,19 @@ public class MainActivity extends Activity {
         intent.setAction(RDevAgentService.ACTION_START_CAPTURE);
         intent.putExtra(RDevAgentService.EXTRA_RESULT_CODE, resultCode);
         intent.putExtra(RDevAgentService.EXTRA_RESULT_DATA, data);
-        startService(intent);
+        if (Build.VERSION.SDK_INT >= 26) {
+            startForegroundService(intent);
+        } else {
+            startService(intent);
+        }
         statusView.setText("服务已启动，请查看 adb logcat -s RDevAgent RDevCapture RDevEncoder");
+    }
+
+    private void requestNotificationPermissionIfNeeded() {
+        if (Build.VERSION.SDK_INT >= 33
+            && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[] {Manifest.permission.POST_NOTIFICATIONS}, 1002);
+        }
     }
 
     private String defaultDeviceId() {

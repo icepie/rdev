@@ -1,4 +1,4 @@
-package cn.singzer.rdev.android;
+package dev.icepie.rdev;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;

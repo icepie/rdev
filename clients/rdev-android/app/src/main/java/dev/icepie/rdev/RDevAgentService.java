@@ -1,4 +1,4 @@
-package cn.singzer.rdev.android;
+package dev.icepie.rdev;
 
 import android.app.Notification;
 import android.app.NotificationChannel;
@@ -20,7 +20,7 @@ import java.io.IOException;
 import java.util.UUID;
 
 public class RDevAgentService extends Service {
-    public static final String ACTION_START_CAPTURE = "cn.singzer.rdev.android.START_CAPTURE";
+    public static final String ACTION_START_CAPTURE = "dev.icepie.rdev.START_CAPTURE";
     public static final String EXTRA_RESULT_CODE = "resultCode";
     public static final String EXTRA_RESULT_DATA = "resultData";
     private static final String TAG = "RDevAgent";

@@ -1,13 +1,13 @@
 plugins { id 'com.android.application' }
 
 android {
-    namespace 'cn.singzer.rdev.android'
+    namespace 'dev.icepie.rdev'
     compileSdk 36
 
     defaultConfig {
-        applicationId 'cn.singzer.rdev.android'
+        applicationId 'dev.icepie.rdev'
         minSdk 21
-        targetSdk 29
+        targetSdk 33
         versionCode 1
         versionName '0.1.0'
     }

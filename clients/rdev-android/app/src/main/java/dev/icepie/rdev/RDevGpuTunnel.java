@@ -1,4 +1,4 @@
-package cn.singzer.rdev.android;
+package dev.icepie.rdev;
 
 import android.util.Log;
 
@@ -129,6 +129,7 @@ final class RDevGpuTunnel {
         final ByteArrayOutputStream request = new ByteArrayOutputStream();
         boolean upgraded;
         boolean videoActive;
+        boolean waitingForKeyFrame;
         Fmp4Muxer muxer;
         long lastVideoSentUs;
         long lastBatchFlushMs;
@@ -209,6 +210,7 @@ final class RDevGpuTunnel {
         private void startVideo() {
             if (videoActive) return;
             videoActive = true;
+            waitingForKeyFrame = true;
             lastVideoSentUs = 0;
             AndroidVideoHub.addListener(this);
             AndroidVideoHub.requestKeyFrame();
@@ -228,8 +230,10 @@ final class RDevGpuTunnel {
                 muxer = null;
                 videoBatch.reset();
                 videoBatchFrames = 0;
+                waitingForKeyFrame = true;
                 lastBatchFlushMs = 0;
                 sendWsText(id, androidVideoConfig(width, height, sps));
+                AndroidVideoHub.requestKeyFrame();
                 Log.i(TAG, "android video config sent stream=" + id + " " + width + "x" + height);
             } catch (Exception e) {
                 Log.w(TAG, "video init failed", e);
@@ -238,10 +242,12 @@ final class RDevGpuTunnel {
 
         @Override public void onVideoSample(byte[] data, long ptsUs, boolean keyFrame) {
             if (!videoActive) return;
+            if (waitingForKeyFrame && !keyFrame) return;
             long minIntervalUs = 1_000_000L / Math.max(1, targetFps);
             if (!keyFrame && lastVideoSentUs > 0 && ptsUs - lastVideoSentUs < minIntervalUs) return;
             try {
                 sendData(id, RDevWsFrame.encode(2, androidVideoPacket(data, ptsUs, keyFrame)));
+                waitingForKeyFrame = false;
                 lastVideoSentUs = ptsUs;
             } catch (Exception e) {
                 Log.w(TAG, "video sample failed", e);
