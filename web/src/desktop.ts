@@ -72,7 +72,7 @@ document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n
         return desktop.platform === 'android' || desktop.displayServer === 'mediaprojection';
     }
     function gpuFrameRate() {
-        const maxFps = isAndroidGpuDevice() ? 60 : 120;
+        const maxFps = isAndroidGpuDevice() ? 30 : 120;
         return Math.max(0, Math.min(maxFps, gpuFrameRateInput.valueAsNumber || 0));
     }
     function gpuMaxVideoSize() {

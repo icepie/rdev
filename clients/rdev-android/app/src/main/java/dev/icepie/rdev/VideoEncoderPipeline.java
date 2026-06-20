@@ -63,9 +63,13 @@ final class VideoEncoderPipeline {
         format.setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface);
         format.setInteger(MediaFormat.KEY_BIT_RATE, bitrate);
         format.setInteger(MediaFormat.KEY_FRAME_RATE, fps);
+        format.setInteger(MediaFormat.KEY_BITRATE_MODE, MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR);
         format.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1);
         if (Build.VERSION.SDK_INT >= 25) {
-            format.setFloat(MediaFormat.KEY_I_FRAME_INTERVAL, 0.5f);
+            format.setFloat(MediaFormat.KEY_I_FRAME_INTERVAL, 0.25f);
+        }
+        if (Build.VERSION.SDK_INT >= 23) {
+            format.setInteger(MediaFormat.KEY_PRIORITY, 0);
         }
         codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
         inputSurface = codec.createInputSurface();
@@ -101,8 +105,14 @@ final class VideoEncoderPipeline {
     private void drainLoop() {
         MediaCodec.BufferInfo info = new MediaCodec.BufferInfo();
         long lastStats = System.currentTimeMillis();
+        long lastKeyRequest = 0;
         while (running.get()) {
             try {
+                long nowForKey = System.currentTimeMillis();
+                if (nowForKey - lastKeyRequest >= 500) {
+                    requestKeyFrame();
+                    lastKeyRequest = nowForKey;
+                }
                 int index = codec.dequeueOutputBuffer(info, 10000);
                 if (index == MediaCodec.INFO_TRY_AGAIN_LATER) {
                     continue;

@@ -105,7 +105,7 @@ final class ScreenCapturePipeline {
         int height = align16(Math.max(16, Math.round(screenHeight * scale)));
         int pixels = Math.max(1, width * height);
         int fps = Math.max(15, Math.min(60, limits.maxFps));
-        int bitrate = Math.max(2_000_000, Math.min(limits.maxBitrate, pixels * fps / 8));
+        int bitrate = Math.max(8_000_000, Math.min(limits.maxBitrate, pixels * fps / 3));
         Log.i(TAG, "encoder limits max=" + limits.maxWidth + "x" + limits.maxHeight + " fps=" + limits.maxFps + " bitrate=" + limits.maxBitrate);
         return new CaptureConfig(width, height, metrics.densityDpi, fps, bitrate);
     }

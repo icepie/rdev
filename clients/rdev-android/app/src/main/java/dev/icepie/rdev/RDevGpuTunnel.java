@@ -287,7 +287,7 @@ final class RDevGpuTunnel {
             long minIntervalUs = 1_000_000L / Math.max(1, targetFps);
             if (!keyFrame && lastVideoSentUs > 0 && ptsUs - lastVideoSentUs < minIntervalUs) return;
             try {
-                byte[] sample = keyFrame ? prependParameterSets(data, sps, pps) : ensureStartCode(data);
+                byte[] sample = keyFrame ? prependParameterSets(data, sps, pps) : toAnnexB(data);
                 sendData(id, RDevWsFrame.encode(2, androidVideoPacket(sample, ptsUs, keyFrame)));
                 waitingForKeyFrame = false;
                 lastVideoSentUs = ptsUs;
@@ -345,16 +345,51 @@ final class RDevGpuTunnel {
 
     private byte[] ensureStartCode(byte[] data) {
         if (data == null || data.length == 0) return new byte[0];
-        if (data.length >= 4 && data[0] == 0 && data[1] == 0 && data[2] == 0 && data[3] == 1) return data;
-        if (data.length >= 3 && data[0] == 0 && data[1] == 0 && data[2] == 1) return data;
+        if (hasStartCode(data)) return data;
         byte[] out = new byte[data.length + 4];
         out[0] = 0; out[1] = 0; out[2] = 0; out[3] = 1;
         System.arraycopy(data, 0, out, 4, data.length);
         return out;
     }
 
+    private boolean hasStartCode(byte[] data) {
+        return data.length >= 4 && data[0] == 0 && data[1] == 0 && data[2] == 0 && data[3] == 1
+            || data.length >= 3 && data[0] == 0 && data[1] == 0 && data[2] == 1;
+    }
+
+    private byte[] toAnnexB(byte[] sample) {
+        if (sample == null || sample.length == 0) return new byte[0];
+        if (hasStartCode(sample)) return sample;
+        byte[] converted = convertLengthPrefixedNal(sample, 4);
+        if (converted.length > 0) return converted;
+        converted = convertLengthPrefixedNal(sample, 2);
+        if (converted.length > 0) return converted;
+        return ensureStartCode(sample);
+    }
+
+    private byte[] convertLengthPrefixedNal(byte[] sample, int lengthSize) {
+        try {
+            ByteArrayOutputStream out = new ByteArrayOutputStream(sample.length + 32);
+            int pos = 0;
+            int count = 0;
+            while (pos + lengthSize <= sample.length) {
+                int nalSize = 0;
+                for (int i = 0; i < lengthSize; i++) nalSize = (nalSize << 8) | (sample[pos + i] & 0xff);
+                pos += lengthSize;
+                if (nalSize <= 0 || pos + nalSize > sample.length) return new byte[0];
+                out.write(0); out.write(0); out.write(0); out.write(1);
+                out.write(sample, pos, nalSize);
+                pos += nalSize;
+                count++;
+            }
+            return pos == sample.length && count > 0 ? out.toByteArray() : new byte[0];
+        } catch (Exception e) {
+            return new byte[0];
+        }
+    }
+
     private byte[] prependParameterSets(byte[] sample, byte[] sps, byte[] pps) {
-        byte[] frame = ensureStartCode(sample);
+        byte[] frame = toAnnexB(sample);
         int spsLen = sps == null ? 0 : sps.length;
         int ppsLen = pps == null ? 0 : pps.length;
         byte[] out = new byte[spsLen + ppsLen + frame.length];
