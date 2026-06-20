@@ -37,13 +37,21 @@ final class RDevGpuTunnel {
             @Override public void onOpen() { Log.i(TAG, "gpu tunnel connected"); }
             @Override public void onText(String text) {}
             @Override public void onBinary(byte[] data) { handleTunnelFrame(data); }
-            @Override public void onClosed(Exception error) { Log.i(TAG, "gpu tunnel closed error=" + error); }
+            @Override public void onClosed(Exception error) {
+                Log.i(TAG, "gpu tunnel closed error=" + error);
+                clearStreams();
+            }
         });
         ws.connect();
     }
 
     void close() {
         if (ws != null) ws.close();
+        clearStreams();
+    }
+
+    private void clearStreams() {
+        for (Stream stream : streams.values()) stream.stopVideo();
         streams.clear();
     }
 
@@ -130,6 +138,8 @@ final class RDevGpuTunnel {
         boolean upgraded;
         boolean videoActive;
         boolean waitingForKeyFrame;
+        byte[] sps;
+        byte[] pps;
         Fmp4Muxer muxer;
         long lastVideoSentUs;
         long lastBatchFlushMs;
@@ -228,6 +238,8 @@ final class RDevGpuTunnel {
         @Override public void onVideoConfig(int width, int height, byte[] sps, byte[] pps) {
             try {
                 muxer = null;
+                this.sps = ensureStartCode(sps);
+                this.pps = ensureStartCode(pps);
                 videoBatch.reset();
                 videoBatchFrames = 0;
                 waitingForKeyFrame = true;
@@ -246,7 +258,8 @@ final class RDevGpuTunnel {
             long minIntervalUs = 1_000_000L / Math.max(1, targetFps);
             if (!keyFrame && lastVideoSentUs > 0 && ptsUs - lastVideoSentUs < minIntervalUs) return;
             try {
-                sendData(id, RDevWsFrame.encode(2, androidVideoPacket(data, ptsUs, keyFrame)));
+                byte[] sample = keyFrame ? prependParameterSets(data, sps, pps) : ensureStartCode(data);
+                sendData(id, RDevWsFrame.encode(2, androidVideoPacket(sample, ptsUs, keyFrame)));
                 waitingForKeyFrame = false;
                 lastVideoSentUs = ptsUs;
             } catch (Exception e) {
@@ -298,6 +311,28 @@ final class RDevGpuTunnel {
         else if (data.length >= 3 && data[0] == 0 && data[1] == 0 && data[2] == 1) off = 3;
         byte[] out = new byte[data.length - off];
         System.arraycopy(data, off, out, 0, out.length);
+        return out;
+    }
+
+    private byte[] ensureStartCode(byte[] data) {
+        if (data == null || data.length == 0) return new byte[0];
+        if (data.length >= 4 && data[0] == 0 && data[1] == 0 && data[2] == 0 && data[3] == 1) return data;
+        if (data.length >= 3 && data[0] == 0 && data[1] == 0 && data[2] == 1) return data;
+        byte[] out = new byte[data.length + 4];
+        out[0] = 0; out[1] = 0; out[2] = 0; out[3] = 1;
+        System.arraycopy(data, 0, out, 4, data.length);
+        return out;
+    }
+
+    private byte[] prependParameterSets(byte[] sample, byte[] sps, byte[] pps) {
+        byte[] frame = ensureStartCode(sample);
+        int spsLen = sps == null ? 0 : sps.length;
+        int ppsLen = pps == null ? 0 : pps.length;
+        byte[] out = new byte[spsLen + ppsLen + frame.length];
+        int off = 0;
+        if (spsLen > 0) { System.arraycopy(sps, 0, out, off, spsLen); off += spsLen; }
+        if (ppsLen > 0) { System.arraycopy(pps, 0, out, off, ppsLen); off += ppsLen; }
+        System.arraycopy(frame, 0, out, off, frame.length);
         return out;
     }
 

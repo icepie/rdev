@@ -47,6 +47,8 @@ document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n
     const ctx = canvas.getContext('2d');
     const gpuViewer = document.getElementById('gpuViewer');
     const gpuVideo = document.getElementById('gpuVideo');
+    const gpuCanvas = document.getElementById('gpuCanvas');
+    const gpuCtx = gpuCanvas.getContext('2d');
     const gpuOverlay = document.getElementById('gpuOverlay');
     const gpuEmpty = document.getElementById('gpuEmpty');
     const empty = document.getElementById('empty');
@@ -301,6 +303,7 @@ document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n
         if (gpuVideo.src) URL.revokeObjectURL(gpuVideo.src);
         gpuVideo.removeAttribute('src');
         gpuVideo.load();
+        gpuCanvas.style.display = 'none';
     }
     function disconnect() {
         connectionSeq++;
@@ -314,6 +317,7 @@ document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n
         stage.dataset.gpu = 'false';
         gpuViewer.style.display = 'none';
         canvas.style.display = 'none';
+        gpuCanvas.style.display = 'none';
         empty.style.display = 'flex';
         lastCloseMessage = '';
         resetFrameStats();
@@ -356,7 +360,7 @@ document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n
         const elapsed = statsStartedAt ? Math.max(0.001, (performance.now() - statsStartedAt) / 1000) : 0;
         const fps = elapsed ? (frameCount / elapsed).toFixed(1) : '0.0';
         const kbps = elapsed ? ((frameBytes * 8 / elapsed) / 1024).toFixed(0) : '0';
-        const size = gpuVideoMode === 'webcodecs' ? `${canvas.width || 0}×${canvas.height || 0}` : (gpuVideo.videoWidth && gpuVideo.videoHeight ? `${gpuVideo.videoWidth}×${gpuVideo.videoHeight}` : 'video');
+        const size = gpuVideoMode === 'webcodecs' ? `${gpuCanvas.width || 0}×${gpuCanvas.height || 0}` : (gpuVideo.videoWidth && gpuVideo.videoHeight ? `${gpuVideo.videoWidth}×${gpuVideo.videoHeight}` : 'video');
         const source = currentSource ? ` · ${currentSource}` : '';
         frameInfo.textContent = `${size}${source} · ${fps} fps · ${kbps} kbps · ${formatBytes(frameBytes)}`;
     }
@@ -372,6 +376,7 @@ document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n
         gpuMediaSource = new MS();
         frameCount = 0; frameBytes = 0; statsStartedAt = performance.now(); lastFrameAt = 0;
         canvas.style.display = 'none';
+        gpuCanvas.style.display = 'none';
         gpuVideo.style.display = 'block';
         gpuVideo.src = URL.createObjectURL(gpuMediaSource);
         gpuMediaSource.addEventListener('sourceopen', () => {
@@ -390,14 +395,16 @@ document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n
         gpuVideoMode = 'webcodecs';
         frameCount = 0; frameBytes = 0; statsStartedAt = performance.now(); lastFrameAt = 0;
         gpuVideo.style.display = 'none';
-        canvas.style.display = 'block';
-        canvas.width = config.width || 320;
-        canvas.height = config.height || 640;
+        canvas.style.display = 'none';
+        gpuCanvas.style.display = 'block';
+        gpuCanvas.width = config.width || 320;
+        gpuCanvas.height = config.height || 640;
         gpuVideoDecoder = new VideoDecoder({
             output: frame => {
-                canvas.width = frame.displayWidth || frame.codedWidth || canvas.width;
-                canvas.height = frame.displayHeight || frame.codedHeight || canvas.height;
-                ctx.drawImage(frame, 0, 0, canvas.width, canvas.height);
+                gpuCanvas.width = frame.displayWidth || frame.codedWidth || gpuCanvas.width;
+                gpuCanvas.height = frame.displayHeight || frame.codedHeight || gpuCanvas.height;
+                gpuCtx.drawImage(frame, 0, 0, gpuCanvas.width, gpuCanvas.height);
+                gpuEmpty.textContent = '';
                 frame.close();
                 gpuUpdateFrameInfo();
             },
@@ -671,8 +678,8 @@ document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n
     }
     function gpuVideoContentRect() {
         const rect = gpuOverlay.getBoundingClientRect();
-        const videoWidth = gpuVideo.videoWidth || 0;
-        const videoHeight = gpuVideo.videoHeight || 0;
+        const videoWidth = gpuVideoMode === 'webcodecs' ? (gpuCanvas.width || 0) : (gpuVideo.videoWidth || 0);
+        const videoHeight = gpuVideoMode === 'webcodecs' ? (gpuCanvas.height || 0) : (gpuVideo.videoHeight || 0);
         if (!videoWidth || !videoHeight || !rect.width || !rect.height) return rect;
         const containerRatio = rect.width / rect.height;
         const videoRatio = videoWidth / videoHeight;
@@ -713,6 +720,9 @@ document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n
         resizeTimer = setTimeout(() => connect(), 500);
     }
     function saveScreenshot() {
+        if (connectionMode === 'gpu' && gpuVideoMode === 'webcodecs' && gpuCanvas.width && gpuCanvas.height) {
+            return saveCanvasBlob(gpuCanvas);
+        }
         if (connectionMode === 'gpu' && gpuVideo.videoWidth && gpuVideo.videoHeight) {
             const shot = document.createElement('canvas');
             shot.width = gpuVideo.videoWidth; shot.height = gpuVideo.videoHeight;

@@ -56,7 +56,7 @@
         .stage[data-fit="fit"] canvas { max-width:100%; max-height:100%; }
         .stage[data-fit="actual"] canvas { max-width:none; max-height:none; }
         .gpu-viewer { position:relative; flex:1; min-height:0; width:100%; border:1px solid var(--border); border-radius:10px; background:#000; overflow:hidden; box-shadow:0 16px 40px rgba(0,0,0,.20); }
-        .gpu-viewer video { width:100%; height:100%; object-fit:contain; background:#000; display:block; }
+        .gpu-viewer video, .gpu-viewer canvas { width:100%; height:100%; object-fit:contain; background:#000; display:block; }
         .gpu-overlay { position:absolute; inset:0; outline:none; touch-action:none; }
         .gpu-empty { position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; color:var(--muted); line-height:1.8; padding:24px; pointer-events:none; background:radial-gradient(circle at center, rgba(34,211,238,.07), transparent 42%); }
         .gpu-empty strong { color:var(--text); font-size:1rem; margin-bottom:4px; }
@@ -123,6 +123,7 @@
         <canvas id="screen" style="display:none" tabindex="0"></canvas>
         <div id="gpuViewer" class="gpu-viewer" style="display:none">
             <video id="gpuVideo" autoplay muted playsinline></video>
+            <canvas id="gpuCanvas" style="display:none"></canvas>
             <div id="gpuOverlay" class="gpu-overlay" tabindex="0" aria-label="remote desktop input area"></div>
             <div id="gpuEmpty" class="gpu-empty"><strong>等待远程桌面画面</strong><span>连接后会自动读取画面来源并开始播放。</span></div>
         </div>
