@@ -84,7 +84,9 @@ final class VideoEncoderPipeline {
                     continue;
                 }
                 if (index == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
-                    Log.i(TAG, "output format=" + codec.getOutputFormat());
+                    MediaFormat outputFormat = codec.getOutputFormat();
+                    Log.i(TAG, "output format=" + outputFormat);
+                    AndroidVideoHub.publishConfig(width, height, bufferBytes(outputFormat.getByteBuffer("csd-0")), bufferBytes(outputFormat.getByteBuffer("csd-1")));
                     continue;
                 }
                 if (index < 0) continue;
@@ -93,8 +95,15 @@ final class VideoEncoderPipeline {
                 boolean keyFrame = (info.flags & MediaCodec.BUFFER_FLAG_KEY_FRAME) != 0;
                 boolean config = (info.flags & MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0;
                 if (output != null && size > 0) {
+                    byte[] sample = new byte[size];
+                    output.position(info.offset);
+                    output.limit(info.offset + size);
+                    output.get(sample);
                     bytesOut += size;
-                    if (!config) frameCount++;
+                    if (!config) {
+                        frameCount++;
+                        AndroidVideoHub.publishSample(sample, info.presentationTimeUs, keyFrame);
+                    }
                     if (keyFrame || config || frameCount <= 3) {
                         Log.i(TAG, "sample size=" + size + " flags=" + info.flags + " pts=" + info.presentationTimeUs + " key=" + keyFrame + " config=" + config);
                     }
@@ -113,6 +122,14 @@ final class VideoEncoderPipeline {
                 return;
             }
         }
+    }
+
+    private byte[] bufferBytes(ByteBuffer buffer) {
+        if (buffer == null) return null;
+        ByteBuffer dup = buffer.duplicate();
+        byte[] out = new byte[dup.remaining()];
+        dup.get(out);
+        return out;
     }
 
     private void requestKeyFrame() {

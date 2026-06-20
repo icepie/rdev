@@ -83,7 +83,8 @@ final class RDevGpuTunnel {
             Stream stream = streams.get(streamId);
             if (stream != null) stream.onData(body);
         } else if (frameType == FRAME_CLOSE) {
-            streams.remove(streamId);
+            Stream stream = streams.remove(streamId);
+            if (stream != null) stream.stopVideo();
             Log.i(TAG, "stream close " + streamId);
         }
     }
@@ -123,10 +124,12 @@ final class RDevGpuTunnel {
         return out;
     }
 
-    private final class Stream {
+    private final class Stream implements AndroidVideoHub.Listener {
         final long id;
         final ByteArrayOutputStream request = new ByteArrayOutputStream();
         boolean upgraded;
+        boolean videoActive;
+        Fmp4Muxer muxer;
         Stream(long id) { this.id = id; }
 
         void onData(byte[] body) {
@@ -174,12 +177,49 @@ final class RDevGpuTunnel {
                     sendWsText(id, "\"ConfigOk\"");
                     sendWsText(id, runtimeStatus());
                 } else if (text.contains("ResumeVideo")) {
-                    sendWsText(id, "\"NewVideo\"");
+                    startVideo();
+                } else if (text.contains("PauseVideo")) {
+                    stopVideo();
                 } else if (text.contains("InputCapabilities")) {
                     sendWsText(id, inputCapabilities());
                 }
             } catch (Exception e) {
                 Log.w(TAG, "desktop ws parse failed", e);
+            }
+        }
+
+        private void startVideo() {
+            if (videoActive) return;
+            videoActive = true;
+            AndroidVideoHub.addListener(this);
+            Log.i(TAG, "video subscribed stream=" + id);
+        }
+
+        private void stopVideo() {
+            if (!videoActive) return;
+            videoActive = false;
+            AndroidVideoHub.removeListener(this);
+            Log.i(TAG, "video unsubscribed stream=" + id);
+        }
+
+        @Override public void onVideoConfig(int width, int height, byte[] sps, byte[] pps) {
+            try {
+                muxer = new Fmp4Muxer(width, height, sps, pps);
+                sendWsText(id, "\"NewVideo\"");
+                sendData(id, RDevWsFrame.encode(2, muxer.initSegment()));
+                Log.i(TAG, "video init sent stream=" + id + " " + width + "x" + height);
+            } catch (Exception e) {
+                Log.w(TAG, "video init failed", e);
+            }
+        }
+
+        @Override public void onVideoSample(byte[] data, long ptsUs, boolean keyFrame) {
+            if (!videoActive || muxer == null) return;
+            try {
+                sendData(id, RDevWsFrame.encode(2, muxer.fragment(data, ptsUs, keyFrame)));
+            } catch (Exception e) {
+                Log.w(TAG, "video sample failed", e);
+                stopVideo();
             }
         }
     }
