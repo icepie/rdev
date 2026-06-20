@@ -22,6 +22,8 @@ final class RDevGpuTunnel {
     private final String instanceId;
     private final String password;
     private RDevWebSocketClient ws;
+    private volatile boolean closed;
+    private int reconnectDelayMs = 1000;
     private final Map<Long, Stream> streams = new HashMap<>();
 
     RDevGpuTunnel(String serverUrl, String deviceId, String instanceId, String password) {
@@ -32,22 +34,41 @@ final class RDevGpuTunnel {
     }
 
     void connect() {
+        closed = false;
+        connectOnce();
+    }
+
+    private void connectOnce() {
         String url = tunnelUrl();
         ws = new RDevWebSocketClient(url, new RDevWebSocketClient.Listener() {
-            @Override public void onOpen() { Log.i(TAG, "gpu tunnel connected"); }
+            @Override public void onOpen() {
+                reconnectDelayMs = 1000;
+                Log.i(TAG, "gpu tunnel connected");
+            }
             @Override public void onText(String text) {}
             @Override public void onBinary(byte[] data) { handleTunnelFrame(data); }
             @Override public void onClosed(Exception error) {
                 Log.i(TAG, "gpu tunnel closed error=" + error);
                 clearStreams();
+                if (!closed) scheduleReconnect();
             }
         });
         ws.connect();
     }
 
     void close() {
+        closed = true;
         if (ws != null) ws.close();
         clearStreams();
+    }
+
+    private void scheduleReconnect() {
+        final int delay = reconnectDelayMs;
+        reconnectDelayMs = Math.min(30000, reconnectDelayMs * 2);
+        new Thread(() -> {
+            try { Thread.sleep(delay); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+            if (!closed) connectOnce();
+        }, "rdev-tunnel-reconnect").start();
     }
 
     private void clearStreams() {

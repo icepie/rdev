@@ -31,6 +31,8 @@ public class RDevAgentService extends Service {
     private RDevWebSocketClient client;
     private RDevGpuTunnel tunnel;
     private String instanceId;
+    private volatile boolean stopping;
+    private int reconnectDelayMs = 1000;
 
     @Override public void onCreate() {
         super.onCreate();
@@ -40,6 +42,7 @@ public class RDevAgentService extends Service {
 
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
         if (intent != null && ACTION_START_CAPTURE.equals(intent.getAction())) {
+            stopping = false;
             startWebSocket();
             startCapture(intent.getIntExtra(EXTRA_RESULT_CODE, 0), intent.getParcelableExtra(EXTRA_RESULT_DATA));
         }
@@ -47,6 +50,7 @@ public class RDevAgentService extends Service {
     }
 
     @Override public void onDestroy() {
+        stopping = true;
         if (capture != null) {
             capture.stop();
             capture = null;
@@ -69,12 +73,27 @@ public class RDevAgentService extends Service {
         if (client != null) client.close();
         String server = prefs.getString("server", "wss://rdev.singzer.cn");
         client = new RDevWebSocketClient(server, new RDevWebSocketClient.Listener() {
-            @Override public void onOpen() { sendRegister(); }
+            @Override public void onOpen() {
+                reconnectDelayMs = 1000;
+                sendRegister();
+            }
             @Override public void onText(String text) { handleText(text); }
             @Override public void onBinary(byte[] data) {}
-            @Override public void onClosed(Exception error) { Log.i(TAG, "websocket closed error=" + error); }
+            @Override public void onClosed(Exception error) {
+                Log.i(TAG, "websocket closed error=" + error);
+                if (!stopping) scheduleReconnect();
+            }
         });
         client.connect();
+    }
+
+    private void scheduleReconnect() {
+        final int delay = reconnectDelayMs;
+        reconnectDelayMs = Math.min(30000, reconnectDelayMs * 2);
+        new Thread(() -> {
+            try { Thread.sleep(delay); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+            if (!stopping) startWebSocket();
+        }, "rdev-agent-reconnect").start();
     }
 
     private void sendRegister() {

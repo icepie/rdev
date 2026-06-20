@@ -70,6 +70,11 @@ document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n
         return Math.max(0, Math.min(120, gpuFrameRateInput.valueAsNumber || 0));
     }
     function gpuMaxVideoSize() {
+        const device = deviceCache.find(d => d.id === deviceSelect.value) || {};
+        const desktop = device.desktop || {};
+        if (desktop.platform === 'android' || desktop.displayServer === 'mediaprojection') {
+            return { width: 320, height: 640 };
+        }
         const scale = Math.max(0.1, Math.min(2, gpuScaleInput.valueAsNumber || 1));
         return {
             width: Math.max(320, Math.round(scale * Math.max(1, gpuViewer.clientWidth || window.innerWidth) * (window.devicePixelRatio || 1))),
@@ -354,7 +359,9 @@ document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n
         gpuSend(gpuEnableVideo.checked ? 'ResumeVideo' : 'PauseVideo');
     }
     function applyGpuVideoFit() {
-        gpuVideo.style.objectFit = gpuStretch.checked ? 'fill' : 'contain';
+        const fit = gpuStretch.checked ? 'fill' : 'contain';
+        gpuVideo.style.objectFit = fit;
+        gpuCanvas.style.objectFit = fit;
     }
     function gpuUpdateFrameInfo() {
         const elapsed = statsStartedAt ? Math.max(0.001, (performance.now() - statsStartedAt) / 1000) : 0;
