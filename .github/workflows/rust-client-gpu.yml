@@ -110,6 +110,20 @@ jobs:
             artifact: rdev-client-gpu
             asset: rdev-client-gpu-darwin-arm64
             deployment_target: '11.0'
+          - name: android-arm64
+            os: ubuntu-latest
+            target: aarch64-linux-android
+            artifact: rdev-client-gpu
+            asset: rdev-client-gpu-android-arm64
+            android: true
+            android_cc: aarch64-linux-android24-clang
+          - name: android-amd64
+            os: ubuntu-latest
+            target: x86_64-linux-android
+            artifact: rdev-client-gpu
+            asset: rdev-client-gpu-android-amd64
+            android: true
+            android_cc: x86_64-linux-android24-clang
     defaults:
       run:
         working-directory: clients/rdev-client-gpu
@@ -120,6 +134,23 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+
+      - uses: android-actions/setup-android@v3
+        if: matrix.android == true
+
+      - name: Install Android NDK dependencies
+        if: matrix.android == true
+        run: |
+          sdkmanager "ndk;27.1.12297006"
+          ANDROID_NDK_HOME="$ANDROID_HOME/ndk/27.1.12297006"
+          ANDROID_NDK_BIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          echo "ANDROID_NDK_HOME=$ANDROID_NDK_HOME" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_BIN=$ANDROID_NDK_BIN" >> "$GITHUB_ENV"
+          echo "$ANDROID_NDK_BIN" >> "$GITHUB_PATH"
+          case "${{ matrix.target }}" in
+            aarch64-linux-android) echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=${{ matrix.android_cc }}" >> "$GITHUB_ENV" ;;
+            x86_64-linux-android) echo "CARGO_TARGET_X86_64_LINUX_ANDROID_LINKER=${{ matrix.android_cc }}" >> "$GITHUB_ENV" ;;
+          esac
 
       - name: Install Windows LLVM MinGW dependencies
         if: contains(fromJSON('["msvcrt","ucrt"]'), matrix.llvm_mingw)
@@ -220,8 +251,12 @@ jobs:
           fi
           run_linux_package centos8 rockylinux:8 "${{ matrix.asset }}-centos8" embedded-rdev-desktop n
 
+      - name: Build Android Termux release
+        if: matrix.android == true
+        run: cargo build --release --target ${{ matrix.target }}
+
       - name: Build embedded desktop release
-        if: matrix.package_linux != true
+        if: matrix.package_linux != true && matrix.android != true
         env:
           MACOSX_DEPLOYMENT_TARGET: ${{ matrix.deployment_target }}
         run: cargo build --release --features embedded-rdev-desktop --target ${{ matrix.target }}
@@ -258,6 +293,12 @@ jobs:
             done
             "dist/${{ matrix.asset }}/rdev-client-gpu.exe" --version > "dist/${{ matrix.asset }}/VERSION.txt" || true
             (cd dist && python3 -m zipfile -c "${{ matrix.asset }}.zip" "${{ matrix.asset }}")
+          elif [ "${{ matrix.android }}" = "true" ]; then
+            mkdir -p "dist/${{ matrix.asset }}"
+            cp "target/${{ matrix.target }}/release/${{ matrix.artifact }}" "dist/${{ matrix.asset }}/rdev-client-gpu"
+            chmod +x "dist/${{ matrix.asset }}/rdev-client-gpu"
+            echo "rdev-client-gpu ${GITHUB_REF_NAME}" > "dist/${{ matrix.asset }}/VERSION.txt"
+            tar -C dist -czf "dist/${{ matrix.asset }}.tar.gz" "${{ matrix.asset }}"
           elif [[ "${{ matrix.target }}" == *windows* ]]; then
             mkdir -p "dist/${{ matrix.asset }}"
             cp "target/${{ matrix.target }}/release/${{ matrix.artifact }}" "dist/${{ matrix.asset }}/rdev-client-gpu.exe"

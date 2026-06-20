@@ -77,6 +77,11 @@ if [ -z "$RDEV_SERVER" ]; then
     exit 1
 fi
 
+ANDROID_ENV=0
+if [ "$(uname -o 2>/dev/null || true)" = "Android" ] || [ -n "${ANDROID_ROOT:-}" ]; then
+    ANDROID_ENV=1
+fi
+
 # ── Optional elevation prompt ───────────────────────────────
 RDEV_ELEVATE=0
 
@@ -107,7 +112,7 @@ wait_elevation_key() {
     return 1
 }
 
-if [ "$(id -u 2>/dev/null || echo 1)" != "0" ]; then
+if [ "$ANDROID_ENV" != "1" ] && [ "$(id -u 2>/dev/null || echo 1)" != "0" ]; then
     if wait_elevation_key; then
         RDEV_ELEVATE=1
         echo "  Elevation requested; will start client with sudo/doas after download." >&2
@@ -121,7 +126,9 @@ OS="$(uname -s 2>/dev/null || echo unknown)"
 ARCH="$(uname -m 2>/dev/null || echo unknown)"
 
 case "$OS" in
-    Linux*)   OS="linux" ;;
+    Linux*)
+        if [ "$ANDROID_ENV" = "1" ]; then OS="android"; else OS="linux"; fi
+        ;;
     Darwin*)  OS="darwin" ;;
     FreeBSD*) OS="freebsd" ;;
     OpenBSD*) OS="openbsd" ;;
@@ -242,6 +249,10 @@ if [ "$RDEV_CLIENT" = "rs" ]; then
             ASSET="rdev-client-gpu-${OS}-${ARCH}$(linux_rs_asset_suffix).tar.gz"
             ARCHIVE="$TMPBASE/rdev-client-gpu-${TAG}-${OS}-${ARCH}-$$.tar.gz"
             ;;
+        android/amd64|android/arm64)
+            ASSET="rdev-client-gpu-${OS}-${ARCH}.tar.gz"
+            ARCHIVE="$TMPBASE/rdev-client-gpu-${TAG}-${OS}-${ARCH}-$$.tar.gz"
+            ;;
         darwin/amd64|darwin/arm64)
             ASSET="rdev-client-gpu-${OS}-${ARCH}.tar.gz"
             ARCHIVE="$TMPBASE/rdev-client-gpu-${TAG}-${OS}-${ARCH}-$$.tar.gz"
@@ -297,6 +308,16 @@ fi
 # ── Build args & run ───────────────────────────────────────
 if [ "$RDEV_CLIENT" = "rs" ] && [ -z "$RDEV_ID" ]; then
     RDEV_ID="$(hostname 2>/dev/null || uname -n 2>/dev/null || echo rdev-client-gpu)"
+fi
+
+if [ "$OS" = "android" ] && [ -z "$RDEV_SHELL" ]; then
+    if [ -x "${PREFIX:-}/bin/bash" ]; then
+        RDEV_SHELL="${PREFIX}/bin/bash"
+    elif [ -x "${PREFIX:-}/bin/sh" ]; then
+        RDEV_SHELL="${PREFIX}/bin/sh"
+    elif [ -x /system/bin/sh ]; then
+        RDEV_SHELL="/system/bin/sh"
+    fi
 fi
 
 if [ "$RDEV_CLIENT" = "rs" ]; then
