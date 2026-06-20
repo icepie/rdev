@@ -26,6 +26,13 @@ use tokio_tungstenite::{connect_async, tungstenite::Message as WsMessage};
 use tracing::{debug, info, warn};
 use tracing_subscriber::EnvFilter;
 
+struct ClientRuntime<'a> {
+    args: &'a Args,
+    instance_id: &'a str,
+    desktop_enabled: bool,
+    gpu_tunnel_started: Arc<AtomicBool>,
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     install_default_tls_provider();
@@ -119,7 +126,15 @@ async fn run_once(
             }
             inbound = read.next() => {
                 match inbound {
-                    Some(Ok(WsMessage::Text(text))) => handle_text(&text, args, instance_id, desktop_enabled, gpu_tunnel_started.clone(), &sessions, &forwards, &files, &out_tx).await?,
+                    Some(Ok(WsMessage::Text(text))) => {
+                        let runtime = ClientRuntime {
+                            args,
+                            instance_id,
+                            desktop_enabled,
+                            gpu_tunnel_started: gpu_tunnel_started.clone(),
+                        };
+                        handle_text(&text, runtime, &sessions, &forwards, &files, &out_tx).await?
+                    },
                     Some(Ok(WsMessage::Binary(raw))) => handle_binary(&raw, &sessions, &forwards, &files, &fileputs, &out_tx).await?,
                     Some(Ok(WsMessage::Close(frame))) => {
                         info!("websocket closed by server: {:?}", frame);
@@ -143,15 +158,13 @@ async fn run_once(
 
 async fn handle_text(
     text: &str,
-    args: &Args,
-    instance_id: &str,
-    desktop_enabled: bool,
-    gpu_tunnel_started: Arc<AtomicBool>,
+    runtime: ClientRuntime<'_>,
     sessions: &SessionManager,
     forwards: &ForwardManager,
     files: &FileManager,
     out_tx: &mpsc::Sender<OutboundEvent>,
 ) -> Result<()> {
+    let args = runtime.args;
     let msg = protocol::decode_message(text)?;
     match msg.ty {
         Some(MessageType::Register) => {
@@ -168,10 +181,14 @@ async fn handle_text(
             } else {
                 info!("registered as {registered_id}");
             }
-            if desktop_enabled && !gpu_tunnel_started.swap(true, Ordering::SeqCst) {
+            if runtime.desktop_enabled && !runtime.gpu_tunnel_started.swap(true, Ordering::SeqCst) {
                 let mut tunnel_args = args.clone();
                 tunnel_args.id = registered_id.to_string();
-                gpu_tunnel::spawn(tunnel_args, instance_id.to_string(), desktop_enabled);
+                gpu_tunnel::spawn(
+                    tunnel_args,
+                    runtime.instance_id.to_string(),
+                    runtime.desktop_enabled,
+                );
             }
         }
         Some(MessageType::NewSession) => sessions.start(msg, args.shell.clone(), out_tx.clone())?,
@@ -194,7 +211,7 @@ async fn handle_text(
         Some(MessageType::FileDownloadStart) => files.download_start(msg, out_tx.clone()).await,
         Some(MessageType::FileTransferCancel) => files.cancel(&msg.task_id).await,
         Some(MessageType::DesktopStart) => {
-            let error = if desktop_enabled {
+            let error = if runtime.desktop_enabled {
                 info!("desktop_start received; embedded GPU desktop is served through the GPU desktop tunnel");
                 "embedded GPU desktop is available through the GPU desktop tunnel; refresh the device list if the browser did not switch automatically"
             } else {
@@ -206,7 +223,7 @@ async fn handle_text(
                     ty: Some(MessageType::DesktopReady),
                     session_id: msg.session_id,
                     error: error.into(),
-                    desktop: Some(desktop::capabilities(desktop_enabled)),
+                    desktop: Some(desktop::capabilities(runtime.desktop_enabled)),
                     ..Default::default()
                 }))
                 .await;
