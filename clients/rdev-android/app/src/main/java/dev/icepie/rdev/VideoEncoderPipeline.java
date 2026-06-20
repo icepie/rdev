@@ -64,9 +64,9 @@ final class VideoEncoderPipeline {
         format.setInteger(MediaFormat.KEY_BIT_RATE, bitrate);
         format.setInteger(MediaFormat.KEY_FRAME_RATE, fps);
         format.setInteger(MediaFormat.KEY_BITRATE_MODE, MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR);
-        format.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1);
+        format.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 0);
         if (Build.VERSION.SDK_INT >= 25) {
-            format.setFloat(MediaFormat.KEY_I_FRAME_INTERVAL, 0.25f);
+            format.setFloat(MediaFormat.KEY_I_FRAME_INTERVAL, 0.1f);
         }
         if (Build.VERSION.SDK_INT >= 23) {
             format.setInteger(MediaFormat.KEY_PRIORITY, 0);
@@ -109,7 +109,7 @@ final class VideoEncoderPipeline {
         while (running.get()) {
             try {
                 long nowForKey = System.currentTimeMillis();
-                if (nowForKey - lastKeyRequest >= 500) {
+                if (nowForKey - lastKeyRequest >= 250) {
                     requestKeyFrame();
                     lastKeyRequest = nowForKey;
                 }

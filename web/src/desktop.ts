@@ -72,7 +72,7 @@ document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n
         return desktop.platform === 'android' || desktop.displayServer === 'mediaprojection';
     }
     function gpuFrameRate() {
-        const maxFps = isAndroidGpuDevice() ? 30 : 120;
+        const maxFps = isAndroidGpuDevice() ? 15 : 120;
         return Math.max(0, Math.min(maxFps, gpuFrameRateInput.valueAsNumber || 0));
     }
     function gpuMaxVideoSize() {
@@ -440,6 +440,10 @@ document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n
         if (gpuNeedKeyFrame && !isKey) return true;
         const timestamp = Number(view.getBigUint64(5));
         const data = new Uint8Array(buffer, 13);
+        if (!isKey && gpuVideoDecoder.decodeQueueSize > 2) {
+            gpuNeedKeyFrame = true;
+            return true;
+        }
         frameCount++;
         frameBytes += data.byteLength;
         lastFrameAt = performance.now();

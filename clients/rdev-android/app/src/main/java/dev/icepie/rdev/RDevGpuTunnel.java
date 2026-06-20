@@ -170,7 +170,7 @@ final class RDevGpuTunnel {
         long lastBatchFlushMs;
         ByteArrayOutputStream videoBatch = new ByteArrayOutputStream(96 * 1024);
         int videoBatchFrames;
-        int targetFps = 30;
+        int targetFps = 15;
         Stream(long id) { this.id = id; }
 
         void onData(byte[] body) {
@@ -239,7 +239,7 @@ final class RDevGpuTunnel {
                 JSONObject config = new JSONObject(text).optJSONObject("Config");
                 if (config == null) return;
                 int requested = config.optInt("frame_rate", targetFps);
-                if (requested > 0) targetFps = Math.max(8, Math.min(30, requested));
+                if (requested > 0) targetFps = Math.max(8, Math.min(15, requested));
                 Log.i(TAG, "desktop config targetFps=" + targetFps + " encoder=" + config.optString("encoder", "auto"));
             } catch (Exception e) {
                 Log.w(TAG, "config parse failed", e);
@@ -283,9 +283,13 @@ final class RDevGpuTunnel {
 
         @Override public void onVideoSample(byte[] data, long ptsUs, boolean keyFrame) {
             if (!videoActive) return;
+            if (!keyFrame) {
+                AndroidVideoHub.requestKeyFrame();
+                return;
+            }
             if (waitingForKeyFrame && !keyFrame) return;
             long minIntervalUs = 1_000_000L / Math.max(1, targetFps);
-            if (!keyFrame && lastVideoSentUs > 0 && ptsUs - lastVideoSentUs < minIntervalUs) return;
+            if (lastVideoSentUs > 0 && ptsUs - lastVideoSentUs < minIntervalUs) return;
             try {
                 byte[] sample = keyFrame ? prependParameterSets(data, sps, pps) : toAnnexB(data);
                 sendData(id, RDevWsFrame.encode(2, androidVideoPacket(sample, ptsUs, keyFrame)));

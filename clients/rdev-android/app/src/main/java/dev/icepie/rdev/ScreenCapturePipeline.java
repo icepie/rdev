@@ -100,12 +100,20 @@ final class ScreenCapturePipeline {
         int screenHeight = metrics.heightPixels;
         int maxWidth = Math.max(16, limits.maxWidth);
         int maxHeight = Math.max(16, limits.maxHeight);
+        int safeMaxShort = 480;
+        int safeMaxLong = 960;
+        if (screenWidth > screenHeight) {
+            safeMaxShort = 960;
+            safeMaxLong = 480;
+        }
+        maxWidth = Math.min(maxWidth, safeMaxShort);
+        maxHeight = Math.min(maxHeight, safeMaxLong);
         float scale = Math.min(1.0f, Math.min(maxWidth / (float) screenWidth, maxHeight / (float) screenHeight));
         int width = align16(Math.max(16, Math.round(screenWidth * scale)));
         int height = align16(Math.max(16, Math.round(screenHeight * scale)));
         int pixels = Math.max(1, width * height);
-        int fps = Math.max(15, Math.min(60, limits.maxFps));
-        int bitrate = Math.max(8_000_000, Math.min(limits.maxBitrate, pixels * fps / 3));
+        int fps = Math.max(10, Math.min(15, limits.maxFps));
+        int bitrate = Math.max(8_000_000, Math.min(limits.maxBitrate, pixels * fps));
         Log.i(TAG, "encoder limits max=" + limits.maxWidth + "x" + limits.maxHeight + " fps=" + limits.maxFps + " bitrate=" + limits.maxBitrate);
         return new CaptureConfig(width, height, metrics.densityDpi, fps, bitrate);
     }
