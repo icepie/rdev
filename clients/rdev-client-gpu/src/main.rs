@@ -29,8 +29,10 @@ use tracing_subscriber::EnvFilter;
 struct ClientRuntime<'a> {
     args: &'a Args,
     instance_id: &'a str,
+    server_host: &'a str,
     desktop_enabled: bool,
     gpu_tunnel_started: Arc<AtomicBool>,
+    connect_printed: Arc<AtomicBool>,
 }
 
 #[tokio::main]
@@ -47,6 +49,9 @@ async fn main() -> Result<()> {
     if args.id.trim().is_empty() {
         args.id = default_device_id();
     }
+    args.server = normalize_server_url(&args.server);
+    print_startup_summary(&args);
+
     desktop_env::prepare(&mut args);
     let instance_id = args.instance_id.clone().unwrap_or_else(new_instance_id);
     let rdev_desktop_service = rdev_desktop_service::start(&args);
@@ -54,15 +59,19 @@ async fn main() -> Result<()> {
     if let Some(service) = rdev_desktop_service.as_ref() {
         args.gpu_desktop_local = service.bind_addr().to_string();
     }
+    let server_host = parse_ws_host(&args.server);
     let gpu_tunnel_started = Arc::new(AtomicBool::new(false));
+    let connect_printed = Arc::new(AtomicBool::new(false));
     let _rdev_desktop_service = rdev_desktop_service;
 
     loop {
         match run_once(
             &args,
             &instance_id,
+            &server_host,
             desktop_enabled,
             gpu_tunnel_started.clone(),
+            connect_printed.clone(),
         )
         .await
         {
@@ -83,8 +92,10 @@ async fn main() -> Result<()> {
 async fn run_once(
     args: &Args,
     instance_id: &str,
+    server_host: &str,
     desktop_enabled: bool,
     gpu_tunnel_started: Arc<AtomicBool>,
+    connect_printed: Arc<AtomicBool>,
 ) -> Result<()> {
     let ws_url = websocket_url(&args.server)?;
     info!("connecting to {ws_url} as {}", args.id);
@@ -131,8 +142,10 @@ async fn run_once(
                         let runtime = ClientRuntime {
                             args,
                             instance_id,
+                            server_host,
                             desktop_enabled,
                             gpu_tunnel_started: gpu_tunnel_started.clone(),
+                            connect_printed: connect_printed.clone(),
                         };
                         handle_text(&text, runtime, &sessions, &forwards, &files, &out_tx).await?
                     },
@@ -181,6 +194,9 @@ async fn handle_text(
                 );
             } else {
                 info!("registered as {registered_id}");
+            }
+            if !runtime.connect_printed.swap(true, Ordering::SeqCst) {
+                print_connection_hints(args, runtime.server_host, registered_id, &msg.ssh_port);
             }
             if runtime.desktop_enabled && !runtime.gpu_tunnel_started.swap(true, Ordering::SeqCst) {
                 let mut tunnel_args = args.clone();
@@ -281,8 +297,104 @@ fn default_device_id() -> String {
         .unwrap_or_else(|| "rdev-client-gpu".to_string())
 }
 
+fn print_startup_summary(args: &Args) {
+    println!();
+    println!("  ╔═══════════════════════════════════════════╗");
+    println!("  ║         RDev Remote Debug Client          ║");
+    println!("  ╠═══════════════════════════════════════════╣");
+    println!("  ║  Server:  {:<31}  ║", args.server);
+    println!("  ║  ID:      {:<31}  ║", args.id);
+    if let Some(shell) = args.shell.as_deref().filter(|value| !value.is_empty()) {
+        println!("  ║  Shell:   {shell:<31}  ║");
+    }
+    let auth_mode = if args.password.is_empty() {
+        "open (no password)"
+    } else {
+        "password"
+    };
+    println!("  ║  Auth:    {auth_mode:<31}  ║");
+    if !args.password.is_empty() {
+        println!("  ║  Pass:    {:<31}  ║", args.password);
+    }
+    println!("  ╚═══════════════════════════════════════════╝");
+    println!();
+}
+
+fn print_connection_hints(args: &Args, server_host: &str, registered_id: &str, ssh_port: &str) {
+    let ssh_port = if ssh_port.is_empty() {
+        "2222"
+    } else {
+        ssh_port
+    };
+
+    println!("  ── How to Connect ─────────────────────────────");
+    println!("  SSH:      ssh {registered_id}@{server_host} -p {ssh_port}");
+    if args.password.is_empty() {
+        println!("  Password: <none> (open mode)");
+    } else {
+        println!("  Password: {}", args.password);
+        println!(
+            "            sshpass -p '{}' ssh {registered_id}@{server_host} -p {ssh_port}",
+            args.password
+        );
+    }
+    println!("  SFTP:     sftp -P {ssh_port} {registered_id}@{server_host}");
+    println!("  SCP:      scp -P {ssh_port} file {registered_id}@{server_host}:~/");
+    println!("  Dashboard: http://{server_host}");
+    println!("  ────────────────────────────────────────────────");
+    println!();
+}
+
+fn normalize_server_url(server: &str) -> String {
+    let mut value = server.trim().to_string();
+    if value.starts_with("wss:///") {
+        value = format!("wss://{}", value["wss://".len()..].trim_start_matches('/'));
+    } else if value.starts_with("ws:///") {
+        value = format!("ws://{}", value["ws://".len()..].trim_start_matches('/'));
+    } else if value.starts_with("https:///") {
+        value = format!(
+            "https://{}",
+            value["https://".len()..].trim_start_matches('/')
+        );
+    } else if value.starts_with("http:///") {
+        value = format!(
+            "http://{}",
+            value["http://".len()..].trim_start_matches('/')
+        );
+    } else if !value.starts_with("ws://")
+        && !value.starts_with("wss://")
+        && !value.starts_with("http://")
+        && !value.starts_with("https://")
+    {
+        value = format!("ws://{value}");
+    }
+    value
+}
+
+fn parse_ws_host(ws_url: &str) -> String {
+    let mut value = ws_url
+        .strip_prefix("ws://")
+        .or_else(|| ws_url.strip_prefix("wss://"))
+        .or_else(|| ws_url.strip_prefix("http://"))
+        .or_else(|| ws_url.strip_prefix("https://"))
+        .unwrap_or(ws_url);
+    if let Some((host, _path)) = value.split_once('/') {
+        value = host;
+    }
+    if let Ok(addr) = value.parse::<std::net::SocketAddr>() {
+        return addr.ip().to_string();
+    }
+    if let Some((host, port)) = value.rsplit_once(':') {
+        if !host.contains(':') && port.parse::<u16>().is_ok() {
+            return host.to_string();
+        }
+    }
+    value.to_string()
+}
+
 fn websocket_url(server: &str) -> Result<String> {
-    let trimmed = server.trim_end_matches('/');
+    let normalized = normalize_server_url(server);
+    let trimmed = normalized.trim_end_matches('/');
     let mut url = if trimmed.ends_with("/ws") {
         trimmed.to_string()
     } else {
@@ -308,5 +420,26 @@ mod tests {
         );
         assert_eq!(websocket_url("https://host/r").unwrap(), "wss://host/r/ws");
         assert_eq!(websocket_url("ws://host/ws").unwrap(), "ws://host/ws");
+        assert_eq!(
+            websocket_url("1.2.3.4:8080").unwrap(),
+            "ws://1.2.3.4:8080/ws"
+        );
+        assert_eq!(
+            websocket_url("ws:///1.2.3.4:8080").unwrap(),
+            "ws://1.2.3.4:8080/ws"
+        );
+    }
+
+    #[test]
+    fn parses_connection_hint_hosts() {
+        assert_eq!(parse_ws_host("ws://1.2.3.4:8080"), "1.2.3.4");
+        assert_eq!(
+            parse_ws_host("wss://rdev.example.com/ws"),
+            "rdev.example.com"
+        );
+        assert_eq!(
+            parse_ws_host("ws://rdev.example.com:8080/path"),
+            "rdev.example.com"
+        );
     }
 }
