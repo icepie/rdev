@@ -131,7 +131,10 @@ final class RDevGpuTunnel {
         boolean videoActive;
         Fmp4Muxer muxer;
         long lastVideoSentUs;
-        int targetFps = 15;
+        long lastBatchFlushMs;
+        ByteArrayOutputStream videoBatch = new ByteArrayOutputStream(96 * 1024);
+        int videoBatchFrames;
+        int targetFps = 12;
         Stream(long id) { this.id = id; }
 
         void onData(byte[] body) {
@@ -196,7 +199,7 @@ final class RDevGpuTunnel {
                 JSONObject config = new JSONObject(text).optJSONObject("Config");
                 if (config == null) return;
                 int requested = config.optInt("frame_rate", targetFps);
-                if (requested > 0) targetFps = Math.max(5, Math.min(20, requested));
+                if (requested > 0) targetFps = Math.max(5, Math.min(12, requested));
                 Log.i(TAG, "desktop config targetFps=" + targetFps + " encoder=" + config.optString("encoder", "auto"));
             } catch (Exception e) {
                 Log.w(TAG, "config parse failed", e);
@@ -215,32 +218,80 @@ final class RDevGpuTunnel {
             if (!videoActive) return;
             videoActive = false;
             AndroidVideoHub.removeListener(this);
+            flushVideoBatch();
             Log.i(TAG, "video unsubscribed stream=" + id);
         }
 
         @Override public void onVideoConfig(int width, int height, byte[] sps, byte[] pps) {
             try {
-                muxer = new Fmp4Muxer(width, height, sps, pps);
-                sendWsText(id, "\"NewVideo\"");
-                sendData(id, RDevWsFrame.encode(2, muxer.initSegment()));
-                Log.i(TAG, "video init sent stream=" + id + " " + width + "x" + height);
+                muxer = null;
+                videoBatch.reset();
+                videoBatchFrames = 0;
+                lastBatchFlushMs = 0;
+                sendWsText(id, androidVideoConfig(width, height, sps));
+                Log.i(TAG, "android video config sent stream=" + id + " " + width + "x" + height);
             } catch (Exception e) {
                 Log.w(TAG, "video init failed", e);
             }
         }
 
         @Override public void onVideoSample(byte[] data, long ptsUs, boolean keyFrame) {
-            if (!videoActive || muxer == null) return;
+            if (!videoActive) return;
             long minIntervalUs = 1_000_000L / Math.max(1, targetFps);
             if (!keyFrame && lastVideoSentUs > 0 && ptsUs - lastVideoSentUs < minIntervalUs) return;
             try {
-                sendData(id, RDevWsFrame.encode(2, muxer.fragment(data, ptsUs, keyFrame)));
+                sendData(id, RDevWsFrame.encode(2, androidVideoPacket(data, ptsUs, keyFrame)));
                 lastVideoSentUs = ptsUs;
             } catch (Exception e) {
                 Log.w(TAG, "video sample failed", e);
                 stopVideo();
             }
         }
+
+        private void flushVideoBatch() {
+            if (videoBatchFrames == 0 || videoBatch.size() == 0) return;
+            sendData(id, RDevWsFrame.encode(2, videoBatch.toByteArray()));
+            videoBatch.reset();
+            videoBatchFrames = 0;
+            lastBatchFlushMs = System.currentTimeMillis();
+        }
+    }
+
+    private String androidVideoConfig(int width, int height, byte[] sps) throws Exception {
+        return new JSONObject().put("AndroidVideoConfig", new JSONObject()
+            .put("codec", avcCodecString(sps))
+            .put("width", width)
+            .put("height", height)
+            .put("format", "annexb")
+            .put("transport", "webcodecs-h264"))
+            .toString();
+    }
+
+    private String avcCodecString(byte[] sps) {
+        byte[] clean = stripStartCode(sps);
+        if (clean.length >= 4) {
+            return String.format(java.util.Locale.US, "avc1.%02X%02X%02X", clean[1] & 0xff, clean[2] & 0xff, clean[3] & 0xff);
+        }
+        return "avc1.42E01F";
+    }
+
+    private byte[] androidVideoPacket(byte[] sample, long ptsUs, boolean keyFrame) {
+        byte[] packet = new byte[13 + sample.length];
+        packet[0] = 'R'; packet[1] = 'D'; packet[2] = 'A'; packet[3] = '1';
+        packet[4] = (byte) (keyFrame ? 1 : 0);
+        for (int i = 0; i < 8; i++) packet[5 + i] = (byte) (ptsUs >>> (56 - i * 8));
+        System.arraycopy(sample, 0, packet, 13, sample.length);
+        return packet;
+    }
+
+    private byte[] stripStartCode(byte[] data) {
+        if (data == null) return new byte[0];
+        int off = 0;
+        if (data.length >= 4 && data[0] == 0 && data[1] == 0 && data[2] == 0 && data[3] == 1) off = 4;
+        else if (data.length >= 3 && data[0] == 0 && data[1] == 0 && data[2] == 1) off = 3;
+        byte[] out = new byte[data.length - off];
+        System.arraycopy(data, off, out, 0, out.length);
+        return out;
     }
 
     private void sendInitialCapabilities(long streamId) {

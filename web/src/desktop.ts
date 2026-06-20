@@ -55,6 +55,7 @@ document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n
     let ws = null, drawing = false, pendingFrame = null, deviceCache = [], lastCloseMessage = '', connectionSeq = 0, connectionMode = '';
     let frameCount = 0, frameBytes = 0, statsStartedAt = 0, lastFrameAt = 0, currentSource = '', remoteInput = false, resizeTimer = null, reconnectTimer = null, lastMouseSent = 0;
     let gpuMediaSource = null, gpuSourceBuffer = null, gpuQueue = [], gpuLastPointer = new Map(), gpuHeldKeys = new Map();
+    let gpuVideoDecoder = null, gpuVideoMode = 'mse';
     let controlPreferenceSet = false;
 
     function frameRateScale(value) {
@@ -290,6 +291,11 @@ document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n
         if (gpuMediaSource && gpuMediaSource.readyState === 'open') {
             try { gpuMediaSource.endOfStream(); } catch (_) {}
         }
+        if (gpuVideoDecoder) {
+            try { gpuVideoDecoder.close(); } catch (_) {}
+        }
+        gpuVideoDecoder = null;
+        gpuVideoMode = 'mse';
         gpuMediaSource = null;
         if (gpuVideo.src) URL.revokeObjectURL(gpuVideo.src);
         gpuVideo.removeAttribute('src');
@@ -349,7 +355,7 @@ document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n
         const elapsed = statsStartedAt ? Math.max(0.001, (performance.now() - statsStartedAt) / 1000) : 0;
         const fps = elapsed ? (frameCount / elapsed).toFixed(1) : '0.0';
         const kbps = elapsed ? ((frameBytes * 8 / elapsed) / 1024).toFixed(0) : '0';
-        const size = gpuVideo.videoWidth && gpuVideo.videoHeight ? `${gpuVideo.videoWidth}×${gpuVideo.videoHeight}` : 'video';
+        const size = gpuVideoMode === 'webcodecs' ? `${canvas.width || 0}×${canvas.height || 0}` : (gpuVideo.videoWidth && gpuVideo.videoHeight ? `${gpuVideo.videoWidth}×${gpuVideo.videoHeight}` : 'video');
         const source = currentSource ? ` · ${currentSource}` : '';
         frameInfo.textContent = `${size}${source} · ${fps} fps · ${kbps} kbps · ${formatBytes(frameBytes)}`;
     }
@@ -361,8 +367,11 @@ document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n
         const MS = window.ManagedMediaSource || window.MediaSource;
         if (!MS) { setStatus('MediaSource unsupported', 'err'); return; }
         closeGPUVideo();
+        gpuVideoMode = 'mse';
         gpuMediaSource = new MS();
         frameCount = 0; frameBytes = 0; statsStartedAt = performance.now(); lastFrameAt = 0;
+        canvas.style.display = 'none';
+        gpuVideo.style.display = 'block';
         gpuVideo.src = URL.createObjectURL(gpuMediaSource);
         gpuMediaSource.addEventListener('sourceopen', () => {
             let mime = 'video/mp4; codecs="avc1.4D403D"';
@@ -370,6 +379,49 @@ document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n
             gpuSourceBuffer = gpuMediaSource.addSourceBuffer(mime);
             gpuSourceBuffer.addEventListener('updateend', gpuUpdateBuffer);
         }, {once:true});
+    }
+    function gpuStartWebCodecsVideo(config) {
+        if (!('VideoDecoder' in window) || !('EncodedVideoChunk' in window)) {
+            setStatus('WebCodecs unsupported', 'err');
+            return;
+        }
+        closeGPUVideo();
+        gpuVideoMode = 'webcodecs';
+        frameCount = 0; frameBytes = 0; statsStartedAt = performance.now(); lastFrameAt = 0;
+        gpuVideo.style.display = 'none';
+        canvas.style.display = 'block';
+        canvas.width = config.width || 320;
+        canvas.height = config.height || 640;
+        gpuVideoDecoder = new VideoDecoder({
+            output: frame => {
+                canvas.width = frame.displayWidth || frame.codedWidth || canvas.width;
+                canvas.height = frame.displayHeight || frame.codedHeight || canvas.height;
+                ctx.drawImage(frame, 0, 0, canvas.width, canvas.height);
+                frame.close();
+                gpuUpdateFrameInfo();
+            },
+            error: err => setStatus(err.message || String(err), 'err')
+        });
+        gpuVideoDecoder.configure({
+            codec: config.codec || 'avc1.42E01F',
+            codedWidth: config.width || 320,
+            codedHeight: config.height || 640,
+            optimizeForLatency: true
+        });
+        setStatus(t('index.desktopReady'), 'ok');
+    }
+    function gpuHandleAndroidVideoPacket(buffer) {
+        const view = new DataView(buffer);
+        if (view.byteLength < 13 || view.getUint8(0) !== 0x52 || view.getUint8(1) !== 0x44 || view.getUint8(2) !== 0x41 || view.getUint8(3) !== 0x31) return false;
+        if (!gpuVideoDecoder || gpuVideoDecoder.state !== 'configured') return true;
+        const timestamp = Number(view.getBigUint64(5));
+        const data = new Uint8Array(buffer, 13);
+        frameCount++;
+        frameBytes += data.byteLength;
+        lastFrameAt = performance.now();
+        if (gpuVideoDecoder.decodeQueueSize > 2) return true;
+        gpuVideoDecoder.decode(new EncodedVideoChunk({type:view.getUint8(4) ? 'key' : 'delta', timestamp, data}));
+        return true;
     }
     function gpuSetSources(list) {
         const saved = localStorage.getItem(gpuStoragePrefix + 'source') || gpuSourceSelect.value || '';
@@ -437,6 +489,7 @@ document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n
         ws.onmessage = evt => {
             if (connID !== connectionSeq) return;
             if (evt.data instanceof ArrayBuffer) {
+                if (gpuHandleAndroidVideoPacket(evt.data)) return;
                 frameCount++;
                 frameBytes += evt.data.byteLength || 0;
                 lastFrameAt = performance.now();
@@ -452,6 +505,7 @@ document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n
             }
             const msg = JSON.parse(evt.data);
             if (msg === 'NewVideo') { gpuStartMedia(); gpuEmpty.textContent = ''; }
+            else if (msg && msg.AndroidVideoConfig) { gpuStartWebCodecsVideo(msg.AndroidVideoConfig); gpuEmpty.textContent = ''; }
             else if (msg === 'ConfigOk') { gpuEmpty.textContent = ''; setStatus(t('index.desktopReady'), 'ok'); }
             else if (msg && msg.CapturableList) gpuSetSources(msg.CapturableList);
             else if (msg && msg.EncoderCapabilities) gpuSetEncoders(msg.EncoderCapabilities.options || []);
