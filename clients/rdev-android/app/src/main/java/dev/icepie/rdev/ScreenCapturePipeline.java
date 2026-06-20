@@ -13,9 +13,6 @@ import android.view.WindowManager;
 
 final class ScreenCapturePipeline {
     private static final String TAG = "RDevCapture";
-    private static final int MAX_WIDTH = 1280;
-    private static final int MAX_HEIGHT = 720;
-
     private final Context context;
     private final MediaProjection projection;
     private HandlerThread thread;
@@ -47,16 +44,16 @@ final class ScreenCapturePipeline {
 
     private void startOnThread() {
         try {
-            CaptureSize size = chooseSize();
-            width = size.width;
-            height = size.height;
-            encoder = new VideoEncoderPipeline(size.width, size.height, 30, 3_000_000);
+            CaptureConfig config = chooseConfig();
+            width = config.width;
+            height = config.height;
+            encoder = new VideoEncoderPipeline(config.width, config.height, config.fps, config.bitrate);
             Surface surface = encoder.start();
             virtualDisplay = projection.createVirtualDisplay(
                 "RDev Android",
-                size.width,
-                size.height,
-                size.densityDpi,
+                config.width,
+                config.height,
+                config.densityDpi,
                 DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
                 surface,
                 null,
@@ -65,7 +62,7 @@ final class ScreenCapturePipeline {
             projection.registerCallback(new MediaProjection.Callback() {
                 @Override public void onStop() { stopOnThread(); }
             }, handler);
-            Log.i(TAG, "capture started " + size.width + "x" + size.height + " dpi=" + size.densityDpi);
+            Log.i(TAG, "capture started " + config.width + "x" + config.height + " dpi=" + config.densityDpi + " fps=" + config.fps + " bitrate=" + config.bitrate);
         } catch (Throwable t) {
             Log.e(TAG, "capture start failed", t);
             stopOnThread();
@@ -94,30 +91,41 @@ final class ScreenCapturePipeline {
         Log.i(TAG, "capture stopped");
     }
 
-    private CaptureSize chooseSize() {
+    private CaptureConfig chooseConfig() {
         DisplayMetrics metrics = new DisplayMetrics();
         WindowManager wm = (WindowManager) context.getSystemService(Context.WINDOW_SERVICE);
         wm.getDefaultDisplay().getRealMetrics(metrics);
-        int width = metrics.widthPixels;
-        int height = metrics.heightPixels;
-        float scale = Math.min(1.0f, Math.min(MAX_WIDTH / (float) width, MAX_HEIGHT / (float) height));
-        width = align16(Math.max(16, Math.round(width * scale)));
-        height = align16(Math.max(16, Math.round(height * scale)));
-        return new CaptureSize(width, height, metrics.densityDpi);
+        VideoEncoderPipeline.EncoderLimits limits = VideoEncoderPipeline.avcEncoderLimits();
+        int screenWidth = metrics.widthPixels;
+        int screenHeight = metrics.heightPixels;
+        int maxWidth = Math.max(16, limits.maxWidth);
+        int maxHeight = Math.max(16, limits.maxHeight);
+        float scale = Math.min(1.0f, Math.min(maxWidth / (float) screenWidth, maxHeight / (float) screenHeight));
+        int width = align16(Math.max(16, Math.round(screenWidth * scale)));
+        int height = align16(Math.max(16, Math.round(screenHeight * scale)));
+        int pixels = Math.max(1, width * height);
+        int fps = Math.max(15, Math.min(60, limits.maxFps));
+        int bitrate = Math.max(2_000_000, Math.min(limits.maxBitrate, pixels * fps / 8));
+        Log.i(TAG, "encoder limits max=" + limits.maxWidth + "x" + limits.maxHeight + " fps=" + limits.maxFps + " bitrate=" + limits.maxBitrate);
+        return new CaptureConfig(width, height, metrics.densityDpi, fps, bitrate);
     }
 
     private int align16(int value) {
         return Math.max(16, (value / 16) * 16);
     }
 
-    private static final class CaptureSize {
+    private static final class CaptureConfig {
         final int width;
         final int height;
         final int densityDpi;
-        CaptureSize(int width, int height, int densityDpi) {
+        final int fps;
+        final int bitrate;
+        CaptureConfig(int width, int height, int densityDpi, int fps, int bitrate) {
             this.width = width;
             this.height = height;
             this.densityDpi = densityDpi;
+            this.fps = fps;
+            this.bitrate = bitrate;
         }
     }
 }

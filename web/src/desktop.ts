@@ -72,12 +72,12 @@ document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n
         return desktop.platform === 'android' || desktop.displayServer === 'mediaprojection';
     }
     function gpuFrameRate() {
-        const maxFps = isAndroidGpuDevice() ? 30 : 120;
+        const maxFps = isAndroidGpuDevice() ? 60 : 120;
         return Math.max(0, Math.min(maxFps, gpuFrameRateInput.valueAsNumber || 0));
     }
     function gpuMaxVideoSize() {
         if (isAndroidGpuDevice()) {
-            return { width: 720, height: 1280 };
+            return { width: 1080, height: 1920 };
         }
         const scale = Math.max(0.1, Math.min(2, gpuScaleInput.valueAsNumber || 1));
         return {
@@ -443,7 +443,9 @@ document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n
         frameCount++;
         frameBytes += data.byteLength;
         lastFrameAt = performance.now();
-        if (!isKey && gpuVideoDecoder.decodeQueueSize > 2) return true;
+        if (isKey && gpuVideoDecoder.decodeQueueSize > 8) {
+            try { gpuVideoDecoder.flush(); } catch (_) {}
+        }
         try {
             gpuVideoDecoder.decode(new EncodedVideoChunk({type:isKey ? 'key' : 'delta', timestamp, data}));
             gpuNeedKeyFrame = false;

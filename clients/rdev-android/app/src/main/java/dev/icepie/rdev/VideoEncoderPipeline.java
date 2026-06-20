@@ -4,6 +4,7 @@ import android.media.MediaCodec;
 import android.media.MediaCodecInfo;
 import android.media.MediaCodecList;
 import android.media.MediaFormat;
+import android.util.Range;
 import android.os.Bundle;
 import android.util.Log;
 import android.view.Surface;
@@ -25,6 +26,22 @@ final class VideoEncoderPipeline {
     private final AtomicBoolean running = new AtomicBoolean(false);
     private long frameCount;
     private long bytesOut;
+
+    static EncoderLimits avcEncoderLimits() {
+        MediaCodecInfo info = chooseAvcEncoderInfo();
+        if (info == null) return new EncoderLimits(1920, 1920, 30, 8_000_000);
+        try {
+            MediaCodecInfo.CodecCapabilities caps = info.getCapabilitiesForType(MIME_AVC);
+            MediaCodecInfo.VideoCapabilities video = caps.getVideoCapabilities();
+            Range<Integer> widths = video.getSupportedWidths();
+            Range<Integer> heights = video.getSupportedHeights();
+            Range<Integer> bitrates = video.getBitrateRange();
+            return new EncoderLimits(widths.getUpper(), heights.getUpper(), 60, bitrates.getUpper());
+        } catch (Throwable t) {
+            Log.w(TAG, "probe encoder limits failed", t);
+            return new EncoderLimits(1920, 1920, 30, 8_000_000);
+        }
+    }
 
     VideoEncoderPipeline(int width, int height, int fps, int bitrate) {
         this.width = width;
@@ -146,7 +163,12 @@ final class VideoEncoderPipeline {
     }
 
     private String chooseAvcEncoder() {
-        String software = null;
+        MediaCodecInfo info = chooseAvcEncoderInfo();
+        return info == null ? null : info.getName();
+    }
+
+    private static MediaCodecInfo chooseAvcEncoderInfo() {
+        MediaCodecInfo software = null;
         for (int i = 0; i < MediaCodecList.getCodecCount(); i++) {
             MediaCodecInfo info = MediaCodecList.getCodecInfoAt(i);
             if (!info.isEncoder()) continue;
@@ -164,11 +186,25 @@ final class VideoEncoderPipeline {
                     if (!surface) continue;
                     String name = info.getName();
                     String lower = name.toLowerCase(Locale.ROOT);
-                    if (!lower.contains("google") && !lower.contains("android")) return name;
-                    if (software == null) software = name;
+                    if (!lower.contains("google") && !lower.contains("android")) return info;
+                    if (software == null) software = info;
                 } catch (Throwable ignored) {}
             }
         }
         return software;
+    }
+
+    static final class EncoderLimits {
+        final int maxWidth;
+        final int maxHeight;
+        final int maxFps;
+        final int maxBitrate;
+
+        EncoderLimits(int maxWidth, int maxHeight, int maxFps, int maxBitrate) {
+            this.maxWidth = maxWidth;
+            this.maxHeight = maxHeight;
+            this.maxFps = maxFps;
+            this.maxBitrate = maxBitrate;
+        }
     }
 }
