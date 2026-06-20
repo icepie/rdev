@@ -22,6 +22,8 @@ final class ScreenCapturePipeline {
     private Handler handler;
     private VideoEncoderPipeline encoder;
     private VirtualDisplay virtualDisplay;
+    private volatile int width;
+    private volatile int height;
 
     ScreenCapturePipeline(Context context, MediaProjection projection) {
         this.context = context.getApplicationContext();
@@ -39,9 +41,15 @@ final class ScreenCapturePipeline {
         if (handler != null) handler.post(this::stopOnThread);
     }
 
+    int width() { return width; }
+
+    int height() { return height; }
+
     private void startOnThread() {
         try {
             CaptureSize size = chooseSize();
+            width = size.width;
+            height = size.height;
             encoder = new VideoEncoderPipeline(size.width, size.height, 30, 2_000_000);
             Surface surface = encoder.start();
             virtualDisplay = projection.createVirtualDisplay(
