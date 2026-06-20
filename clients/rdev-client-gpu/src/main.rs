@@ -1,3 +1,8 @@
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
+
 use anyhow::{Context, Result};
 use clap::Parser;
 use futures_util::{SinkExt, StreamExt};
@@ -41,11 +46,18 @@ async fn main() -> Result<()> {
     if let Some(service) = rdev_desktop_service.as_ref() {
         args.gpu_desktop_local = service.bind_addr().to_string();
     }
-    gpu_tunnel::spawn(args.clone(), instance_id.clone(), desktop_enabled);
+    let gpu_tunnel_started = Arc::new(AtomicBool::new(false));
     let _rdev_desktop_service = rdev_desktop_service;
 
     loop {
-        match run_once(&args, &instance_id, desktop_enabled).await {
+        match run_once(
+            &args,
+            &instance_id,
+            desktop_enabled,
+            gpu_tunnel_started.clone(),
+        )
+        .await
+        {
             Ok(()) => info!("connection closed"),
             Err(err) => warn!("connection failed: {err:#}"),
         }
@@ -60,7 +72,12 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-async fn run_once(args: &Args, instance_id: &str, desktop_enabled: bool) -> Result<()> {
+async fn run_once(
+    args: &Args,
+    instance_id: &str,
+    desktop_enabled: bool,
+    gpu_tunnel_started: Arc<AtomicBool>,
+) -> Result<()> {
     let ws_url = websocket_url(&args.server)?;
     info!("connecting to {ws_url} as {}", args.id);
     let (ws, _) = connect_async(ws_url).await.context("connect websocket")?;
@@ -102,7 +119,7 @@ async fn run_once(args: &Args, instance_id: &str, desktop_enabled: bool) -> Resu
             }
             inbound = read.next() => {
                 match inbound {
-                    Some(Ok(WsMessage::Text(text))) => handle_text(&text, args, desktop_enabled, &sessions, &forwards, &files, &out_tx).await?,
+                    Some(Ok(WsMessage::Text(text))) => handle_text(&text, args, instance_id, desktop_enabled, gpu_tunnel_started.clone(), &sessions, &forwards, &files, &out_tx).await?,
                     Some(Ok(WsMessage::Binary(raw))) => handle_binary(&raw, &sessions, &forwards, &files, &fileputs, &out_tx).await?,
                     Some(Ok(WsMessage::Close(frame))) => {
                         info!("websocket closed by server: {:?}", frame);
@@ -127,7 +144,9 @@ async fn run_once(args: &Args, instance_id: &str, desktop_enabled: bool) -> Resu
 async fn handle_text(
     text: &str,
     args: &Args,
+    instance_id: &str,
     desktop_enabled: bool,
+    gpu_tunnel_started: Arc<AtomicBool>,
     sessions: &SessionManager,
     forwards: &ForwardManager,
     files: &FileManager,
@@ -136,20 +155,23 @@ async fn handle_text(
     let msg = protocol::decode_message(text)?;
     match msg.ty {
         Some(MessageType::Register) => {
+            let registered_id = if msg.client_id.is_empty() {
+                args.id.as_str()
+            } else {
+                msg.client_id.as_str()
+            };
             if !msg.client_id.is_empty() && msg.client_id != args.id {
                 info!(
                     "server assigned device ID {} for requested ID {}",
                     msg.client_id, args.id
                 );
             } else {
-                info!(
-                    "registered as {}",
-                    if msg.client_id.is_empty() {
-                        &args.id
-                    } else {
-                        &msg.client_id
-                    }
-                );
+                info!("registered as {registered_id}");
+            }
+            if desktop_enabled && !gpu_tunnel_started.swap(true, Ordering::SeqCst) {
+                let mut tunnel_args = args.clone();
+                tunnel_args.id = registered_id.to_string();
+                gpu_tunnel::spawn(tunnel_args, instance_id.to_string(), desktop_enabled);
             }
         }
         Some(MessageType::NewSession) => sessions.start(msg, args.shell.clone(), out_tx.clone())?,
