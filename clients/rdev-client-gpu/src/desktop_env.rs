@@ -2,36 +2,31 @@ use crate::config::Args;
 
 #[cfg(target_os = "linux")]
 pub fn prepare(args: &mut Args) {
-    if std::env::var_os("DISPLAY").is_some() || std::env::var_os("WAYLAND_DISPLAY").is_some() {
+    let display_present = std::env::var_os("DISPLAY").is_some();
+    let wayland_present = std::env::var_os("WAYLAND_DISPLAY").is_some();
+    if display_present || wayland_present {
         tracing::info!(
             "desktop environment detected: DISPLAY={:?} WAYLAND_DISPLAY={:?}",
             std::env::var("DISPLAY"),
             std::env::var("WAYLAND_DISPLAY")
         );
-        return;
     }
 
-    let wayland_detected = detect_wayland_session();
-    let x11_detected = detect_x11_session();
-    if x11_detected {
-        return;
-    }
+    let wayland_detected = wayland_present || detect_wayland_session();
+    let x11_detected = display_present || detect_x11_session();
     if wayland_detected && cfg!(feature = "embedded-rdev-desktop-wayland") {
         args.gpu_desktop_wayland = true;
-        return;
+        tracing::info!("enabled Wayland/PipeWire desktop capture path");
+    } else if wayland_detected {
+        tracing::warn!("Wayland session detected but this package has no PipeWire support");
+    }
+    if x11_detected {
+        tracing::info!("enabled X11 desktop capture path");
     }
 
     if current_uid() == Some(0) && !args.gpu_desktop_kms {
         args.gpu_desktop_kms = true;
-        if wayland_detected {
-            tracing::warn!(
-                "Wayland session detected but this package has no PipeWire support; enabling Linux KMS capture fallback for root"
-            );
-        } else {
-            tracing::warn!(
-                "no DISPLAY/WAYLAND_DISPLAY detected; enabling Linux KMS capture fallback for root"
-            );
-        }
+        tracing::warn!("enabled Linux KMS desktop capture fallback for root");
     }
 }
 

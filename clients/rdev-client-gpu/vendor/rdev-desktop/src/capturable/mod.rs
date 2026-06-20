@@ -143,18 +143,6 @@ pub fn get_capturables(
             warn!("Wayland/PipeWire capture not available (built without 'pipewire' feature)");
         }
 
-        if kms_support {
-            use crate::capturable::kms::get_capturables as get_capturables_kms;
-            match get_capturables_kms(kms_device) {
-                Ok(captrs) => {
-                    for c in captrs {
-                        capturables.push(Box::new(c));
-                    }
-                }
-                Err(err) => warn!("Failed to get list of capturables via KMS: {}", err),
-            }
-        }
-
         use crate::capturable::x11::X11Context;
         let x11ctx = X11Context::new();
         if let Some(mut x11ctx) = x11ctx {
@@ -167,6 +155,18 @@ pub fn get_capturables(
                 Err(err) => warn!("Failed to get list of capturables via X11: {}", err),
             }
         };
+
+        if kms_support {
+            use crate::capturable::kms::get_capturables as get_capturables_kms;
+            match get_capturables_kms(kms_device) {
+                Ok(captrs) => {
+                    for c in captrs {
+                        capturables.push(Box::new(c));
+                    }
+                }
+                Err(err) => warn!("Failed to get list of capturables via KMS: {}", err),
+            }
+        }
     }
 
     #[cfg(target_os = "macos")]
