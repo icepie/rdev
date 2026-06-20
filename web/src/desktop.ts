@@ -443,9 +443,6 @@ document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n
         frameCount++;
         frameBytes += data.byteLength;
         lastFrameAt = performance.now();
-        if (isKey && gpuVideoDecoder.decodeQueueSize > 8) {
-            try { gpuVideoDecoder.flush(); } catch (_) {}
-        }
         try {
             gpuVideoDecoder.decode(new EncodedVideoChunk({type:isKey ? 'key' : 'delta', timestamp, data}));
             gpuNeedKeyFrame = false;

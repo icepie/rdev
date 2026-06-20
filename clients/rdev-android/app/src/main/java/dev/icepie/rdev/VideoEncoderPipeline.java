@@ -5,6 +5,7 @@ import android.media.MediaCodecInfo;
 import android.media.MediaCodecList;
 import android.media.MediaFormat;
 import android.util.Range;
+import android.os.Build;
 import android.os.Bundle;
 import android.util.Log;
 import android.view.Surface;
@@ -63,6 +64,9 @@ final class VideoEncoderPipeline {
         format.setInteger(MediaFormat.KEY_BIT_RATE, bitrate);
         format.setInteger(MediaFormat.KEY_FRAME_RATE, fps);
         format.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1);
+        if (Build.VERSION.SDK_INT >= 25) {
+            format.setFloat(MediaFormat.KEY_I_FRAME_INTERVAL, 0.5f);
+        }
         codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
         inputSurface = codec.createInputSurface();
         codec.start();
