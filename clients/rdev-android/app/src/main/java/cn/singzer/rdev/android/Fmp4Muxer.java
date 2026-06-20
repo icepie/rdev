@@ -142,7 +142,7 @@ final class Fmp4Muxer {
 
     private byte[] trun(int duration, int size, boolean keyFrame, int dataOffset) throws IOException {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
-        u32(out, 0x000f01); u32(out, 1); u32(out, dataOffset); u32(out, duration); u32(out, size); u32(out, keyFrame ? 0x02000000 : 0x01010000);
+        u32(out, 0x000701); u32(out, 1); u32(out, dataOffset); u32(out, duration); u32(out, size); u32(out, keyFrame ? 0x02000000 : 0x01010000);
         return box("trun", out.toByteArray());
     }
 
