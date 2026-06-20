@@ -34,6 +34,7 @@ final class RDevWebSocketClient {
     private InputStream in;
     private OutputStream out;
     private Thread thread;
+    private final SecureRandom random = new SecureRandom();
 
     RDevWebSocketClient(String rawUrl, Listener listener) {
         this.rawUrl = normalizeUrl(rawUrl);
@@ -156,7 +157,7 @@ final class RDevWebSocketClient {
     private void sendFrame(int opcode, byte[] payload) throws IOException {
         if (!running || out == null) throw new IOException("websocket not connected");
         byte[] mask = new byte[4];
-        new SecureRandom().nextBytes(mask);
+        random.nextBytes(mask);
         synchronized (writeLock) {
             out.write(0x80 | (opcode & 0x0f));
             int len = payload.length;

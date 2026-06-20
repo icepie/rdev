@@ -130,6 +130,8 @@ final class RDevGpuTunnel {
         boolean upgraded;
         boolean videoActive;
         Fmp4Muxer muxer;
+        long lastVideoSentUs;
+        int targetFps = 15;
         Stream(long id) { this.id = id; }
 
         void onData(byte[] body) {
@@ -174,6 +176,7 @@ final class RDevGpuTunnel {
                 } else if (text.contains("PointerEvent")) {
                     handlePointerEvent(text);
                 } else if (text.contains("Config")) {
+                    updateConfig(text);
                     sendWsText(id, "\"ConfigOk\"");
                     sendWsText(id, runtimeStatus());
                 } else if (text.contains("ResumeVideo")) {
@@ -188,11 +191,24 @@ final class RDevGpuTunnel {
             }
         }
 
+        private void updateConfig(String text) {
+            try {
+                JSONObject config = new JSONObject(text).optJSONObject("Config");
+                if (config == null) return;
+                int requested = config.optInt("frame_rate", targetFps);
+                if (requested > 0) targetFps = Math.max(5, Math.min(20, requested));
+                Log.i(TAG, "desktop config targetFps=" + targetFps + " encoder=" + config.optString("encoder", "auto"));
+            } catch (Exception e) {
+                Log.w(TAG, "config parse failed", e);
+            }
+        }
+
         private void startVideo() {
             if (videoActive) return;
             videoActive = true;
+            lastVideoSentUs = 0;
             AndroidVideoHub.addListener(this);
-            Log.i(TAG, "video subscribed stream=" + id);
+            Log.i(TAG, "video subscribed stream=" + id + " targetFps=" + targetFps);
         }
 
         private void stopVideo() {
@@ -215,8 +231,11 @@ final class RDevGpuTunnel {
 
         @Override public void onVideoSample(byte[] data, long ptsUs, boolean keyFrame) {
             if (!videoActive || muxer == null) return;
+            long minIntervalUs = 1_000_000L / Math.max(1, targetFps);
+            if (!keyFrame && lastVideoSentUs > 0 && ptsUs - lastVideoSentUs < minIntervalUs) return;
             try {
                 sendData(id, RDevWsFrame.encode(2, muxer.fragment(data, ptsUs, keyFrame)));
+                lastVideoSentUs = ptsUs;
             } catch (Exception e) {
                 Log.w(TAG, "video sample failed", e);
                 stopVideo();
