@@ -48,6 +48,7 @@ final class VideoEncoderPipeline {
         codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
         inputSurface = codec.createInputSurface();
         codec.start();
+        AndroidVideoHub.setKeyFrameRequester(this::requestKeyFrame);
         running.set(true);
         drainThread = new Thread(this::drainLoop, "rdev-encoder-drain");
         drainThread.start();
@@ -71,6 +72,7 @@ final class VideoEncoderPipeline {
             try { inputSurface.release(); } catch (Throwable ignored) {}
             inputSurface = null;
         }
+        AndroidVideoHub.setKeyFrameRequester(null);
         Log.i(TAG, "encoder stopped frames=" + frameCount + " bytes=" + bytesOut);
     }
 
@@ -132,7 +134,7 @@ final class VideoEncoderPipeline {
         return out;
     }
 
-    private void requestKeyFrame() {
+    void requestKeyFrame() {
         try {
             Bundle params = new Bundle();
             params.putInt(MediaCodec.PARAMETER_KEY_REQUEST_SYNC_FRAME, 0);

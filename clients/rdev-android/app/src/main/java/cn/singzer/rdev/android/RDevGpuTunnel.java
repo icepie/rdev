@@ -211,6 +211,7 @@ final class RDevGpuTunnel {
             videoActive = true;
             lastVideoSentUs = 0;
             AndroidVideoHub.addListener(this);
+            AndroidVideoHub.requestKeyFrame();
             Log.i(TAG, "video subscribed stream=" + id + " targetFps=" + targetFps);
         }
 

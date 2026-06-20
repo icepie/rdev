@@ -14,6 +14,19 @@ final class AndroidVideoHub {
     private static int height;
     private static byte[] sps;
     private static byte[] pps;
+    private static KeyFrameRequester keyFrameRequester;
+
+    interface KeyFrameRequester {
+        void requestKeyFrame();
+    }
+
+    static synchronized void setKeyFrameRequester(KeyFrameRequester requester) {
+        keyFrameRequester = requester;
+    }
+
+    static synchronized void requestKeyFrame() {
+        if (keyFrameRequester != null) keyFrameRequester.requestKeyFrame();
+    }
 
     static synchronized void addListener(Listener listener) {
         listeners.add(listener);

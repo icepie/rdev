@@ -55,7 +55,7 @@ document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n
     let ws = null, drawing = false, pendingFrame = null, deviceCache = [], lastCloseMessage = '', connectionSeq = 0, connectionMode = '';
     let frameCount = 0, frameBytes = 0, statsStartedAt = 0, lastFrameAt = 0, currentSource = '', remoteInput = false, resizeTimer = null, reconnectTimer = null, lastMouseSent = 0;
     let gpuMediaSource = null, gpuSourceBuffer = null, gpuQueue = [], gpuLastPointer = new Map(), gpuHeldKeys = new Map();
-    let gpuVideoDecoder = null, gpuVideoMode = 'mse';
+    let gpuVideoDecoder = null, gpuVideoMode = 'mse', gpuNeedKeyFrame = false;
     let controlPreferenceSet = false;
 
     function frameRateScale(value) {
@@ -296,6 +296,7 @@ document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n
         }
         gpuVideoDecoder = null;
         gpuVideoMode = 'mse';
+        gpuNeedKeyFrame = false;
         gpuMediaSource = null;
         if (gpuVideo.src) URL.revokeObjectURL(gpuVideo.src);
         gpuVideo.removeAttribute('src');
@@ -408,19 +409,28 @@ document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n
             codedHeight: config.height || 640,
             optimizeForLatency: true
         });
+        gpuNeedKeyFrame = true;
         setStatus(t('index.desktopReady'), 'ok');
     }
     function gpuHandleAndroidVideoPacket(buffer) {
         const view = new DataView(buffer);
         if (view.byteLength < 13 || view.getUint8(0) !== 0x52 || view.getUint8(1) !== 0x44 || view.getUint8(2) !== 0x41 || view.getUint8(3) !== 0x31) return false;
         if (!gpuVideoDecoder || gpuVideoDecoder.state !== 'configured') return true;
+        const isKey = view.getUint8(4) !== 0;
+        if (gpuNeedKeyFrame && !isKey) return true;
         const timestamp = Number(view.getBigUint64(5));
         const data = new Uint8Array(buffer, 13);
         frameCount++;
         frameBytes += data.byteLength;
         lastFrameAt = performance.now();
         if (gpuVideoDecoder.decodeQueueSize > 2) return true;
-        gpuVideoDecoder.decode(new EncodedVideoChunk({type:view.getUint8(4) ? 'key' : 'delta', timestamp, data}));
+        try {
+            gpuVideoDecoder.decode(new EncodedVideoChunk({type:isKey ? 'key' : 'delta', timestamp, data}));
+            gpuNeedKeyFrame = false;
+        } catch (err) {
+            gpuNeedKeyFrame = true;
+            setStatus(err.message || String(err), 'err');
+        }
         return true;
     }
     function gpuSetSources(list) {
