@@ -29,6 +29,7 @@ public class RDevAgentService extends Service {
 
     private ScreenCapturePipeline capture;
     private RDevWebSocketClient client;
+    private RDevGpuTunnel tunnel;
     private String instanceId;
 
     @Override public void onCreate() {
@@ -54,6 +55,10 @@ public class RDevAgentService extends Service {
             client.close();
             client = null;
         }
+        if (tunnel != null) {
+            tunnel.close();
+            tunnel = null;
+        }
         super.onDestroy();
     }
 
@@ -66,6 +71,7 @@ public class RDevAgentService extends Service {
         client = new RDevWebSocketClient(server, new RDevWebSocketClient.Listener() {
             @Override public void onOpen() { sendRegister(); }
             @Override public void onText(String text) { handleText(text); }
+            @Override public void onBinary(byte[] data) {}
             @Override public void onClosed(Exception error) { Log.i(TAG, "websocket closed error=" + error); }
         });
         client.connect();
@@ -104,7 +110,9 @@ public class RDevAgentService extends Service {
             JSONObject msg = new JSONObject(text);
             String type = msg.optString("type", "");
             if ("register".equals(type)) {
-                Log.i(TAG, "registered as " + msg.optString("clientId", ""));
+                String registeredId = msg.optString("clientId", getSharedPreferences("rdev", MODE_PRIVATE).getString("id", "android"));
+                Log.i(TAG, "registered as " + registeredId);
+                startTunnel(registeredId);
             } else if ("desktop_start".equals(type)) {
                 sendDesktopReady(msg.optString("sessionId", ""));
             } else {
@@ -113,6 +121,18 @@ public class RDevAgentService extends Service {
         } catch (Exception e) {
             Log.w(TAG, "invalid websocket text: " + text, e);
         }
+    }
+
+    private void startTunnel(String registeredId) {
+        SharedPreferences prefs = getSharedPreferences("rdev", MODE_PRIVATE);
+        if (tunnel != null) tunnel.close();
+        tunnel = new RDevGpuTunnel(
+            prefs.getString("server", "wss://rdev.singzer.cn"),
+            registeredId,
+            instanceId,
+            prefs.getString("password", "")
+        );
+        tunnel.connect();
     }
 
     private void sendDesktopReady(String sessionId) {

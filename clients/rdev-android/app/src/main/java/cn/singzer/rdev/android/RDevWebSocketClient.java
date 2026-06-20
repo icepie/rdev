@@ -20,6 +20,7 @@ final class RDevWebSocketClient {
     interface Listener {
         void onOpen();
         void onText(String text);
+        void onBinary(byte[] data);
         void onClosed(Exception error);
     }
 
@@ -52,6 +53,10 @@ final class RDevWebSocketClient {
 
     void sendText(String text) throws IOException {
         sendFrame(0x1, text.getBytes("UTF-8"));
+    }
+
+    void sendBinary(byte[] data) throws IOException {
+        sendFrame(0x2, data);
     }
 
     private void runLoop() {
@@ -142,6 +147,7 @@ final class RDevWebSocketClient {
             byte[] payload = readFully((int) len);
             if (mask != null) for (int i = 0; i < payload.length; i++) payload[i] ^= mask[i & 3];
             if (opcode == 0x1) listener.onText(new String(payload, "UTF-8"));
+            else if (opcode == 0x2) listener.onBinary(payload);
             else if (opcode == 0x8) return;
             else if (opcode == 0x9) sendFrame(0xA, payload);
         }
@@ -207,7 +213,13 @@ final class RDevWebSocketClient {
         if (url.startsWith("https://")) url = "wss://" + url.substring(8);
         else if (url.startsWith("http://")) url = "ws://" + url.substring(7);
         else if (!url.startsWith("ws://") && !url.startsWith("wss://")) url = "ws://" + url;
-        if (!url.endsWith("/ws")) url += "/ws";
+        try {
+            URI uri = URI.create(url);
+            String path = uri.getRawPath();
+            if ((path == null || path.length() == 0 || "/".equals(path)) && !url.endsWith("/ws")) url += url.endsWith("/") ? "ws" : "/ws";
+        } catch (Throwable ignored) {
+            if (!url.endsWith("/ws")) url += "/ws";
+        }
         return url;
     }
 }
