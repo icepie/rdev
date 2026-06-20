@@ -8,7 +8,7 @@ use clap::Parser;
 use futures_util::{SinkExt, StreamExt};
 use rdev_client_gpu::{
     config::Args,
-    desktop,
+    desktop, desktop_env,
     fileput::FilePutManager,
     files::FileManager,
     forward::ForwardManager,
@@ -47,6 +47,7 @@ async fn main() -> Result<()> {
     if args.id.trim().is_empty() {
         args.id = default_device_id();
     }
+    desktop_env::prepare(&mut args);
     let instance_id = args.instance_id.clone().unwrap_or_else(new_instance_id);
     let rdev_desktop_service = rdev_desktop_service::start(&args);
     let desktop_enabled = rdev_desktop_service.is_some();

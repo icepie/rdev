@@ -1,5 +1,6 @@
 pub mod config;
 pub mod desktop;
+pub mod desktop_env;
 pub mod fileput;
 pub mod files;
 pub mod forward;
