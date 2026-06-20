@@ -49,7 +49,12 @@ final class RDevWebSocketClient {
 
     void close() {
         running = false;
-        try { if (socket != null) socket.close(); } catch (IOException ignored) {}
+        final Socket socketToClose = socket;
+        socket = null;
+        if (socketToClose == null) return;
+        new Thread(() -> {
+            try { socketToClose.close(); } catch (IOException ignored) {}
+        }, "rdev-ws-close").start();
     }
 
     void sendText(String text) throws IOException {

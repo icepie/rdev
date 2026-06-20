@@ -8,7 +8,9 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.net.URI;
 import java.security.MessageDigest;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 
@@ -25,6 +27,8 @@ final class RDevGpuTunnel {
     private volatile boolean closed;
     private int reconnectDelayMs = 1000;
     private final Map<Long, Stream> streams = new HashMap<>();
+    private final Map<Integer, PointerTrace> activePointers = new HashMap<>();
+    private final List<PointerTrace> completedPointers = new ArrayList<>();
 
     RDevGpuTunnel(String serverUrl, String deviceId, String instanceId, String password) {
         this.serverUrl = serverUrl;
@@ -166,7 +170,7 @@ final class RDevGpuTunnel {
         long lastBatchFlushMs;
         ByteArrayOutputStream videoBatch = new ByteArrayOutputStream(96 * 1024);
         int videoBatchFrames;
-        int targetFps = 12;
+        int targetFps = 30;
         Stream(long id) { this.id = id; }
 
         void onData(byte[] body) {
@@ -210,6 +214,10 @@ final class RDevGpuTunnel {
                     sendWsText(id, new JSONObject().put("CapturableList", new org.json.JSONArray().put("Android Screen (MediaProjection)")).toString());
                 } else if (text.contains("PointerEvent") || text.contains("\"op\":\"input\"")) {
                     handlePointerEvent(text);
+                } else if (text.contains("WheelEvent")) {
+                    handleWheelEvent(text);
+                } else if (text.contains("TextInputEvent") || text.contains("KeyboardEvent")) {
+                    handleKeyboardEvent(text);
                 } else if (text.contains("Config")) {
                     updateConfig(text);
                     sendWsText(id, "\"ConfigOk\"");
@@ -231,7 +239,7 @@ final class RDevGpuTunnel {
                 JSONObject config = new JSONObject(text).optJSONObject("Config");
                 if (config == null) return;
                 int requested = config.optInt("frame_rate", targetFps);
-                if (requested > 0) targetFps = Math.max(8, Math.min(24, requested));
+                if (requested > 0) targetFps = Math.max(8, Math.min(30, requested));
                 Log.i(TAG, "desktop config targetFps=" + targetFps + " encoder=" + config.optString("encoder", "auto"));
             } catch (Exception e) {
                 Log.w(TAG, "config parse failed", e);
@@ -385,12 +393,137 @@ final class RDevGpuTunnel {
             } else {
                 return;
             }
-            if ("pointerup".equals(eventType) || "click".equals(eventType) || "mouse_up".equals(eventType)) {
-                boolean ok = RDevAccessibilityService.tapNormalized(x, y);
-                Log.i(TAG, "accessibility tap " + ok + " x=" + x + " y=" + y);
+            int pointerId = pointer != null ? pointer.optInt("pointer_id", 0) : 0;
+            if ("pointerdown".equals(eventType) || "mouse_down".equals(eventType)) {
+                synchronized (activePointers) {
+                    activePointers.put(pointerId, new PointerTrace(x, y, System.currentTimeMillis()));
+                }
+            } else if ("pointermove".equals(eventType) || "mouse_move".equals(eventType)) {
+                synchronized (activePointers) {
+                    PointerTrace trace = activePointers.get(pointerId);
+                    if (trace != null) trace.update(x, y);
+                }
+            } else if ("pointerup".equals(eventType) || "click".equals(eventType) || "mouse_up".equals(eventType)) {
+                handlePointerUp(pointerId, x, y);
+            } else if ("pointercancel".equals(eventType)) {
+                synchronized (activePointers) { activePointers.remove(pointerId); }
             }
         } catch (Exception e) {
             Log.w(TAG, "pointer event failed", e);
+        }
+    }
+
+    private void handlePointerUp(int pointerId, double x, double y) {
+        PointerTrace trace;
+        synchronized (activePointers) {
+            trace = activePointers.remove(pointerId);
+            if (trace == null) trace = new PointerTrace(x, y, System.currentTimeMillis());
+            trace.update(x, y);
+            completedPointers.add(trace);
+            if (!activePointers.isEmpty()) return;
+            List<PointerTrace> traces = new ArrayList<>(completedPointers);
+            completedPointers.clear();
+            dispatchPointerTraces(traces);
+        }
+    }
+
+    private void dispatchPointerTraces(List<PointerTrace> traces) {
+        if (traces.isEmpty()) return;
+        if (traces.size() == 1) {
+            PointerTrace trace = traces.get(0);
+            if (trace.distance() < 0.015) {
+                boolean ok = RDevAccessibilityService.tapNormalized(trace.endX, trace.endY);
+                Log.i(TAG, "accessibility tap " + ok + " x=" + trace.endX + " y=" + trace.endY);
+            } else {
+                boolean ok = RDevAccessibilityService.swipeNormalized(trace.startX, trace.startY, trace.endX, trace.endY, trace.durationMs());
+                Log.i(TAG, "accessibility swipe " + ok + " from=" + trace.startX + "," + trace.startY + " to=" + trace.endX + "," + trace.endY);
+            }
+            return;
+        }
+        double[] startX = new double[traces.size()];
+        double[] startY = new double[traces.size()];
+        double[] endX = new double[traces.size()];
+        double[] endY = new double[traces.size()];
+        long duration = 80;
+        for (int i = 0; i < traces.size(); i++) {
+            PointerTrace trace = traces.get(i);
+            startX[i] = trace.startX;
+            startY[i] = trace.startY;
+            endX[i] = trace.endX;
+            endY[i] = trace.endY;
+            duration = Math.max(duration, trace.durationMs());
+        }
+        boolean ok = RDevAccessibilityService.multiSwipeNormalized(startX, startY, endX, endY, duration);
+        Log.i(TAG, "accessibility multi touch " + ok + " count=" + traces.size());
+    }
+
+    private void handleWheelEvent(String text) {
+        try {
+            JSONObject wheel = new JSONObject(text).optJSONObject("WheelEvent");
+            if (wheel == null) return;
+            double dy = wheel.optDouble("dy", 0);
+            if (Math.abs(dy) < 1) return;
+            double amount = Math.max(-0.35, Math.min(0.35, dy / 1200.0));
+            boolean ok = RDevAccessibilityService.swipeNormalized(0.5, 0.5, 0.5, 0.5 + amount, 180);
+            Log.i(TAG, "accessibility wheel swipe " + ok + " dy=" + dy);
+        } catch (Exception e) {
+            Log.w(TAG, "wheel event failed", e);
+        }
+    }
+
+    private void handleKeyboardEvent(String text) {
+        try {
+            JSONObject root = new JSONObject(text);
+            JSONObject textInput = root.optJSONObject("TextInputEvent");
+            if (textInput != null) {
+                boolean ok = RDevAccessibilityService.inputText(textInput.optString("text", ""));
+                Log.i(TAG, "accessibility text " + ok);
+                return;
+            }
+            JSONObject keyboard = root.optJSONObject("KeyboardEvent");
+            if (keyboard == null || !"down".equals(keyboard.optString("event_type", ""))) return;
+            String key = keyboard.optString("key", "");
+            boolean ok = false;
+            if ("Backspace".equals(key)) ok = RDevAccessibilityService.backspace();
+            else if ("Escape".equals(key)) ok = RDevAccessibilityService.globalBack();
+            else if (key.length() == 1) ok = RDevAccessibilityService.inputText(key);
+            Log.i(TAG, "accessibility key " + ok + " key=" + key);
+        } catch (Exception e) {
+            Log.w(TAG, "keyboard event failed", e);
+        }
+    }
+
+    private static final class PointerTrace {
+        final double startX;
+        final double startY;
+        final long startMs;
+        double endX;
+        double endY;
+        long endMs;
+
+        PointerTrace(double x, double y, long now) {
+            startX = x;
+            startY = y;
+            endX = x;
+            endY = y;
+            startMs = now;
+            endMs = now;
+        }
+
+        void update(double x, double y) {
+            endX = x;
+            endY = y;
+            endMs = System.currentTimeMillis();
+        }
+
+        double distance() {
+            double dx = endX - startX;
+            double dy = endY - startY;
+            return Math.sqrt(dx * dx + dy * dy);
+        }
+
+        long durationMs() {
+            return Math.max(80, endMs - startMs);
         }
     }
 

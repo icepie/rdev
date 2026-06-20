@@ -54,7 +54,7 @@ document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n
     const empty = document.getElementById('empty');
     const storagePrefix = 'rdevDesktop.';
     const gpuStoragePrefix = 'rdevGpuDesktop.';
-    let ws = null, drawing = false, pendingFrame = null, deviceCache = [], lastCloseMessage = '', connectionSeq = 0, connectionMode = '';
+    let ws = null, drawing = false, pendingFrame = null, deviceCache = [], lastCloseMessage = '', connectionSeq = 0, connectionMode = '', manualDisconnect = false;
     let frameCount = 0, frameBytes = 0, statsStartedAt = 0, lastFrameAt = 0, currentSource = '', remoteInput = false, resizeTimer = null, reconnectTimer = null, lastMouseSent = 0;
     let gpuMediaSource = null, gpuSourceBuffer = null, gpuQueue = [], gpuLastPointer = new Map(), gpuHeldKeys = new Map();
     let gpuVideoDecoder = null, gpuVideoMode = 'mse', gpuNeedKeyFrame = false;
@@ -72,12 +72,12 @@ document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n
         return desktop.platform === 'android' || desktop.displayServer === 'mediaprojection';
     }
     function gpuFrameRate() {
-        const maxFps = isAndroidGpuDevice() ? 24 : 120;
+        const maxFps = isAndroidGpuDevice() ? 30 : 120;
         return Math.max(0, Math.min(maxFps, gpuFrameRateInput.valueAsNumber || 0));
     }
     function gpuMaxVideoSize() {
         if (isAndroidGpuDevice()) {
-            return { width: 320, height: 640 };
+            return { width: 720, height: 1280 };
         }
         const scale = Math.max(0.1, Math.min(2, gpuScaleInput.valueAsNumber || 1));
         return {
@@ -315,6 +315,7 @@ document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n
         gpuCanvas.style.display = 'none';
     }
     function disconnect() {
+        manualDisconnect = true;
         connectionSeq++;
         clearTimeout(reconnectTimer);
         if (ws) { ws.close(); ws = null; }
@@ -414,6 +415,7 @@ document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n
             output: frame => {
                 gpuCanvas.width = frame.displayWidth || frame.codedWidth || gpuCanvas.width;
                 gpuCanvas.height = frame.displayHeight || frame.codedHeight || gpuCanvas.height;
+                gpuCtx.clearRect(0, 0, gpuCanvas.width, gpuCanvas.height);
                 gpuCtx.drawImage(frame, 0, 0, gpuCanvas.width, gpuCanvas.height);
                 gpuEmpty.textContent = '';
                 frame.close();
@@ -441,7 +443,7 @@ document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n
         frameCount++;
         frameBytes += data.byteLength;
         lastFrameAt = performance.now();
-        if (gpuVideoDecoder.decodeQueueSize > 2) return true;
+        if (!isKey && gpuVideoDecoder.decodeQueueSize > 2) return true;
         try {
             gpuVideoDecoder.decode(new EncodedVideoChunk({type:isKey ? 'key' : 'delta', timestamp, data}));
             gpuNeedKeyFrame = false;
@@ -493,7 +495,14 @@ document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n
         setSelectOptions(gpuPointerBackend, capabilities.pointerOptions || capabilities.options || [], localStorage.getItem(gpuStoragePrefix + 'pointerBackend') || gpuPointerBackend.value || 'auto');
         setSelectOptions(gpuKeyboardBackend, capabilities.keyboardOptions || capabilities.options || [], localStorage.getItem(gpuStoragePrefix + 'keyboardBackend') || gpuKeyboardBackend.value || 'auto');
     }
-    function connectGPUDesktop(device) {
+    function scheduleGPUReconnect(device, connID) {
+        if (manualDisconnect || connID !== connectionSeq || connectionMode !== 'gpu') return;
+        clearTimeout(reconnectTimer);
+        reconnectTimer = setTimeout(() => {
+            if (!manualDisconnect && connID === connectionSeq && connectionMode === 'gpu') connectGPUDesktop(device, true);
+        }, 1500);
+    }
+    function connectGPUDesktop(device, reconnecting = false) {
         connectionMode = 'gpu';
         remoteInput = true;
         controlInput.disabled = false;
@@ -507,13 +516,13 @@ document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n
         gpuEmpty.innerHTML = '<strong>正在连接远程桌面</strong><span>连接建立后会自动读取画面来源。</span>';
         resetFrameStats();
         ws = RDevUI.socket(gpuURL(device));
-        const connID = ++connectionSeq;
+        const connID = reconnecting ? connectionSeq : ++connectionSeq;
         lastCloseMessage = '';
         ws.binaryType = 'arraybuffer';
-        setStatus(t('common.connecting'));
+        setStatus(reconnecting ? t('common.connecting') : t('common.connecting'));
         ws.onopen = () => { if (connID !== connectionSeq) return; setStatus(t('desktop.starting')); gpuSend('GetCapturableList'); gpuSendConfig(); };
         ws.onerror = () => { if (connID !== connectionSeq) return; setStatus(t('common.error'), 'err'); };
-        ws.onclose = () => { if (connID !== connectionSeq) return; ws = null; setStatus(lastCloseMessage || t('desktop.closed'), lastCloseMessage ? 'err' : 'warn'); };
+        ws.onclose = () => { if (connID !== connectionSeq) return; ws = null; setStatus(lastCloseMessage || t('desktop.closed'), lastCloseMessage ? 'err' : 'warn'); scheduleGPUReconnect(device, connID); };
         ws.onmessage = evt => {
             if (connID !== connectionSeq) return;
             if (evt.data instanceof ArrayBuffer) {
@@ -545,6 +554,7 @@ document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n
     }
     async function connect() {
         disconnect();
+        manualDisconnect = false;
         saveDesktopSettings();
         const device = deviceSelect.value;
         if (!device) return setStatus(t('common.noDevices'), 'err');

@@ -13,8 +13,8 @@ import android.view.WindowManager;
 
 final class ScreenCapturePipeline {
     private static final String TAG = "RDevCapture";
-    private static final int MAX_WIDTH = 960;
-    private static final int MAX_HEIGHT = 640;
+    private static final int MAX_WIDTH = 1280;
+    private static final int MAX_HEIGHT = 720;
 
     private final Context context;
     private final MediaProjection projection;
@@ -50,7 +50,7 @@ final class ScreenCapturePipeline {
             CaptureSize size = chooseSize();
             width = size.width;
             height = size.height;
-            encoder = new VideoEncoderPipeline(size.width, size.height, 24, 1_200_000);
+            encoder = new VideoEncoderPipeline(size.width, size.height, 30, 3_000_000);
             Surface surface = encoder.start();
             virtualDisplay = projection.createVirtualDisplay(
                 "RDev Android",
