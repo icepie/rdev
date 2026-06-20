@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">RDev Android</string>
+    <string name="accessibility_service_label">RDev Remote Input</string>
+    <string name="accessibility_service_description">Allows RDev to inject remote touch and system navigation events when you explicitly enable control.</string>
+</resources>

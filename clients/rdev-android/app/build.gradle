@@ -1,0 +1,14 @@
+plugins { id 'com.android.application' }
+
+android {
+    namespace 'cn.singzer.rdev.android'
+    compileSdk 36
+
+    defaultConfig {
+        applicationId 'cn.singzer.rdev.android'
+        minSdk 21
+        targetSdk 29
+        versionCode 1
+        versionName '0.1.0'
+    }
+}

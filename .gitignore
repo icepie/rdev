@@ -19,6 +19,12 @@ node_modules/
 /clients/rdev-client-gpu/target/
 /clients/rdev-client-gpu/dist/
 
+# Android
+/clients/rdev-android/local.properties
+/clients/rdev-android/.gradle/
+/clients/rdev-android/build/
+/clients/rdev-android/app/build/
+
 # OS
 .DS_Store
 Thumbs.db
