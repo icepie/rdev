@@ -66,13 +66,17 @@ document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n
     function frameRateScaleInv(value) {
         return 100 * Math.pow(Number(value), 2 / 3);
     }
-    function gpuFrameRate() {
-        return Math.max(0, Math.min(120, gpuFrameRateInput.valueAsNumber || 0));
-    }
-    function gpuMaxVideoSize() {
+    function isAndroidGpuDevice() {
         const device = deviceCache.find(d => d.id === deviceSelect.value) || {};
         const desktop = device.desktop || {};
-        if (desktop.platform === 'android' || desktop.displayServer === 'mediaprojection') {
+        return desktop.platform === 'android' || desktop.displayServer === 'mediaprojection';
+    }
+    function gpuFrameRate() {
+        const maxFps = isAndroidGpuDevice() ? 24 : 120;
+        return Math.max(0, Math.min(maxFps, gpuFrameRateInput.valueAsNumber || 0));
+    }
+    function gpuMaxVideoSize() {
+        if (isAndroidGpuDevice()) {
             return { width: 320, height: 640 };
         }
         const scale = Math.max(0.1, Math.min(2, gpuScaleInput.valueAsNumber || 1));

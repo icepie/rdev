@@ -208,7 +208,7 @@ final class RDevGpuTunnel {
                 Log.i(TAG, "desktop ws " + text);
                 if (text.contains("GetCapturableList")) {
                     sendWsText(id, new JSONObject().put("CapturableList", new org.json.JSONArray().put("Android Screen (MediaProjection)")).toString());
-                } else if (text.contains("PointerEvent")) {
+                } else if (text.contains("PointerEvent") || text.contains("\"op\":\"input\"")) {
                     handlePointerEvent(text);
                 } else if (text.contains("Config")) {
                     updateConfig(text);
@@ -231,7 +231,7 @@ final class RDevGpuTunnel {
                 JSONObject config = new JSONObject(text).optJSONObject("Config");
                 if (config == null) return;
                 int requested = config.optInt("frame_rate", targetFps);
-                if (requested > 0) targetFps = Math.max(5, Math.min(12, requested));
+                if (requested > 0) targetFps = Math.max(8, Math.min(24, requested));
                 Log.i(TAG, "desktop config targetFps=" + targetFps + " encoder=" + config.optString("encoder", "auto"));
             } catch (Exception e) {
                 Log.w(TAG, "config parse failed", e);
@@ -369,12 +369,25 @@ final class RDevGpuTunnel {
 
     private void handlePointerEvent(String text) {
         try {
-            JSONObject pointer = new JSONObject(text).optJSONObject("PointerEvent");
-            if (pointer == null) return;
-            String eventType = pointer.optString("event_type", pointer.optString("type", ""));
-            if ("pointerup".equals(eventType) || "click".equals(eventType)) {
-                boolean ok = RDevAccessibilityService.tapNormalized(pointer.optDouble("x", 0.5), pointer.optDouble("y", 0.5));
-                Log.i(TAG, "accessibility tap " + ok + " x=" + pointer.optDouble("x") + " y=" + pointer.optDouble("y"));
+            JSONObject root = new JSONObject(text);
+            JSONObject pointer = root.optJSONObject("PointerEvent");
+            String eventType;
+            double x;
+            double y;
+            if (pointer != null) {
+                eventType = pointer.optString("event_type", pointer.optString("type", ""));
+                x = pointer.optDouble("x", 0.5);
+                y = pointer.optDouble("y", 0.5);
+            } else if ("input".equals(root.optString("op"))) {
+                eventType = root.optString("inputType", "");
+                x = root.optDouble("x", 160) / 320.0;
+                y = root.optDouble("y", 320) / 640.0;
+            } else {
+                return;
+            }
+            if ("pointerup".equals(eventType) || "click".equals(eventType) || "mouse_up".equals(eventType)) {
+                boolean ok = RDevAccessibilityService.tapNormalized(x, y);
+                Log.i(TAG, "accessibility tap " + ok + " x=" + x + " y=" + y);
             }
         } catch (Exception e) {
             Log.w(TAG, "pointer event failed", e);

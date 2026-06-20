@@ -171,7 +171,9 @@ final class RDevWebSocketClient {
                 for (int i = 7; i >= 0; i--) out.write((len >>> (8 * i)) & 0xff);
             }
             out.write(mask);
-            for (int i = 0; i < payload.length; i++) out.write(payload[i] ^ mask[i & 3]);
+            byte[] masked = new byte[payload.length];
+            for (int i = 0; i < payload.length; i++) masked[i] = (byte) (payload[i] ^ mask[i & 3]);
+            out.write(masked);
             out.flush();
         }
     }

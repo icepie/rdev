@@ -50,7 +50,7 @@ final class ScreenCapturePipeline {
             CaptureSize size = chooseSize();
             width = size.width;
             height = size.height;
-            encoder = new VideoEncoderPipeline(size.width, size.height, 12, 650_000);
+            encoder = new VideoEncoderPipeline(size.width, size.height, 24, 1_200_000);
             Surface surface = encoder.start();
             virtualDisplay = projection.createVirtualDisplay(
                 "RDev Android",
