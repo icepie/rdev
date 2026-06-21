@@ -213,7 +213,7 @@ describe('terminal image wiring', () => {
       expect(html).toContain('sixelSupport: true');
       expect(html).toContain('iipSupport: true');
       expect(html).toContain('RDevTerminalImages.create(term)');
-      expect(html).toMatch(/imageWriter\.write\(evt\.data\)|enqueueAttachOutput\(evt\.data\)/);
+      expect(html).toMatch(/imageWriter\.write\((?:evt\.data|data)\)|enqueueAttachOutput\(evt\.data\)/);
     }
   });
 });
