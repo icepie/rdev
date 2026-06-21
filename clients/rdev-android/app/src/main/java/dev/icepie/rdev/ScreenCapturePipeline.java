@@ -19,15 +19,20 @@ final class ScreenCapturePipeline {
     private Handler handler;
     private VideoEncoderPipeline encoder;
     private VirtualDisplay virtualDisplay;
+    private MediaProjection.Callback projectionCallback;
     private volatile int width;
     private volatile int height;
+    private volatile boolean running;
+    private volatile boolean projectionStopped;
 
     ScreenCapturePipeline(Context context, MediaProjection projection) {
         this.context = context.getApplicationContext();
         this.projection = projection;
     }
 
-    void start() {
+    synchronized void start() {
+        if (running || projectionStopped) return;
+        running = true;
         thread = new HandlerThread("rdev-capture");
         thread.start();
         handler = new Handler(thread.getLooper());
@@ -35,8 +40,22 @@ final class ScreenCapturePipeline {
     }
 
     void stop() {
-        if (handler != null) handler.post(this::stopOnThread);
+        Handler h = handler;
+        if (h != null) h.post(() -> stopOnThread(false));
     }
+
+    void releaseProjection() {
+        Handler h = handler;
+        if (h != null) {
+            h.post(() -> stopOnThread(true));
+        } else if (!projectionStopped) {
+            try { projection.stop(); } catch (Throwable ignored) {}
+            projectionStopped = true;
+            AndroidVideoHub.clearVideoState();
+        }
+    }
+
+    boolean isRunning() { return running; }
 
     int width() { return width; }
 
@@ -59,17 +78,18 @@ final class ScreenCapturePipeline {
                 null,
                 handler
             );
-            projection.registerCallback(new MediaProjection.Callback() {
-                @Override public void onStop() { stopOnThread(); }
-            }, handler);
+            projectionCallback = new MediaProjection.Callback() {
+                @Override public void onStop() { stopOnThread(true); }
+            };
+            projection.registerCallback(projectionCallback, handler);
             Log.i(TAG, "capture started " + config.width + "x" + config.height + " dpi=" + config.densityDpi + " fps=" + config.fps + " bitrate=" + config.bitrate);
         } catch (Throwable t) {
             Log.e(TAG, "capture start failed", t);
-            stopOnThread();
+            stopOnThread(false);
         }
     }
 
-    private void stopOnThread() {
+    private void stopOnThread(boolean releaseProjection) {
         try {
             if (virtualDisplay != null) {
                 virtualDisplay.release();
@@ -79,16 +99,27 @@ final class ScreenCapturePipeline {
                 encoder.stop();
                 encoder = null;
             }
-            projection.stop();
+            if (projectionCallback != null) {
+                try { projection.unregisterCallback(projectionCallback); } catch (Throwable ignored) {}
+                projectionCallback = null;
+            }
+            if (releaseProjection && !projectionStopped) {
+                projection.stop();
+                projectionStopped = true;
+            }
         } catch (Throwable t) {
             Log.w(TAG, "capture stop error", t);
         }
+        running = false;
+        width = 0;
+        height = 0;
+        AndroidVideoHub.clearVideoState();
         if (thread != null) {
             thread.quitSafely();
             thread = null;
             handler = null;
         }
-        Log.i(TAG, "capture stopped");
+        Log.i(TAG, releaseProjection ? "capture released" : "capture paused");
     }
 
     private CaptureConfig chooseConfig() {

@@ -29,6 +29,7 @@ final class RDevGpuTunnel {
     private final Map<Long, Stream> streams = new HashMap<>();
     private final Map<Integer, PointerTrace> activePointers = new HashMap<>();
     private final List<PointerTrace> completedPointers = new ArrayList<>();
+    private boolean inputPermissionWarned;
 
     RDevGpuTunnel(String serverUrl, String deviceId, String instanceId, String password) {
         this.serverUrl = serverUrl;
@@ -415,6 +416,7 @@ final class RDevGpuTunnel {
     }
 
     private void handlePointerEvent(String text) {
+        if (!inputReady()) return;
         try {
             JSONObject root = new JSONObject(text);
             JSONObject pointer = root.optJSONObject("PointerEvent");
@@ -497,13 +499,14 @@ final class RDevGpuTunnel {
     }
 
     private void handleWheelEvent(String text) {
+        if (!inputReady()) return;
         try {
             JSONObject wheel = new JSONObject(text).optJSONObject("WheelEvent");
             if (wheel == null) return;
             double dy = wheel.optDouble("dy", 0);
             if (Math.abs(dy) < 1) return;
             double amount = Math.max(-0.35, Math.min(0.35, dy / 1200.0));
-            boolean ok = RDevAccessibilityService.swipeNormalized(0.5, 0.5, 0.5, 0.5 + amount, 180);
+            boolean ok = RDevAccessibilityService.swipeNormalized(0.5, 0.5, 0.5, 0.5 - amount, 140);
             Log.i(TAG, "accessibility wheel swipe " + ok + " dy=" + dy);
         } catch (Exception e) {
             Log.w(TAG, "wheel event failed", e);
@@ -515,18 +518,17 @@ final class RDevGpuTunnel {
             JSONObject root = new JSONObject(text);
             JSONObject textInput = root.optJSONObject("TextInputEvent");
             if (textInput != null) {
-                boolean ok = RDevAccessibilityService.inputText(textInput.optString("text", ""));
-                Log.i(TAG, "accessibility text " + ok);
+                String value = textInput.optString("text", "");
+                boolean ok = RDevInputMethodService.commitText(value);
+                if (!ok) ok = RDevAccessibilityService.inputText(value);
+                Log.i(TAG, "keyboard text " + ok + " ime=" + RDevInputMethodService.isActive());
                 return;
             }
             JSONObject keyboard = root.optJSONObject("KeyboardEvent");
             if (keyboard == null || !"down".equals(keyboard.optString("event_type", ""))) return;
             String key = keyboard.optString("key", "");
-            boolean ok = false;
-            if ("Backspace".equals(key)) ok = RDevAccessibilityService.backspace();
-            else if ("Escape".equals(key)) ok = RDevAccessibilityService.globalBack();
-            else if (key.length() == 1) ok = RDevAccessibilityService.inputText(key);
-            Log.i(TAG, "accessibility key " + ok + " key=" + key);
+            boolean ok = handleKeyboardKey(key);
+            Log.i(TAG, "keyboard key " + ok + " key=" + key + " ime=" + RDevInputMethodService.isActive());
         } catch (Exception e) {
             Log.w(TAG, "keyboard event failed", e);
         }
@@ -570,6 +572,21 @@ final class RDevGpuTunnel {
         sendData(streamId, RDevWsFrame.encodeText(text));
     }
 
+    private boolean handleKeyboardKey(String key) {
+        if ("Backspace".equals(key)) return RDevInputMethodService.deleteBackward() || RDevAccessibilityService.backspace();
+        if ("Enter".equals(key)) return RDevInputMethodService.sendKey(android.view.KeyEvent.KEYCODE_ENTER) || RDevInputMethodService.commitText("\n");
+        if ("Tab".equals(key)) return RDevInputMethodService.sendKey(android.view.KeyEvent.KEYCODE_TAB) || RDevInputMethodService.commitText("\t");
+        if ("ArrowLeft".equals(key)) return RDevInputMethodService.sendKey(android.view.KeyEvent.KEYCODE_DPAD_LEFT);
+        if ("ArrowRight".equals(key)) return RDevInputMethodService.sendKey(android.view.KeyEvent.KEYCODE_DPAD_RIGHT);
+        if ("ArrowUp".equals(key)) return RDevInputMethodService.sendKey(android.view.KeyEvent.KEYCODE_DPAD_UP);
+        if ("ArrowDown".equals(key)) return RDevInputMethodService.sendKey(android.view.KeyEvent.KEYCODE_DPAD_DOWN);
+        if ("Home".equals(key)) return RDevInputMethodService.sendKey(android.view.KeyEvent.KEYCODE_MOVE_HOME);
+        if ("End".equals(key)) return RDevInputMethodService.sendKey(android.view.KeyEvent.KEYCODE_MOVE_END);
+        if ("Escape".equals(key)) return RDevAccessibilityService.globalBack();
+        if (key != null && key.length() == 1) return RDevInputMethodService.commitText(key) || RDevAccessibilityService.inputText(key);
+        return false;
+    }
+
     private String encoderCapabilities() throws Exception {
         return new JSONObject().put("EncoderCapabilities", new JSONObject().put("options", new org.json.JSONArray()
             .put(new JSONObject().put("value", "mediacodec-h264").put("label", "MediaCodec H.264"))
@@ -590,7 +607,19 @@ final class RDevGpuTunnel {
         return new JSONObject().put("RuntimeStatus", new JSONObject()
             .put("captureBackend", "android-mediaprojection")
             .put("encoderBackend", "mediacodec-h264")
-            .put("inputBackend", RDevAccessibilityService.isActive() ? "android-accessibility" : "view-only")).toString();
+            .put("inputBackend", RDevAccessibilityService.isActive() ? "android-accessibility" : "view-only")
+            .put("keyboardBackend", RDevInputMethodService.isActive() ? "android-ime" : (RDevAccessibilityService.isActive() ? "android-accessibility" : "view-only"))
+            .put("inputReady", RDevAccessibilityService.isActive())
+            .put("keyboardReady", RDevInputMethodService.isActive())).toString();
+    }
+
+    private boolean inputReady() {
+        if (RDevAccessibilityService.isActive()) return true;
+        if (!inputPermissionWarned) {
+            inputPermissionWarned = true;
+            Log.w(TAG, "remote pointer input ignored: enable Android Accessibility service RDev Remote Input");
+        }
+        return false;
     }
 
     private byte[] ascii(String value) {

@@ -24,6 +24,8 @@ var templateFS embed.FS
 
 const sessionHistoryLimit = 1024 * 1024
 
+const wsReadWait = 75 * time.Second
+
 // ClientConn represents a connected client device
 type ClientConn struct {
 	ID          string
@@ -505,7 +507,18 @@ func (s *Server) clientByID(id string) *ClientConn {
 	return client
 }
 
-func (h *wsHandler) OnOpen(socket *gws.Conn) {}
+func (h *wsHandler) OnOpen(socket *gws.Conn) {
+	_ = socket.SetDeadline(time.Now().Add(wsReadWait))
+}
+
+func (h *wsHandler) OnPing(socket *gws.Conn, payload []byte) {
+	_ = socket.SetDeadline(time.Now().Add(wsReadWait))
+	_ = socket.WritePong(payload)
+}
+
+func (h *wsHandler) OnPong(socket *gws.Conn, payload []byte) {
+	_ = socket.SetDeadline(time.Now().Add(wsReadWait))
+}
 
 func (h *wsHandler) OnClose(socket *gws.Conn, err error) {
 	clientID, _ := socket.Session().Load("clientID")
@@ -761,6 +774,8 @@ func (h *wsHandler) handleBinaryMessage(socket *gws.Conn, raw []byte) {
 		if sess != nil && len(data) > 0 {
 			sendBytes(sess.WriteCh, data, "session stdout")
 			sess.BroadcastOutput(data) // notify observers
+		} else if len(data) > 0 {
+			log.Printf("dropping session stdout: session not found id=%s bytes=%d", id, len(data))
 		}
 
 	case protocol.BinStderr:
@@ -768,6 +783,8 @@ func (h *wsHandler) handleBinaryMessage(socket *gws.Conn, raw []byte) {
 		if sess != nil && len(data) > 0 {
 			sendBytes(sess.StderrCh, data, "session stderr")
 			sess.BroadcastStderr(data) // notify observers
+		} else if len(data) > 0 {
+			log.Printf("dropping session stderr: session not found id=%s bytes=%d", id, len(data))
 		}
 
 	case protocol.BinTCPData:
@@ -847,7 +864,8 @@ func (s *Server) handleClientMessage(client *ClientConn, msg *protocol.Message) 
 	// File distribution
 	case protocol.MsgFileResult:
 		s.handleFileResult(msg)
-	case protocol.MsgFileListResult, protocol.MsgFileUploadReady, protocol.MsgFileDownloadStart, protocol.MsgFileTransferEnd, protocol.MsgFileTransferError:
+	case protocol.MsgFileListResult, protocol.MsgFileUploadReady, protocol.MsgFileDownloadStart, protocol.MsgFileTransferEnd, protocol.MsgFileTransferError,
+		"file_stat_result", "file_mkdir_result", "file_delete_result", "file_rename_result", "file_copy_result":
 		s.handleFileManagerMessage(msg)
 	case protocol.MsgDesktopReady, protocol.MsgDesktopClose:
 		s.handleDesktopMessage(msg)

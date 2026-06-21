@@ -41,6 +41,9 @@
         .drop { border: 2px dashed var(--border); border-radius: 8px; padding: 0.75rem; color: var(--muted); display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 54px; }
         .drop.drag { border-color: var(--accent); color: var(--accent); background: rgba(34,211,238,0.05); }
         .browser { background: var(--card); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; min-height: 58vh; }
+        .file-info { color: var(--muted); background: rgba(34,211,238,0.07); }
+        .file-info td { border-bottom: 1px solid var(--border); }
+        .file-info button { margin-left: 10px; }
         table { width: 100%; border-collapse: collapse; }
         th, td { text-align: left; padding: 0.65rem 0.8rem; border-bottom: 1px solid var(--border); font-size: 0.86rem; }
         th { color: var(--muted); font-size: 0.74rem; text-transform: uppercase; letter-spacing: 0.04em; }
@@ -141,9 +144,13 @@
     document.querySelectorAll('[data-auth-link]').forEach(a => a.href = authURL(a.getAttribute('href')));
 
     const CHUNK = 512 * 1024;
+    const FILE_LIST_LIMIT = 100;
+    const DOWNLOAD_STALL_MS = 12000;
+    const DOWNLOAD_RETRY_MS = 2500;
     const enc = new TextEncoder();
     const dec = new TextDecoder();
     let ws, devices = [], currentPath = '', parentPath = '', activeDevice = '', authPending = null, authResult = null, initialDeviceLoaded = false;
+    let fileEntries = [], listOffset = 0, listTotal = 0, listTruncated = false;
     const sendQueue = [];
     RDevUI.setSelectOptions(document.getElementById('device-select'), [{ value: '', label: t('terminal.devicePlaceholder') }], '');
     const tasks = new Map(JSON.parse(localStorage.getItem('rdevFileTasks') || '[]').map(t => [t.id, t]));
@@ -191,16 +198,32 @@
             </div>`;
         }).join('');
     }
-    setInterval(() => { tasks.forEach(t => { if (t.status === 'running') updateSpeed(t); }); renderTasks(); }, 250);
+    setInterval(() => {
+        const now = Date.now();
+        tasks.forEach(task => {
+            if (task.status === 'running') updateSpeed(task);
+            if (task.dir === 'download' && task.status === 'running' && !task.saved && now - (task.lastProgress || task.created || 0) > DOWNLOAD_STALL_MS && now - (task.lastRequested || 0) > DOWNLOAD_RETRY_MS) {
+                resumeDownload(task, task.done || 0, t('files.resuming'));
+            }
+        });
+        renderTasks();
+    }, 500);
 
     function connectWS() {
         const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-        ws = RDevUI.socket(`${proto}//${location.host}${authURL('/files')}`);
+        ws = RDevUI.socket(`${proto}//${location.host}${authURL('/files')}`, { worker: false });
         ws.binaryType = 'arraybuffer';
         ws.onopen = () => {
             while (sendQueue.length && ws && ws.readyState === WebSocket.OPEN) ws.send(sendQueue.shift());
+            tasks.forEach(task => {
+                if (task.dir === 'download' && task.status === 'running' && !task.saved) resumeDownload(task, task.done || 0, t('files.resuming'));
+            });
         };
-        ws.onmessage = evt => evt.data instanceof ArrayBuffer ? onBinary(evt.data) : onText(JSON.parse(evt.data));
+        ws.onmessage = evt => {
+            if (evt.data instanceof ArrayBuffer) return onBinary(evt.data);
+            if (evt.data instanceof Blob) return evt.data.arrayBuffer().then(onBinary);
+            onText(JSON.parse(evt.data));
+        };
         ws.onclose = () => setTimeout(connectWS, 1500);
     }
     function send(msg) {
@@ -239,19 +262,33 @@
         if (msg.op === 'auth_ok') { authResult = true; authPending = null; return; }
         if (msg.op === 'auth_fail' || msg.op === 'auth_required') { if (authPending) RDevUI.forgetDevicePassword(authPending); authResult = false; authPending = null; RDevUI.alert({ title: t('common.error'), message: msg.message || t('common.passwordWrong') }); return; }
         if (msg.op === 'list_result') {
-            if (msg.error) { renderFiles([], msg.error); return; }
-            currentPath = msg.path || currentPath; parentPath = msg.parent || currentPath;
+            if (msg.error) { renderFiles([], { error: msg.error }); return; }
+            const resultPath = msg.path || currentPath;
+            const offset = Number(msg.offset || 0);
+            const entries = msg.entries || [];
+            const append = offset > 0 && resultPath === currentPath;
+            currentPath = resultPath; parentPath = msg.parent || currentPath;
             document.getElementById('path-input').value = currentPath;
-            renderFiles(msg.entries || [], msg.truncated ? t('files.truncated') : '');
+            fileEntries = append ? fileEntries.concat(entries) : entries;
+            listOffset = offset + entries.length;
+            listTotal = Number(msg.total || msg.fileMode || listOffset);
+            listTruncated = !!msg.truncated || listOffset < listTotal;
+            renderFiles(fileEntries, { truncated: listTruncated, shown: fileEntries.length, total: listTotal });
             return;
         }
         const task = tasks.get(msg.taskId);
         if (msg.op === 'upload_ready' && task) {
             task.path = msg.path; task.done = msg.offset || 0; task.status = 'running'; saveTasks(); uploadLoop(task);
         } else if (msg.op === 'download_start' && task) {
-            task.size = msg.size || task.size; task.done = msg.offset || 0; task.name = msg.name || task.name; task.status = 'running'; saveTasks();
+            task.size = msg.size || task.size;
+            task.name = msg.name || task.name;
+            task.status = 'running';
+            task.message = '';
+            task.lastProgress = Date.now();
+            if ((msg.offset || 0) === 0 && (task.done || 0) === 0) task.blobParts = [];
+            saveTasks();
         } else if (msg.op === 'transfer_end' && task) {
-            task.done = msg.offset || task.size || task.done; task.status = 'completed'; saveTasks(); finishDownload(task);
+            completeDownload(task, msg.offset || task.done || 0);
         } else if ((msg.op === 'transfer_error' || msg.op === 'error') && task) {
             task.status = 'failed'; task.message = msg.message || msg.error || t('common.error'); saveTasks();
         } else if (msg.op === 'canceled' && task) {
@@ -270,28 +307,53 @@
                 task.blobParts = task.blobParts || [];
                 task.blobParts.push(f.payload);
                 task.done = f.offset + f.payload.byteLength;
+                task.lastProgress = Date.now();
+                task.message = '';
                 updateSpeed(task); saveTasks();
+            } else if (f.offset < (task.done || 0)) {
+                // Duplicate chunk from a resumed request; ignore it.
+            } else if (Date.now() - (task.lastRequested || 0) > 1000) {
+                resumeDownload(task, task.done || 0, t('files.resuming'));
             }
         } else if (f.typ === 0x23) {
-            task.done = f.offset || task.done; task.status = 'completed'; saveTasks(); finishDownload(task);
+            completeDownload(task, f.offset || task.done || 0);
         }
     }
 
-    function renderFiles(entries, message) {
+    function renderFiles(entries, meta) {
+        meta = meta || {};
         const body = document.getElementById('file-list');
-        if (message) body.innerHTML = `<tr><td colspan="4" class="empty">${esc(message)}</td></tr>`;
-        else if (!entries.length) body.innerHTML = '<tr><td colspan="4" class="empty">' + t('files.emptyDir') + '</td></tr>';
-        else body.innerHTML = entries.map(e => `<tr>
+        if (meta.error) {
+            body.innerHTML = `<tr><td colspan="4" class="empty">${esc(meta.error)}</td></tr>`;
+            return;
+        }
+        const rows = [];
+        if (meta.truncated || meta.total > entries.length) {
+            const text = t('files.showing', { shown: meta.shown || entries.length, total: meta.total || entries.length });
+            rows.push(`<tr class="file-info"><td colspan="4">${esc(text)}${meta.truncated ? `<button data-load-more="1">${t('files.loadMore')}</button>` : ''}</td></tr>`);
+        }
+        if (!entries.length) rows.push('<tr><td colspan="4" class="empty">' + t('files.emptyDir') + '</td></tr>');
+        else rows.push(entries.map(e => `<tr>
             <td><button class="name-btn" data-path="${esc(e.path)}" data-dir="${e.isDir ? '1' : '0'}">${icon(e.isDir ? 'folder' : 'files')}${esc(e.name)}</button></td>
             <td>${e.isDir ? '--' : esc(fmtBytes(e.size))}</td>
             <td class="muted">${esc(fmtTime(e.modTime))}</td>
             <td>${e.isDir ? '' : `<button data-download="${esc(e.path)}" data-name="${esc(e.name)}" data-size="${e.size}">${icon('download')}${t('files.download')}</button>`}</td>
-        </tr>`).join('');
+        </tr>`).join(''));
+        body.innerHTML = rows.join('');
     }
-    async function list(path) {
+    async function list(path, append) {
         activeDevice = document.getElementById('device-select').value;
         if (!activeDevice || !(await ensureAuth(activeDevice))) return;
-        send({ op: 'list', deviceId: activeDevice, requestId: id(), path });
+        const targetPath = append ? currentPath : path;
+        const offset = append ? listOffset : 0;
+        if (!append) {
+            fileEntries = [];
+            listOffset = 0;
+            listTotal = 0;
+            listTruncated = false;
+            renderFiles([], { error: t('common.connecting') });
+        }
+        send({ op: 'list', deviceId: activeDevice, requestId: id(), path: targetPath, offset, limit: FILE_LIST_LIMIT });
     }
     async function loadDevices() {
         const r = await authFetch('/api/devices'); devices = await r.json();
@@ -332,17 +394,52 @@
     }
     function startDownload(path, name, size) {
         if (!activeDevice) activeDevice = document.getElementById('device-select').value;
-        const task = { id: id(), dir: 'download', device: activeDevice, name, path, size: Number(size) || 0, done: 0, status: 'running', created: Date.now(), speed: 0, blobParts: [] };
+        const now = Date.now();
+        const task = { id: id(), dir: 'download', device: activeDevice, name, path, size: Number(size) || 0, done: 0, status: 'running', created: now, lastProgress: now, lastRequested: now, speed: 0, blobParts: [] };
         tasks.set(task.id, task); saveTasks(); renderTasks();
         send({ op: 'download_start', deviceId: activeDevice, taskId: task.id, path, offset: 0 });
+    }
+    function resumeDownload(task, offset, message) {
+        if (!task || task.dir !== 'download' || task.saved) return;
+        let resumeOffset = Number(offset || 0);
+        const buffered = (task.blobParts || []).reduce((sum, part) => sum + (part.byteLength || part.size || 0), 0);
+        if (resumeOffset > 0 && buffered !== resumeOffset) {
+            resumeOffset = 0;
+            task.blobParts = [];
+        }
+        task.done = resumeOffset;
+        task.status = 'running';
+        task.message = message || '';
+        task.lastRequested = Date.now();
+        saveTasks();
+        send({ op: 'download_start', deviceId: task.device, taskId: task.id, path: task.path, offset: resumeOffset });
+    }
+    function completeDownload(task, offset) {
+        if (!task || task.dir !== 'download' || task.saved) return;
+        const finalOffset = Number(offset || task.done || 0);
+        if (task.size && finalOffset < task.size) {
+            task.done = Math.max(task.done || 0, finalOffset);
+            resumeDownload(task, task.done || 0, t('files.resuming'));
+            return;
+        }
+        task.done = finalOffset;
+        task.status = 'completed';
+        task.message = '';
+        saveTasks();
+        finishDownload(task);
     }
     function finishDownload(task) {
         if (task.dir !== 'download' || !task.blobParts || task.saved) return;
         const blob = new Blob(task.blobParts);
+        if (task.size && blob.size < task.size) {
+            resumeDownload(task, blob.size, t('files.resuming'));
+            return;
+        }
         const a = document.createElement('a');
         a.href = URL.createObjectURL(blob); a.download = task.name || 'download'; document.body.appendChild(a); a.click();
         setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
         task.saved = true;
+        saveTasks();
     }
 
     document.getElementById('device-select').addEventListener('change', () => { activeDevice = document.getElementById('device-select').value; list(''); });
@@ -352,6 +449,8 @@
     document.getElementById('upload-btn').addEventListener('click', () => document.getElementById('file-input').click());
     document.getElementById('file-input').addEventListener('change', e => [...e.target.files].forEach(startUpload));
     document.getElementById('file-list').addEventListener('click', e => {
+        const loadMore = e.target.closest('[data-load-more]');
+        if (loadMore) { list(currentPath, true); return; }
         const name = e.target.closest('.name-btn');
         if (name && name.dataset.dir === '1') list(name.dataset.path);
         const dl = e.target.closest('[data-download]');
@@ -371,7 +470,7 @@
                 else send({ op: 'upload_start', deviceId: task.device, taskId: task.id, parentPath: task.parentPath, name: task.name, size: task.size });
             } else {
                 task.blobParts = task.blobParts || [];
-                send({ op: 'download_start', deviceId: task.device, taskId: task.id, path: task.path, offset: task.done || 0 });
+                resumeDownload(task, task.done || 0, t('files.resuming'));
             }
         }
         if (act === 'cancel') { task.status = 'canceled'; send({ op: 'cancel', taskId: task.id, offset: task.done || 0 }); }

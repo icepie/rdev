@@ -117,6 +117,13 @@ jobs:
             asset: rdev-client-gpu-android-arm64
             android: true
             android_cc: aarch64-linux-android24-clang
+          - name: android-armv7
+            os: ubuntu-latest
+            target: armv7-linux-androideabi
+            artifact: rdev-client-gpu
+            asset: rdev-client-gpu-android-armv7
+            android: true
+            android_cc: armv7a-linux-androideabi24-clang
           - name: android-amd64
             os: ubuntu-latest
             target: x86_64-linux-android
@@ -124,6 +131,13 @@ jobs:
             asset: rdev-client-gpu-android-amd64
             android: true
             android_cc: x86_64-linux-android24-clang
+          - name: android-x86
+            os: ubuntu-latest
+            target: i686-linux-android
+            artifact: rdev-client-gpu
+            asset: rdev-client-gpu-android-x86
+            android: true
+            android_cc: i686-linux-android24-clang
     defaults:
       run:
         working-directory: clients/rdev-client-gpu
@@ -148,8 +162,22 @@ jobs:
           echo "ANDROID_NDK_BIN=$ANDROID_NDK_BIN" >> "$GITHUB_ENV"
           echo "$ANDROID_NDK_BIN" >> "$GITHUB_PATH"
           case "${{ matrix.target }}" in
-            aarch64-linux-android) echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=${{ matrix.android_cc }}" >> "$GITHUB_ENV" ;;
-            x86_64-linux-android) echo "CARGO_TARGET_X86_64_LINUX_ANDROID_LINKER=${{ matrix.android_cc }}" >> "$GITHUB_ENV" ;;
+            aarch64-linux-android)
+              echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=${{ matrix.android_cc }}" >> "$GITHUB_ENV"
+              echo "CC_aarch64_linux_android=${{ matrix.android_cc }}" >> "$GITHUB_ENV"
+              ;;
+            armv7-linux-androideabi)
+              echo "CARGO_TARGET_ARMV7_LINUX_ANDROIDEABI_LINKER=${{ matrix.android_cc }}" >> "$GITHUB_ENV"
+              echo "CC_armv7_linux_androideabi=${{ matrix.android_cc }}" >> "$GITHUB_ENV"
+              ;;
+            x86_64-linux-android)
+              echo "CARGO_TARGET_X86_64_LINUX_ANDROID_LINKER=${{ matrix.android_cc }}" >> "$GITHUB_ENV"
+              echo "CC_x86_64_linux_android=${{ matrix.android_cc }}" >> "$GITHUB_ENV"
+              ;;
+            i686-linux-android)
+              echo "CARGO_TARGET_I686_LINUX_ANDROID_LINKER=${{ matrix.android_cc }}" >> "$GITHUB_ENV"
+              echo "CC_i686_linux_android=${{ matrix.android_cc }}" >> "$GITHUB_ENV"
+              ;;
           esac
 
       - name: Install Windows LLVM MinGW dependencies

@@ -170,7 +170,7 @@
                 sixelSizeLimit: 16 * 1024 * 1024,
                 iipSizeLimit: 16 * 1024 * 1024,
                 storageLimit: 64,
-                showPlaceholder: true,
+                showPlaceholder: false,
             });
             term.loadAddon(addon);
             return addon;
@@ -184,6 +184,7 @@
         const id = ++tabCounter;
         const term = new Terminal({
             cursorBlink: true, fontSize: 14,
+            convertEol: true,
             fontFamily: "'SF Mono','Fira Code','Cascadia Code',Menlo,Monaco,monospace",
             theme: {
                 background: '#0f1117', foreground: '#e4e4e7',
@@ -272,12 +273,21 @@
         if (overlay) overlay.remove();
     }
 
+    function handleTerminalBytes(tab, data) {
+        removeAuthOverlay(tab);
+        tab.status = 'connected'; renderTabs();
+        const text = new TextDecoder().decode(data);
+        if (/\x1b(?:Pq|]1337;File=|_G)/.test(text) && tab.imageWriter) tab.imageWriter.write(data);
+        else tab.term.write(text);
+    }
+
     function connectTab(tab) {
         if (tab.ws) { tab.ws.close(); tab.ws = null; }
         tab.status = 'connecting'; tab.needAuth = false; tab.term.reset(); renderTabs();
 
         const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-        tab.ws = RDevUI.socket(`${proto}//${location.host}${authURL('/terminal?device=' + encodeURIComponent(tab.deviceId))}`);
+        const terminalURL = `${proto}//${location.host}${authURL('/terminal?device=' + encodeURIComponent(tab.deviceId))}`;
+        tab.ws = RDevUI.socket(terminalURL, { worker: false });
         tab.ws.binaryType = 'arraybuffer';
 
         tab.ws.onopen = () => {
@@ -286,10 +296,11 @@
 
         tab.ws.onmessage = (evt) => {
             if (evt.data instanceof ArrayBuffer) {
-                // Binary = terminal output (only after auth)
-                removeAuthOverlay(tab);
-                tab.status = 'connected'; renderTabs();
-                tab.imageWriter.write(evt.data);
+                handleTerminalBytes(tab, evt.data);
+                return;
+            }
+            if (evt.data instanceof Blob) {
+                evt.data.arrayBuffer().then(buf => handleTerminalBytes(tab, buf));
                 return;
             }
             // Text = JSON control

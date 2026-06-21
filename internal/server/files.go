@@ -17,15 +17,22 @@ type fileMsg struct {
 	RequestID  string               `json:"requestId,omitempty"`
 	TaskID     string               `json:"taskId,omitempty"`
 	Path       string               `json:"path,omitempty"`
+	From       string               `json:"from,omitempty"`
+	To         string               `json:"to,omitempty"`
 	ParentPath string               `json:"parentPath,omitempty"`
 	Name       string               `json:"name,omitempty"`
 	Size       int64                `json:"size,omitempty"`
 	Offset     int64                `json:"offset,omitempty"`
+	Limit      int                  `json:"limit,omitempty"`
+	Total      int                  `json:"total,omitempty"`
 	ModTime    string               `json:"modTime,omitempty"`
+	IsDir      bool                 `json:"isDir,omitempty"`
+	Recursive  bool                 `json:"recursive,omitempty"`
 	Password   string               `json:"password,omitempty"`
 	Success    bool                 `json:"success,omitempty"`
 	Message    string               `json:"message,omitempty"`
 	Error      string               `json:"error,omitempty"`
+	Entry      *protocol.FileEntry  `json:"entry,omitempty"`
 	Entries    []protocol.FileEntry `json:"entries,omitempty"`
 	Parent     string               `json:"parent,omitempty"`
 	Home       string               `json:"home,omitempty"`
@@ -135,6 +142,8 @@ func (h *filesWSHandler) OnMessage(socket *gws.Conn, message *gws.Message) {
 		h.forwardTaskControl(fs, msg, protocol.MsgFileUploadEnd)
 	case "download_start":
 		h.handleDownloadStart(fs, msg)
+	case "stat", "mkdir", "delete", "rename", "move", "copy":
+		h.handleFileOp(fs, msg)
 	case "cancel":
 		h.handleCancel(fs, msg)
 	}
@@ -202,7 +211,10 @@ func (h *filesWSHandler) handleList(socket *fileSocket, msg fileMsg) {
 	h.srv.fileMu.Lock()
 	h.srv.fileRequests[msg.RequestID] = socket
 	h.srv.fileMu.Unlock()
-	if err := client.Send(&protocol.Message{Type: protocol.MsgFileListRequest, RequestID: msg.RequestID, Path: msg.Path}); err != nil {
+	if msg.Limit <= 0 {
+		msg.Limit = 200
+	}
+	if err := client.Send(&protocol.Message{Type: protocol.MsgFileListRequest, RequestID: msg.RequestID, Path: msg.Path, Offset: msg.Offset, Size: int64(msg.Limit)}); err != nil {
 		h.srv.removeFileRequest(msg.RequestID)
 		socket.writeText(fileMsg{Op: "error", DeviceID: msg.DeviceID, RequestID: msg.RequestID, Message: "failed to reach device"})
 	}
@@ -244,6 +256,24 @@ func (h *filesWSHandler) handleDownloadStart(socket *fileSocket, msg fileMsg) {
 	if err := client.Send(&protocol.Message{Type: protocol.MsgFileDownloadStart, TaskID: msg.TaskID, Path: msg.Path, Offset: msg.Offset}); err != nil {
 		h.srv.removeFileTask(msg.TaskID)
 		socket.writeText(fileMsg{Op: "error", DeviceID: msg.DeviceID, TaskID: msg.TaskID, Message: "failed to reach device"})
+	}
+}
+
+func (h *filesWSHandler) handleFileOp(socket *fileSocket, msg fileMsg) {
+	if msg.RequestID == "" {
+		msg.RequestID = generateID()
+	}
+	client, ok := h.clientFor(socket, msg.DeviceID)
+	if !ok {
+		return
+	}
+	h.srv.fileMu.Lock()
+	h.srv.fileRequests[msg.RequestID] = socket
+	h.srv.fileMu.Unlock()
+	typ := protocol.MessageType("file_" + msg.Op)
+	if err := client.Send(&protocol.Message{Type: typ, RequestID: msg.RequestID, Path: msg.Path, ParentPath: msg.ParentPath, Name: msg.Name, Success: msg.Recursive, Data: msg.From, FilePath: msg.To}); err != nil {
+		h.srv.removeFileRequest(msg.RequestID)
+		socket.writeText(fileMsg{Op: "error", DeviceID: msg.DeviceID, RequestID: msg.RequestID, Message: "failed to reach device"})
 	}
 }
 
@@ -337,6 +367,9 @@ func (s *Server) handleFileManagerMessage(msg *protocol.Message) {
 				Path:      msg.Path,
 				Parent:    msg.ParentPath,
 				Home:      msg.HomePath,
+				Offset:    msg.Offset,
+				Limit:     int(msg.Size),
+				Total:     int(msg.FileMode),
 				Entries:   msg.FileEntries,
 				Truncated: msg.Truncated,
 				Error:     msg.Error,
@@ -347,6 +380,16 @@ func (s *Server) handleFileManagerMessage(msg *protocol.Message) {
 		if route := s.getFileTask(msg.TaskID); route != nil {
 			route.socket.writeText(fileMsg{Op: "upload_ready", TaskID: msg.TaskID, Path: msg.Path, Offset: msg.Offset, Size: msg.Size})
 		}
+	case "file_stat_result":
+		s.forwardFileOpResult(msg, "stat_result")
+	case "file_mkdir_result":
+		s.forwardFileOpResult(msg, "mkdir_result")
+	case "file_delete_result":
+		s.forwardFileOpResult(msg, "delete_result")
+	case "file_rename_result":
+		s.forwardFileOpResult(msg, "rename_result")
+	case "file_copy_result":
+		s.forwardFileOpResult(msg, "copy_result")
 	case protocol.MsgFileDownloadStart:
 		if route := s.getFileTask(msg.TaskID); route != nil {
 			route.socket.writeText(fileMsg{Op: "download_start", TaskID: msg.TaskID, Path: msg.Path, Name: msg.Name, Size: msg.Size, Offset: msg.Offset, ModTime: msg.ModTime})
@@ -362,6 +405,21 @@ func (s *Server) handleFileManagerMessage(msg *protocol.Message) {
 			s.removeFileTask(msg.TaskID)
 		}
 	}
+}
+
+func (s *Server) forwardFileOpResult(msg *protocol.Message, op string) {
+	s.fileMu.Lock()
+	socket := s.fileRequests[msg.RequestID]
+	delete(s.fileRequests, msg.RequestID)
+	s.fileMu.Unlock()
+	if socket == nil {
+		return
+	}
+	var entry *protocol.FileEntry
+	if len(msg.FileEntries) > 0 {
+		entry = &msg.FileEntries[0]
+	}
+	socket.writeText(fileMsg{Op: op, RequestID: msg.RequestID, Path: msg.Path, Success: msg.Success, Error: msg.Error, Message: msg.Error, Entry: entry})
 }
 
 func (s *Server) handleFileManagerBinary(raw []byte) bool {
@@ -393,12 +451,7 @@ func (s *Server) HandleFilesWS(w http.ResponseWriter, r *http.Request) {
 	upgrader := gws.NewUpgrader(&filesWSHandler{srv: s}, &gws.ServerOption{
 		ReadMaxPayloadSize: 16 * 1024 * 1024,
 		ParallelGolimit:    1,
-		PermessageDeflate: gws.PermessageDeflate{
-			Enabled:               true,
-			ServerContextTakeover: true,
-			ClientContextTakeover: true,
-			Threshold:             256,
-		},
+		PermessageDeflate:  gws.PermessageDeflate{Enabled: false},
 	})
 	socket, err := upgrader.Upgrade(w, r)
 	if err != nil {

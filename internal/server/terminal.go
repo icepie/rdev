@@ -262,10 +262,14 @@ func (h *terminalWSHandler) sendJSON(socket *gws.Conn, msg terminalMsg) {
 	socket.WriteMessage(gws.OpcodeText, data)
 }
 
-func (tc *terminalConn) writeMessage(opcode gws.Opcode, data []byte) {
+func (tc *terminalConn) writeMessage(opcode gws.Opcode, data []byte) bool {
 	tc.writeMu.Lock()
 	defer tc.writeMu.Unlock()
-	tc.socket.WriteMessage(opcode, data)
+	if err := tc.socket.WriteMessage(opcode, data); err != nil {
+		log.Printf("terminal write failed: device=%s session=%s opcode=%d bytes=%d err=%v", tc.deviceID, tc.sessionID, opcode, len(data), err)
+		return false
+	}
+	return true
 }
 
 // pumpOutput forwards ProxySession output to browser as binary frames
@@ -278,13 +282,17 @@ func (tc *terminalConn) pumpOutput() {
 				return
 			}
 			// Binary frame = raw terminal output (no header needed, xterm.js handles raw bytes)
-			tc.writeMessage(gws.OpcodeBinary, data)
+			if !tc.writeMessage(gws.OpcodeBinary, data) {
+				return
+			}
 
 		case data, ok := <-tc.sess.StderrCh:
 			if !ok {
 				return
 			}
-			tc.writeMessage(gws.OpcodeBinary, data)
+			if !tc.writeMessage(gws.OpcodeBinary, data) {
+				return
+			}
 
 		case <-tc.sess.CloseCh:
 			tc.sess.NotifyObserversClose()
@@ -325,12 +333,7 @@ func (s *Server) HandleTerminalWS(w http.ResponseWriter, r *http.Request) {
 			session.Store("deviceID", deviceID)
 			return true
 		},
-		PermessageDeflate: gws.PermessageDeflate{
-			Enabled:               true,
-			ServerContextTakeover: true,
-			ClientContextTakeover: true,
-			Threshold:             128,
-		},
+		PermessageDeflate: gws.PermessageDeflate{Enabled: false},
 	})
 
 	socket, err := upgrader.Upgrade(w, r)

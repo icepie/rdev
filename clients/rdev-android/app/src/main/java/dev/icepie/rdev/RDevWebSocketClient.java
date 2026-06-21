@@ -34,6 +34,7 @@ final class RDevWebSocketClient {
     private InputStream in;
     private OutputStream out;
     private Thread thread;
+    private Thread pingThread;
     private final SecureRandom random = new SecureRandom();
 
     RDevWebSocketClient(String rawUrl, Listener listener) {
@@ -75,9 +76,12 @@ final class RDevWebSocketClient {
             if (host == null || host.length() == 0) throw new IOException("missing websocket host: " + rawUrl);
             socket = tls ? SSLSocketFactory.getDefault().createSocket(host, port) : new Socket(host, port);
             socket.setTcpNoDelay(true);
+            socket.setKeepAlive(true);
+            socket.setSoTimeout(45000);
             in = socket.getInputStream();
             out = socket.getOutputStream();
             handshake(uri, host, port, tls);
+            startPingLoop();
             listener.onOpen();
             readFrames();
         } catch (Exception e) {
@@ -85,6 +89,7 @@ final class RDevWebSocketClient {
             if (running) Log.w(TAG, "websocket closed", e);
         } finally {
             running = false;
+            stopPingLoop();
             try { if (socket != null) socket.close(); } catch (IOException ignored) {}
             listener.onClosed(closeError);
         }
@@ -159,6 +164,32 @@ final class RDevWebSocketClient {
         }
     }
 
+    private void startPingLoop() {
+        stopPingLoop();
+        pingThread = new Thread(() -> {
+            while (running) {
+                try {
+                    Thread.sleep(10000);
+                    if (running) sendFrame(0x9, new byte[] {'r', 'd', 'e', 'v'});
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return;
+                } catch (IOException e) {
+                    Log.w(TAG, "websocket ping failed", e);
+                    close();
+                    return;
+                }
+            }
+        }, "rdev-ws-ping");
+        pingThread.start();
+    }
+
+    private void stopPingLoop() {
+        Thread thread = pingThread;
+        pingThread = null;
+        if (thread != null) thread.interrupt();
+    }
+
     private void sendFrame(int opcode, byte[] payload) throws IOException {
         if (!running || out == null) throw new IOException("websocket not connected");
         byte[] mask = new byte[4];
@@ -172,8 +203,9 @@ final class RDevWebSocketClient {
                 out.write((len >>> 8) & 0xff);
                 out.write(len & 0xff);
             } else {
+                long length = payload.length;
                 out.write(0x80 | 127);
-                for (int i = 7; i >= 0; i--) out.write((len >>> (8 * i)) & 0xff);
+                for (int i = 7; i >= 0; i--) out.write((int) ((length >>> (8 * i)) & 0xff));
             }
             out.write(mask);
             byte[] masked = new byte[payload.length];
