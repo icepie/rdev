@@ -61,6 +61,22 @@ function Get-RDevLatestTag {
     return 'latest'
 }
 
+function Get-RDevServerHttpBase([string]$Server) {
+    if ($Server -like 'wss://*') { $Base = 'https://' + $Server.Substring(6) }
+    elseif ($Server -like 'ws://*') { $Base = 'http://' + $Server.Substring(5) }
+    elseif ($Server -like 'http://*' -or $Server -like 'https://*') { $Base = $Server }
+    else { return '' }
+    if ($Base -match '^(https?://[^/]+)') { return $Matches[1] }
+    return ''
+}
+
+function Get-RDevProxyUrl([string]$Server, [string]$Asset, [string]$Tag) {
+    $Base = Get-RDevServerHttpBase $Server
+    if (-not $Base) { return '' }
+    if (-not $Tag) { $Tag = 'latest' }
+    return "$Base/download-release-proxy?asset=$([Uri]::EscapeDataString($Asset))&tag=$([Uri]::EscapeDataString($Tag))"
+}
+
 # -- WinPTY fallback for legacy Windows -----------------------
 $script:WinPTYVersion = '0.4.3'
 $script:WinPTYAsset = "winpty-$script:WinPTYVersion-msvc2015.zip"
@@ -272,6 +288,17 @@ function global:RDev {
         if (Dl $GH_URL $OutPath) {
             $f = Get-Item $OutPath -EA SilentlyContinue
             if ($f -and $f.Length -gt 0) { $OK = $true; Write-Host "  OK via github.com" -ForegroundColor Green }
+        }
+    }
+
+    if (-not $OK) {
+        $ProxyUrl = Get-RDevProxyUrl $Server $Asset $Tag
+        if ($ProxyUrl) {
+            Write-Host "  Trying RDev server proxy..." -ForegroundColor DarkGray
+            if (Dl $ProxyUrl $OutPath) {
+                $f = Get-Item $OutPath -EA SilentlyContinue
+                if ($f -and $f.Length -gt 0) { $OK = $true; Write-Host "  OK via RDev server proxy" -ForegroundColor Green }
+            }
         }
     }
 

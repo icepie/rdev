@@ -204,6 +204,7 @@ Examples:
 	mux.HandleFunc("/api/vnc/settings", srv.HandleVNCSettingsAPI)
 	mux.HandleFunc("/api/upload", srv.HandleFileUpload)
 	mux.HandleFunc("/download-release", srv.HandleReleaseDownload)
+	mux.HandleFunc("/download-release-proxy", srv.HandleReleaseDownloadProxy)
 	mux.Handle("/", srv.StaticHandler())
 
 	go func() {

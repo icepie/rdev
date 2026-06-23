@@ -4,6 +4,7 @@ import (
 	"context"
 	"embed"
 	"encoding/json"
+	"io"
 	"io/fs"
 	"log"
 	"net"
@@ -1164,22 +1165,62 @@ func (s *Server) HandleAPI(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(clients)
 }
 
-// HandleReleaseDownload redirects release downloads through the first reachable mirror.
-func (s *Server) HandleReleaseDownload(w http.ResponseWriter, r *http.Request) {
-	asset := strings.TrimSpace(r.URL.Query().Get("asset"))
-	if asset == "" || strings.Contains(asset, "/") || strings.Contains(asset, "\\") || strings.Contains(asset, "..") {
-		http.Error(w, "bad asset", http.StatusBadRequest)
-		return
+func releaseDownloadDirectURL(asset, tag string) string {
+	asset = url.PathEscape(asset)
+	if tag == "" || tag == "latest" {
+		return "https://github.com/icepie/rdev/releases/latest/download/" + asset
 	}
-	direct := "https://github.com/icepie/rdev/releases/latest/download/" + url.PathEscape(asset)
-	client := &http.Client{Timeout: 2500 * time.Millisecond}
+	return "https://github.com/icepie/rdev/releases/download/" + url.PathEscape(tag) + "/" + asset
+}
+
+func releaseDownloadParams(r *http.Request) (asset, tag string, ok bool) {
+	asset = strings.TrimSpace(r.URL.Query().Get("asset"))
+	tag = strings.TrimSpace(r.URL.Query().Get("tag"))
+	if tag == "" {
+		tag = "latest"
+	}
+	if asset == "" || strings.Contains(asset, "/") || strings.Contains(asset, "\\") || strings.Contains(asset, "..") {
+		return "", "", false
+	}
+	if tag != "latest" {
+		clean := strings.TrimPrefix(tag, "v")
+		if clean == "" || strings.ContainsAny(clean, "/\\?") || strings.Contains(tag, "..") {
+			return "", "", false
+		}
+		if !strings.HasPrefix(tag, "v") {
+			tag = "v" + tag
+		}
+	}
+	return asset, tag, true
+}
+
+func releaseDownloadCandidates(asset, tag string) []string {
+	direct := releaseDownloadDirectURL(asset, tag)
 	candidates := make([]string, 0, len(releaseDownloadMirrors)+1)
 	for _, mirror := range releaseDownloadMirrors {
 		candidates = append(candidates, "https://"+mirror+"/"+direct)
 	}
-	candidates = append(candidates, direct)
+	return append(candidates, direct)
+}
 
-	for _, candidate := range candidates {
+func releaseDownloadProxyCandidates(asset, tag string) []string {
+	direct := releaseDownloadDirectURL(asset, tag)
+	candidates := []string{direct}
+	for _, mirror := range releaseDownloadMirrors {
+		candidates = append(candidates, "https://"+mirror+"/"+direct)
+	}
+	return candidates
+}
+
+// HandleReleaseDownload redirects release downloads through the first reachable mirror.
+func (s *Server) HandleReleaseDownload(w http.ResponseWriter, r *http.Request) {
+	asset, tag, ok := releaseDownloadParams(r)
+	if !ok {
+		http.Error(w, "bad asset", http.StatusBadRequest)
+		return
+	}
+	client := &http.Client{Timeout: 2500 * time.Millisecond}
+	for _, candidate := range releaseDownloadCandidates(asset, tag) {
 		ctx, cancel := context.WithTimeout(r.Context(), 2500*time.Millisecond)
 		req, err := http.NewRequestWithContext(ctx, http.MethodHead, candidate, nil)
 		if err == nil {
@@ -1196,7 +1237,41 @@ func (s *Server) HandleReleaseDownload(w http.ResponseWriter, r *http.Request) {
 		}
 		cancel()
 	}
-	http.Redirect(w, r, direct, http.StatusFound)
+	http.Redirect(w, r, releaseDownloadDirectURL(asset, tag), http.StatusFound)
+}
+
+// HandleReleaseDownloadProxy streams a release asset through the RDev server as a last-resort fallback.
+func (s *Server) HandleReleaseDownloadProxy(w http.ResponseWriter, r *http.Request) {
+	asset, tag, ok := releaseDownloadParams(r)
+	if !ok {
+		http.Error(w, "bad asset", http.StatusBadRequest)
+		return
+	}
+	client := &http.Client{Timeout: 10 * time.Minute}
+	for _, candidate := range releaseDownloadProxyCandidates(asset, tag) {
+		req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, candidate, nil)
+		if err != nil {
+			continue
+		}
+		req.Header.Set("User-Agent", "rdev-server")
+		resp, err := client.Do(req)
+		if err != nil {
+			continue
+		}
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			resp.Body.Close()
+			continue
+		}
+		defer resp.Body.Close()
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Header().Set("Content-Disposition", "attachment; filename=\""+asset+"\"")
+		if length := resp.Header.Get("Content-Length"); length != "" {
+			w.Header().Set("Content-Length", length)
+		}
+		_, _ = io.Copy(w, resp.Body)
+		return
+	}
+	http.Error(w, "download failed", http.StatusBadGateway)
 }
 
 // HandleConfigAPI returns server configuration for the web UI

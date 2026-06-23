@@ -178,6 +178,29 @@ mirror_url() {
     echo "https://$1/$2"
 }
 
+server_http_base() {
+    case "$RDEV_SERVER" in
+        wss://*) base="https://${RDEV_SERVER#wss://}" ;;
+        ws://*)  base="http://${RDEV_SERVER#ws://}" ;;
+        http://*|https://*) base="$RDEV_SERVER" ;;
+        *) return 1 ;;
+    esac
+    proto="${base%%://*}"
+    rest="${base#*://}"
+    host="${rest%%/*}"
+    [ -n "$host" ] || return 1
+    echo "$proto://$host"
+}
+
+release_proxy_url() {
+    base="$(server_http_base 2>/dev/null || true)"
+    [ -n "$base" ] || return 1
+    asset="$1"
+    tag="$TAG"
+    [ -n "$tag" ] || tag="latest"
+    echo "$base/download-release-proxy?asset=$asset&tag=$tag"
+}
+
 extract_latest_tag() {
     grep '"tag_name"' | head -1 | sed 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/'
 }
@@ -212,6 +235,8 @@ release_url() {
 download_with_fallback() {
     url="$1"
     out="$2"
+    asset="$3"
+    [ -n "$asset" ] || asset="${url##*/}"
     ok=0
     for m in $MIRRORS; do
         [ -z "$m" ] && continue
@@ -226,6 +251,13 @@ download_with_fallback() {
     if [ "$ok" = "0" ]; then
         echo "  Trying github.com..." >&2
         if dl "$url" "$out" && [ -s "$out" ]; then ok=1; echo "  ok via github.com" >&2; fi
+    fi
+    if [ "$ok" = "0" ]; then
+        proxy_url="$(release_proxy_url "$asset" 2>/dev/null || true)"
+        if [ -n "$proxy_url" ]; then
+            echo "  Trying RDev server proxy..." >&2
+            if dl "$proxy_url" "$out" && [ -s "$out" ]; then ok=1; echo "  ok via RDev server proxy" >&2; fi
+        fi
     fi
     [ "$ok" = "1" ]
 }
@@ -291,7 +323,7 @@ if [ "$RDEV_CLIENT" = "rs" ]; then
     esac
     GH_URL="$(release_url "$ASSET")"
     echo "  Downloading ${CLIENT_LABEL} package (${OS}/${ARCH})..." >&2
-    if ! download_with_fallback "$GH_URL" "$ARCHIVE"; then
+    if ! download_with_fallback "$GH_URL" "$ARCHIVE" "$ASSET"; then
         echo "Error: download failed" >&2
         rm -f "$ARCHIVE" 2>/dev/null
         exit 1
@@ -320,7 +352,7 @@ else
     GH_URL="$(release_url "$BINARY")"
     RUN_BIN="$TMPBASE/rdev-client-${TAG}-${OS}-${ARCH}-$$"
     echo "  Downloading rdev-client (${OS}/${ARCH})..." >&2
-    if ! download_with_fallback "$GH_URL" "$RUN_BIN"; then
+    if ! download_with_fallback "$GH_URL" "$RUN_BIN" "$BINARY"; then
         echo "Error: download failed" >&2
         rm -f "$RUN_BIN" 2>/dev/null
         exit 1
