@@ -1247,31 +1247,60 @@ func (s *Server) HandleReleaseDownloadProxy(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "bad asset", http.StatusBadRequest)
 		return
 	}
-	client := &http.Client{Timeout: 10 * time.Minute}
-	for _, candidate := range releaseDownloadProxyCandidates(asset, tag) {
-		req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, candidate, nil)
-		if err != nil {
-			continue
+	transport := &http.Transport{
+		Proxy:                 http.ProxyFromEnvironment,
+		DialContext:           (&net.Dialer{Timeout: 8 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+		TLSHandshakeTimeout:   8 * time.Second,
+		ResponseHeaderTimeout: 12 * time.Second,
+		IdleConnTimeout:       30 * time.Second,
+	}
+	client := &http.Client{Transport: transport}
+	candidates := releaseDownloadProxyCandidates(asset, tag)
+	selected := ""
+	for _, candidate := range candidates {
+		ctx, cancel := context.WithTimeout(r.Context(), 12*time.Second)
+		req, err := http.NewRequestWithContext(ctx, http.MethodHead, candidate, nil)
+		if err == nil {
+			req.Header.Set("User-Agent", "rdev-server")
+			resp, err := client.Do(req)
+			if err == nil {
+				resp.Body.Close()
+				if resp.StatusCode >= 200 && resp.StatusCode < 400 {
+					selected = candidate
+				}
+			}
 		}
-		req.Header.Set("User-Agent", "rdev-server")
-		resp, err := client.Do(req)
-		if err != nil {
-			continue
+		cancel()
+		if selected != "" {
+			break
 		}
-		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			resp.Body.Close()
-			continue
-		}
-		defer resp.Body.Close()
-		w.Header().Set("Content-Type", "application/octet-stream")
-		w.Header().Set("Content-Disposition", "attachment; filename=\""+asset+"\"")
-		if length := resp.Header.Get("Content-Length"); length != "" {
-			w.Header().Set("Content-Length", length)
-		}
-		_, _ = io.Copy(w, resp.Body)
+	}
+	if selected == "" {
+		selected = releaseDownloadDirectURL(asset, tag)
+	}
+
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, selected, nil)
+	if err != nil {
+		http.Error(w, "download failed", http.StatusBadGateway)
 		return
 	}
-	http.Error(w, "download failed", http.StatusBadGateway)
+	req.Header.Set("User-Agent", "rdev-server")
+	resp, err := client.Do(req)
+	if err != nil {
+		http.Error(w, "download failed", http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		http.Error(w, "download failed", http.StatusBadGateway)
+		return
+	}
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Content-Disposition", "attachment; filename=\""+asset+"\"")
+	if length := resp.Header.Get("Content-Length"); length != "" {
+		w.Header().Set("Content-Length", length)
+	}
+	_, _ = io.Copy(w, resp.Body)
 }
 
 // HandleConfigAPI returns server configuration for the web UI
