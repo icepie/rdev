@@ -22,7 +22,7 @@ RDEV_REPO="icepie/rdev"
 
 # CN GitHub mirrors (tried first, fallback to direct)
 # Override with: RDEV_MIRRORS="mirror1 mirror2" sh run.sh ...
-MIRRORS="${RDEV_MIRRORS:-gh.llkk.cc gh.idayer.com gh.ddlc.top gh-proxy.com ghfast.top ghproxy.net ghproxy.cc gh-proxy.net ghproxy.cfd github.moeyy.xyz hub.gitmirror.com ghproxy.1888866.xyz ghproxy.sakuramoe.dev}"
+MIRRORS="${RDEV_MIRRORS:-gh.idayer.com gh.ddlc.top gh-proxy.com ghfast.top ghproxy.net ghproxy.cc gh-proxy.net ghproxy.cfd github.moeyy.xyz hub.gitmirror.com ghproxy.1888866.xyz ghproxy.sakuramoe.dev}"
 
 # ── Parse arguments ─────────────────────────────────────────
 while [ $# -gt 0 ]; do

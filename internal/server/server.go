@@ -1,12 +1,14 @@
 package server
 
 import (
+	"context"
 	"embed"
 	"encoding/json"
 	"io/fs"
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"runtime"
 	"sort"
 	"strconv"
@@ -25,6 +27,21 @@ var templateFS embed.FS
 const sessionHistoryLimit = 1024 * 1024
 
 const wsReadWait = 75 * time.Second
+
+var releaseDownloadMirrors = []string{
+	"gh.idayer.com",
+	"gh.ddlc.top",
+	"gh-proxy.com",
+	"ghfast.top",
+	"ghproxy.net",
+	"ghproxy.cc",
+	"gh-proxy.net",
+	"ghproxy.cfd",
+	"github.moeyy.xyz",
+	"hub.gitmirror.com",
+	"ghproxy.1888866.xyz",
+	"ghproxy.sakuramoe.dev",
+}
 
 // ClientConn represents a connected client device
 type ClientConn struct {
@@ -1145,6 +1162,41 @@ func (s *Server) HandleAPI(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(clients)
+}
+
+// HandleReleaseDownload redirects release downloads through the first reachable mirror.
+func (s *Server) HandleReleaseDownload(w http.ResponseWriter, r *http.Request) {
+	asset := strings.TrimSpace(r.URL.Query().Get("asset"))
+	if asset == "" || strings.Contains(asset, "/") || strings.Contains(asset, "\\") || strings.Contains(asset, "..") {
+		http.Error(w, "bad asset", http.StatusBadRequest)
+		return
+	}
+	direct := "https://github.com/icepie/rdev/releases/latest/download/" + url.PathEscape(asset)
+	client := &http.Client{Timeout: 2500 * time.Millisecond}
+	candidates := make([]string, 0, len(releaseDownloadMirrors)+1)
+	for _, mirror := range releaseDownloadMirrors {
+		candidates = append(candidates, "https://"+mirror+"/"+direct)
+	}
+	candidates = append(candidates, direct)
+
+	for _, candidate := range candidates {
+		ctx, cancel := context.WithTimeout(r.Context(), 2500*time.Millisecond)
+		req, err := http.NewRequestWithContext(ctx, http.MethodHead, candidate, nil)
+		if err == nil {
+			req.Header.Set("User-Agent", "rdev-server")
+			resp, err := client.Do(req)
+			if err == nil {
+				resp.Body.Close()
+				if resp.StatusCode >= 200 && resp.StatusCode < 400 {
+					cancel()
+					http.Redirect(w, r, candidate, http.StatusFound)
+					return
+				}
+			}
+		}
+		cancel()
+	}
+	http.Redirect(w, r, direct, http.StatusFound)
 }
 
 // HandleConfigAPI returns server configuration for the web UI

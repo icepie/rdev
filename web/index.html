@@ -299,8 +299,6 @@
         let SP = '2222';
         let VP = '';
         let clientFlavor = 'go';
-        const GITHUB_RELEASE_BASE = 'https://github.com/icepie/rdev/releases/latest/download/';
-        const DOWNLOAD_MIRRORS = ['gh.llkk.cc','gh.idayer.com','gh.ddlc.top','gh-proxy.com','ghfast.top','ghproxy.net','ghproxy.cc','gh-proxy.net','ghproxy.cfd','github.moeyy.xyz','hub.gitmirror.com','ghproxy.1888866.xyz','ghproxy.sakuramoe.dev'];
 
         function vncDisplayAddr(addr) {
             if (!addr) return '';
@@ -382,25 +380,10 @@
             });
         }
 
-        function releaseAssetUrl(asset) { return GITHUB_RELEASE_BASE + encodeURIComponent(asset); }
-        function mirrorDownloadUrl(mirror, url) { return 'https://' + mirror + '/' + url; }
-        async function canReachDownload(url) {
-            const controller = new AbortController();
-            const timer = setTimeout(() => controller.abort(), 2500);
-            try { await fetch(url, { method: 'HEAD', mode: 'no-cors', cache: 'no-store', signal: controller.signal }); return true; }
-            catch(e) { return false; }
-            finally { clearTimeout(timer); }
-        }
-        async function downloadAndroidAsset(asset) {
+        function downloadAndroidAsset(asset) {
             const note = document.getElementById('android-download-note');
-            const direct = releaseAssetUrl(asset);
             if (note) note.textContent = t('index.androidDownloadTrying');
-            for (const mirror of DOWNLOAD_MIRRORS) {
-                const url = mirrorDownloadUrl(mirror, direct);
-                if (await canReachDownload(url)) { location.href = url; return; }
-            }
-            if (note) note.textContent = t('index.androidDownloadDirect');
-            location.href = direct;
+            location.href = '/download-release?asset=' + encodeURIComponent(asset);
         }
         document.querySelectorAll('[data-android-asset]').forEach(btn => btn.addEventListener('click', () => downloadAndroidAsset(btn.dataset.androidAsset)));
 

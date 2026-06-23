@@ -18,7 +18,6 @@ try {
 
 # ── Mirror list ─────────────────────────────────────────────
 $script:Mirrors = @(
-    'gh.llkk.cc',
     'gh.idayer.com',
     'gh.ddlc.top',
     'gh-proxy.com',
