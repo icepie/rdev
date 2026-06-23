@@ -165,15 +165,6 @@ dl() {
     esac
 }
 
-dl_stdout() {
-    case "$DL_TOOL" in
-        curl)         curl -fsSL --connect-timeout 8 --max-time 20 "$1" ;;
-        wget)         wget -q --timeout=20 -O - "$1" ;;
-        fetch)        fetch -qo - "$1" ;;
-        busybox_wget) busybox wget -q -O - "$1" ;;
-    esac
-}
-
 mirror_url() {
     echo "https://$1/$2"
 }
@@ -201,27 +192,11 @@ release_proxy_url() {
     echo "$base/download-release-proxy?asset=$asset&tag=$tag"
 }
 
-extract_latest_tag() {
-    grep '"tag_name"' | head -1 | sed 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/'
-}
-
-latest_tag_with_fallback() {
-    api="https://api.github.com/repos/${RDEV_REPO}/releases/latest"
-    for m in $MIRRORS; do
-        [ -z "$m" ] && continue
-        tag="$(dl_stdout "$(mirror_url "$m" "$api")" 2>/dev/null | extract_latest_tag || true)"
-        [ -n "$tag" ] && { echo "$tag"; return 0; }
-    done
-    tag="$(dl_stdout "$api" 2>/dev/null | extract_latest_tag || true)"
-    [ -n "$tag" ] && echo "$tag"
-}
-
 # ── Determine version ──────────────────────────────────────
 if [ -n "$RDEV_VERSION" ]; then
     case "$RDEV_VERSION" in v*) TAG="$RDEV_VERSION" ;; *) TAG="v${RDEV_VERSION}" ;; esac
 else
-    TAG="$(latest_tag_with_fallback)"
-    [ -z "$TAG" ] && TAG="latest"
+    TAG="latest"
 fi
 
 release_url() {
@@ -238,7 +213,14 @@ download_with_fallback() {
     asset="$3"
     [ -n "$asset" ] || asset="${url##*/}"
     ok=0
+    proxy_url="$(release_proxy_url "$asset" 2>/dev/null || true)"
+    if [ -n "$proxy_url" ]; then
+        echo "  Trying RDev server proxy..." >&2
+        if dl "$proxy_url" "$out" && [ -s "$out" ]; then ok=1; echo "  ok via RDev server proxy" >&2; fi
+        [ "$ok" = "1" ] || rm -f "$out" 2>/dev/null
+    fi
     for m in $MIRRORS; do
+        [ "$ok" = "1" ] && break
         [ -z "$m" ] && continue
         echo "  Trying ${m}..." >&2
         if dl "$(mirror_url "$m" "$url")" "$out" 2>/dev/null && [ -s "$out" ]; then
@@ -251,13 +233,6 @@ download_with_fallback() {
     if [ "$ok" = "0" ]; then
         echo "  Trying github.com..." >&2
         if dl "$url" "$out" && [ -s "$out" ]; then ok=1; echo "  ok via github.com" >&2; fi
-    fi
-    if [ "$ok" = "0" ]; then
-        proxy_url="$(release_proxy_url "$asset" 2>/dev/null || true)"
-        if [ -n "$proxy_url" ]; then
-            echo "  Trying RDev server proxy..." >&2
-            if dl "$proxy_url" "$out" && [ -s "$out" ]; then ok=1; echo "  ok via RDev server proxy" >&2; fi
-        fi
     fi
     [ "$ok" = "1" ]
 }

@@ -42,25 +42,6 @@ function Convert-RDevMirrorUrl([string]$Mirror, [string]$Url) {
     return "https://$Mirror/$Url"
 }
 
-function Get-RDevUrlText([string]$Url) {
-    try {
-        $w = New-Object Net.WebClient
-        $w.Headers.Add('User-Agent', 'rdev-runner')
-        return $w.DownloadString($Url)
-    } catch { return '' }
-}
-
-function Get-RDevLatestTag {
-    $Api = "https://api.github.com/repos/$script:Repo/releases/latest"
-    foreach ($M in $script:Mirrors) {
-        $j = Get-RDevUrlText (Convert-RDevMirrorUrl $M $Api)
-        if ($j -match '"tag_name"\s*:\s*"([^"]+)"') { return $Matches[1] }
-    }
-    $direct = Get-RDevUrlText $Api
-    if ($direct -match '"tag_name"\s*:\s*"([^"]+)"') { return $Matches[1] }
-    return 'latest'
-}
-
 function Get-RDevServerHttpBase([string]$Server) {
     if ($Server -like 'wss://*') { $Base = 'https://' + $Server.Substring(6) }
     elseif ($Server -like 'ws://*') { $Base = 'http://' + $Server.Substring(5) }
@@ -226,7 +207,7 @@ function global:RDev {
     # ── Resolve version & URL ───────────────────────────────
     $WindowsMajor = Get-WindowsMajorVersion
     if ($Version) { if ($Version -like 'v*') { $Tag = $Version } else { $Tag = "v$Version" } } else {
-        $Tag = Get-RDevLatestTag
+        $Tag = 'latest'
     }
 
     $Base = "https://github.com/$script:Repo/releases"
@@ -259,7 +240,7 @@ function global:RDev {
         }
     }
 
-    # ── Download (mirror → github) ────────────────────────────
+    # ── Download (RDev server proxy → mirror → github) ───────
     $SafeTag = $Tag -replace '[^A-Za-z0-9_.-]', '-'
     $OutPath = if ($PackageKind -eq 'zip') { Join-Path $env:TEMP "rdev-client-gpu-$SafeTag-windows-amd64.zip" } else { Join-Path $env:TEMP "rdev-client-$SafeTag-windows-$Arch.exe" }
     $OK = $false
@@ -267,20 +248,32 @@ function global:RDev {
     $ClientName = if ($Client -eq 'rs') { 'rdev-client-gpu' } else { 'rdev-client' }
     Write-Host "  Downloading $ClientName package (windows/$Arch)..." -ForegroundColor Cyan
 
-    if ($Mirror -eq 'auto' -and $Tag -ne 'latest') {
+    $ProxyUrl = Get-RDevProxyUrl $Server $Asset $Tag
+    if ($ProxyUrl) {
+        Write-Host "  Trying RDev server proxy..." -ForegroundColor DarkGray
+        if (Dl $ProxyUrl $OutPath) {
+            $f = Get-Item $OutPath -EA SilentlyContinue
+            if ($f -and $f.Length -gt 0) { $OK = $true; Write-Host "  OK via RDev server proxy" -ForegroundColor Green }
+        }
+        if (-not $OK) { Remove-Item $OutPath -Force -EA SilentlyContinue }
+    }
+
+    if ($Mirror -eq 'auto' -and -not $OK) {
         foreach ($M in $script:Mirrors) {
             Write-Host "  Trying $M..." -ForegroundColor DarkGray
             if (Dl (Convert-RDevMirrorUrl $M $GH_URL) $OutPath) {
                 $f = Get-Item $OutPath -EA SilentlyContinue
                 if ($f -and $f.Length -gt 0) { $OK = $true; Write-Host "  OK via $M" -ForegroundColor Green; break }
             }
+            Remove-Item $OutPath -Force -EA SilentlyContinue
         }
-    } elseif ($Mirror -ne 'none' -and $Mirror -ne '' -and $Tag -ne 'latest') {
+    } elseif ($Mirror -ne 'none' -and $Mirror -ne '' -and -not $OK) {
         Write-Host "  Trying $Mirror..." -ForegroundColor DarkGray
         if (Dl (Convert-RDevMirrorUrl $Mirror $GH_URL) $OutPath) {
             $f = Get-Item $OutPath -EA SilentlyContinue
             if ($f -and $f.Length -gt 0) { $OK = $true; Write-Host "  OK via $Mirror" -ForegroundColor Green }
         }
+        if (-not $OK) { Remove-Item $OutPath -Force -EA SilentlyContinue }
     }
 
     if (-not $OK) {
@@ -288,17 +281,6 @@ function global:RDev {
         if (Dl $GH_URL $OutPath) {
             $f = Get-Item $OutPath -EA SilentlyContinue
             if ($f -and $f.Length -gt 0) { $OK = $true; Write-Host "  OK via github.com" -ForegroundColor Green }
-        }
-    }
-
-    if (-not $OK) {
-        $ProxyUrl = Get-RDevProxyUrl $Server $Asset $Tag
-        if ($ProxyUrl) {
-            Write-Host "  Trying RDev server proxy..." -ForegroundColor DarkGray
-            if (Dl $ProxyUrl $OutPath) {
-                $f = Get-Item $OutPath -EA SilentlyContinue
-                if ($f -and $f.Length -gt 0) { $OK = $true; Write-Host "  OK via RDev server proxy" -ForegroundColor Green }
-            }
         }
     }
 
