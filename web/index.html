@@ -83,6 +83,10 @@
         .copy-btn { padding: 6px 12px; border-radius: 6px; font-size: 0.75rem; cursor: pointer; border: 1px solid var(--border); background: var(--card); color: var(--muted); transition: all 0.15s; white-space: nowrap; flex-shrink: 0; }
         .copy-btn:hover { border-color: var(--accent); color: var(--accent); }
         .copy-btn.ok { border-color: var(--green); color: var(--green); }
+        .android-downloads { display: flex; flex-wrap: wrap; gap: 8px; }
+        .android-downloads .btn { background: rgba(34,211,238,0.08); border-color: rgba(34,211,238,0.3); color: var(--accent); }
+        .android-downloads .btn:hover { background: rgba(34,211,238,0.16); }
+        .download-note { margin-top: 0.7rem; font-size: 0.8rem; color: var(--muted); }
         .hint { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 1.5rem; margin-top: 1.5rem; }
         .hint h3 { font-size: 0.95rem; color: var(--accent); margin-bottom: 0.8rem; }
         .hint code { display: block; background: #000; padding: 0.5rem 1rem; border-radius: 6px; font-family: 'SF Mono','Fira Code',monospace; font-size: 0.8rem; color: var(--muted); margin-top: 0.3rem; overflow-x: auto; }
@@ -156,6 +160,7 @@
                 <div class="install-tab active" onclick="sw(this,'linux')" data-i18n="index.tabLinux">Linux / macOS</div>
                 <div class="install-tab" onclick="sw(this,'win')" data-i18n="index.tabWindows">Windows</div>
                 <div class="install-tab" onclick="sw(this,'win7')" data-i18n="index.tabWinLegacy">Win 7/8</div>
+                <div class="install-tab" onclick="sw(this,'android')" data-i18n="index.tabAndroid">Android</div>
             </div>
 
             <div class="install-panel active" id="p-linux">
@@ -222,6 +227,20 @@
                     </div>
                 </div>
             </div>
+
+            <div class="install-panel" id="p-android">
+                <div class="cmd-group">
+                    <div class="cmd-label icon-inline"><span data-icon="download"></span><span data-i18n="index.androidDownloadLabel">Android 下载（自动优先尝试镜像）</span></div>
+                    <div class="android-downloads">
+                        <button type="button" class="btn" data-android-asset="rdev-android-apk-debug.apk">APK</button>
+                        <button type="button" class="btn" data-android-asset="rdev-client-android-arm64">arm64</button>
+                        <button type="button" class="btn" data-android-asset="rdev-client-android-armv7">armv7</button>
+                        <button type="button" class="btn" data-android-asset="rdev-client-android-x86">x86</button>
+                        <button type="button" class="btn" data-android-asset="rdev-client-android-amd64">x64</button>
+                    </div>
+                    <div class="download-note" id="android-download-note" data-i18n="index.androidDownloadNote">APK 是手机被控端；架构按钮为 Android 命令行客户端。</div>
+                </div>
+            </div>
         </div>
 
         <div class="hint">
@@ -280,6 +299,8 @@
         let SP = '2222';
         let VP = '';
         let clientFlavor = 'go';
+        const GITHUB_RELEASE_BASE = 'https://github.com/icepie/rdev/releases/latest/download/';
+        const DOWNLOAD_MIRRORS = ['gh.llkk.cc','gh.idayer.com','gh.ddlc.top','gh-proxy.com','ghfast.top','ghproxy.net','ghproxy.cc','gh-proxy.net','ghproxy.cfd','github.moeyy.xyz','hub.gitmirror.com','ghproxy.1888866.xyz','ghproxy.sakuramoe.dev'];
 
         function vncDisplayAddr(addr) {
             if (!addr) return '';
@@ -360,6 +381,28 @@
                 setTimeout(() => { btn.innerHTML = '<span data-i18n="common.copy">' + t('common.copy') + '</span>'; btn.classList.remove('ok'); }, 1500);
             });
         }
+
+        function releaseAssetUrl(asset) { return GITHUB_RELEASE_BASE + encodeURIComponent(asset); }
+        function mirrorDownloadUrl(mirror, url) { return 'https://' + mirror + '/' + url; }
+        async function canReachDownload(url) {
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), 2500);
+            try { await fetch(url, { method: 'HEAD', mode: 'no-cors', cache: 'no-store', signal: controller.signal }); return true; }
+            catch(e) { return false; }
+            finally { clearTimeout(timer); }
+        }
+        async function downloadAndroidAsset(asset) {
+            const note = document.getElementById('android-download-note');
+            const direct = releaseAssetUrl(asset);
+            if (note) note.textContent = t('index.androidDownloadTrying');
+            for (const mirror of DOWNLOAD_MIRRORS) {
+                const url = mirrorDownloadUrl(mirror, direct);
+                if (await canReachDownload(url)) { location.href = url; return; }
+            }
+            if (note) note.textContent = t('index.androidDownloadDirect');
+            location.href = direct;
+        }
+        document.querySelectorAll('[data-android-asset]').forEach(btn => btn.addEventListener('click', () => downloadAndroidAsset(btn.dataset.androidAsset)));
 
         async function refresh() {
             try {
