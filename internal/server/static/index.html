@@ -379,7 +379,7 @@
         function downloadAndroidAsset(asset) {
             const note = document.getElementById('android-download-note');
             if (note) note.textContent = t('index.androidDownloadTrying');
-            location.href = '/download-release?asset=' + encodeURIComponent(asset);
+            location.href = '/download-release-proxy?asset=' + encodeURIComponent(asset) + '&tag=latest';
         }
         document.querySelectorAll('[data-android-asset]').forEach(btn => btn.addEventListener('click', () => downloadAndroidAsset(btn.dataset.androidAsset)));
 

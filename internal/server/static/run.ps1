@@ -47,7 +47,7 @@ function Get-RDevServerHttpBase([string]$Server) {
     elseif ($Server -like 'ws://*') { $Base = 'http://' + $Server.Substring(5) }
     elseif ($Server -like 'http://*' -or $Server -like 'https://*') { $Base = $Server }
     else { return '' }
-    if ($Base -match '^(https?://[^/]+)') { return $Matches[1] }
+    if ($Base -match '^(https?://[^/?#]+)') { return $Matches[1] }
     return ''
 }
 

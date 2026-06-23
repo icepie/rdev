@@ -53,7 +53,7 @@ while [ $# -gt 0 ]; do
             echo "  -v, --version VER    Client version (default: latest)"
             echo "  --client go|rs       Client flavor: compatible Go or performance Rust"
             echo "  --go, --rs           Shorthand for --client go|rs"
-            echo "  --no-mirror          Skip CN mirrors, use github.com"
+            echo "  --no-mirror          Skip CN mirrors (server proxy is still tried first)"
             echo ""
             echo "Examples:"
             echo "  curl -sL http://SERVER/run.sh | sh -s -- ws://SERVER:8080"
@@ -179,6 +179,8 @@ server_http_base() {
     proto="${base%%://*}"
     rest="${base#*://}"
     host="${rest%%/*}"
+    host="${host%%\?*}"
+    host="${host%%#*}"
     [ -n "$host" ] || return 1
     echo "$proto://$host"
 }
@@ -279,16 +281,18 @@ if [ "$RDEV_CLIENT" = "rs" ]; then
             ASSET="rdev-client-gpu-${OS}-${ARCH}$(linux_rs_asset_suffix).tar.gz"
             ARCHIVE="$TMPBASE/rdev-client-gpu-${TAG}-${OS}-${ARCH}-$$.tar.gz"
             ;;
-        android/amd64|android/arm64)
-            ASSET="rdev-client-gpu-${OS}-${ARCH}.tar.gz"
-            ARCHIVE="$TMPBASE/rdev-client-gpu-${TAG}-${OS}-${ARCH}-$$.tar.gz"
+        android/amd64|android/arm64|android/armv7|android/386)
+            ASSET_ARCH="$ARCH"
+            [ "$ARCH" = "386" ] && ASSET_ARCH="x86"
+            ASSET="rdev-client-gpu-${OS}-${ASSET_ARCH}.tar.gz"
+            ARCHIVE="$TMPBASE/rdev-client-gpu-${TAG}-${OS}-${ASSET_ARCH}-$$.tar.gz"
             ;;
         darwin/amd64|darwin/arm64)
             ASSET="rdev-client-gpu-${OS}-${ARCH}.tar.gz"
             ARCHIVE="$TMPBASE/rdev-client-gpu-${TAG}-${OS}-${ARCH}-$$.tar.gz"
             ;;
-        windows/amd64)
-            ASSET="rdev-client-gpu-windows-amd64.zip"
+        windows/amd64|windows/arm64)
+            ASSET="rdev-client-gpu-windows-${ARCH}.zip"
             ARCHIVE="$TMPBASE/rdev-client-gpu-${TAG}-windows-${ARCH}-$$.zip"
             ;;
         *)
@@ -322,10 +326,18 @@ if [ "$RDEV_CLIENT" = "rs" ]; then
     [ -n "$RUN_BIN" ] || { echo "Error: rdev-client-gpu binary not found in package" >&2; exit 1; }
     chmod +x "$RUN_BIN" 2>/dev/null || true
 else
-    BINARY="rdev-client-${OS}-${ARCH}"
+    ASSET_ARCH="$ARCH"
+    if [ "$OS" = "android" ]; then
+        case "$ARCH" in
+            amd64|arm64|armv7) ;;
+            386) ASSET_ARCH="x86" ;;
+            *) echo "Error: compatible Go client is not published for ${OS}/${ARCH}" >&2; exit 1 ;;
+        esac
+    fi
+    BINARY="rdev-client-${OS}-${ASSET_ARCH}"
     [ "$OS" = "windows" ] && BINARY="${BINARY}.exe"
     GH_URL="$(release_url "$BINARY")"
-    RUN_BIN="$TMPBASE/rdev-client-${TAG}-${OS}-${ARCH}-$$"
+    RUN_BIN="$TMPBASE/rdev-client-${TAG}-${OS}-${ASSET_ARCH}-$$"
     echo "  Downloading rdev-client (${OS}/${ARCH})..." >&2
     if ! download_with_fallback "$GH_URL" "$RUN_BIN" "$BINARY"; then
         echo "Error: download failed" >&2
