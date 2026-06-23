@@ -23,9 +23,44 @@ $script:Mirrors = @(
     'gh.ddlc.top',
     'gh-proxy.com',
     'ghfast.top',
-    'ghproxy.net'
+    'ghproxy.net',
+    'ghproxy.cc',
+    'gh-proxy.net',
+    'ghproxy.cfd',
+    'github.moeyy.xyz',
+    'hub.gitmirror.com',
+    'ghproxy.1888866.xyz',
+    'ghproxy.sakuramoe.dev'
 )
+if ($env:RDEV_MIRRORS) {
+    $customMirrors = @()
+    foreach ($m in ($env:RDEV_MIRRORS -split '[,\s]+')) { if ($m) { $customMirrors += $m } }
+    if ($customMirrors.Count -gt 0) { $script:Mirrors = $customMirrors }
+}
 $script:Repo = 'icepie/rdev'
+
+function Convert-RDevMirrorUrl([string]$Mirror, [string]$Url) {
+    return "https://$Mirror/$Url"
+}
+
+function Get-RDevUrlText([string]$Url) {
+    try {
+        $w = New-Object Net.WebClient
+        $w.Headers.Add('User-Agent', 'rdev-runner')
+        return $w.DownloadString($Url)
+    } catch { return '' }
+}
+
+function Get-RDevLatestTag {
+    $Api = "https://api.github.com/repos/$script:Repo/releases/latest"
+    foreach ($M in $script:Mirrors) {
+        $j = Get-RDevUrlText (Convert-RDevMirrorUrl $M $Api)
+        if ($j -match '"tag_name"\s*:\s*"([^"]+)"') { return $Matches[1] }
+    }
+    $direct = Get-RDevUrlText $Api
+    if ($direct -match '"tag_name"\s*:\s*"([^"]+)"') { return $Matches[1] }
+    return 'latest'
+}
 
 # -- WinPTY fallback for legacy Windows -----------------------
 $script:WinPTYVersion = '0.4.3'
@@ -68,11 +103,11 @@ function Install-WinPTYIfLegacy([string]$Arch, [string]$Mirror) {
     if ($Mirror -eq 'auto') {
         foreach ($M in $script:Mirrors) {
             Write-Host "  Trying WinPTY via $M..." -ForegroundColor DarkGray
-            if (Dl "https://$M/$Base" $Tmp) { $f = Get-Item $Tmp -EA SilentlyContinue; if ($f -and $f.Length -gt 0) { $OK = $true; break } }
+            if (Dl (Convert-RDevMirrorUrl $M $Base) $Tmp) { $f = Get-Item $Tmp -EA SilentlyContinue; if ($f -and $f.Length -gt 0) { $OK = $true; break } }
         }
     } elseif ($Mirror -ne 'none' -and $Mirror -ne '') {
         Write-Host "  Trying WinPTY via $Mirror..." -ForegroundColor DarkGray
-        if (Dl "https://$Mirror/$Base" $Tmp) { $f = Get-Item $Tmp -EA SilentlyContinue; if ($f -and $f.Length -gt 0) { $OK = $true } }
+        if (Dl (Convert-RDevMirrorUrl $Mirror $Base) $Tmp) { $f = Get-Item $Tmp -EA SilentlyContinue; if ($f -and $f.Length -gt 0) { $OK = $true } }
     }
     if (-not $OK) {
         Write-Host "  Trying WinPTY via github.com..." -ForegroundColor DarkGray
@@ -176,11 +211,7 @@ function global:RDev {
     # ── Resolve version & URL ───────────────────────────────
     $WindowsMajor = Get-WindowsMajorVersion
     if ($Version) { if ($Version -like 'v*') { $Tag = $Version } else { $Tag = "v$Version" } } else {
-        $Tag = 'latest'
-        try {
-            try { $rel = Invoke-RestMethod -Uri "https://api.github.com/repos/$script:Repo/releases/latest" -ErrorAction Stop; $Tag = $rel.tag_name }
-            catch { $wc = New-Object Net.WebClient; $j = $wc.DownloadString("https://api.github.com/repos/$script:Repo/releases/latest"); if ($j -match '"tag_name"\s*:\s*"([^"]+)"') { $Tag = $Matches[1] } }
-        } catch { $Tag = 'latest' }
+        $Tag = Get-RDevLatestTag
     }
 
     $Base = "https://github.com/$script:Repo/releases"
@@ -224,14 +255,14 @@ function global:RDev {
     if ($Mirror -eq 'auto' -and $Tag -ne 'latest') {
         foreach ($M in $script:Mirrors) {
             Write-Host "  Trying $M..." -ForegroundColor DarkGray
-            if (Dl "https://$M/$GH_URL" $OutPath) {
+            if (Dl (Convert-RDevMirrorUrl $M $GH_URL) $OutPath) {
                 $f = Get-Item $OutPath -EA SilentlyContinue
                 if ($f -and $f.Length -gt 0) { $OK = $true; Write-Host "  OK via $M" -ForegroundColor Green; break }
             }
         }
     } elseif ($Mirror -ne 'none' -and $Mirror -ne '' -and $Tag -ne 'latest') {
         Write-Host "  Trying $Mirror..." -ForegroundColor DarkGray
-        if (Dl "https://$Mirror/$GH_URL" $OutPath) {
+        if (Dl (Convert-RDevMirrorUrl $Mirror $GH_URL) $OutPath) {
             $f = Get-Item $OutPath -EA SilentlyContinue
             if ($f -and $f.Length -gt 0) { $OK = $true; Write-Host "  OK via $Mirror" -ForegroundColor Green }
         }

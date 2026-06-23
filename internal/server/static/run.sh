@@ -21,7 +21,8 @@ RDEV_CLIENT="go"
 RDEV_REPO="icepie/rdev"
 
 # CN GitHub mirrors (tried first, fallback to direct)
-MIRRORS="gh.llkk.cc gh.idayer.com gh.ddlc.top gh-proxy.com ghfast.top ghproxy.net"
+# Override with: RDEV_MIRRORS="mirror1 mirror2" sh run.sh ...
+MIRRORS="${RDEV_MIRRORS:-gh.llkk.cc gh.idayer.com gh.ddlc.top gh-proxy.com ghfast.top ghproxy.net ghproxy.cc gh-proxy.net ghproxy.cfd github.moeyy.xyz hub.gitmirror.com ghproxy.1888866.xyz ghproxy.sakuramoe.dev}"
 
 # ── Parse arguments ─────────────────────────────────────────
 while [ $# -gt 0 ]; do
@@ -164,17 +165,39 @@ dl() {
     esac
 }
 
+dl_stdout() {
+    case "$DL_TOOL" in
+        curl)         curl -fsSL --connect-timeout 8 --max-time 20 "$1" ;;
+        wget)         wget -q --timeout=20 -O - "$1" ;;
+        fetch)        fetch -qo - "$1" ;;
+        busybox_wget) busybox wget -q -O - "$1" ;;
+    esac
+}
+
+mirror_url() {
+    echo "https://$1/$2"
+}
+
+extract_latest_tag() {
+    grep '"tag_name"' | head -1 | sed 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/'
+}
+
+latest_tag_with_fallback() {
+    api="https://api.github.com/repos/${RDEV_REPO}/releases/latest"
+    for m in $MIRRORS; do
+        [ -z "$m" ] && continue
+        tag="$(dl_stdout "$(mirror_url "$m" "$api")" 2>/dev/null | extract_latest_tag || true)"
+        [ -n "$tag" ] && { echo "$tag"; return 0; }
+    done
+    tag="$(dl_stdout "$api" 2>/dev/null | extract_latest_tag || true)"
+    [ -n "$tag" ] && echo "$tag"
+}
+
 # ── Determine version ──────────────────────────────────────
 if [ -n "$RDEV_VERSION" ]; then
     case "$RDEV_VERSION" in v*) TAG="$RDEV_VERSION" ;; *) TAG="v${RDEV_VERSION}" ;; esac
 else
-    TAG=""
-    if [ "$DL_TOOL" = "curl" ]; then
-        TAG="$(curl -fsSL --connect-timeout 5 --max-time 10 \
-            "https://api.github.com/repos/${RDEV_REPO}/releases/latest" 2>/dev/null \
-            | grep '"tag_name"' | head -1 \
-            | sed 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')"
-    fi
+    TAG="$(latest_tag_with_fallback)"
     [ -z "$TAG" ] && TAG="latest"
 fi
 
@@ -193,7 +216,7 @@ download_with_fallback() {
     for m in $MIRRORS; do
         [ -z "$m" ] && continue
         echo "  Trying ${m}..." >&2
-        if dl "https://${m}/${url}" "$out" 2>/dev/null && [ -s "$out" ]; then
+        if dl "$(mirror_url "$m" "$url")" "$out" 2>/dev/null && [ -s "$out" ]; then
             ok=1
             echo "  ok via ${m}" >&2
             break
