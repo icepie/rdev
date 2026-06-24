@@ -150,6 +150,7 @@
     const enc = new TextEncoder();
     const dec = new TextDecoder();
     let ws, devices = [], currentPath = '', parentPath = '', activeDevice = '', authPending = null, authResult = null, initialDeviceLoaded = false;
+    let reconnectDelay = 1000, reconnectTimer = null;
     let fileEntries = [], listOffset = 0, listTotal = 0, listTruncated = false;
     const sendQueue = [];
     RDevUI.setSelectOptions(document.getElementById('device-select'), [{ value: '', label: t('terminal.devicePlaceholder') }], '');
@@ -209,11 +210,24 @@
         renderTasks();
     }, 500);
 
+    function resetReconnectBackoff() { reconnectDelay = 1000; }
+    function nextReconnectDelay() {
+        const base = reconnectDelay;
+        reconnectDelay = Math.min(30000, reconnectDelay * 2);
+        const spread = Math.max(1, Math.floor(base / 5));
+        return base - spread + Math.floor(Math.random() * (spread * 2 + 1));
+    }
+    function scheduleReconnect() {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = setTimeout(connectWS, nextReconnectDelay());
+    }
     function connectWS() {
+        clearTimeout(reconnectTimer);
         const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
         ws = RDevUI.socket(`${proto}//${location.host}${authURL('/files')}`, { worker: false });
         ws.binaryType = 'arraybuffer';
         ws.onopen = () => {
+            resetReconnectBackoff();
             while (sendQueue.length && ws && ws.readyState === WebSocket.OPEN) ws.send(sendQueue.shift());
             tasks.forEach(task => {
                 if (task.dir === 'download' && task.status === 'running' && !task.saved) resumeDownload(task, task.done || 0, t('files.resuming'));
@@ -224,7 +238,7 @@
             if (evt.data instanceof Blob) return evt.data.arrayBuffer().then(onBinary);
             onText(JSON.parse(evt.data));
         };
-        ws.onclose = () => setTimeout(connectWS, 1500);
+        ws.onclose = () => { ws = null; scheduleReconnect(); };
     }
     function send(msg) {
         const payload = JSON.stringify(msg);

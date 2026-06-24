@@ -23,6 +23,8 @@ func main() {
 		shell          string
 		autoUpdate     = true
 		updateInterval = time.Minute
+		reconnectMin   = time.Second
+		reconnectMax   = 30 * time.Second
 	)
 
 	for i := 1; i < len(os.Args); i++ {
@@ -61,6 +63,20 @@ func main() {
 				}
 				i++
 			}
+		case "--reconnect-min":
+			if i+1 < len(os.Args) {
+				if d, err := time.ParseDuration(os.Args[i+1]); err == nil && d > 0 {
+					reconnectMin = d
+				}
+				i++
+			}
+		case "--reconnect-max":
+			if i+1 < len(os.Args) {
+				if d, err := time.ParseDuration(os.Args[i+1]); err == nil && d > 0 {
+					reconnectMax = d
+				}
+				i++
+			}
 		case "--version", "-v":
 			fmt.Println(version)
 			os.Exit(0)
@@ -75,6 +91,8 @@ Options:
   --no-auto-update Disable built-in GitHub release auto-update
   --auto-update    Enable/disable auto-update explicitly (true/false)
   --update-interval Auto-update polling interval (default 1m)
+  --reconnect-min Minimum reconnect delay (default 1s)
+  --reconnect-max Maximum reconnect delay (default 30s)
   --version, -v   Print version and exit
 
 SSH port is auto-detected from server — no need to specify manually.
@@ -89,6 +107,8 @@ Environment variables:
   RDEV_ID       Client ID (overrides --id flag)
   RDEV_AUTO_UPDATE true/false (default true)
   RDEV_UPDATE_INTERVAL duration like 5m or 1h
+  RDEV_RECONNECT_MIN minimum reconnect delay (default 1s)
+  RDEV_RECONNECT_MAX maximum reconnect delay (default 30s)
   RDEV_UPDATE_PROXY comma-separated GitHub proxy prefixes
 `)
 			os.Exit(0)
@@ -110,6 +130,16 @@ Environment variables:
 	if env := os.Getenv("RDEV_UPDATE_INTERVAL"); env != "" {
 		if d, err := time.ParseDuration(env); err == nil && d > 0 {
 			updateInterval = d
+		}
+	}
+	if env := os.Getenv("RDEV_RECONNECT_MIN"); env != "" {
+		if d, err := time.ParseDuration(env); err == nil && d > 0 {
+			reconnectMin = d
+		}
+	}
+	if env := os.Getenv("RDEV_RECONNECT_MAX"); env != "" {
+		if d, err := time.ParseDuration(env); err == nil && d > 0 {
+			reconnectMax = d
 		}
 	}
 	if serverURL == "" {
@@ -161,6 +191,7 @@ Environment variables:
 
 	c := client.NewClient(serverURL, clientID, password, shell)
 	c.SetVersion("go/" + version)
+	c.SetReconnectDelays(reconnectMin, reconnectMax)
 
 	// Print connection hints after successful connect
 	connectPrinted := false

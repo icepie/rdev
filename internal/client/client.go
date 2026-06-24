@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math/big"
 	"net"
 	"os"
 	"os/exec"
@@ -26,6 +27,14 @@ import (
 	"rdev/internal/protocol"
 	"rdev/internal/ptyutil"
 	"rdev/internal/wincompat"
+)
+
+const (
+	defaultReconnectMin = 1 * time.Second
+	defaultReconnectMax = 30 * time.Second
+	clientWriteWait     = 10 * time.Second
+	clientReadWait      = 75 * time.Second
+	clientPingPeriod    = 25 * time.Second
 )
 
 // convertModes converts protocol modes (map[uint8]uint32) to ssh.TerminalModes.
@@ -200,6 +209,9 @@ type Client struct {
 	desktopSessions map[string]*desktopSession
 	mu              sync.Mutex
 	done            chan struct{}
+	reconnectReset  chan struct{}
+	reconnectMin    time.Duration
+	reconnectMax    time.Duration
 
 	// Server info (received on register response)
 	sshPort  string
@@ -227,7 +239,22 @@ func NewClient(serverURL, clientID, password, shell string) *Client {
 		downloads:       make(map[string]chan struct{}),
 		desktopSessions: make(map[string]*desktopSession),
 		done:            make(chan struct{}, 1),
+		reconnectReset:  make(chan struct{}, 1),
+		reconnectMin:    defaultReconnectMin,
+		reconnectMax:    defaultReconnectMax,
 	}
+}
+
+// SetReconnectDelays configures the reconnect backoff bounds.
+func (c *Client) SetReconnectDelays(minDelay, maxDelay time.Duration) {
+	if minDelay <= 0 {
+		minDelay = defaultReconnectMin
+	}
+	if maxDelay < minDelay {
+		maxDelay = minDelay
+	}
+	c.reconnectMin = minDelay
+	c.reconnectMax = maxDelay
 }
 
 // SetVersion sets the version string reported during registration.
@@ -243,6 +270,46 @@ func newClientInstanceID() string {
 	return fmt.Sprintf("%d-%d", time.Now().UnixNano(), os.Getpid())
 }
 
+type reconnectBackoff struct {
+	min     time.Duration
+	max     time.Duration
+	current time.Duration
+}
+
+func newReconnectBackoff(minDelay, maxDelay time.Duration) *reconnectBackoff {
+	if minDelay <= 0 {
+		minDelay = defaultReconnectMin
+	}
+	if maxDelay < minDelay {
+		maxDelay = minDelay
+	}
+	return &reconnectBackoff{min: minDelay, max: maxDelay, current: minDelay}
+}
+
+func (b *reconnectBackoff) Reset() {
+	b.current = b.min
+}
+
+func (b *reconnectBackoff) Next() time.Duration {
+	base := b.current
+	b.current *= 2
+	if b.current > b.max || b.current < 0 {
+		b.current = b.max
+	}
+	if base <= 0 {
+		return b.min
+	}
+	jitter := base / 5
+	if jitter <= 0 {
+		return base
+	}
+	n, err := rand.Int(rand.Reader, big.NewInt(int64(jitter*2)+1))
+	if err != nil {
+		return base
+	}
+	return base - jitter + time.Duration(n.Int64())
+}
+
 // wsEventHandler implements gws.Event for the client
 type wsEventHandler struct {
 	gws.BuiltinEventHandler
@@ -250,6 +317,7 @@ type wsEventHandler struct {
 }
 
 func (h *wsEventHandler) OnOpen(socket *gws.Conn) {
+	_ = socket.SetDeadline(time.Now().Add(clientReadWait))
 	h.client.mu.Lock()
 	h.client.conn = socket
 	h.client.mu.Unlock()
@@ -304,11 +372,23 @@ func (h *wsEventHandler) OnClose(socket *gws.Conn, err error) {
 	}
 }
 
+func (h *wsEventHandler) OnPing(socket *gws.Conn, payload []byte) {
+	_ = socket.SetDeadline(time.Now().Add(clientReadWait))
+	h.client.writeMu.Lock()
+	_ = socket.WritePong(payload)
+	h.client.writeMu.Unlock()
+}
+
+func (h *wsEventHandler) OnPong(socket *gws.Conn, payload []byte) {
+	_ = socket.SetDeadline(time.Now().Add(clientReadWait))
+}
+
 func (h *wsEventHandler) OnMessage(socket *gws.Conn, message *gws.Message) {
 	defer message.Close()
 	if !h.client.isCurrentConn(socket) {
 		return
 	}
+	_ = socket.SetDeadline(time.Now().Add(clientReadWait))
 
 	if message.Opcode == gws.OpcodeBinary {
 		h.handleBinaryMessage(message.Bytes())
@@ -364,31 +444,57 @@ func (h *wsEventHandler) handleBinaryMessage(raw []byte) {
 func (c *Client) Run() error {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	backoff := newReconnectBackoff(c.reconnectMin, c.reconnectMax)
 
 	for {
+		if c.drainReconnectSignals() {
+			backoff.Reset()
+		}
 		err := c.connect()
 		if err != nil {
-			log.Printf("connection error: %v, reconnecting in 3s...", err)
+			delay := backoff.Next()
+			log.Printf("connection error: %v, reconnecting in %s...", err, delay.Round(time.Millisecond))
 			select {
-			case <-time.After(3 * time.Second):
+			case <-time.After(delay):
 				continue
 			case <-sigCh:
 				return nil
 			}
 		}
 
-		select {
-		case <-c.done:
-			log.Printf("disconnected, reconnecting in 3s...")
+		for connected := true; connected; {
 			select {
-			case <-time.After(3 * time.Second):
-				continue
+			case <-c.reconnectReset:
+				backoff.Reset()
+			case <-c.done:
+				if c.drainReconnectSignals() {
+					backoff.Reset()
+				}
+				delay := backoff.Next()
+				log.Printf("disconnected, reconnecting in %s...", delay.Round(time.Millisecond))
+				select {
+				case <-time.After(delay):
+					connected = false
+				case <-sigCh:
+					return nil
+				}
 			case <-sigCh:
+				c.cleanup()
 				return nil
 			}
-		case <-sigCh:
-			c.cleanup()
-			return nil
+		}
+	}
+}
+
+func (c *Client) drainReconnectSignals() bool {
+	reset := false
+	for {
+		select {
+		case <-c.done:
+		case <-c.reconnectReset:
+			reset = true
+		default:
+			return reset
 		}
 	}
 }
@@ -427,6 +533,7 @@ func (c *Client) connect() error {
 	}
 
 	go socket.ReadLoop()
+	go c.pingLoop(socket)
 	return nil
 }
 
@@ -442,6 +549,7 @@ func (c *Client) handleMessage(msg *protocol.Message) {
 		}
 		c.sshPort = msg.SSHPort
 		c.httpHost = msg.HTTPHost
+		c.reconnectBackoffReset()
 		if c.OnConnect != nil {
 			c.OnConnect(c)
 		}
@@ -1378,7 +1486,7 @@ func (c *Client) send(msg *protocol.Message) error {
 	}
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
-	_ = conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+	_ = conn.SetWriteDeadline(time.Now().Add(clientWriteWait))
 	err = conn.WriteMessage(gws.OpcodeText, data)
 	_ = conn.SetWriteDeadline(time.Time{})
 	return err
@@ -1394,10 +1502,36 @@ func (c *Client) sendBinary(typ byte, id string, data []byte) error {
 	frame := protocol.EncodeBinFrame(typ, id, data)
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
-	_ = conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+	_ = conn.SetWriteDeadline(time.Now().Add(clientWriteWait))
 	err := conn.WriteMessage(gws.OpcodeBinary, frame)
 	_ = conn.SetWriteDeadline(time.Time{})
 	return err
+}
+
+func (c *Client) pingLoop(conn *gws.Conn) {
+	ticker := time.NewTicker(clientPingPeriod)
+	defer ticker.Stop()
+	for range ticker.C {
+		if !c.isCurrentConn(conn) {
+			return
+		}
+		c.writeMu.Lock()
+		_ = conn.SetWriteDeadline(time.Now().Add(clientWriteWait))
+		err := conn.WritePing(nil)
+		_ = conn.SetWriteDeadline(time.Time{})
+		c.writeMu.Unlock()
+		if err != nil {
+			_ = conn.WriteClose(1001, []byte("ping failed"))
+			return
+		}
+	}
+}
+
+func (c *Client) reconnectBackoffReset() {
+	select {
+	case c.reconnectReset <- struct{}{}:
+	default:
+	}
 }
 
 func (c *Client) sendClose(sessionID string) error {

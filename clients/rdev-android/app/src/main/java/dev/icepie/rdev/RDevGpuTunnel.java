@@ -8,6 +8,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.net.URI;
 import java.security.MessageDigest;
+import java.security.SecureRandom;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -26,6 +27,8 @@ final class RDevGpuTunnel {
     private RDevWebSocketClient ws;
     private volatile boolean closed;
     private int reconnectDelayMs = 1000;
+    private volatile int reconnectGeneration;
+    private final SecureRandom reconnectRandom = new SecureRandom();
     private final Map<Long, Stream> streams = new HashMap<>();
     private final Map<Integer, PointerTrace> activePointers = new HashMap<>();
     private final List<PointerTrace> completedPointers = new ArrayList<>();
@@ -40,10 +43,12 @@ final class RDevGpuTunnel {
 
     void connect() {
         closed = false;
+        reconnectGeneration++;
         connectOnce();
     }
 
     private void connectOnce() {
+        final int generation = reconnectGeneration;
         String url = tunnelUrl();
         ws = new RDevWebSocketClient(url, new RDevWebSocketClient.Listener() {
             @Override public void onOpen() {
@@ -55,7 +60,7 @@ final class RDevGpuTunnel {
             @Override public void onClosed(Exception error) {
                 Log.i(TAG, "gpu tunnel closed error=" + error);
                 clearStreams();
-                if (!closed) scheduleReconnect();
+                if (!closed && generation == reconnectGeneration) scheduleReconnect();
             }
         });
         ws.connect();
@@ -63,17 +68,24 @@ final class RDevGpuTunnel {
 
     void close() {
         closed = true;
+        reconnectGeneration++;
         if (ws != null) ws.close();
         clearStreams();
     }
 
     private void scheduleReconnect() {
-        final int delay = reconnectDelayMs;
+        final int generation = reconnectGeneration;
+        final int delay = jitterDelayMs(reconnectDelayMs);
         reconnectDelayMs = Math.min(30000, reconnectDelayMs * 2);
         new Thread(() -> {
             try { Thread.sleep(delay); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
-            if (!closed) connectOnce();
+            if (!closed && generation == reconnectGeneration) connectOnce();
         }, "rdev-tunnel-reconnect").start();
+    }
+
+    private int jitterDelayMs(int baseMs) {
+        int spread = Math.max(1, baseMs / 5);
+        return baseMs - spread + reconnectRandom.nextInt(spread * 2 + 1);
     }
 
     private void clearStreams() {

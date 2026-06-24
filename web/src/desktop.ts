@@ -56,6 +56,7 @@ document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n
     const gpuStoragePrefix = 'rdevGpuDesktop.';
     let ws = null, drawing = false, pendingFrame = null, deviceCache = [], lastCloseMessage = '', connectionSeq = 0, connectionMode = '', manualDisconnect = false;
     let frameCount = 0, frameBytes = 0, statsStartedAt = 0, lastFrameAt = 0, currentSource = '', remoteInput = false, resizeTimer = null, reconnectTimer = null, lastMouseSent = 0;
+    let gpuReconnectDelay = 1000;
     let gpuMediaSource = null, gpuSourceBuffer = null, gpuQueue = [], gpuLastPointer = new Map(), gpuHeldKeys = new Map();
     let gpuVideoDecoder = null, gpuVideoMode = 'mse', gpuNeedKeyFrame = false;
     let controlPreferenceSet = false;
@@ -258,6 +259,13 @@ document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n
         manualSettings.dataset.disabled = modeSelect.value === 'manual' ? 'false' : 'true';
     }
     function setStatus(text, cls = '') { statusEl.textContent = text; statusEl.className = 'status ' + cls; }
+    function resetGPUReconnectBackoff() { gpuReconnectDelay = 1000; }
+    function nextGPUReconnectDelay() {
+        const base = gpuReconnectDelay;
+        gpuReconnectDelay = Math.min(30000, gpuReconnectDelay * 2);
+        const spread = Math.max(1, Math.floor(base / 5));
+        return base - spread + Math.floor(Math.random() * (spread * 2 + 1));
+    }
     function resetFrameStats() {
         frameCount = 0; frameBytes = 0; statsStartedAt = 0; lastFrameAt = 0; currentSource = ''; frameInfo.textContent = '';
     }
@@ -330,6 +338,7 @@ document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n
         gpuCanvas.style.display = 'none';
         empty.style.display = 'flex';
         lastCloseMessage = '';
+        resetGPUReconnectBackoff();
         resetFrameStats();
         setStatus(t('desktop.closed'), 'warn');
     }
@@ -500,10 +509,11 @@ document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n
     }
     function scheduleGPUReconnect(device, connID) {
         if (manualDisconnect || connID !== connectionSeq || connectionMode !== 'gpu') return;
+        const delay = nextGPUReconnectDelay();
         clearTimeout(reconnectTimer);
         reconnectTimer = setTimeout(() => {
             if (!manualDisconnect && connID === connectionSeq && connectionMode === 'gpu') connectGPUDesktop(device, true);
-        }, 1500);
+        }, delay);
     }
     function connectGPUDesktop(device, reconnecting = false) {
         connectionMode = 'gpu';
@@ -523,7 +533,7 @@ document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n
         lastCloseMessage = '';
         ws.binaryType = 'arraybuffer';
         setStatus(reconnecting ? t('common.connecting') : t('common.connecting'));
-        ws.onopen = () => { if (connID !== connectionSeq) return; setStatus(t('desktop.starting')); gpuSend('GetCapturableList'); gpuSendConfig(); };
+        ws.onopen = () => { if (connID !== connectionSeq) return; resetGPUReconnectBackoff(); setStatus(t('desktop.starting')); gpuSend('GetCapturableList'); gpuSendConfig(); };
         ws.onerror = () => { if (connID !== connectionSeq) return; setStatus(t('common.error'), 'err'); };
         ws.onclose = () => { if (connID !== connectionSeq) return; ws = null; setStatus(lastCloseMessage || t('desktop.closed'), lastCloseMessage ? 'err' : 'warn'); scheduleGPUReconnect(device, connID); };
         ws.onmessage = evt => {

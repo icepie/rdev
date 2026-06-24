@@ -22,6 +22,7 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.IOException;
+import java.security.SecureRandom;
 import java.util.UUID;
 
 public class RDevAgentService extends Service {
@@ -45,7 +46,9 @@ public class RDevAgentService extends Service {
     private volatile boolean videoDemandActive;
     private volatile long suppressReconnectUntilMs;
     private int reconnectDelayMs = 1000;
+    private volatile int reconnectGeneration;
     private int captureStopGeneration;
+    private final SecureRandom reconnectRandom = new SecureRandom();
 
     @Override public void onCreate() {
         super.onCreate();
@@ -161,6 +164,7 @@ public class RDevAgentService extends Service {
 
     private void reconnectNow() {
         if (stopping) return;
+        reconnectGeneration++;
         reconnectDelayMs = 1000;
         suppressReconnectUntilMs = System.currentTimeMillis() + 5000;
         if (client != null) client.close();
@@ -172,6 +176,7 @@ public class RDevAgentService extends Service {
     }
 
     private void startWebSocket() {
+        final int generation = ++reconnectGeneration;
         SharedPreferences prefs = getSharedPreferences("rdev", MODE_PRIVATE);
         if (client != null) client.close();
         String server = prefs.getString("server", "wss://rdev.singzer.cn");
@@ -184,19 +189,25 @@ public class RDevAgentService extends Service {
             @Override public void onBinary(byte[] data) { handleBinary(data); }
             @Override public void onClosed(Exception error) {
                 Log.i(TAG, "websocket closed error=" + error);
-                if (!stopping && System.currentTimeMillis() >= suppressReconnectUntilMs) scheduleReconnect();
+                if (!stopping && generation == reconnectGeneration && System.currentTimeMillis() >= suppressReconnectUntilMs) scheduleReconnect();
             }
         });
         client.connect();
     }
 
     private void scheduleReconnect() {
-        final int delay = reconnectDelayMs;
+        final int generation = reconnectGeneration;
+        final int delay = jitterDelayMs(reconnectDelayMs);
         reconnectDelayMs = Math.min(30000, reconnectDelayMs * 2);
         new Thread(() -> {
             try { Thread.sleep(delay); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
-            if (!stopping) startWebSocket();
+            if (!stopping && generation == reconnectGeneration) startWebSocket();
         }, "rdev-agent-reconnect").start();
+    }
+
+    private int jitterDelayMs(int baseMs) {
+        int spread = Math.max(1, baseMs / 5);
+        return baseMs - spread + reconnectRandom.nextInt(spread * 2 + 1);
     }
 
     private void sendRegister() {

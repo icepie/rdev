@@ -2,6 +2,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
 };
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -63,6 +64,8 @@ async fn main() -> Result<()> {
     let gpu_tunnel_started = Arc::new(AtomicBool::new(false));
     let connect_printed = Arc::new(AtomicBool::new(false));
     let _rdev_desktop_service = rdev_desktop_service;
+    let mut reconnect_backoff =
+        ReconnectBackoff::new(args.reconnect_delay, Duration::from_secs(30));
 
     loop {
         match run_once(
@@ -75,11 +78,18 @@ async fn main() -> Result<()> {
         )
         .await
         {
-            Ok(()) => info!("connection closed"),
+            Ok(registered) => {
+                if registered {
+                    reconnect_backoff.reset();
+                }
+                info!("connection closed");
+            }
             Err(err) => warn!("connection failed: {err:#}"),
         }
+        let delay = reconnect_backoff.next();
+        info!("reconnecting in {:?}", delay);
         tokio::select! {
-            _ = tokio::time::sleep(args.reconnect_delay) => {},
+            _ = tokio::time::sleep(delay) => {},
             _ = tokio::signal::ctrl_c() => {
                 info!("shutdown requested");
                 break;
@@ -89,6 +99,53 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
+#[derive(Debug, Clone)]
+struct ReconnectBackoff {
+    min: Duration,
+    max: Duration,
+    current: Duration,
+}
+
+impl ReconnectBackoff {
+    fn new(min: Duration, max: Duration) -> Self {
+        let min = if min.is_zero() {
+            Duration::from_secs(1)
+        } else {
+            min
+        };
+        let max = if max < min { min } else { max };
+        Self {
+            min,
+            max,
+            current: min,
+        }
+    }
+
+    fn reset(&mut self) {
+        self.current = self.min;
+    }
+
+    fn next(&mut self) -> Duration {
+        let base = self.current;
+        self.current = self.current.saturating_mul(2).min(self.max);
+        jitter(base)
+    }
+}
+
+fn jitter(base: Duration) -> Duration {
+    let millis = base.as_millis();
+    if millis < 5 {
+        return base;
+    }
+    let spread = (millis / 5).max(1);
+    let seed = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let offset = seed % (spread * 2 + 1);
+    Duration::from_millis((millis - spread + offset) as u64)
+}
+
 async fn run_once(
     args: &Args,
     instance_id: &str,
@@ -96,7 +153,7 @@ async fn run_once(
     desktop_enabled: bool,
     gpu_tunnel_started: Arc<AtomicBool>,
     connect_printed: Arc<AtomicBool>,
-) -> Result<()> {
+) -> Result<bool> {
     let ws_url = websocket_url(&args.server)?;
     info!("connecting to {ws_url} as {}", args.id);
     let (ws, _) = connect_async(ws_url).await.context("connect websocket")?;
@@ -106,6 +163,7 @@ async fn run_once(
     let forwards = ForwardManager::new();
     let files = FileManager::new();
     let fileputs = FilePutManager::new();
+    let mut registered = false;
 
     let register = Message {
         ty: Some(MessageType::Register),
@@ -147,7 +205,9 @@ async fn run_once(
                             gpu_tunnel_started: gpu_tunnel_started.clone(),
                             connect_printed: connect_printed.clone(),
                         };
-                        handle_text(&text, runtime, &sessions, &forwards, &files, &out_tx).await?
+                        if handle_text(&text, runtime, &sessions, &forwards, &files, &out_tx).await? {
+                            registered = true;
+                        }
                     },
                     Some(Ok(WsMessage::Binary(raw))) => handle_binary(&raw, &sessions, &forwards, &files, &fileputs, &out_tx).await?,
                     Some(Ok(WsMessage::Close(frame))) => {
@@ -167,7 +227,7 @@ async fn run_once(
     forwards.close_all().await;
     files.close_all().await;
     fileputs.close_all().await;
-    Ok(())
+    Ok(registered)
 }
 
 async fn handle_text(
@@ -177,9 +237,10 @@ async fn handle_text(
     forwards: &ForwardManager,
     files: &FileManager,
     out_tx: &mpsc::Sender<OutboundEvent>,
-) -> Result<()> {
+) -> Result<bool> {
     let args = runtime.args;
     let msg = protocol::decode_message(text)?;
+    let is_register = matches!(msg.ty, Some(MessageType::Register));
     match msg.ty {
         Some(MessageType::Register) => {
             let registered_id = if msg.client_id.is_empty() {
@@ -247,7 +308,7 @@ async fn handle_text(
         }
         other => debug!("ignored message type: {:?}", other),
     }
-    Ok(())
+    Ok(is_register)
 }
 
 async fn handle_binary(
@@ -441,5 +502,22 @@ mod tests {
             parse_ws_host("ws://rdev.example.com:8080/path"),
             "rdev.example.com"
         );
+    }
+
+    #[test]
+    fn reconnect_backoff_caps_and_resets() {
+        let mut backoff = ReconnectBackoff::new(Duration::from_secs(1), Duration::from_secs(4));
+        let first = backoff.next();
+        assert!(first >= Duration::from_millis(800) && first <= Duration::from_millis(1200));
+
+        let second = backoff.next();
+        assert!(second >= Duration::from_millis(1600) && second <= Duration::from_millis(2400));
+
+        let capped = backoff.next();
+        assert!(capped >= Duration::from_millis(3200) && capped <= Duration::from_millis(4800));
+
+        backoff.reset();
+        let reset = backoff.next();
+        assert!(reset >= Duration::from_millis(800) && reset <= Duration::from_millis(1200));
     }
 }

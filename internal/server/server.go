@@ -27,7 +27,11 @@ var templateFS embed.FS
 
 const sessionHistoryLimit = 1024 * 1024
 
-const wsReadWait = 75 * time.Second
+const (
+	wsWriteWait  = 10 * time.Second
+	wsReadWait   = 75 * time.Second
+	wsPingPeriod = 25 * time.Second
+)
 
 var releaseDownloadMirrors = []string{
 	"gh.idayer.com",
@@ -68,6 +72,8 @@ func (c *ClientConn) Send(msg *protocol.Message) error {
 	}
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
+	_ = c.Conn.SetWriteDeadline(time.Now().Add(wsWriteWait))
+	defer c.Conn.SetWriteDeadline(time.Time{})
 	return c.Conn.WriteMessage(gws.OpcodeText, data)
 }
 
@@ -76,6 +82,8 @@ func (c *ClientConn) SendBinary(typ byte, id string, data []byte) error {
 	frame := protocol.EncodeBinFrame(typ, id, data)
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
+	_ = c.Conn.SetWriteDeadline(time.Now().Add(wsWriteWait))
+	defer c.Conn.SetWriteDeadline(time.Time{})
 	return c.Conn.WriteMessage(gws.OpcodeBinary, frame)
 }
 
@@ -84,6 +92,8 @@ func (c *ClientConn) SendFilePut(id, path string, mode int32, fileData []byte) e
 	frame := protocol.EncodeBinFilePut(id, path, mode, fileData)
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
+	_ = c.Conn.SetWriteDeadline(time.Now().Add(wsWriteWait))
+	defer c.Conn.SetWriteDeadline(time.Time{})
 	return c.Conn.WriteMessage(gws.OpcodeBinary, frame)
 }
 
@@ -91,6 +101,8 @@ func (c *ClientConn) SendFileStart(id, path string, mode int32) error {
 	frame := protocol.EncodeBinFileStart(id, path, mode)
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
+	_ = c.Conn.SetWriteDeadline(time.Now().Add(wsWriteWait))
+	defer c.Conn.SetWriteDeadline(time.Time{})
 	return c.Conn.WriteMessage(gws.OpcodeBinary, frame)
 }
 
@@ -98,6 +110,8 @@ func (c *ClientConn) SendFileChunk(id string, data []byte) error {
 	frame := protocol.EncodeBinFrame(protocol.BinFileChunk, id, data)
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
+	_ = c.Conn.SetWriteDeadline(time.Now().Add(wsWriteWait))
+	defer c.Conn.SetWriteDeadline(time.Time{})
 	return c.Conn.WriteMessage(gws.OpcodeBinary, frame)
 }
 
@@ -105,6 +119,8 @@ func (c *ClientConn) SendFileEnd(id string) error {
 	frame := protocol.EncodeBinFrame(protocol.BinFileEnd, id, nil)
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
+	_ = c.Conn.SetWriteDeadline(time.Now().Add(wsWriteWait))
+	defer c.Conn.SetWriteDeadline(time.Time{})
 	return c.Conn.WriteMessage(gws.OpcodeBinary, frame)
 }
 
@@ -112,7 +128,17 @@ func (c *ClientConn) SendBinaryOffset(typ byte, id string, offset int64, data []
 	frame := protocol.EncodeBinFrameOffset(typ, id, offset, data)
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
+	_ = c.Conn.SetWriteDeadline(time.Now().Add(wsWriteWait))
+	defer c.Conn.SetWriteDeadline(time.Time{})
 	return c.Conn.WriteMessage(gws.OpcodeBinary, frame)
+}
+
+func (c *ClientConn) SendPing() error {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	_ = c.Conn.SetWriteDeadline(time.Now().Add(wsWriteWait))
+	defer c.Conn.SetWriteDeadline(time.Time{})
+	return c.Conn.WritePing(nil)
 }
 
 // ProxySession represents a proxied SSH session (shell/exec/sftp)
@@ -531,7 +557,18 @@ func (h *wsHandler) OnOpen(socket *gws.Conn) {
 
 func (h *wsHandler) OnPing(socket *gws.Conn, payload []byte) {
 	_ = socket.SetDeadline(time.Now().Add(wsReadWait))
+	clientID, _ := socket.Session().Load("clientID")
+	if clientID == nil {
+		_ = socket.WritePong(payload)
+		return
+	}
+	client := h.srv.clientByID(clientID.(string))
+	if client == nil || client.Conn != socket {
+		return
+	}
+	client.writeMu.Lock()
 	_ = socket.WritePong(payload)
+	client.writeMu.Unlock()
 }
 
 func (h *wsHandler) OnPong(socket *gws.Conn, payload []byte) {
@@ -640,6 +677,7 @@ func (h *wsHandler) handleRegister(socket *gws.Conn, msg *protocol.Message) {
 		SSHPort:    h.srv.SSHPort,
 		HTTPHost:   h.srv.HTTPHost,
 	})
+	go h.srv.clientPingLoop(client)
 }
 
 func cloneDesktopCapabilities(caps *protocol.DesktopCapabilities) *protocol.DesktopCapabilities {
@@ -748,6 +786,20 @@ func (s *Server) unregisterClient(id string, conn *gws.Conn) (*ClientConn, bool)
 	}
 	delete(s.clients, id)
 	return client, true
+}
+
+func (s *Server) clientPingLoop(client *ClientConn) {
+	ticker := time.NewTicker(wsPingPeriod)
+	defer ticker.Stop()
+	for range ticker.C {
+		if current := s.clientByID(client.ID); current != client {
+			return
+		}
+		if err := client.SendPing(); err != nil {
+			_ = client.Conn.WriteClose(1001, []byte("ping failed"))
+			return
+		}
+	}
 }
 
 func sendBytes(ch chan []byte, data []byte, label string) {
