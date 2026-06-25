@@ -10,7 +10,10 @@ use serde::Deserialize;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
-    sync::{mpsc, watch},
+    sync::{
+        mpsc::{self, error::TrySendError},
+        watch,
+    },
     task::JoinHandle,
 };
 use tokio_tungstenite::{connect_async, tungstenite::Message as WsMessage};
@@ -26,6 +29,7 @@ const CHUNK_SIZE: usize = 64 * 1024;
 const TUNNEL_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const TUNNEL_PING_PERIOD: Duration = Duration::from_secs(25);
 const TUNNEL_READ_WAIT: Duration = Duration::from_secs(75);
+const TUNNEL_OUTBOUND_QUEUE: usize = 256;
 
 #[derive(Debug, Clone)]
 struct ReconnectBackoff {
@@ -151,7 +155,7 @@ async fn run_once(args: &Args, instance_id: &str) -> Result<()> {
         .context("gpu desktop tunnel websocket connect timed out")?
         .context("connect gpu desktop tunnel websocket")?;
     let (mut ws_write, mut ws_read) = ws.split();
-    let (out_tx, mut out_rx) = mpsc::channel::<TunnelFrame>(1024);
+    let (out_tx, mut out_rx) = mpsc::channel::<TunnelFrame>(TUNNEL_OUTBOUND_QUEUE);
     let mut streams: HashMap<u64, mpsc::Sender<Vec<u8>>> = HashMap::new();
     let mut ping_interval = tokio::time::interval(TUNNEL_PING_PERIOD);
     let mut last_control = Instant::now();
@@ -238,16 +242,17 @@ async fn proxy_stream(
             match reader.read(&mut buffer).await {
                 Ok(0) => break,
                 Ok(n) => {
-                    if reader_outbound
-                        .send(TunnelFrame {
-                            typ: FRAME_DATA,
-                            stream_id,
-                            payload: buffer[..n].to_vec(),
-                        })
-                        .await
-                        .is_err()
-                    {
-                        break;
+                    match reader_outbound.try_send(TunnelFrame {
+                        typ: FRAME_DATA,
+                        stream_id,
+                        payload: buffer[..n].to_vec(),
+                    }) {
+                        Ok(()) => {}
+                        Err(TrySendError::Full(_)) => {
+                            warn!("gpu desktop tunnel stream {stream_id} outbound queue full; closing stream");
+                            break;
+                        }
+                        Err(TrySendError::Closed(_)) => break,
                     }
                 }
                 Err(err) => {

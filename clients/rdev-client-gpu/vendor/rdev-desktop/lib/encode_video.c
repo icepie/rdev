@@ -158,6 +158,14 @@ void set_codec_params(VideoContext* ctx)
 		ctx->c->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
 }
 
+const char* env_or_default(const char* name, const char* default_value)
+{
+	const char* value = getenv(name);
+	if (value && value[0])
+		return value;
+	return default_value;
+}
+
 void destroy_scale_ctx(ScaleContext* ctx)
 {
 	avfilter_graph_free(&ctx->filter_graph_scale);
@@ -1134,7 +1142,9 @@ void open_video(VideoContext* ctx, Error* err)
 		ctx->c->pix_fmt = AV_PIX_FMT_YUV420P;
 		av_opt_set(ctx->c->priv_data, "preset", "ultrafast", 0);
 		av_opt_set(ctx->c->priv_data, "tune", "zerolatency", 0);
-		av_opt_set(ctx->c->priv_data, "crf", "23", 0);
+		av_opt_set(ctx->c->priv_data, "crf", env_or_default("RDEV_X264_CRF", "26"), 0);
+		av_opt_set(ctx->c->priv_data, "maxrate", env_or_default("RDEV_X264_MAXRATE", "8000k"), 0);
+		av_opt_set(ctx->c->priv_data, "bufsize", env_or_default("RDEV_X264_BUFSIZE", "12000k"), 0);
 		set_codec_params(ctx);
 
 		ret = avcodec_open2(ctx->c, codec, NULL);

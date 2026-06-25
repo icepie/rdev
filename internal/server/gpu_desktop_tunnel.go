@@ -26,6 +26,7 @@ const (
 	gpuDesktopTunnelFrameData  = byte(2)
 	gpuDesktopTunnelFrameClose = byte(3)
 	gpuDesktopTunnelChunkSize  = 64 * 1024
+	gpuDesktopTunnelSendQueue  = 256
 	gpuDesktopProxyPrefix      = "/gpu-desktop"
 )
 
@@ -141,7 +142,7 @@ func newGPUDesktopTunnel(deviceID string, conn *gws.Conn) *gpuDesktopTunnel {
 	return &gpuDesktopTunnel{
 		deviceID: deviceID,
 		conn:     conn,
-		send:     make(chan []byte, 256),
+		send:     make(chan []byte, gpuDesktopTunnelSendQueue),
 		streams:  make(map[uint64]*gpuDesktopStream),
 		closed:   make(chan struct{}),
 	}
@@ -289,6 +290,9 @@ func (t *gpuDesktopTunnel) sendFrame(frameType byte, streamID uint64, body []byt
 	select {
 	case t.send <- frame:
 		return true
+	default:
+		log.Printf("gpu desktop tunnel send queue full: device=%s stream=%d frame=%d bytes=%d", t.deviceID, streamID, frameType, len(body))
+		return false
 	case <-t.closed:
 		return false
 	}
