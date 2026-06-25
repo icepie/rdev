@@ -79,6 +79,12 @@ fn encoder_backends() -> Vec<String> {
     if cfg!(feature = "embedded-rdev-desktop-hw") {
         encoders.push("nvenc".to_string());
     }
+    if cfg!(target_os = "windows") {
+        encoders.push("mediafoundation".to_string());
+    }
+    if cfg!(target_os = "macos") {
+        encoders.push("videotoolbox".to_string());
+    }
     encoders
 }
 

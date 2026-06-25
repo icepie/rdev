@@ -81,7 +81,11 @@ pub struct Args {
     #[arg(
         long = "gpu-desktop-vaapi",
         env = "RDEV_GPU_DESKTOP_VAAPI",
-        default_value_t = cfg!(feature = "embedded-rdev-desktop-vaapi")
+        default_value_t = cfg!(feature = "embedded-rdev-desktop-vaapi"),
+        action = ArgAction::Set,
+        num_args = 0..=1,
+        default_missing_value = "true",
+        value_parser = parse_bool
     )]
     pub gpu_desktop_vaapi: bool,
 
@@ -89,28 +93,46 @@ pub struct Args {
     #[arg(
         long = "gpu-desktop-nvenc",
         env = "RDEV_GPU_DESKTOP_NVENC",
-        default_value_t = cfg!(feature = "embedded-rdev-desktop-hw")
+        default_value_t = cfg!(feature = "embedded-rdev-desktop-hw"),
+        action = ArgAction::Set,
+        num_args = 0..=1,
+        default_missing_value = "true",
+        value_parser = parse_bool
     )]
     pub gpu_desktop_nvenc: bool,
 
     #[cfg(target_os = "linux")]
     #[arg(
         long = "gpu-desktop-vulkan-video",
-        env = "RDEV_GPU_DESKTOP_VULKAN_VIDEO"
+        env = "RDEV_GPU_DESKTOP_VULKAN_VIDEO",
+        action = ArgAction::Set,
+        num_args = 0..=1,
+        default_missing_value = "true",
+        value_parser = parse_bool
     )]
     pub gpu_desktop_vulkan_video: bool,
 
     #[cfg(target_os = "macos")]
     #[arg(
         long = "gpu-desktop-videotoolbox",
-        env = "RDEV_GPU_DESKTOP_VIDEOTOOLBOX"
+        env = "RDEV_GPU_DESKTOP_VIDEOTOOLBOX",
+        default_value_t = true,
+        action = ArgAction::Set,
+        num_args = 0..=1,
+        default_missing_value = "true",
+        value_parser = parse_bool
     )]
     pub gpu_desktop_videotoolbox: bool,
 
     #[cfg(target_os = "windows")]
     #[arg(
         long = "gpu-desktop-mediafoundation",
-        env = "RDEV_GPU_DESKTOP_MEDIAFOUNDATION"
+        env = "RDEV_GPU_DESKTOP_MEDIAFOUNDATION",
+        default_value_t = true,
+        action = ArgAction::Set,
+        num_args = 0..=1,
+        default_missing_value = "true",
+        value_parser = parse_bool
     )]
     pub gpu_desktop_mediafoundation: bool,
 
@@ -160,6 +182,7 @@ pub fn parse_bool(value: &str) -> Result<bool, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clap::Parser;
 
     #[test]
     fn parses_duration_units() {
@@ -188,5 +211,22 @@ mod tests {
         assert!(!parse_bool("false").unwrap());
         assert!(!parse_bool("0").unwrap());
         assert!(parse_bool("maybe").is_err());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn parses_optional_bool_flags() {
+        let args = Args::parse_from(["rdev-client-gpu", "--gpu-desktop-vulkan-video"]);
+        assert!(args.gpu_desktop_vulkan_video);
+
+        let args = Args::parse_from([
+            "rdev-client-gpu",
+            "--gpu-desktop-vaapi=false",
+            "--gpu-desktop-nvenc=false",
+            "--gpu-desktop-vulkan-video=false",
+        ]);
+        assert!(!args.gpu_desktop_vaapi);
+        assert!(!args.gpu_desktop_nvenc);
+        assert!(!args.gpu_desktop_vulkan_video);
     }
 }

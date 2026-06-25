@@ -48,6 +48,11 @@ jobs:
       - name: Test
         run: cargo test
 
+      - name: Check embedded desktop encoders
+        run: |
+          cargo check --features embedded-rdev-desktop
+          cargo check --features embedded-rdev-desktop-wayland
+
       - name: Smoke test
         working-directory: .
         run: |
