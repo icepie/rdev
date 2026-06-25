@@ -30,7 +30,6 @@ use tracing_subscriber::EnvFilter;
 
 struct ClientRuntime<'a> {
     args: &'a Args,
-    instance_id: &'a str,
     server_host: &'a str,
     desktop_enabled: bool,
     gpu_tunnel_device_tx: &'a watch::Sender<Option<String>>,
@@ -206,7 +205,6 @@ async fn run_once(
                     Some(Ok(WsMessage::Text(text))) => {
                         let runtime = ClientRuntime {
                             args,
-                            instance_id,
                             server_host,
                             desktop_enabled,
                             gpu_tunnel_device_tx,

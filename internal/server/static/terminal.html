@@ -51,8 +51,11 @@
         .tab-dot.disconnected { background: var(--red); }
         .tab-dot.authing { background: var(--yellow); }
         .terminal-panes { flex: 1; position: relative; overflow: hidden; min-height: 0; }
-        .terminal-pane { position: absolute; inset: 0; padding: 4px; display: none; touch-action: manipulation; }
-        .terminal-pane.active { display: block; }
+        .terminal-pane { position: absolute; inset: 0; padding: 4px; visibility: hidden; pointer-events: none; touch-action: manipulation; }
+        .terminal-pane.active { visibility: visible; pointer-events: auto; }
+        .terminal-pane > .xterm { width: 100%; height: 100%; }
+        .terminal-pane .xterm-screen, .terminal-pane .xterm-viewport { box-sizing: content-box; }
+        .terminal-pane .xterm-screen canvas { display: block; }
         .mobile-keys { display: none; flex-shrink: 0; gap: 6px; padding: 6px 8px; background: var(--card); border-top: 1px solid var(--border); overflow-x: auto; -webkit-overflow-scrolling: touch; }
         .mobile-keys button { min-width: 44px; min-height: 34px; padding: 6px 10px; border-radius: 7px; border: 1px solid var(--border); background: var(--bg); color: var(--text); font-size: 0.8rem; }
 
@@ -133,15 +136,17 @@
     const FitAddon = window.FitAddon;
     const WebLinksAddon = window.WebLinksAddon;
     const WebglAddon = window.AddonWebgl?.WebglAddon;
+    const enableTerminalWebgl = localStorage.getItem('rdevTerminal.webgl') === 'true';
 
     document.querySelectorAll('[data-auth-link]').forEach(a => a.href = authURL(a.getAttribute('href')));
 
     let tabs = [], activeTabId = null, tabCounter = 0;
+    const terminalInputEncoder = new TextEncoder();
     RDevUI.setSelectOptions(document.getElementById('device-select'), [{ value: '', label: t('terminal.devicePlaceholder') }], '');
     function activeTab() { return tabs.find(t => t.id === activeTabId); }
     function sendTerminalData(tab, data) {
         if (tab && tab.ws && tab.ws.readyState === WebSocket.OPEN && !tab.needAuth) {
-            tab.ws.send(new TextEncoder().encode(data));
+            tab.ws.send(terminalInputEncoder.encode(data));
         }
     }
     function prepareTerminalInput(tab) {
@@ -186,6 +191,8 @@
             cursorBlink: true, fontSize: 14,
             convertEol: true,
             fontFamily: "'SF Mono','Fira Code','Cascadia Code',Menlo,Monaco,monospace",
+            lineHeight: 1.12,
+            letterSpacing: 0,
             theme: {
                 background: '#0f1117', foreground: '#e4e4e7',
                 cursor: '#22d3ee', cursorAccent: '#0f1117',
@@ -209,8 +216,8 @@
         document.getElementById('terminal-panes').appendChild(pane);
         term.open(pane);
 
-        // Try GPU (WebGL) renderer, fallback gracefully
-        if (WebglAddon) {
+        // Canvas is the default because it is more stable across font/DPR changes.
+        if (enableTerminalWebgl && WebglAddon) {
             try {
                 const webgl = new WebglAddon();
                 webgl.onContextLoss(() => { webgl.dispose(); });
@@ -218,9 +225,9 @@
             } catch(e) { /* fallback to canvas is automatic */ }
         }
 
-        fitAddon.fit();
+        refreshTerminalLayout({ term, fitAddon });
 
-        const tab = { id, deviceId: deviceID, ws: null, term, fitAddon, imageAddon, imageWriter: RDevTerminalImages.create(term), status: 'disconnected', needAuth: false };
+        const tab = { id, deviceId: deviceID, ws: null, term, fitAddon, imageAddon, imageWriter: RDevTerminalImages.create(term), decoder: new TextDecoder(), status: 'disconnected', needAuth: false };
         tabs.push(tab);
         prepareTerminalInput(tab);
         connectTab(tab);
@@ -273,16 +280,37 @@
         if (overlay) overlay.remove();
     }
 
+    function hasTerminalImageSequence(data) {
+        const bytes = data instanceof Uint8Array ? data : new Uint8Array(data);
+        for (let i = 0; i + 2 < bytes.length; i++) {
+            if (bytes[i] !== 0x1b) continue;
+            if (bytes[i + 1] === 0x50 && bytes[i + 2] === 0x71) return true; // ESC P q (SIXEL)
+            if (bytes[i + 1] === 0x5f && bytes[i + 2] === 0x47) return true; // ESC _ G (Kitty)
+            if (i + 12 < bytes.length && bytes[i + 1] === 0x5d) {
+                const marker = [49, 51, 51, 55, 59, 70, 105, 108, 101, 61]; // 1337;File=
+                let ok = true;
+                for (let j = 0; j < marker.length; j++) {
+                    if (bytes[i + 2 + j] !== marker[j]) { ok = false; break; }
+                }
+                if (ok) return true;
+            }
+        }
+        return false;
+    }
+
     function handleTerminalBytes(tab, data) {
         removeAuthOverlay(tab);
-        tab.status = 'connected'; renderTabs();
-        const text = new TextDecoder().decode(data);
-        if (/\x1b(?:Pq|]1337;File=|_G)/.test(text) && tab.imageWriter) tab.imageWriter.write(data);
-        else tab.term.write(text);
+        if (tab.status !== 'connected') {
+            tab.status = 'connected';
+            renderTabs();
+        }
+        if (hasTerminalImageSequence(data) && tab.imageWriter) tab.imageWriter.write(data);
+        else tab.term.write(tab.decoder.decode(data, { stream: true }));
     }
 
     function connectTab(tab) {
         if (tab.ws) { tab.ws.close(); tab.ws = null; }
+        tab.decoder = new TextDecoder();
         tab.status = 'connecting'; tab.needAuth = false; tab.term.reset(); renderTabs();
 
         const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -315,7 +343,6 @@
                 removeAuthOverlay(tab);
                 tab.needAuth = false;
                 tab.status = 'connected'; tab.term.focus(); renderTabs();
-                try { tab.fitAddon.fit(); } catch(e) {}
                 doResize(tab);
             } else if (msg.op === 'auth_fail') {
                 RDevUI.forgetDevicePassword(tab.deviceId);
@@ -360,14 +387,29 @@
         });
     }
 
-    function doResize(tab) { try { tab.fitAddon.fit(); } catch(e) {} }
+    function refreshTerminalLayout(tab) {
+        if (!tab) return;
+        const fit = () => {
+            try { tab.fitAddon.fit(); } catch(e) {}
+            try { tab.term.clearTextureAtlas(); } catch(e) {}
+            try { tab.term.refresh(0, Math.max(0, tab.term.rows - 1)); } catch(e) {}
+        };
+        fit();
+        requestAnimationFrame(fit);
+    }
+
+    function doResize(tab) {
+        const pane = tab ? document.getElementById('pane-' + tab.id) : null;
+        if (pane && (pane.clientWidth === 0 || pane.clientHeight === 0)) return;
+        refreshTerminalLayout(tab);
+    }
 
     function switchTab(id) {
         activeTabId = id;
         tabs.forEach(t => {
             const pane = document.getElementById('pane-' + t.id);
             if (pane) pane.classList.toggle('active', t.id === id);
-            if (t.id === id) { try { t.fitAddon.fit(); } catch(e) {} setTimeout(() => t.term.focus(), 0); }
+            if (t.id === id) { refreshTerminalLayout(t); setTimeout(() => t.term.focus(), 0); }
         });
         renderTabs();
     }
@@ -443,6 +485,9 @@
     if (window.visualViewport) {
         visualViewport.addEventListener('resize', () => scheduleActiveResize(80));
         visualViewport.addEventListener('scroll', () => scheduleActiveResize(80));
+    }
+    if (document.fonts?.ready) {
+        document.fonts.ready.then(() => scheduleActiveResize(0)).catch(() => {});
     }
 
     const params = new URLSearchParams(location.search);

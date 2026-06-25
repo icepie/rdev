@@ -86,6 +86,25 @@ function Expand-ZipLegacy([string]$Zip, [string]$Dest) {
     return $false
 }
 
+function Test-RDevPackage([string]$Path, [string]$PackageKind) {
+    $f = Get-Item $Path -EA SilentlyContinue
+    if (-not $f -or $f.Length -le 0) { return $false }
+    if ($PackageKind -ne 'zip') { return $true }
+    try {
+        Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction Stop
+        $zip = [System.IO.Compression.ZipFile]::OpenRead($Path)
+        try {
+            foreach ($entry in $zip.Entries) {
+                if ($entry.FullName -match '(^|/)rdev-client-gpu\.exe$') { return $true }
+            }
+        } finally {
+            $zip.Dispose()
+        }
+    } catch {}
+    Write-Host "  Downloaded package does not contain rdev-client-gpu.exe" -ForegroundColor DarkGray
+    return $false
+}
+
 function Install-WinPTYIfLegacy([string]$Arch, [string]$Mirror) {
     if ((Get-WindowsMajorVersion) -ge 10) { return '' }
     $Dll = Join-Path $script:WinPTYDir 'winpty.dll'
@@ -252,8 +271,7 @@ function global:RDev {
     if ($ProxyUrl) {
         Write-Host "  Trying RDev server proxy..." -ForegroundColor DarkGray
         if (Dl $ProxyUrl $OutPath) {
-            $f = Get-Item $OutPath -EA SilentlyContinue
-            if ($f -and $f.Length -gt 0) { $OK = $true; Write-Host "  OK via RDev server proxy" -ForegroundColor Green }
+            if (Test-RDevPackage $OutPath $PackageKind) { $OK = $true; Write-Host "  OK via RDev server proxy" -ForegroundColor Green }
         }
         if (-not $OK) { Remove-Item $OutPath -Force -EA SilentlyContinue }
     }
@@ -262,16 +280,14 @@ function global:RDev {
         foreach ($M in $script:Mirrors) {
             Write-Host "  Trying $M..." -ForegroundColor DarkGray
             if (Dl (Convert-RDevMirrorUrl $M $GH_URL) $OutPath) {
-                $f = Get-Item $OutPath -EA SilentlyContinue
-                if ($f -and $f.Length -gt 0) { $OK = $true; Write-Host "  OK via $M" -ForegroundColor Green; break }
+                if (Test-RDevPackage $OutPath $PackageKind) { $OK = $true; Write-Host "  OK via $M" -ForegroundColor Green; break }
             }
             Remove-Item $OutPath -Force -EA SilentlyContinue
         }
     } elseif ($Mirror -ne 'none' -and $Mirror -ne '' -and -not $OK) {
         Write-Host "  Trying $Mirror..." -ForegroundColor DarkGray
         if (Dl (Convert-RDevMirrorUrl $Mirror $GH_URL) $OutPath) {
-            $f = Get-Item $OutPath -EA SilentlyContinue
-            if ($f -and $f.Length -gt 0) { $OK = $true; Write-Host "  OK via $Mirror" -ForegroundColor Green }
+            if (Test-RDevPackage $OutPath $PackageKind) { $OK = $true; Write-Host "  OK via $Mirror" -ForegroundColor Green }
         }
         if (-not $OK) { Remove-Item $OutPath -Force -EA SilentlyContinue }
     }
@@ -279,8 +295,7 @@ function global:RDev {
     if (-not $OK) {
         Write-Host "  Trying github.com..." -ForegroundColor DarkGray
         if (Dl $GH_URL $OutPath) {
-            $f = Get-Item $OutPath -EA SilentlyContinue
-            if ($f -and $f.Length -gt 0) { $OK = $true; Write-Host "  OK via github.com" -ForegroundColor Green }
+            if (Test-RDevPackage $OutPath $PackageKind) { $OK = $true; Write-Host "  OK via github.com" -ForegroundColor Green }
         }
     }
 
