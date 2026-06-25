@@ -23,6 +23,18 @@ const (
 	mouseEventWheel      = 0x0800
 	mouseEventHWheel     = 0x01000
 	keyEventKeyUp        = 0x0002
+	maxTouchContacts     = 8
+
+	pointerFlagInRange   = 0x00000002
+	pointerFlagInContact = 0x00000004
+	pointerFlagDown      = 0x00010000
+	pointerFlagUpdate    = 0x00020000
+	pointerFlagUp        = 0x00040000
+
+	touchMaskContactArea = 0x00000001
+	touchMaskOrientation = 0x00000002
+	touchMaskPressure    = 0x00000004
+	touchFeedbackDefault = 0x00000001
 )
 
 var (
@@ -38,7 +50,7 @@ type windowsDesktopInput struct {
 }
 
 type windowsTouchInput struct {
-	active map[uint32]bool
+	active map[int]uint32
 }
 
 type pointerInfo struct {
@@ -142,36 +154,31 @@ func newWindowsTouchInput() (*windowsTouchInput, error) {
 	if !windowsTouchInjectionAvailable() {
 		return nil, fmt.Errorf("Windows touch injection is unavailable")
 	}
-	r1, _, err := procInitializeTouchInjection.Call(8, 0)
+	r1, _, err := procInitializeTouchInjection.Call(maxTouchContacts, touchFeedbackDefault)
 	if r1 == 0 {
 		return nil, fmt.Errorf("InitializeTouchInjection failed: %w", err)
 	}
-	return &windowsTouchInput{active: make(map[uint32]bool)}, nil
+	return &windowsTouchInput{active: make(map[int]uint32)}, nil
 }
 
 func (t *windowsTouchInput) Apply(event desktopInputEvent) error {
-	pointerID := uint32(event.PointerID)
-	if pointerID == 0 {
-		pointerID = 1
+	pointerID, ok := t.touchPointerID(event)
+	if !ok {
+		return nil
 	}
-	flags := uint32(0x00000002)
+	flags := uint32(pointerFlagInRange)
 	switch event.Type {
 	case "mouse_down":
-		flags |= 0x00010000 | 0x00000004
-		t.active[pointerID] = true
+		flags |= pointerFlagDown | pointerFlagInContact
 	case "mouse_move":
-		flags |= 0x00020000
-		if t.active[pointerID] {
-			flags |= 0x00000004
-		}
+		flags |= pointerFlagUpdate | pointerFlagInContact
 	case "mouse_up":
-		flags |= 0x00040000
-		delete(t.active, pointerID)
+		flags |= pointerFlagUp
 	default:
 		return nil
 	}
 	pressure := uint32(event.Pressure * 1024)
-	if pressure == 0 && flags&0x00000004 != 0 {
+	if pressure == 0 && flags&pointerFlagInContact != 0 {
 		pressure = 512
 	}
 	if pressure > 1024 {
@@ -180,17 +187,54 @@ func (t *windowsTouchInput) Apply(event desktopInputEvent) error {
 	contact := winRect{Left: int32(event.X - 2), Top: int32(event.Y - 2), Right: int32(event.X + 2), Bottom: int32(event.Y + 2)}
 	info := pointerTouchInfo{
 		PointerInfo: pointerInfo{PointerType: 2, PointerID: pointerID, PointerFlags: flags, PtPixelLocation: winPoint{X: int32(event.X), Y: int32(event.Y)}},
-		TouchMask:   0x00000001 | 0x00000002 | 0x00000004,
+		TouchMask:   touchMaskContactArea | touchMaskOrientation | touchMaskPressure,
 		Contact:     contact,
 		ContactRaw:  contact,
 		Orientation: 90,
 		Pressure:    pressure,
 	}
 	r1, _, err := procInjectTouchInput.Call(1, uintptr(unsafe.Pointer(&info)))
+	if event.Type == "mouse_up" {
+		delete(t.active, normalizedPointerKey(event.PointerID))
+	}
 	if r1 == 0 {
+		if event.Type == "mouse_down" {
+			delete(t.active, normalizedPointerKey(event.PointerID))
+		}
 		return fmt.Errorf("InjectTouchInput failed: %w", err)
 	}
 	return nil
+}
+
+func (t *windowsTouchInput) touchPointerID(event desktopInputEvent) (uint32, bool) {
+	key := normalizedPointerKey(event.PointerID)
+	if id, ok := t.active[key]; ok {
+		return id, true
+	}
+	if event.Type != "mouse_down" {
+		return 0, false
+	}
+	for id := uint32(1); id <= maxTouchContacts; id++ {
+		used := false
+		for _, activeID := range t.active {
+			if activeID == id {
+				used = true
+				break
+			}
+		}
+		if !used {
+			t.active[key] = id
+			return id, true
+		}
+	}
+	return 0, false
+}
+
+func normalizedPointerKey(pointerID int) int {
+	if pointerID == 0 {
+		return 1
+	}
+	return pointerID
 }
 
 func setCursorPos(x, y int) {
