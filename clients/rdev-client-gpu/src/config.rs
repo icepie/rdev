@@ -1,12 +1,16 @@
-use clap::Parser;
+use clap::{ArgAction, Parser};
 
 #[derive(Debug, Clone, Parser)]
 #[command(
     name = "rdev-client-gpu",
-    version,
+    version = crate::version::VERSION,
+    disable_version_flag = true,
     about = "GPU-ready RDev client skeleton"
 )]
 pub struct Args {
+    #[arg(short = 'v', long = "version", action = ArgAction::SetTrue)]
+    pub version: bool,
+
     #[arg(
         short = 's',
         long = "server",

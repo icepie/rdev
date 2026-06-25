@@ -237,6 +237,7 @@ jobs:
           RDEV_GPU_TARGET: ${{ matrix.target }}
           RDEV_GPU_ARCH: ${{ matrix.arch }}
           RDEV_GPU_RUST_TOOLCHAIN: stable
+          RDEV_VERSION: ${{ github.ref_name }}
           TMPDIR: /tmp
         run: |
           set -euo pipefail
@@ -260,6 +261,7 @@ jobs:
               -e RDEV_GPU_TARGET \
               -e RDEV_GPU_ARCH \
               -e RDEV_GPU_RUST_TOOLCHAIN \
+              -e RDEV_VERSION \
               -e TMPDIR \
               -e RDEV_GPU_ASSET="$asset" \
               -e RDEV_GPU_FEATURES="$features" \
@@ -281,12 +283,15 @@ jobs:
 
       - name: Build Android Termux release
         if: matrix.android == true
+        env:
+          RDEV_VERSION: ${{ github.ref_name }}
         run: cargo build --release --target ${{ matrix.target }}
 
       - name: Build embedded desktop release
         if: matrix.package_linux != true && matrix.android != true
         env:
           MACOSX_DEPLOYMENT_TARGET: ${{ matrix.deployment_target }}
+          RDEV_VERSION: ${{ github.ref_name }}
         run: cargo build --release --features embedded-rdev-desktop --target ${{ matrix.target }}
 
       - name: Stage artifact

@@ -10,5 +10,6 @@ pub mod protocol;
 pub mod rdev_desktop_service;
 pub mod session;
 pub mod sftp;
+pub mod version;
 #[cfg(windows)]
 pub mod winpty;

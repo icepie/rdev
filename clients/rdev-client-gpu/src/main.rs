@@ -21,6 +21,7 @@ use rdev_client_gpu::{
     },
     rdev_desktop_service,
     session::{OutboundEvent, SessionManager},
+    version,
 };
 use tokio::sync::mpsc;
 use tokio::sync::watch;
@@ -47,6 +48,10 @@ async fn main() -> Result<()> {
         .init();
 
     let mut args = Args::parse();
+    if args.version {
+        println!("{}", version::VERSION);
+        return Ok(());
+    }
     if args.id.trim().is_empty() {
         args.id = default_device_id();
     }
@@ -175,7 +180,7 @@ async fn run_once(
         ty: Some(MessageType::Register),
         client_id: args.id.clone(),
         instance_id: instance_id.to_string(),
-        client_version: format!("rs/{}", env!("CARGO_PKG_VERSION")),
+        client_version: version::client_version(),
         password: args.password.clone(),
         desktop: Some(desktop::capabilities(!args.no_desktop && desktop_enabled)),
         ..Default::default()
