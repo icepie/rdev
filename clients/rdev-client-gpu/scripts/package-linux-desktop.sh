@@ -242,7 +242,6 @@ chmod +x "$DIST_DIR/rdev-client-gpu"
   echo "native_dist_suffix=$RDEV_DESKTOP_DIST_SUFFIX"
   echo "enable_vaapi=$ENABLE_VAAPI"
   echo "enable_nvenc=$ENABLE_NVENC"
-  echo "default_hw_encoder=vaapi when embedded-rdev-desktop-vaapi is enabled"
   if command -v ldd >/dev/null 2>&1; then
     echo
     echo "ldd:"

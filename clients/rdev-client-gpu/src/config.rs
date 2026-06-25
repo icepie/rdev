@@ -81,7 +81,7 @@ pub struct Args {
     #[arg(
         long = "gpu-desktop-vaapi",
         env = "RDEV_GPU_DESKTOP_VAAPI",
-        default_value_t = cfg!(feature = "embedded-rdev-desktop-vaapi"),
+        default_value_t = false,
         action = ArgAction::Set,
         num_args = 0..=1,
         default_missing_value = "true",
