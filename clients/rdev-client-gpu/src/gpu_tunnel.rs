@@ -1,4 +1,8 @@
-use std::{collections::HashMap, net::SocketAddr, time::Duration};
+use std::{
+    collections::HashMap,
+    net::SocketAddr,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+};
 
 use anyhow::{anyhow, Context, Result};
 use futures_util::{SinkExt, StreamExt};
@@ -7,6 +11,7 @@ use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
     sync::mpsc,
+    task::JoinHandle,
 };
 use tokio_tungstenite::{connect_async, tungstenite::Message as WsMessage};
 use tracing::{debug, info, warn};
@@ -19,6 +24,55 @@ const FRAME_DATA: u8 = 2;
 const FRAME_CLOSE: u8 = 3;
 const CHUNK_SIZE: usize = 64 * 1024;
 const TUNNEL_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+const TUNNEL_PING_PERIOD: Duration = Duration::from_secs(25);
+const TUNNEL_READ_WAIT: Duration = Duration::from_secs(75);
+
+#[derive(Debug, Clone)]
+struct ReconnectBackoff {
+    min: Duration,
+    max: Duration,
+    current: Duration,
+}
+
+impl ReconnectBackoff {
+    fn new(min: Duration, max: Duration) -> Self {
+        let min = if min.is_zero() {
+            Duration::from_secs(1)
+        } else {
+            min
+        };
+        let max = if max < min { min } else { max };
+        Self {
+            min,
+            max,
+            current: min,
+        }
+    }
+
+    fn reset(&mut self) {
+        self.current = self.min;
+    }
+
+    fn next(&mut self) -> Duration {
+        let base = self.current;
+        self.current = self.current.saturating_mul(2).min(self.max);
+        jitter(base)
+    }
+}
+
+fn jitter(base: Duration) -> Duration {
+    let millis = base.as_millis();
+    if millis < 5 {
+        return base;
+    }
+    let spread = (millis / 5).max(1);
+    let seed = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let offset = seed % (spread * 2 + 1);
+    Duration::from_millis((millis - spread + offset) as u64)
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -33,18 +87,21 @@ struct TunnelFrame {
     payload: Vec<u8>,
 }
 
-pub fn spawn(args: Args, instance_id: String, local_desktop_ready: bool) {
+pub fn spawn(args: Args, instance_id: String, local_desktop_ready: bool) -> Option<JoinHandle<()>> {
     if args.no_desktop || args.no_gpu_desktop_tunnel || !local_desktop_ready {
-        return;
+        return None;
     }
-    tokio::spawn(async move {
+    Some(tokio::spawn(async move {
+        let mut backoff = ReconnectBackoff::new(args.reconnect_delay, Duration::from_secs(30));
         loop {
             if let Err(err) = run_once(&args, &instance_id).await {
                 warn!("gpu desktop tunnel disconnected: {err:#}");
+            } else {
+                backoff.reset();
             }
-            tokio::time::sleep(args.reconnect_delay.max(Duration::from_secs(1))).await;
+            tokio::time::sleep(backoff.next()).await;
         }
-    });
+    }))
 }
 
 async fn run_once(args: &Args, instance_id: &str) -> Result<()> {
@@ -61,6 +118,8 @@ async fn run_once(args: &Args, instance_id: &str) -> Result<()> {
     let (mut ws_write, mut ws_read) = ws.split();
     let (out_tx, mut out_rx) = mpsc::channel::<TunnelFrame>(1024);
     let mut streams: HashMap<u64, mpsc::Sender<Vec<u8>>> = HashMap::new();
+    let mut ping_interval = tokio::time::interval(TUNNEL_PING_PERIOD);
+    let mut last_control = Instant::now();
 
     loop {
         tokio::select! {
@@ -68,9 +127,16 @@ async fn run_once(args: &Args, instance_id: &str) -> Result<()> {
                 let Some(frame) = outbound else { break; };
                 ws_write.send(WsMessage::Binary(encode_frame(frame.typ, frame.stream_id, &frame.payload).into())).await?;
             }
+            _ = ping_interval.tick() => {
+                if last_control.elapsed() > TUNNEL_READ_WAIT {
+                    return Err(anyhow!("gpu desktop tunnel pong timeout"));
+                }
+                ws_write.send(WsMessage::Ping(b"rdev".to_vec().into())).await?;
+            }
             inbound = ws_read.next() => {
                 match inbound {
                     Some(Ok(WsMessage::Binary(raw))) => {
+                        last_control = Instant::now();
                         let frame = decode_frame(&raw)?;
                         match frame.typ {
                             FRAME_OPEN => {
@@ -91,8 +157,13 @@ async fn run_once(args: &Args, instance_id: &str) -> Result<()> {
                             other => debug!("ignored gpu desktop tunnel frame type={other}"),
                         }
                     }
-                    Some(Ok(WsMessage::Ping(payload))) => ws_write.send(WsMessage::Pong(payload)).await?,
-                    Some(Ok(WsMessage::Pong(_))) => {}
+                    Some(Ok(WsMessage::Ping(payload))) => {
+                        last_control = Instant::now();
+                        ws_write.send(WsMessage::Pong(payload)).await?;
+                    }
+                    Some(Ok(WsMessage::Pong(_))) => {
+                        last_control = Instant::now();
+                    }
                     Some(Ok(WsMessage::Close(frame))) => return Err(anyhow!("gpu desktop tunnel closed by server: {frame:?}")),
                     Some(Ok(WsMessage::Text(_))) | Some(Ok(WsMessage::Frame(_))) => {}
                     Some(Err(err)) => return Err(err.into()),
@@ -229,5 +300,19 @@ mod tests {
         assert_eq!(decoded.typ, FRAME_DATA);
         assert_eq!(decoded.stream_id, 42);
         assert_eq!(decoded.payload, b"hello");
+    }
+
+    #[test]
+    fn reconnect_backoff_caps_and_resets() {
+        let mut backoff = ReconnectBackoff::new(Duration::from_secs(1), Duration::from_secs(4));
+        let first = backoff.next();
+        assert!(first >= Duration::from_millis(800) && first <= Duration::from_millis(1200));
+        let second = backoff.next();
+        assert!(second >= Duration::from_millis(1600) && second <= Duration::from_millis(2400));
+        let capped = backoff.next();
+        assert!(capped >= Duration::from_millis(3200) && capped <= Duration::from_millis(4800));
+        backoff.reset();
+        let reset = backoff.next();
+        assert!(reset >= Duration::from_millis(800) && reset <= Duration::from_millis(1200));
     }
 }
