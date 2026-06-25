@@ -105,6 +105,7 @@ pub struct Args {
     #[arg(
         long = "gpu-desktop-vulkan-video",
         env = "RDEV_GPU_DESKTOP_VULKAN_VIDEO",
+        default_value_t = false,
         action = ArgAction::Set,
         num_args = 0..=1,
         default_missing_value = "true",
