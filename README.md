@@ -83,12 +83,13 @@ curl -sL https://rdev.singzer.cn/run.sh | sh -s -- wss://rdev.singzer.cn -p secr
 
 ### 自动更新
 
-客户端和服务端默认启用自动更新：启动 1 分钟后开始检查 GitHub latest release，之后每 1 分钟轮询一次。发现新版本后会下载当前平台/架构对应资产，使用 `github.com/minio/selfupdate` 替换当前二进制并重启进程。
+客户端和服务端默认启用自动更新：启动 1 分钟后开始检查 GitHub latest release，之后每 1 分钟轮询一次。Go 客户端/服务端发现新版本后会下载当前平台/架构对应资产，使用 `github.com/minio/selfupdate` 替换当前二进制并重启进程。Rust GPU 客户端同样支持 `--no-auto-update`、`--auto-update`、`--update-interval` 和 `RDEV_UPDATE_PROXY`，会下载对应 `rdev-client-gpu-*` 归档并替换当前可执行文件；归档内的 DLL/sidecar 仍由安装脚本或服务包装器负责部署。
 
 ```bash
 # 禁用自动更新
 ./rdev-server --no-auto-update
 ./rdev-client -s ws://your-server:8080 --no-auto-update
+./rdev-client-gpu -s ws://your-server:8080 --no-auto-update
 
 # 调整检查间隔
 ./rdev-server --update-interval 10m

@@ -21,7 +21,7 @@ use rdev_client_gpu::{
     },
     rdev_desktop_service,
     session::{OutboundEvent, SessionManager},
-    version,
+    updater, version,
 };
 use tokio::sync::mpsc;
 use tokio::sync::watch;
@@ -57,6 +57,11 @@ async fn main() -> Result<()> {
     }
     args.server = normalize_server_url(&args.server);
     print_startup_summary(&args);
+    updater::start(updater::Config {
+        version: version::VERSION,
+        enabled: args.auto_update && !args.no_auto_update,
+        interval: args.update_interval,
+    });
 
     desktop_env::prepare(&mut args);
     let instance_id = args.instance_id.clone().unwrap_or_else(new_instance_id);

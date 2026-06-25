@@ -39,6 +39,15 @@ pub struct Args {
     #[arg(long = "reconnect-delay", env = "RDEV_RECONNECT_DELAY", default_value = "2s", value_parser = parse_duration)]
     pub reconnect_delay: std::time::Duration,
 
+    #[arg(long = "no-auto-update", env = "RDEV_NO_AUTO_UPDATE")]
+    pub no_auto_update: bool,
+
+    #[arg(long = "auto-update", env = "RDEV_AUTO_UPDATE", default_value = "true", value_parser = parse_bool)]
+    pub auto_update: bool,
+
+    #[arg(long = "update-interval", env = "RDEV_UPDATE_INTERVAL", default_value = "1m", value_parser = parse_duration)]
+    pub update_interval: std::time::Duration,
+
     #[arg(long = "no-desktop", env = "RDEV_NO_DESKTOP")]
     pub no_desktop: bool,
 
@@ -140,6 +149,14 @@ pub fn parse_duration(value: &str) -> Result<std::time::Duration, String> {
         .map_err(|e| e.to_string())
 }
 
+pub fn parse_bool(value: &str) -> Result<bool, String> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "y" | "on" | "enable" | "enabled" => Ok(true),
+        "0" | "false" | "no" | "n" | "off" | "disable" | "disabled" => Ok(false),
+        _ => Err(format!("invalid bool value: {value}")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -162,5 +179,14 @@ mod tests {
             parse_duration("4").unwrap(),
             std::time::Duration::from_secs(4)
         );
+    }
+
+    #[test]
+    fn parses_bool_values() {
+        assert!(parse_bool("true").unwrap());
+        assert!(parse_bool("ON").unwrap());
+        assert!(!parse_bool("false").unwrap());
+        assert!(!parse_bool("0").unwrap());
+        assert!(parse_bool("maybe").is_err());
     }
 }
