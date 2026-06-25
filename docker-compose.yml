@@ -1,0 +1,29 @@
+services:
+  rdev-server:
+    image: ghcr.io/icepie/rdev-server:${RDEV_IMAGE_TAG:-latest}
+    container_name: rdev-server
+    restart: unless-stopped
+    ports:
+      - "${RDEV_HTTP_PORT:-8080}:8080"
+      - "${RDEV_SSH_PORT:-2222}:2222"
+      # Enable this mapping if you set RDEV_VNC_ADDR=:15900 below.
+      # - "${RDEV_VNC_PORT:-15900}:15900"
+    environment:
+      RDEV_ADMIN_TOKEN: "${RDEV_ADMIN_TOKEN:-}"
+      RDEV_AUTO_UPDATE: "false"
+    volumes:
+      - rdev-data:/data
+    command:
+      - --http
+      - :8080
+      - --ssh
+      - :2222
+      - --data
+      - /data
+      - --no-auto-update
+      # Uncomment these two lines together to expose the optional VNC/RFB bridge.
+      # - --vnc
+      # - "${RDEV_VNC_ADDR:-:15900}"
+
+volumes:
+  rdev-data:

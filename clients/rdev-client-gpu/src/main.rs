@@ -23,7 +23,7 @@ use rdev_client_gpu::{
     session::{OutboundEvent, SessionManager},
 };
 use tokio::sync::mpsc;
-use tokio::task::JoinHandle;
+use tokio::sync::watch;
 use tokio_tungstenite::{connect_async, tungstenite::Message as WsMessage};
 use tracing::{debug, info, warn};
 use tracing_subscriber::EnvFilter;
@@ -33,7 +33,7 @@ struct ClientRuntime<'a> {
     instance_id: &'a str,
     server_host: &'a str,
     desktop_enabled: bool,
-    gpu_tunnel: &'a mut Option<JoinHandle<()>>,
+    gpu_tunnel_device_tx: &'a watch::Sender<Option<String>>,
     connect_printed: Arc<AtomicBool>,
 }
 
@@ -63,6 +63,13 @@ async fn main() -> Result<()> {
     }
     let server_host = parse_ws_host(&args.server);
     let connect_printed = Arc::new(AtomicBool::new(false));
+    let (gpu_tunnel_device_tx, gpu_tunnel_device_rx) = watch::channel::<Option<String>>(None);
+    let _gpu_tunnel_supervisor = gpu_tunnel::spawn_supervisor(
+        args.clone(),
+        instance_id.clone(),
+        gpu_tunnel_device_rx,
+        desktop_enabled,
+    );
     let _rdev_desktop_service = rdev_desktop_service;
     let mut reconnect_backoff =
         ReconnectBackoff::new(args.reconnect_delay, Duration::from_secs(30));
@@ -73,6 +80,7 @@ async fn main() -> Result<()> {
             &instance_id,
             &server_host,
             desktop_enabled,
+            &gpu_tunnel_device_tx,
             connect_printed.clone(),
         )
         .await
@@ -150,6 +158,7 @@ async fn run_once(
     instance_id: &str,
     server_host: &str,
     desktop_enabled: bool,
+    gpu_tunnel_device_tx: &watch::Sender<Option<String>>,
     connect_printed: Arc<AtomicBool>,
 ) -> Result<bool> {
     let ws_url = websocket_url(&args.server)?;
@@ -161,7 +170,6 @@ async fn run_once(
     let forwards = ForwardManager::new();
     let files = FileManager::new();
     let fileputs = FilePutManager::new();
-    let mut gpu_tunnel_handle: Option<JoinHandle<()>> = None;
     let mut registered = false;
 
     let register = Message {
@@ -201,7 +209,7 @@ async fn run_once(
                             instance_id,
                             server_host,
                             desktop_enabled,
-                            gpu_tunnel: &mut gpu_tunnel_handle,
+                            gpu_tunnel_device_tx,
                             connect_printed: connect_printed.clone(),
                         };
                         if handle_text(&text, runtime, &sessions, &forwards, &files, &out_tx).await? {
@@ -226,9 +234,6 @@ async fn run_once(
     forwards.close_all().await;
     files.close_all().await;
     fileputs.close_all().await;
-    if let Some(handle) = gpu_tunnel_handle.take() {
-        handle.abort();
-    }
     Ok(registered)
 }
 
@@ -262,16 +267,9 @@ async fn handle_text(
                 print_connection_hints(args, runtime.server_host, registered_id, &msg.ssh_port);
             }
             if runtime.desktop_enabled {
-                if let Some(handle) = runtime.gpu_tunnel.take() {
-                    handle.abort();
-                }
-                let mut tunnel_args = args.clone();
-                tunnel_args.id = registered_id.to_string();
-                *runtime.gpu_tunnel = gpu_tunnel::spawn(
-                    tunnel_args,
-                    runtime.instance_id.to_string(),
-                    runtime.desktop_enabled,
-                );
+                let _ = runtime
+                    .gpu_tunnel_device_tx
+                    .send(Some(registered_id.to_string()));
             }
         }
         Some(MessageType::NewSession) => sessions.start(msg, args.shell.clone(), out_tx.clone())?,

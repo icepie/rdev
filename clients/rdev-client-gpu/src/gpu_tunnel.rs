@@ -10,7 +10,7 @@ use serde::Deserialize;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
-    sync::mpsc,
+    sync::{mpsc, watch},
     task::JoinHandle,
 };
 use tokio_tungstenite::{connect_async, tungstenite::Message as WsMessage};
@@ -100,6 +100,41 @@ pub fn spawn(args: Args, instance_id: String, local_desktop_ready: bool) -> Opti
                 backoff.reset();
             }
             tokio::time::sleep(backoff.next()).await;
+        }
+    }))
+}
+
+pub fn spawn_supervisor(
+    args: Args,
+    instance_id: String,
+    mut device_rx: watch::Receiver<Option<String>>,
+    local_desktop_ready: bool,
+) -> Option<JoinHandle<()>> {
+    if args.no_desktop || args.no_gpu_desktop_tunnel || !local_desktop_ready {
+        return None;
+    }
+    Some(tokio::spawn(async move {
+        let mut current_device: Option<String> = None;
+        let mut worker: Option<JoinHandle<()>> = None;
+        loop {
+            let next_device = device_rx.borrow().clone();
+            if next_device != current_device {
+                current_device = next_device.clone();
+                if let Some(handle) = worker.take() {
+                    handle.abort();
+                }
+                if let Some(device_id) = next_device {
+                    let mut tunnel_args = args.clone();
+                    tunnel_args.id = device_id;
+                    worker = spawn(tunnel_args, instance_id.clone(), local_desktop_ready);
+                }
+            }
+            if device_rx.changed().await.is_err() {
+                break;
+            }
+        }
+        if let Some(handle) = worker.take() {
+            handle.abort();
         }
     }))
 }
