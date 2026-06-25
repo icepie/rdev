@@ -11,6 +11,10 @@ on:
 permissions:
   contents: write
 
+env:
+  CARGO_NET_RETRY: 5
+  CARGO_HTTP_MULTIPLEXING: false
+
 concurrency:
   group: rust-client-gpu-${{ github.ref }}
   cancel-in-progress: true
