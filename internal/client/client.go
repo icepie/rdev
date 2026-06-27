@@ -9,6 +9,8 @@ import (
 	"log"
 	"math/big"
 	"net"
+	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -499,20 +501,100 @@ func (c *Client) drainReconnectSignals() bool {
 	}
 }
 
-func (c *Client) connect() error {
-	wsURL := c.serverURL
-
-	// Normalize scheme: ensure exactly "ws://" or "wss://" (no triple slash)
-	if strings.HasPrefix(wsURL, "wss:///") {
-		wsURL = "wss://" + strings.TrimLeft(wsURL[len("wss://"):], "/")
-	} else if strings.HasPrefix(wsURL, "ws:///") {
-		wsURL = "ws://" + strings.TrimLeft(wsURL[len("ws://"):], "/")
-	} else if !strings.HasPrefix(wsURL, "ws://") && !strings.HasPrefix(wsURL, "wss://") {
-		wsURL = "ws://" + wsURL
+func resolveWebSocketURL(wsURL string, maxRedirects int) (string, error) {
+	current := strings.TrimSpace(wsURL)
+	if current == "" {
+		return "", fmt.Errorf("empty websocket url")
 	}
+	for i := 0; i <= maxRedirects; i++ {
+		normalized, err := normalizeWebSocketURL(current)
+		if err != nil {
+			return "", err
+		}
+		current = normalized
+		probe := current
+		if strings.HasPrefix(probe, "wss://") {
+			probe = "https://" + strings.TrimPrefix(probe, "wss://")
+		} else if strings.HasPrefix(probe, "ws://") {
+			probe = "http://" + strings.TrimPrefix(probe, "ws://")
+		}
+		client := &http.Client{Timeout: 8 * time.Second, CheckRedirect: func(req *http.Request, via []*http.Request) error { return http.ErrUseLastResponse }}
+		req, err := http.NewRequest(http.MethodGet, probe, nil)
+		if err != nil {
+			return "", err
+		}
+		req.Header.Set("User-Agent", "rdev-client")
+		resp, err := client.Do(req)
+		if err != nil {
+			return current, nil
+		}
+		resp.Body.Close()
+		switch resp.StatusCode {
+		case http.StatusMovedPermanently, http.StatusFound, http.StatusSeeOther, http.StatusTemporaryRedirect, http.StatusPermanentRedirect:
+			loc := strings.TrimSpace(resp.Header.Get("Location"))
+			if loc == "" {
+				return "", fmt.Errorf("redirect without location")
+			}
+			base, err := url.Parse(current)
+			if err != nil {
+				return "", err
+			}
+			rel, err := url.Parse(loc)
+			if err != nil {
+				return "", err
+			}
+			next := base.ResolveReference(rel)
+			current = next.String()
+			if strings.HasPrefix(current, "http://") {
+				current = "ws://" + strings.TrimPrefix(current, "http://")
+			} else if strings.HasPrefix(current, "https://") {
+				current = "wss://" + strings.TrimPrefix(current, "https://")
+			}
+			continue
+		default:
+			return current, nil
+		}
+	}
+	return current, nil
+}
 
-	if !strings.HasSuffix(wsURL, "/ws") {
-		wsURL += "/ws"
+func normalizeWebSocketURL(value string) (string, error) {
+	urlValue := strings.TrimSpace(value)
+	if urlValue == "" {
+		return "", fmt.Errorf("empty websocket url")
+	}
+	if strings.HasPrefix(urlValue, "wss:///") {
+		urlValue = "wss://" + strings.TrimLeft(urlValue[len("wss://"):], "/")
+	} else if strings.HasPrefix(urlValue, "ws:///") {
+		urlValue = "ws://" + strings.TrimLeft(urlValue[len("ws://"):], "/")
+	} else if strings.HasPrefix(urlValue, "https:///") {
+		urlValue = "https://" + strings.TrimLeft(urlValue[len("https://"):], "/")
+	} else if strings.HasPrefix(urlValue, "http:///") {
+		urlValue = "http://" + strings.TrimLeft(urlValue[len("http://"):], "/")
+	}
+	if strings.HasPrefix(urlValue, "https://") {
+		urlValue = "wss://" + strings.TrimPrefix(urlValue, "https://")
+	} else if strings.HasPrefix(urlValue, "http://") {
+		urlValue = "ws://" + strings.TrimPrefix(urlValue, "http://")
+	} else if !strings.HasPrefix(urlValue, "ws://") && !strings.HasPrefix(urlValue, "wss://") {
+		urlValue = "ws://" + urlValue
+	}
+	parsed, err := url.Parse(urlValue)
+	if err != nil {
+		return "", err
+	}
+	if parsed.Path == "" || parsed.Path == "/" {
+		parsed.Path = "/ws"
+	} else if !strings.HasSuffix(parsed.Path, "/ws") {
+		parsed.Path = strings.TrimRight(parsed.Path, "/") + "/ws"
+	}
+	return parsed.String(), nil
+}
+
+func (c *Client) connect() error {
+	wsURL, err := resolveWebSocketURL(c.serverURL, 5)
+	if err != nil {
+		return err
 	}
 
 	handler := &wsEventHandler{client: c}

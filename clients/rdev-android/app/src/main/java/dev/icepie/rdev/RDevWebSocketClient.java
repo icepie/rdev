@@ -69,34 +69,63 @@ final class RDevWebSocketClient {
     private void runLoop() {
         Exception closeError = null;
         try {
-            URI uri = URI.create(rawUrl);
-            boolean tls = "wss".equalsIgnoreCase(uri.getScheme());
-            int port = uri.getPort() >= 0 ? uri.getPort() : (tls ? 443 : 80);
-            String host = uri.getHost();
-            if (host == null || host.length() == 0) throw new IOException("missing websocket host: " + rawUrl);
-            socket = tls ? SSLSocketFactory.getDefault().createSocket(host, port) : new Socket(host, port);
-            socket.setTcpNoDelay(true);
-            socket.setKeepAlive(true);
-            socket.setSoTimeout(45000);
-            in = socket.getInputStream();
-            out = socket.getOutputStream();
-            handshake(uri, host, port, tls);
-            startPingLoop();
-            listener.onOpen();
-            readFrames();
+            String currentUrl = rawUrl;
+            for (int redirects = 0; redirects <= 5; redirects++) {
+                URI uri = URI.create(currentUrl);
+                boolean tls = "wss".equalsIgnoreCase(uri.getScheme());
+                int port = uri.getPort() >= 0 ? uri.getPort() : (tls ? 443 : 80);
+                String host = uri.getHost();
+                if (host == null || host.length() == 0) throw new IOException("missing websocket host: " + currentUrl);
+                socket = tls ? SSLSocketFactory.getDefault().createSocket(host, port) : new Socket(host, port);
+                socket.setTcpNoDelay(true);
+                socket.setKeepAlive(true);
+                socket.setSoTimeout(45000);
+                in = socket.getInputStream();
+                out = socket.getOutputStream();
+                String key = randomKey();
+                String header = handshake(uri, host, port, tls, key);
+                int status = statusCode(header);
+                if (status == 101) {
+                    String expected = acceptKey(key);
+                    if (!header.toLowerCase(Locale.US).contains("sec-websocket-accept: " + expected.toLowerCase(Locale.US))) {
+                        throw new IOException("websocket accept mismatch");
+                    }
+                    Log.i(TAG, "connected " + currentUrl);
+                    startPingLoop();
+                    listener.onOpen();
+                    readFrames();
+                    return;
+                }
+                if (isRedirect(status)) {
+                    String location = headerValue(header, "location");
+                    closeSocketQuietly();
+                    if (location == null || location.length() == 0) throw new IOException("websocket redirect without location");
+                    currentUrl = normalizeUrl(resolveRedirect(currentUrl, location));
+                    Log.i(TAG, "websocket redirect to " + currentUrl);
+                    continue;
+                }
+                throw new IOException("websocket handshake failed: " + firstLine(header));
+            }
+            throw new IOException("too many websocket redirects");
         } catch (Exception e) {
             closeError = e;
             if (running) Log.w(TAG, "websocket closed", e);
         } finally {
             running = false;
             stopPingLoop();
-            try { if (socket != null) socket.close(); } catch (IOException ignored) {}
+            closeSocketQuietly();
             listener.onClosed(closeError);
         }
     }
 
-    private void handshake(URI uri, String host, int port, boolean tls) throws Exception {
-        String key = randomKey();
+    private void closeSocketQuietly() {
+        try { if (socket != null) socket.close(); } catch (IOException ignored) {}
+        socket = null;
+        in = null;
+        out = null;
+    }
+
+    private String handshake(URI uri, String host, int port, boolean tls, String key) throws Exception {
         String path = uri.getRawPath();
         if (path == null || path.length() == 0) path = "/";
         if (uri.getRawQuery() != null && uri.getRawQuery().length() > 0) path += "?" + uri.getRawQuery();
@@ -112,15 +141,7 @@ final class RDevWebSocketClient {
             "\r\n";
         out.write(req.getBytes("US-ASCII"));
         out.flush();
-        String header = readHttpHeader();
-        if (!header.startsWith("HTTP/1.1 101") && !header.startsWith("HTTP/1.0 101")) {
-            throw new IOException("websocket handshake failed: " + firstLine(header));
-        }
-        String expected = acceptKey(key);
-        if (!header.toLowerCase(Locale.US).contains("sec-websocket-accept: " + expected.toLowerCase(Locale.US))) {
-            throw new IOException("websocket accept mismatch");
-        }
-        Log.i(TAG, "connected " + rawUrl);
+        return readHttpHeader();
     }
 
     private String readHttpHeader() throws IOException {
@@ -248,6 +269,39 @@ final class RDevWebSocketClient {
         return pos >= 0 ? header.substring(0, pos).trim() : header.trim();
     }
 
+    private int statusCode(String header) {
+        String line = firstLine(header);
+        String[] parts = line.split(" ");
+        if (parts.length < 2) return 0;
+        try { return Integer.parseInt(parts[1]); } catch (Throwable ignored) { return 0; }
+    }
+
+    private boolean isRedirect(int status) {
+        return status == 301 || status == 302 || status == 303 || status == 307 || status == 308;
+    }
+
+    private String headerValue(String header, String name) {
+        String needle = name.toLowerCase(Locale.US) + ":";
+        for (String line : header.split("\r?\n")) {
+            String lower = line.toLowerCase(Locale.US);
+            if (lower.startsWith(needle)) {
+                return line.substring(line.indexOf(':') + 1).trim();
+            }
+        }
+        return null;
+    }
+
+    private String resolveRedirect(String currentUrl, String location) {
+        URI base = URI.create(currentUrl);
+        URI rel = URI.create(location);
+        URI next = base.resolve(rel);
+        String scheme = next.getScheme();
+        if (scheme == null) return next.toString();
+        if (scheme.equalsIgnoreCase("http")) return "ws://" + next.toString().substring(7);
+        if (scheme.equalsIgnoreCase("https")) return "wss://" + next.toString().substring(8);
+        return next.toString();
+    }
+
     private static String normalizeUrl(String value) {
         String url = value == null ? "" : value.trim();
         if (url.startsWith("https://")) url = "wss://" + url.substring(8);
@@ -256,10 +310,14 @@ final class RDevWebSocketClient {
         try {
             URI uri = URI.create(url);
             String path = uri.getRawPath();
-            if ((path == null || path.length() == 0 || "/".equals(path)) && !url.endsWith("/ws")) url += url.endsWith("/") ? "ws" : "/ws";
+            String query = uri.getQuery();
+            if (path == null || path.length() == 0 || "/".equals(path)) path = "/ws";
+            else if (!path.endsWith("/ws")) path = path.endsWith("/") ? path + "ws" : path + "/ws";
+            URI rebuilt = new URI(uri.getScheme(), uri.getUserInfo(), uri.getHost(), uri.getPort(), path, query, uri.getFragment());
+            return rebuilt.toString();
         } catch (Throwable ignored) {
             if (!url.endsWith("/ws")) url += "/ws";
+            return url;
         }
-        return url;
     }
 }

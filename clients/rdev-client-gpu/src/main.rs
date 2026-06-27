@@ -22,12 +22,14 @@ use rdev_client_gpu::{
     rdev_desktop_service,
     session::{OutboundEvent, SessionManager},
     updater, version,
+    ws_redirect::connect_async_follow_redirects,
 };
 use tokio::sync::mpsc;
 use tokio::sync::watch;
-use tokio_tungstenite::{connect_async, tungstenite::Message as WsMessage};
+use tokio_tungstenite::tungstenite::Message as WsMessage;
 use tracing::{debug, info, warn};
 use tracing_subscriber::EnvFilter;
+use url::Url;
 
 struct ClientRuntime<'a> {
     args: &'a Args,
@@ -172,7 +174,9 @@ async fn run_once(
 ) -> Result<bool> {
     let ws_url = websocket_url(&args.server)?;
     info!("connecting to {ws_url} as {}", args.id);
-    let (ws, _) = connect_async(ws_url).await.context("connect websocket")?;
+    let (ws, _) = connect_async_follow_redirects(&ws_url, 5)
+        .await
+        .context("connect websocket")?;
     let (mut write, mut read) = ws.split();
     let (out_tx, mut out_rx) = mpsc::channel::<OutboundEvent>(4096);
     let sessions = SessionManager::new();
@@ -466,18 +470,24 @@ fn parse_ws_host(ws_url: &str) -> String {
 
 fn websocket_url(server: &str) -> Result<String> {
     let normalized = normalize_server_url(server);
-    let trimmed = normalized.trim_end_matches('/');
-    let mut url = if trimmed.ends_with("/ws") {
-        trimmed.to_string()
-    } else {
-        format!("{trimmed}/ws")
-    };
-    if url.starts_with("http://") {
-        url.replace_range(0..4, "ws");
-    } else if url.starts_with("https://") {
-        url.replace_range(0..5, "wss");
+    let mut parsed = Url::parse(&normalized)?;
+    let path = parsed.path().trim_end_matches('/').to_string();
+    if path.is_empty() || path == "/" {
+        parsed.set_path("/ws");
+    } else if !path.ends_with("/ws") {
+        parsed.set_path(&format!("{path}/ws"));
     }
-    Ok(url)
+    match parsed.scheme() {
+        "http" => parsed
+            .set_scheme("ws")
+            .map_err(|_| anyhow::anyhow!("invalid websocket scheme"))?,
+        "https" => parsed
+            .set_scheme("wss")
+            .map_err(|_| anyhow::anyhow!("invalid websocket scheme"))?,
+        "ws" | "wss" => {}
+        other => return Err(anyhow::anyhow!("unsupported websocket scheme: {other}")),
+    }
+    Ok(parsed.to_string())
 }
 
 #[cfg(test)]

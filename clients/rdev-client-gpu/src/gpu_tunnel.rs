@@ -16,11 +16,12 @@ use tokio::{
     },
     task::JoinHandle,
 };
-use tokio_tungstenite::{connect_async, tungstenite::Message as WsMessage};
+use tokio_tungstenite::tungstenite::Message as WsMessage;
 use tracing::{debug, info, warn};
 use url::Url;
 
 use crate::config::Args;
+use crate::ws_redirect::connect_async_follow_redirects;
 
 const FRAME_OPEN: u8 = 1;
 const FRAME_DATA: u8 = 2;
@@ -150,10 +151,13 @@ async fn run_once(args: &Args, instance_id: &str) -> Result<()> {
         .parse()
         .with_context(|| format!("invalid --gpu-desktop-local {}", args.gpu_desktop_local))?;
     info!("connecting gpu desktop tunnel to {tunnel_url}; local={local_addr}");
-    let (ws, _) = tokio::time::timeout(TUNNEL_CONNECT_TIMEOUT, connect_async(tunnel_url.as_str()))
-        .await
-        .context("gpu desktop tunnel websocket connect timed out")?
-        .context("connect gpu desktop tunnel websocket")?;
+    let (ws, _) = tokio::time::timeout(
+        TUNNEL_CONNECT_TIMEOUT,
+        connect_async_follow_redirects(tunnel_url.as_str(), 5),
+    )
+    .await
+    .context("gpu desktop tunnel websocket connect timed out")?
+    .context("connect gpu desktop tunnel websocket")?;
     let (mut ws_write, mut ws_read) = ws.split();
     let (out_tx, mut out_rx) = mpsc::channel::<TunnelFrame>(TUNNEL_OUTBOUND_QUEUE);
     let mut streams: HashMap<u64, mpsc::Sender<Vec<u8>>> = HashMap::new();

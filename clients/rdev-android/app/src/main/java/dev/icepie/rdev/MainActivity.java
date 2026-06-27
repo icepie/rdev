@@ -2,6 +2,8 @@ package dev.icepie.rdev;
 
 import android.Manifest;
 import android.app.Activity;
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
@@ -40,7 +42,48 @@ public class MainActivity extends Activity {
         super.onCreate(state);
         prefs = getSharedPreferences("rdev", MODE_PRIVATE);
         setContentView(createContentView());
+        applyDeepLink(getIntent(), false);
         requestNotificationPermissionIfNeeded();
+    }
+
+    @Override protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        applyDeepLink(intent, true);
+    }
+
+    private void applyDeepLink(Intent intent, boolean showStatus) {
+        if (intent == null) return;
+        Uri uri = intent.getData();
+        if (uri == null) return;
+        if (!"rdev".equalsIgnoreCase(uri.getScheme())) return;
+        String server = firstNonEmpty(uri.getQueryParameter("server"), uri.getQueryParameter("s"));
+        String id = firstNonEmpty(uri.getQueryParameter("id"), uri.getQueryParameter("device"));
+        String password = firstPresent(uri, "password", "p");
+        if (server == null && uri.getHost() != null && uri.getHost().length() > 0 && !"connect".equalsIgnoreCase(uri.getHost())) {
+            server = uri.getHost();
+            if (uri.getPort() > 0) server += ":" + uri.getPort();
+            if (uri.getPath() != null && uri.getPath().length() > 1) server += uri.getPath();
+        }
+        if (server != null) serverField.setText(server);
+        if (id != null) idField.setText(id);
+        if (password != null) passwordField.setText(password);
+        if (server != null || id != null || password != null) {
+            saveConfig();
+            if (showStatus) setStatus("已从链接填充配置");
+        }
+    }
+
+    private String firstNonEmpty(String a, String b) {
+        if (a != null && a.length() > 0) return a;
+        if (b != null && b.length() > 0) return b;
+        return null;
+    }
+
+    private String firstPresent(Uri uri, String a, String b) {
+        String value = uri.getQueryParameter(a);
+        if (value != null) return value;
+        return uri.getQueryParameter(b);
     }
 
     private View createContentView() {
@@ -64,7 +107,7 @@ public class MainActivity extends Activity {
         root.addView(subtitle, matchWrap());
 
         LinearLayout config = card("连接配置", "保存后启动在线服务，空密码表示开放模式。", colors);
-        serverField = addInput(config, "服务器", "wss://rdev.singzer.cn", prefs.getString("server", "wss://rdev.singzer.cn"), false, colors);
+        serverField = addInput(config, "服务器", "例如 wss://rdev.singzer.cn（可用 rdev:// 链接填充）", prefs.getString("server", ""), false, colors);
         idField = addInput(config, "设备 ID", "例如 PDA3109", prefs.getString("id", defaultDeviceId()), false, colors);
         passwordField = addInput(config, "访问密码", "留空为无密码", prefs.getString("password", ""), true, colors);
         root.addView(config, sectionParams());
@@ -82,14 +125,17 @@ public class MainActivity extends Activity {
         LinearLayout secondRow = row();
         Button save = button("保存配置", false, colors);
         save.setOnClickListener(v -> saveConfig());
+        Button link = button("复制填充链接", false, colors);
+        link.setOnClickListener(v -> copySchemeLink());
+        secondRow.addView(save, weighted());
+        secondRow.addView(link, weightedWithStartMargin());
+        quick.addView(secondRow, topMarginParams(dp(10)));
         Button stop = button("停止服务", false, colors);
         stop.setOnClickListener(v -> {
             stopService(new Intent(this, RDevAgentService.class));
             setStatus("在线服务已停止");
         });
-        secondRow.addView(save, weighted());
-        secondRow.addView(stop, weightedWithStartMargin());
-        quick.addView(secondRow, topMarginParams(dp(10)));
+        quick.addView(stop, topMarginParams(dp(10)));
         root.addView(quick, sectionParams());
 
         LinearLayout permissions = card("权限与输入", "远程触控、键盘和公开存储访问需要系统授权。", colors);
@@ -241,8 +287,27 @@ public class MainActivity extends Activity {
         setStatus("配置已保存");
     }
 
+    private void copySchemeLink() {
+        saveConfig();
+        Uri.Builder builder = new Uri.Builder().scheme("rdev").authority("connect");
+        String server = serverField.getText().toString().trim();
+        String id = idField.getText().toString().trim();
+        String password = passwordField.getText().toString();
+        if (server.length() > 0) builder.appendQueryParameter("server", server);
+        if (id.length() > 0) builder.appendQueryParameter("id", id);
+        if (password.length() > 0) builder.appendQueryParameter("password", password);
+        String link = builder.build().toString();
+        ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+        if (cm != null) cm.setPrimaryClip(ClipData.newPlainText("RDev Android", link));
+        setStatus("已复制填充链接：" + link);
+    }
+
     private void startOnlineService() {
         saveConfig();
+        if (serverField.getText().toString().trim().length() == 0) {
+            setStatus("请先填写服务器地址，或通过 rdev:// 链接填充配置。");
+            return;
+        }
         requestStoragePermissionIfNeeded();
         Intent intent = new Intent(this, RDevAgentService.class);
         if (Build.VERSION.SDK_INT >= 26) {

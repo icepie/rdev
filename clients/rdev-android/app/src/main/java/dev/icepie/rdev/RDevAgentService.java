@@ -179,7 +179,12 @@ public class RDevAgentService extends Service {
         final int generation = ++reconnectGeneration;
         SharedPreferences prefs = getSharedPreferences("rdev", MODE_PRIVATE);
         if (client != null) client.close();
-        String server = prefs.getString("server", "wss://rdev.singzer.cn");
+        String server = prefs.getString("server", "");
+        if (server == null || server.trim().length() == 0) {
+            Log.w(TAG, "server is empty; open app or rdev:// link to configure");
+            scheduleReconnect();
+            return;
+        }
         client = new RDevWebSocketClient(server, new RDevWebSocketClient.Listener() {
             @Override public void onOpen() {
                 reconnectDelayMs = 1000;
@@ -363,7 +368,7 @@ public class RDevAgentService extends Service {
         SharedPreferences prefs = getSharedPreferences("rdev", MODE_PRIVATE);
         if (tunnel != null) tunnel.close();
         tunnel = new RDevGpuTunnel(
-            prefs.getString("server", "wss://rdev.singzer.cn"),
+            prefs.getString("server", ""),
             registeredId,
             instanceId,
             prefs.getString("password", "")
