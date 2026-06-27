@@ -12,6 +12,6 @@ pub mod session;
 pub mod sftp;
 pub mod updater;
 pub mod version;
-pub mod ws_redirect;
 #[cfg(windows)]
 pub mod winpty;
+pub mod ws_redirect;

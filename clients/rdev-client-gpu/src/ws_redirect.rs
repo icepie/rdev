@@ -12,7 +12,10 @@ pub type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
 pub async fn connect_async_follow_redirects(
     url: &str,
     max_redirects: usize,
-) -> Result<(WsStream, tokio_tungstenite::tungstenite::handshake::client::Response)> {
+) -> Result<(
+    WsStream,
+    tokio_tungstenite::tungstenite::handshake::client::Response,
+)> {
     let mut current = url.to_string();
     for _ in 0..=max_redirects {
         match connect_async(current.as_str()).await {
@@ -37,8 +40,12 @@ fn resolve_redirect(current: &str, location: &str) -> Result<String> {
     let base = Url::parse(current)?;
     let mut next = base.join(location)?;
     match next.scheme() {
-        "http" => next.set_scheme("ws").map_err(|_| anyhow!("invalid redirect scheme"))?,
-        "https" => next.set_scheme("wss").map_err(|_| anyhow!("invalid redirect scheme"))?,
+        "http" => next
+            .set_scheme("ws")
+            .map_err(|_| anyhow!("invalid redirect scheme"))?,
+        "https" => next
+            .set_scheme("wss")
+            .map_err(|_| anyhow!("invalid redirect scheme"))?,
         "ws" | "wss" => {}
         other => return Err(anyhow!("unsupported websocket redirect scheme: {other}")),
     }
