@@ -55,6 +55,7 @@
         .row-actions { display: flex; align-items: center; justify-content: flex-end; gap: 6px; flex-wrap: wrap; }
         .term-btn { display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px; border-radius: 6px; font-size: 0.8rem; cursor: pointer; border: 1px solid rgba(34,211,238,0.3); background: rgba(34,211,238,0.08); color: var(--accent); text-decoration: none; transition: all 0.15s; white-space: nowrap; }
         .term-btn:hover { background: rgba(34,211,238,0.18); border-color: var(--accent); }
+        .term-btn.ok { border-color: rgba(74,222,128,0.45); background: rgba(74,222,128,0.08); color: var(--green); }
         .install { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 1.5rem; margin-top: 2rem; }
         .install-head { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: 1rem; }
         .install h3 { font-size: 1rem; color: var(--accent); margin: 0; }
@@ -376,6 +377,53 @@
             });
         }
 
+        function copyText(text) {
+            if (navigator.clipboard && window.isSecureContext) return navigator.clipboard.writeText(text);
+            const area = document.createElement('textarea');
+            area.value = text;
+            area.style.position = 'fixed';
+            area.style.left = '-9999px';
+            document.body.appendChild(area);
+            area.focus();
+            area.select();
+            const ok = document.execCommand('copy');
+            area.remove();
+            return ok ? Promise.resolve() : Promise.reject(new Error('copy failed'));
+        }
+
+        function deviceConnectionText(deviceID, hasPassword) {
+            const sshHost = location.hostname || H.split(':')[0];
+            const desktopURL = `${HTTP}${H}/desktop.html?device=${encodeURIComponent(deviceID)}`;
+            const lines = [
+                `RDev device: ${deviceID}`,
+                `Auth: ${hasPassword ? t('common.password') : t('common.open')}`,
+                '',
+                `SSH: ssh ${deviceID}@${sshHost} -p ${SP}`,
+                `SFTP: sftp -P ${SP} ${deviceID}@${sshHost}`,
+                `SCP: scp -P ${SP} file ${deviceID}@${sshHost}:~/`,
+                `Desktop: ${desktopURL}`,
+            ];
+            if (VP) lines.push(`VNC: vncviewer ${VP} (username=${deviceID})`);
+            lines.push(
+                '',
+                `Local forward: ssh -L 8080:localhost:80 ${deviceID}@${sshHost} -p ${SP}`,
+                `Remote forward: ssh -R 3000:localhost:3000 ${deviceID}@${sshHost} -p ${SP}`,
+                `Git clone: git clone ssh://${deviceID}@${sshHost}:${SP}/home/user/repo.git`
+            );
+            return lines.join('\n');
+        }
+
+        function copyDeviceConnection(btn) {
+            const deviceID = btn.dataset.device || '';
+            const hasPassword = btn.dataset.hasPassword === 'true';
+            copyText(deviceConnectionText(deviceID, hasPassword)).then(() => {
+                const old = btn.innerHTML;
+                btn.innerHTML = icon('check') + ' ' + t('common.copied');
+                btn.classList.add('ok');
+                setTimeout(() => { btn.innerHTML = old; btn.classList.remove('ok'); }, 1500);
+            });
+        }
+
         function downloadAndroidAsset(asset) {
             const note = document.getElementById('android-download-note');
             if (note) note.textContent = t('index.androidDownloadTrying');
@@ -403,6 +451,7 @@
                         <a href="/terminal.html?device=${encodeURIComponent(d.id)}" class="term-btn">${icon('terminal')} ${t('index.navTerminal')}</a>
                         <a href="/desktop.html?device=${encodeURIComponent(d.id)}" class="term-btn">${icon('monitor')} ${t('index.navDesktop')}</a>
                         <a href="/files.html?device=${encodeURIComponent(d.id)}" class="term-btn">${icon('files')} ${t('index.navFiles')}</a>
+                        <button type="button" class="term-btn" data-device="${esc(d.id)}" data-has-password="${d.hasPassword ? 'true' : 'false'}" onclick="copyDeviceConnection(this)">${t('index.copyConnection')}</button>
                     </div></td>
                 </tr>`).join('');
             } catch(e) {}
