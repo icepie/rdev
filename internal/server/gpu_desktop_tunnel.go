@@ -367,7 +367,7 @@ func gpuDesktopIsServerFrontendPath(path, deviceID string) bool {
 func serveGPUDesktopFrontend(w http.ResponseWriter, r *http.Request, deviceID string) {
 	query := r.URL.Query()
 	query.Set("device", deviceID)
-	http.Redirect(w, r, "/desktop.html?"+query.Encode(), http.StatusFound)
+	http.Redirect(w, r, "/remote-desktop?"+query.Encode(), http.StatusFound)
 }
 
 func proxyGPUDesktopHTTP(w http.ResponseWriter, r *http.Request, tunnel *gpuDesktopTunnel, deviceID string) {

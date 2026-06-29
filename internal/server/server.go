@@ -1416,3 +1416,14 @@ func (s *Server) StaticHandler() http.Handler {
 	}
 	return http.FileServer(http.FS(sub))
 }
+
+// StaticPageHandler serves a named embedded UI page without exposing the .html suffix.
+func (s *Server) StaticPageHandler(name string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		http.ServeFileFS(w, r, templateFS, "static/"+name)
+	}
+}

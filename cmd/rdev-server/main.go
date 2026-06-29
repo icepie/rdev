@@ -189,13 +189,15 @@ Examples:
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", srv.HandleWS)
-	mux.HandleFunc("/terminal", srv.HandleTerminalWS)
+	mux.HandleFunc("/terminal", splitPageAndWebSocket(srv.StaticPageHandler("terminal.html"), srv.HandleTerminalWS))
 	mux.HandleFunc("/desktop", srv.HandleDesktopWS)
 	mux.HandleFunc("/gpu-desktop-tunnel", srv.HandleGPUDesktopTunnel)
 	mux.HandleFunc("/gpu-desktop/", srv.HandleGPUDesktopProxy)
 	mux.HandleFunc("/session", srv.HandleSessionAttachWS)
-	mux.HandleFunc("/batch", srv.HandleBatchWS)
-	mux.HandleFunc("/files", srv.HandleFilesWS)
+	mux.HandleFunc("/batch", splitPageAndWebSocket(srv.StaticPageHandler("batch.html"), srv.HandleBatchWS))
+	mux.HandleFunc("/files", splitPageAndWebSocket(srv.StaticPageHandler("files.html"), srv.HandleFilesWS))
+	mux.HandleFunc("/sessions", srv.StaticPageHandler("sessions.html"))
+	mux.HandleFunc("/remote-desktop", srv.StaticPageHandler("desktop.html"))
 	mux.HandleFunc("/api/clients", srv.HandleAPI)
 	mux.HandleFunc("/api/sessions", srv.HandleSessionsAPI)
 	mux.HandleFunc("/api/devices", srv.HandleTerminalAPI)
@@ -254,6 +256,16 @@ Examples:
 	log.Printf("HTTP server listening on %s", httpAddr)
 	if err := http.Serve(httpListener, mux); err != nil {
 		log.Fatalf("HTTP server error: %v", err)
+	}
+}
+
+func splitPageAndWebSocket(page http.HandlerFunc, websocket http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
+			websocket(w, r)
+			return
+		}
+		page(w, r)
 	}
 }
 

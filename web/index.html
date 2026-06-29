@@ -129,10 +129,10 @@
                 <a class="gh-link" href="https://github.com/icepie/rdev" target="_blank" title="GitHub"><span class="icon-inline"><span data-icon="github"></span>GitHub</span></a>
                 <div id="lang-slot"></div>
                 <div class="header-btns">
-                    <a href="/terminal.html" data-auth-link class="btn"><span class="icon-inline"><span data-icon="terminal"></span><span data-i18n="index.navTerminal">Terminal</span></span></a>
-                    <a href="/batch.html" data-auth-link class="btn"><span class="icon-inline"><span data-icon="package"></span><span data-i18n="index.navBatch">Batch</span></span></a>
-                    <a href="/files.html" data-auth-link class="btn"><span class="icon-inline"><span data-icon="files"></span><span data-i18n="index.navFiles">Files</span></span></a>
-                    <a href="/sessions.html" data-auth-link class="btn"><span class="icon-inline"><span data-icon="sessions"></span><span data-i18n="index.navSessions">Sessions</span></span></a>
+                    <a href="/terminal" data-auth-link class="btn"><span class="icon-inline"><span data-icon="terminal"></span><span data-i18n="index.navTerminal">Terminal</span></span></a>
+                    <a href="/batch" data-auth-link class="btn"><span class="icon-inline"><span data-icon="package"></span><span data-i18n="index.navBatch">Batch</span></span></a>
+                    <a href="/files" data-auth-link class="btn"><span class="icon-inline"><span data-icon="files"></span><span data-i18n="index.navFiles">Files</span></span></a>
+                    <a href="/sessions" data-auth-link class="btn"><span class="icon-inline"><span data-icon="sessions"></span><span data-i18n="index.navSessions">Sessions</span></span></a>
                 </div>
             </div>
         </header>
@@ -247,7 +247,7 @@
             <code id="h-sftp"><span class="h1">sftp</span> -P {{SP}} &lt;deviceID&gt;@{{H}}</code>
             <code id="h-rsync"><span class="h1">rsync</span> -az --delete -e "ssh -p {{SP}}" ./local-dir/ &lt;deviceID&gt;@{{H}}:/tmp/remote-dir/</code>
             <h3 style="margin-top:0.8rem" class="icon-inline"><span data-icon="monitor"></span><span data-i18n="index.remoteDesktopTitle">远程桌面</span></h3>
-            <code id="h-web-desktop"><span class="h1">open</span> {{HTTP}}{{H}}/desktop.html?device=&lt;deviceID&gt;</code>
+            <code id="h-web-desktop"><span class="h1">open</span> {{HTTP}}{{H}}/remote-desktop?device=&lt;deviceID&gt;</code>
             <code id="h-vnc" data-vnc-only><span class="h1">vncviewer</span> {{VP}}</code>
             <code data-vnc-only><span class="h3"><span data-i18n="index.vncAuthComment"># VNC 用户名 = 设备 ID；密码 = 设备密码；无密码设备可用 password=deviceID</span></span></code>
             <h3 style="margin-top:0.8rem" class="icon-inline"><span data-icon="monitor"></span><span data-i18n="index.forwardTitle">端口转发</span></h3>
@@ -393,7 +393,7 @@
 
         function deviceConnectionText(deviceID, hasPassword) {
             const sshHost = location.hostname || H.split(':')[0];
-            const desktopURL = `${HTTP}${H}/desktop.html?device=${encodeURIComponent(deviceID)}`;
+            const desktopURL = `${HTTP}${H}/remote-desktop?device=${encodeURIComponent(deviceID)}`;
             const lines = [
                 `RDev device: ${deviceID}`,
                 `Auth: ${hasPassword ? t('common.password') : t('common.open')}`,
@@ -448,9 +448,9 @@
                     <td>${d.hasPassword?'<span class="badge green">' + t('common.password') + '</span>':'<span class="badge yellow">' + t('common.open') + '</span>'}</td>
                     <td>${desktopBadge(d)}</td>
                     <td><div class="row-actions">
-                        <a href="/terminal.html?device=${encodeURIComponent(d.id)}" class="term-btn">${icon('terminal')} ${t('index.navTerminal')}</a>
-                        <a href="/desktop.html?device=${encodeURIComponent(d.id)}" class="term-btn">${icon('monitor')} ${t('index.navDesktop')}</a>
-                        <a href="/files.html?device=${encodeURIComponent(d.id)}" class="term-btn">${icon('files')} ${t('index.navFiles')}</a>
+                        <a href="/terminal?device=${encodeURIComponent(d.id)}" class="term-btn">${icon('terminal')} ${t('index.navTerminal')}</a>
+                        <a href="/remote-desktop?device=${encodeURIComponent(d.id)}" class="term-btn">${icon('monitor')} ${t('index.navDesktop')}</a>
+                        <a href="/files?device=${encodeURIComponent(d.id)}" class="term-btn">${icon('files')} ${t('index.navFiles')}</a>
                         <button type="button" class="term-btn" data-device="${esc(d.id)}" data-has-password="${d.hasPassword ? 'true' : 'false'}" onclick="copyDeviceConnection(this)">${t('index.copyConnection')}</button>
                     </div></td>
                 </tr>`).join('');
