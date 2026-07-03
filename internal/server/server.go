@@ -30,9 +30,10 @@ var templateFS embed.FS
 const sessionHistoryLimit = 1024 * 1024
 
 const (
-	wsWriteWait  = 10 * time.Second
-	wsReadWait   = 75 * time.Second
-	wsPingPeriod = 25 * time.Second
+	wsWriteWait      = 10 * time.Second
+	wsReadWait       = 75 * time.Second
+	wsPingPeriod     = 25 * time.Second
+	releaseLatestTTL = 5 * time.Minute
 )
 
 var releaseDownloadMirrors = []string{
@@ -533,6 +534,9 @@ type Server struct {
 	vncStreams        map[string]*vncDesktopStream
 	gpuDesktopMu      sync.RWMutex
 	gpuDesktopTunnels map[string]*gpuDesktopTunnel
+	releaseLatestMu   sync.Mutex
+	releaseLatestTag  string
+	releaseLatestAt   time.Time
 	upgrader          *gws.Upgrader
 
 	// Public config (set by main) for API/UI
@@ -545,6 +549,7 @@ type Server struct {
 	MaxSessions      int    // maximum concurrent sessions per device
 	MaxForwards      int    // maximum concurrent forwards per device
 	BatchConcurrency int    // maximum concurrent batch operations
+	ReleaseVersion   string // server release version, injected by main
 }
 
 // NewServer creates a new Server
@@ -1572,6 +1577,71 @@ func (s *Server) HandleReleaseDownloadProxy(w http.ResponseWriter, r *http.Reque
 	_, _ = io.Copy(w, resp.Body)
 }
 
+func normalizeReleaseTag(tag string) string {
+	tag = strings.TrimSpace(tag)
+	if tag == "" {
+		return ""
+	}
+	if !strings.HasPrefix(tag, "v") {
+		tag = "v" + tag
+	}
+	return tag
+}
+
+func fetchLatestReleaseTag(ctx context.Context) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 4*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.github.com/repos/icepie/rdev/releases/latest", nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("User-Agent", "rdev-server")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", io.ErrUnexpectedEOF
+	}
+	var data struct {
+		TagName string `json:"tag_name"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&data); err != nil {
+		return "", err
+	}
+	tag := normalizeReleaseTag(data.TagName)
+	if tag == "" {
+		return "", io.ErrUnexpectedEOF
+	}
+	return tag, nil
+}
+
+func (s *Server) latestReleaseTag(ctx context.Context) (string, bool) {
+	s.releaseLatestMu.Lock()
+	if s.releaseLatestTag != "" && time.Since(s.releaseLatestAt) < releaseLatestTTL {
+		tag := s.releaseLatestTag
+		s.releaseLatestMu.Unlock()
+		return tag, true
+	}
+	s.releaseLatestMu.Unlock()
+
+	tag, err := fetchLatestReleaseTag(ctx)
+	if err != nil {
+		fallback := normalizeReleaseTag(s.ReleaseVersion)
+		if fallback == "" {
+			fallback = "latest"
+		}
+		return fallback, false
+	}
+
+	s.releaseLatestMu.Lock()
+	s.releaseLatestTag = tag
+	s.releaseLatestAt = time.Now()
+	s.releaseLatestMu.Unlock()
+	return tag, true
+}
+
 // HandleConfigAPI returns server configuration for the web UI
 func (s *Server) HandleConfigAPI(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
@@ -1582,6 +1652,16 @@ func (s *Server) HandleConfigAPI(w http.ResponseWriter, r *http.Request) {
 		"kcpPort":      s.KCPPort,
 		"vncAddr":      s.VNCAddr,
 		"authRequired": map[bool]string{true: "true", false: "false"}[s.AdminToken != ""],
+	})
+}
+
+// HandleReleaseLatestAPI returns the resolved latest release tag for runner cache keys.
+func (s *Server) HandleReleaseLatestAPI(w http.ResponseWriter, r *http.Request) {
+	tag, fresh := s.latestReleaseTag(r.Context())
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"tag":   tag,
+		"fresh": fresh,
 	})
 }
 

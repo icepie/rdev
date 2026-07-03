@@ -87,7 +87,7 @@ fi
 RDEV_ELEVATE=0
 
 wait_elevation_key() {
-    [ -r /dev/tty ] || return 1
+    (: </dev/tty) 2>/dev/null || return 1
     printf '%s' "  Not running as root. Press any key within 3 seconds to run elevated; waiting continues normal mode... " >/dev/tty
     old_stty="$(stty -g </dev/tty 2>/dev/null || true)"
     if [ -n "$old_stty" ]; then
@@ -209,6 +209,65 @@ release_proxy_url() {
     echo "$base/download-release-proxy?asset=$asset&tag=$tag"
 }
 
+json_tag_value() {
+    sed -n 's/.*"tag"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1
+}
+
+resolve_latest_tag() {
+    if [ "$TAG" != "latest" ]; then
+        RESOLVED_TAG="$TAG"
+        return
+    fi
+    RESOLVED_TAG=""
+    base="$(server_http_base 2>/dev/null || true)"
+    tmp_latest="${TMPBASE:-${TMPDIR:-/tmp}}/rdev-latest-$$.json"
+    if [ -n "$base" ]; then
+        if dl "$base/api/release/latest" "$tmp_latest" 2>/dev/null && [ -s "$tmp_latest" ]; then
+            RESOLVED_TAG="$(json_tag_value < "$tmp_latest")"
+        fi
+        rm -f "$tmp_latest" 2>/dev/null
+    fi
+    if [ -z "$RESOLVED_TAG" ]; then
+        tmp_hdr="${TMPBASE:-${TMPDIR:-/tmp}}/rdev-latest-$$.hdr"
+        if command -v curl >/dev/null 2>&1; then
+            curl -fsSLI --connect-timeout 5 --max-time 12 "https://github.com/${RDEV_REPO}/releases/latest" > "$tmp_hdr" 2>/dev/null || true
+            RESOLVED_TAG="$(sed -n 's|^[Ll]ocation: .*/tag/\(v[^[:space:]\r]*\).*|\1|p' "$tmp_hdr" | tail -1)"
+        fi
+        rm -f "$tmp_hdr" 2>/dev/null
+    fi
+    if [ -z "$RESOLVED_TAG" ]; then
+        RESOLVED_TAG="latest"
+        echo "  Latest tag could not be resolved; using cache key 'latest'." >&2
+    fi
+}
+
+safe_name() {
+    printf '%s' "$1" | sed 's/[^A-Za-z0-9_.-]/-/g'
+}
+
+cache_lock_acquire() {
+    lock_dir="$1.lock"
+    i=0
+    while ! mkdir "$lock_dir" 2>/dev/null; do
+        i=$((i + 1))
+        [ "$i" -ge 50 ] && return 1
+        sleep 0.1 2>/dev/null || sleep 1
+    done
+    CACHE_LOCK_DIR="$lock_dir"
+    return 0
+}
+
+cache_lock_release() {
+    [ -n "${CACHE_LOCK_DIR:-}" ] && rmdir "$CACHE_LOCK_DIR" 2>/dev/null || true
+    CACHE_LOCK_DIR=""
+}
+
+cache_complete() {
+    bin="$1"
+    dir="$2"
+    [ -f "$dir/.complete" ] && [ -s "$bin" ] && [ -x "$bin" ]
+}
+
 # ── Determine version ──────────────────────────────────────
 if [ -n "$RDEV_VERSION" ]; then
     case "$RDEV_VERSION" in v*) TAG="$RDEV_VERSION" ;; *) TAG="v${RDEV_VERSION}" ;; esac
@@ -286,6 +345,10 @@ linux_rs_asset_suffix() {
 
 # ── Resolve asset and download ─────────────────────────────
 TMPBASE="${TMPDIR:-/tmp}"
+CACHE_BASE="$TMPBASE/rdev-cache"
+mkdir -p "$CACHE_BASE" 2>/dev/null || true
+resolve_latest_tag
+SAFE_TAG="$(safe_name "$RESOLVED_TAG")"
 RUN_BIN=""
 CLIENT_LABEL="rdev-client"
 
@@ -294,21 +357,21 @@ if [ "$RDEV_CLIENT" = "rs" ]; then
     case "$OS/$ARCH" in
         linux/amd64|linux/arm64)
             ASSET="rdev-client-gpu-${OS}-${ARCH}$(linux_rs_asset_suffix).tar.gz"
-            ARCHIVE="$TMPBASE/rdev-client-gpu-${TAG}-${OS}-${ARCH}-$$.tar.gz"
+            ARCHIVE="$TMPBASE/rdev-client-gpu-${SAFE_TAG}-${OS}-${ARCH}-$$.tar.gz"
             ;;
         android/amd64|android/arm64|android/armv7|android/386)
             ASSET_ARCH="$ARCH"
             [ "$ARCH" = "386" ] && ASSET_ARCH="x86"
             ASSET="rdev-client-gpu-${OS}-${ASSET_ARCH}.tar.gz"
-            ARCHIVE="$TMPBASE/rdev-client-gpu-${TAG}-${OS}-${ASSET_ARCH}-$$.tar.gz"
+            ARCHIVE="$TMPBASE/rdev-client-gpu-${SAFE_TAG}-${OS}-${ASSET_ARCH}-$$.tar.gz"
             ;;
         darwin/amd64|darwin/arm64)
             ASSET="rdev-client-gpu-${OS}-${ARCH}.tar.gz"
-            ARCHIVE="$TMPBASE/rdev-client-gpu-${TAG}-${OS}-${ARCH}-$$.tar.gz"
+            ARCHIVE="$TMPBASE/rdev-client-gpu-${SAFE_TAG}-${OS}-${ARCH}-$$.tar.gz"
             ;;
         windows/amd64|windows/arm64)
             ASSET="rdev-client-gpu-windows-${ARCH}.zip"
-            ARCHIVE="$TMPBASE/rdev-client-gpu-${TAG}-windows-${ARCH}-$$.zip"
+            ARCHIVE="$TMPBASE/rdev-client-gpu-${SAFE_TAG}-windows-${ARCH}-$$.zip"
             ;;
         *)
             echo "Error: performance Rust client is not published for ${OS}/${ARCH}" >&2
@@ -316,6 +379,14 @@ if [ "$RDEV_CLIENT" = "rs" ]; then
             ;;
     esac
     GH_URL="$(release_url "$ASSET")"
+    CACHE_KEY="rs-${SAFE_TAG}-${OS}-${ARCH}-$(safe_name "$ASSET")"
+    CACHE_DIR="$CACHE_BASE/$CACHE_KEY"
+    CACHE_BIN="$CACHE_DIR/rdev-client-gpu"
+    [ "$OS" = "windows" ] && CACHE_BIN="$CACHE_DIR/rdev-client-gpu.exe"
+    if cache_complete "$CACHE_BIN" "$CACHE_DIR"; then
+        RUN_BIN="$CACHE_BIN"
+        echo "  Using cached ${CLIENT_LABEL} (${RESOLVED_TAG}, ${OS}/${ARCH})." >&2
+    else
     echo "  Downloading ${CLIENT_LABEL} package (${OS}/${ARCH})..." >&2
     if ! download_with_fallback "$GH_URL" "$ARCHIVE" "$ASSET"; then
         echo "Error: download failed" >&2
@@ -323,7 +394,7 @@ if [ "$RDEV_CLIENT" = "rs" ]; then
         exit 1
     fi
 
-    EXTRACT_DIR="$TMPBASE/rdev-client-gpu-${TAG}-${OS}-${ARCH}-$$"
+    EXTRACT_DIR="$TMPBASE/rdev-client-gpu-${SAFE_TAG}-${OS}-${ARCH}-$$"
     rm -rf "$EXTRACT_DIR" 2>/dev/null
     mkdir -p "$EXTRACT_DIR"
     case "$ASSET" in
@@ -340,6 +411,20 @@ if [ "$RDEV_CLIENT" = "rs" ]; then
     esac
     [ -n "$RUN_BIN" ] || { echo "Error: rdev-client-gpu binary not found in package" >&2; exit 1; }
     chmod +x "$RUN_BIN" 2>/dev/null || true
+    if cache_lock_acquire "$CACHE_DIR"; then
+        rm -rf "$CACHE_DIR.part" 2>/dev/null
+        mkdir -p "$CACHE_DIR.part"
+        cp "$RUN_BIN" "$CACHE_DIR.part/$(basename "$CACHE_BIN")"
+        chmod +x "$CACHE_DIR.part/$(basename "$CACHE_BIN")" 2>/dev/null || true
+        : > "$CACHE_DIR.part/.complete"
+        rm -rf "$CACHE_DIR" 2>/dev/null
+        mv "$CACHE_DIR.part" "$CACHE_DIR"
+        cache_lock_release
+        RUN_BIN="$CACHE_BIN"
+    fi
+    rm -f "$ARCHIVE" 2>/dev/null || true
+    rm -rf "$EXTRACT_DIR" 2>/dev/null || true
+    fi
 else
     ASSET_ARCH="$ARCH"
     if [ "$OS" = "android" ]; then
@@ -352,7 +437,14 @@ else
     BINARY="rdev-client-${OS}-${ASSET_ARCH}"
     [ "$OS" = "windows" ] && BINARY="${BINARY}.exe"
     GH_URL="$(release_url "$BINARY")"
-    RUN_BIN="$TMPBASE/rdev-client-${TAG}-${OS}-${ASSET_ARCH}-$$"
+    CACHE_KEY="go-${SAFE_TAG}-${OS}-${ASSET_ARCH}-$(safe_name "$BINARY")"
+    CACHE_DIR="$CACHE_BASE/$CACHE_KEY"
+    CACHE_BIN="$CACHE_DIR/$BINARY"
+    if cache_complete "$CACHE_BIN" "$CACHE_DIR"; then
+        RUN_BIN="$CACHE_BIN"
+        echo "  Using cached rdev-client (${RESOLVED_TAG}, ${OS}/${ARCH})." >&2
+    else
+    RUN_BIN="$TMPBASE/rdev-client-${SAFE_TAG}-${OS}-${ASSET_ARCH}-$$"
     echo "  Downloading rdev-client (${OS}/${ARCH})..." >&2
     if ! download_with_fallback "$GH_URL" "$RUN_BIN" "$BINARY"; then
         echo "Error: download failed" >&2
@@ -360,6 +452,19 @@ else
         exit 1
     fi
     chmod +x "$RUN_BIN"
+    if cache_lock_acquire "$CACHE_DIR"; then
+        rm -rf "$CACHE_DIR.part" 2>/dev/null
+        mkdir -p "$CACHE_DIR.part"
+        cp "$RUN_BIN" "$CACHE_DIR.part/$BINARY"
+        chmod +x "$CACHE_DIR.part/$BINARY" 2>/dev/null || true
+        : > "$CACHE_DIR.part/.complete"
+        rm -rf "$CACHE_DIR" 2>/dev/null
+        mv "$CACHE_DIR.part" "$CACHE_DIR"
+        cache_lock_release
+        rm -f "$RUN_BIN" 2>/dev/null || true
+        RUN_BIN="$CACHE_BIN"
+    fi
+    fi
 fi
 
 # ── Build args & run ───────────────────────────────────────

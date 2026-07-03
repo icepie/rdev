@@ -179,6 +179,7 @@ Examples:
 	sshPort := portFromAddr(sshAddr)
 
 	srv := server.NewServer()
+	srv.ReleaseVersion = version
 	srv.SSHPort = sshPort
 	srv.HTTPHost = outboundIP + ":" + httpPort
 	srv.TCPPort = tcpPort
@@ -227,6 +228,7 @@ Examples:
 	mux.HandleFunc("/api/devices", srv.HandleTerminalAPI)
 	mux.HandleFunc("/api/batch/devices", srv.HandleBatchDevicesAPI)
 	mux.HandleFunc("/api/config", srv.HandleConfigAPI)
+	mux.HandleFunc("/api/release/latest", srv.HandleReleaseLatestAPI)
 	mux.HandleFunc("/api/vnc/settings", srv.HandleVNCSettingsAPI)
 	mux.HandleFunc("/api/upload", srv.HandleFileUpload)
 	mux.HandleFunc("/download-release", srv.HandleReleaseDownload)

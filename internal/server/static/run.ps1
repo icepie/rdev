@@ -69,6 +69,71 @@ function Get-RDevProxyUrl([string]$Server, [string]$Asset, [string]$Tag) {
     return "$Base/download-release-proxy?asset=$([Uri]::EscapeDataString($Asset))&tag=$([Uri]::EscapeDataString($Tag))"
 }
 
+function Convert-RDevSafeName([string]$Value) {
+    if (-not $Value) { return 'unknown' }
+    return ($Value -replace '[^A-Za-z0-9_.-]', '-')
+}
+
+function Get-RDevLatestTag([string]$Server) {
+    $Base = Get-RDevServerHttpBase $Server
+    if ($Base) {
+        try {
+            $w = New-Object Net.WebClient
+            $w.Headers.Add('User-Agent', 'rdev-runner')
+            $json = $w.DownloadString("$Base/api/release/latest")
+            if ($json -match '"tag"\s*:\s*"([^"]+)"') { return $Matches[1] }
+        } catch {}
+    }
+    try {
+        $w = New-Object Net.WebClient
+        $w.Headers.Add('User-Agent', 'rdev-runner')
+        $json = $w.DownloadString("https://api.github.com/repos/$script:Repo/releases/latest")
+        if ($json -match '"tag_name"\s*:\s*"([^"]+)"') { return $Matches[1] }
+    } catch {}
+    Write-Host "  Latest tag could not be resolved; using cache key 'latest'." -ForegroundColor DarkGray
+    return 'latest'
+}
+
+function Enter-RDevCacheLock([string]$CacheDir) {
+    $Lock = "$CacheDir.lock"
+    for ($i = 0; $i -lt 50; $i++) {
+        try {
+            New-Item -ItemType Directory -Path $Lock -ErrorAction Stop | Out-Null
+            return $Lock
+        } catch {
+            Start-Sleep -Milliseconds 100
+        }
+    }
+    return ''
+}
+
+function Exit-RDevCacheLock([string]$Lock) {
+    if ($Lock) { Remove-Item -Recurse -Force $Lock -EA SilentlyContinue }
+}
+
+function Test-RDevCache([string]$RunPath, [string]$CacheDir) {
+    $Complete = Join-Path $CacheDir '.complete'
+    $f = Get-Item $RunPath -EA SilentlyContinue
+    return ((Test-Path $Complete) -and $f -and $f.Length -gt 0)
+}
+
+function Publish-RDevCache([string]$SourceRunPath, [string]$CacheDir, [string]$CacheRunName) {
+    $Lock = Enter-RDevCacheLock $CacheDir
+    if (-not $Lock) { return '' }
+    try {
+        $Part = "$CacheDir.part"
+        Remove-Item -Recurse -Force $Part -EA SilentlyContinue
+        New-Item -ItemType Directory -Force -Path $Part | Out-Null
+        Copy-Item $SourceRunPath (Join-Path $Part $CacheRunName) -Force
+        New-Item -ItemType File -Force -Path (Join-Path $Part '.complete') | Out-Null
+        Remove-Item -Recurse -Force $CacheDir -EA SilentlyContinue
+        Move-Item $Part $CacheDir -Force
+        return (Join-Path $CacheDir $CacheRunName)
+    } finally {
+        Exit-RDevCacheLock $Lock
+    }
+}
+
 # -- WinPTY fallback for legacy Windows -----------------------
 $script:WinPTYVersion = '0.4.3'
 $script:WinPTYAsset = "winpty-$script:WinPTYVersion-msvc2015.zip"
@@ -239,6 +304,10 @@ function global:RDev {
     if ($Version) { if ($Version -like 'v*') { $Tag = $Version } else { $Tag = "v$Version" } } else {
         $Tag = 'latest'
     }
+    if ($Tag -eq 'latest') { $ResolvedTag = Get-RDevLatestTag $Server } else { $ResolvedTag = $Tag }
+    $SafeTag = Convert-RDevSafeName $ResolvedTag
+    $CacheBase = Join-Path $env:TEMP 'rdev-cache'
+    New-Item -ItemType Directory -Force -Path $CacheBase | Out-Null
 
     $Base = "https://github.com/$script:Repo/releases"
     if ($Client -eq 'rs') {
@@ -271,11 +340,24 @@ function global:RDev {
     }
 
     # ── Download (RDev server proxy → mirror → github) ───────
-    $SafeTag = $Tag -replace '[^A-Za-z0-9_.-]', '-'
-    $OutPath = if ($PackageKind -eq 'zip') { Join-Path $env:TEMP "rdev-client-gpu-$SafeTag-windows-amd64.zip" } else { Join-Path $env:TEMP "rdev-client-$SafeTag-windows-$Arch.exe" }
+    if ($PackageKind -eq 'zip') { $OutPath = Join-Path $env:TEMP "rdev-client-gpu-$SafeTag-windows-$Arch.zip" } else { $OutPath = Join-Path $env:TEMP "rdev-client-$SafeTag-windows-$Arch.exe" }
     $OK = $false
 
-    $ClientName = if ($Client -eq 'rs') { 'rdev-client-gpu' } else { 'rdev-client' }
+    if ($Client -eq 'rs') {
+        $ClientName = 'rdev-client-gpu'
+        $CacheKey = "rs-$SafeTag-windows-$Arch-$(Convert-RDevSafeName $Asset)"
+        $CacheRunName = 'rdev-client-gpu.exe'
+    } else {
+        $ClientName = 'rdev-client'
+        $CacheKey = "go-$SafeTag-windows-$Arch-$(Convert-RDevSafeName $Asset)"
+        $CacheRunName = $Asset
+    }
+    $CacheDir = Join-Path $CacheBase $CacheKey
+    $CacheRunPath = Join-Path $CacheDir $CacheRunName
+    if (Test-RDevCache $CacheRunPath $CacheDir) {
+        $RunPath = $CacheRunPath
+        Write-Host "  Using cached $ClientName ($ResolvedTag, windows/$Arch)." -ForegroundColor Green
+    } else {
     Write-Host "  Downloading $ClientName package (windows/$Arch)..." -ForegroundColor Cyan
 
     $ProxyUrl = Get-RDevProxyUrl $Server $Asset $Tag
@@ -313,13 +395,16 @@ function global:RDev {
     if (-not $OK) { Write-Error "Download failed"; return }
 
     if ($PackageKind -eq 'zip') {
-        $ExtractDir = Join-Path $env:TEMP "rdev-client-gpu-$SafeTag-windows-amd64"
+        $ExtractDir = Join-Path $env:TEMP "rdev-client-gpu-$SafeTag-windows-$Arch"
         if (-not (Expand-ZipLegacy $OutPath $ExtractDir)) { Write-Error "Package unzip failed"; return }
         $Exe = Get-ChildItem -Path $ExtractDir -Recurse -Filter 'rdev-client-gpu.exe' -EA SilentlyContinue | Select-Object -First 1
         if (-not $Exe) { Write-Error "rdev-client-gpu.exe not found in package"; return }
         $RunPath = $Exe.FullName
     } else {
         $RunPath = $OutPath
+    }
+    $Published = Publish-RDevCache $RunPath $CacheDir $CacheRunName
+    if ($Published) { $RunPath = $Published }
     }
 
     $WinPTYDir = Install-WinPTYIfLegacy $Arch $Mirror
