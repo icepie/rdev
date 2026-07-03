@@ -53,6 +53,9 @@ const (
 	MsgDesktopInput MessageType = "desktop_input" // S->C: inject desktop mouse/keyboard input
 	MsgDesktopClose MessageType = "desktop_close" // bidir: close desktop session
 
+	// GPU desktop tunnel over shared TCP/KCP transport.
+	MsgGPUDesktopTunnel MessageType = "gpu_desktop_tunnel"
+
 	// Legacy text-frame data types (kept for reference, use binary frames instead)
 	MsgData       MessageType = "data"
 	MsgStderrData MessageType = "stderr"

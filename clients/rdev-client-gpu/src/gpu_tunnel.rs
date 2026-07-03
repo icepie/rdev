@@ -16,11 +16,14 @@ use tokio::{
     },
     task::JoinHandle,
 };
+use tokio_kcp::{KcpConfig, KcpNoDelayConfig, KcpStream};
 use tokio_tungstenite::tungstenite::Message as WsMessage;
 use tracing::{debug, info, warn};
 use url::Url;
 
 use crate::config::Args;
+use crate::protocol::{self, Message, MessageType};
+use crate::stream_frame;
 use crate::ws_redirect::connect_async_follow_redirects;
 
 const FRAME_OPEN: u8 = 1;
@@ -145,6 +148,17 @@ pub fn spawn_supervisor(
 }
 
 async fn run_once(args: &Args, instance_id: &str) -> Result<()> {
+    for endpoint in server_endpoints(&args.server) {
+        if endpoint.starts_with("tcp://")
+            || endpoint.starts_with("kcp://")
+            || endpoint.starts_with("udp://")
+        {
+            match run_once_stream_tunnel(args, instance_id, &endpoint).await {
+                Ok(()) => return Ok(()),
+                Err(err) => warn!("gpu desktop stream tunnel failed for {endpoint}: {err:#}"),
+            }
+        }
+    }
     let tunnel_url = tunnel_url(args, instance_id)?;
     let local_addr: SocketAddr = args
         .gpu_desktop_local
@@ -216,6 +230,135 @@ async fn run_once(args: &Args, instance_id: &str) -> Result<()> {
         }
     }
     Ok(())
+}
+
+trait AsyncReadWrite: tokio::io::AsyncRead + tokio::io::AsyncWrite {}
+impl<T: tokio::io::AsyncRead + tokio::io::AsyncWrite + ?Sized> AsyncReadWrite for T {}
+
+async fn run_once_stream_tunnel(args: &Args, instance_id: &str, endpoint: &str) -> Result<()> {
+    let local_addr: SocketAddr = args
+        .gpu_desktop_local
+        .parse()
+        .with_context(|| format!("invalid --gpu-desktop-local {}", args.gpu_desktop_local))?;
+    let addr = endpoint_addr(endpoint);
+    info!("connecting gpu desktop tcp tunnel to {endpoint}; local={local_addr}");
+    let stream: Box<dyn AsyncReadWrite + Unpin + Send> =
+        if endpoint.starts_with("kcp://") || endpoint.starts_with("udp://") {
+            Box::new(KcpStream::connect(&kcp_config(), addr.parse()?).await?)
+        } else {
+            Box::new(
+                TcpStream::connect(addr)
+                    .await
+                    .context("connect gpu desktop tcp tunnel")?,
+            )
+        };
+    let (mut reader, mut writer) = tokio::io::split(stream);
+    let hello = Message {
+        ty: Some(MessageType::GpuDesktopTunnel),
+        client_id: args.id.clone(),
+        instance_id: instance_id.to_string(),
+        password: args.password.clone(),
+        ..Default::default()
+    };
+    stream_frame::write_frame(
+        &mut writer,
+        stream_frame::KIND_JSON,
+        protocol::encode_message(&hello)?.as_bytes(),
+    )
+    .await?;
+    let (out_tx, mut out_rx) = mpsc::channel::<TunnelFrame>(TUNNEL_OUTBOUND_QUEUE);
+    let mut streams: HashMap<u64, mpsc::Sender<Vec<u8>>> = HashMap::new();
+    let mut ping_interval = tokio::time::interval(TUNNEL_PING_PERIOD);
+    let mut last_control = Instant::now();
+    loop {
+        tokio::select! {
+            outbound = out_rx.recv() => {
+                let Some(frame) = outbound else { break; };
+                stream_frame::write_frame(&mut writer, stream_frame::KIND_BINARY, &encode_frame(frame.typ, frame.stream_id, &frame.payload)).await?;
+            }
+            _ = ping_interval.tick() => {
+                if last_control.elapsed() > TUNNEL_READ_WAIT {
+                    return Err(anyhow!("gpu desktop tcp tunnel pong timeout"));
+                }
+                stream_frame::write_frame(&mut writer, stream_frame::KIND_PING, b"gpu").await?;
+            }
+            inbound = stream_frame::read_frame(&mut reader) => {
+                let frame = inbound?;
+                last_control = Instant::now();
+                match frame.kind {
+                    stream_frame::KIND_BINARY => {
+                        let frame = decode_frame(&frame.payload)?;
+                        match frame.typ {
+                            FRAME_OPEN => {
+                                let open = serde_json::from_slice::<TunnelOpen>(&frame.payload).ok();
+                                let stream_id = open.map(|open| open.stream_id).unwrap_or(frame.stream_id);
+                                let (stream_tx, stream_rx) = mpsc::channel::<Vec<u8>>(128);
+                                streams.insert(stream_id, stream_tx);
+                                tokio::spawn(proxy_stream(stream_id, local_addr, stream_rx, out_tx.clone()));
+                            }
+                            FRAME_DATA => {
+                                if let Some(stream) = streams.get(&frame.stream_id) {
+                                    let _ = stream.send(frame.payload).await;
+                                }
+                            }
+                            FRAME_CLOSE => {
+                                streams.remove(&frame.stream_id);
+                            }
+                            other => debug!("ignored gpu desktop tcp tunnel frame type={other}"),
+                        }
+                    }
+                    stream_frame::KIND_PING => stream_frame::write_frame(&mut writer, stream_frame::KIND_PONG, &frame.payload).await?,
+                    stream_frame::KIND_PONG => {}
+                    stream_frame::KIND_CLOSE => return Err(anyhow!("gpu desktop tcp tunnel closed by server")),
+                    _ => {}
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn server_endpoints(server: &str) -> Vec<String> {
+    server
+        .split(',')
+        .map(|part| part.trim())
+        .filter(|part| !part.is_empty())
+        .map(|part| {
+            if part.contains("://") {
+                part.to_string()
+            } else {
+                format!("tcp://{part}")
+            }
+        })
+        .collect()
+}
+
+fn endpoint_addr(endpoint: &str) -> String {
+    let mut value = endpoint
+        .trim()
+        .trim_start_matches("tcp://")
+        .trim_start_matches("kcp://")
+        .trim_start_matches("udp://")
+        .to_string();
+    if let Some((addr, _)) = value.split_once('/') {
+        value = addr.to_string();
+    }
+    value
+}
+
+fn kcp_config() -> KcpConfig {
+    KcpConfig {
+        mtu: 1200,
+        nodelay: KcpNoDelayConfig {
+            nodelay: true,
+            interval: 20,
+            resend: 2,
+            nc: true,
+        },
+        wnd_size: (256, 256),
+        stream: true,
+        ..Default::default()
+    }
 }
 
 async fn proxy_stream(

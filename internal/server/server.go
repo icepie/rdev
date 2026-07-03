@@ -18,8 +18,10 @@ import (
 	"time"
 
 	"github.com/lxzan/gws"
+	kcp "github.com/xtaci/kcp-go/v5"
 	gossh "golang.org/x/crypto/ssh"
 	"rdev/internal/protocol"
+	tframe "rdev/internal/transport"
 )
 
 //go:embed static
@@ -55,6 +57,7 @@ type ClientConn struct {
 	InstanceID  string
 	Version     string
 	Conn        *gws.Conn
+	Transport   DeviceTransport
 	ConnectedAt time.Time
 	Password    string
 	Sessions    map[string]*ProxySession
@@ -64,6 +67,66 @@ type ClientConn struct {
 	mu          sync.Mutex
 }
 
+type DeviceTransport interface {
+	WriteJSON([]byte) error
+	WriteBinary([]byte) error
+	WritePing([]byte) error
+	Close(string) error
+	RemoteAddr() string
+}
+
+type wsDeviceTransport struct{ conn *gws.Conn }
+
+func (t *wsDeviceTransport) WriteJSON(data []byte) error {
+	_ = t.conn.SetWriteDeadline(time.Now().Add(wsWriteWait))
+	defer t.conn.SetWriteDeadline(time.Time{})
+	return t.conn.WriteMessage(gws.OpcodeText, data)
+}
+
+func (t *wsDeviceTransport) WriteBinary(data []byte) error {
+	_ = t.conn.SetWriteDeadline(time.Now().Add(wsWriteWait))
+	defer t.conn.SetWriteDeadline(time.Time{})
+	return t.conn.WriteMessage(gws.OpcodeBinary, data)
+}
+
+func (t *wsDeviceTransport) WritePing(payload []byte) error {
+	_ = t.conn.SetWriteDeadline(time.Now().Add(wsWriteWait))
+	defer t.conn.SetWriteDeadline(time.Time{})
+	return t.conn.WritePing(payload)
+}
+
+func (t *wsDeviceTransport) Close(reason string) error {
+	return t.conn.WriteClose(1000, []byte(reason))
+}
+
+func (t *wsDeviceTransport) RemoteAddr() string { return "" }
+
+type streamDeviceTransport struct {
+	conn net.Conn
+	mu   sync.Mutex
+}
+
+func (t *streamDeviceTransport) write(kind byte, payload []byte) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	_ = t.conn.SetWriteDeadline(time.Now().Add(wsWriteWait))
+	defer t.conn.SetWriteDeadline(time.Time{})
+	return tframe.WriteFrame(t.conn, kind, payload)
+}
+
+func (t *streamDeviceTransport) WriteJSON(data []byte) error { return t.write(tframe.KindJSON, data) }
+func (t *streamDeviceTransport) WriteBinary(data []byte) error {
+	return t.write(tframe.KindBinary, data)
+}
+func (t *streamDeviceTransport) WritePing(payload []byte) error {
+	return t.write(tframe.KindPing, payload)
+}
+func (t *streamDeviceTransport) Close(reason string) error {
+	_ = t.write(tframe.KindClose, []byte(reason))
+	return t.conn.Close()
+}
+func (t *streamDeviceTransport) RemoteAddr() string { return t.conn.RemoteAddr().String() }
+
 // Send sends a JSON control message to the client (text frame)
 func (c *ClientConn) Send(msg *protocol.Message) error {
 	data, err := protocol.Encode(msg)
@@ -72,9 +135,10 @@ func (c *ClientConn) Send(msg *protocol.Message) error {
 	}
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
-	_ = c.Conn.SetWriteDeadline(time.Now().Add(wsWriteWait))
-	defer c.Conn.SetWriteDeadline(time.Time{})
-	return c.Conn.WriteMessage(gws.OpcodeText, data)
+	if c.Transport == nil {
+		return net.ErrClosed
+	}
+	return c.Transport.WriteJSON(data)
 }
 
 // SendBinary sends a binary data frame to the client
@@ -82,9 +146,10 @@ func (c *ClientConn) SendBinary(typ byte, id string, data []byte) error {
 	frame := protocol.EncodeBinFrame(typ, id, data)
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
-	_ = c.Conn.SetWriteDeadline(time.Now().Add(wsWriteWait))
-	defer c.Conn.SetWriteDeadline(time.Time{})
-	return c.Conn.WriteMessage(gws.OpcodeBinary, frame)
+	if c.Transport == nil {
+		return net.ErrClosed
+	}
+	return c.Transport.WriteBinary(frame)
 }
 
 // SendFilePut sends a file to the client device (binary frame)
@@ -92,53 +157,59 @@ func (c *ClientConn) SendFilePut(id, path string, mode int32, fileData []byte) e
 	frame := protocol.EncodeBinFilePut(id, path, mode, fileData)
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
-	_ = c.Conn.SetWriteDeadline(time.Now().Add(wsWriteWait))
-	defer c.Conn.SetWriteDeadline(time.Time{})
-	return c.Conn.WriteMessage(gws.OpcodeBinary, frame)
+	if c.Transport == nil {
+		return net.ErrClosed
+	}
+	return c.Transport.WriteBinary(frame)
 }
 
 func (c *ClientConn) SendFileStart(id, path string, mode int32) error {
 	frame := protocol.EncodeBinFileStart(id, path, mode)
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
-	_ = c.Conn.SetWriteDeadline(time.Now().Add(wsWriteWait))
-	defer c.Conn.SetWriteDeadline(time.Time{})
-	return c.Conn.WriteMessage(gws.OpcodeBinary, frame)
+	if c.Transport == nil {
+		return net.ErrClosed
+	}
+	return c.Transport.WriteBinary(frame)
 }
 
 func (c *ClientConn) SendFileChunk(id string, data []byte) error {
 	frame := protocol.EncodeBinFrame(protocol.BinFileChunk, id, data)
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
-	_ = c.Conn.SetWriteDeadline(time.Now().Add(wsWriteWait))
-	defer c.Conn.SetWriteDeadline(time.Time{})
-	return c.Conn.WriteMessage(gws.OpcodeBinary, frame)
+	if c.Transport == nil {
+		return net.ErrClosed
+	}
+	return c.Transport.WriteBinary(frame)
 }
 
 func (c *ClientConn) SendFileEnd(id string) error {
 	frame := protocol.EncodeBinFrame(protocol.BinFileEnd, id, nil)
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
-	_ = c.Conn.SetWriteDeadline(time.Now().Add(wsWriteWait))
-	defer c.Conn.SetWriteDeadline(time.Time{})
-	return c.Conn.WriteMessage(gws.OpcodeBinary, frame)
+	if c.Transport == nil {
+		return net.ErrClosed
+	}
+	return c.Transport.WriteBinary(frame)
 }
 
 func (c *ClientConn) SendBinaryOffset(typ byte, id string, offset int64, data []byte) error {
 	frame := protocol.EncodeBinFrameOffset(typ, id, offset, data)
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
-	_ = c.Conn.SetWriteDeadline(time.Now().Add(wsWriteWait))
-	defer c.Conn.SetWriteDeadline(time.Time{})
-	return c.Conn.WriteMessage(gws.OpcodeBinary, frame)
+	if c.Transport == nil {
+		return net.ErrClosed
+	}
+	return c.Transport.WriteBinary(frame)
 }
 
 func (c *ClientConn) SendPing() error {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
-	_ = c.Conn.SetWriteDeadline(time.Now().Add(wsWriteWait))
-	defer c.Conn.SetWriteDeadline(time.Time{})
-	return c.Conn.WritePing(nil)
+	if c.Transport == nil {
+		return net.ErrClosed
+	}
+	return c.Transport.WritePing(nil)
 }
 
 // ProxySession represents a proxied SSH session (shell/exec/sftp)
@@ -467,6 +538,8 @@ type Server struct {
 	// Public config (set by main) for API/UI
 	SSHPort          string // e.g. "2222"
 	HTTPHost         string // e.g. "192.168.1.100:8080"
+	TCPPort          string
+	KCPPort          string
 	AdminToken       string // optional token for web APIs and browser WebSockets
 	VNCAddr          string // optional VNC/RFB listen address
 	MaxSessions      int    // maximum concurrent sessions per device
@@ -566,9 +639,7 @@ func (h *wsHandler) OnPing(socket *gws.Conn, payload []byte) {
 	if client == nil || client.Conn != socket {
 		return
 	}
-	client.writeMu.Lock()
 	_ = socket.WritePong(payload)
-	client.writeMu.Unlock()
 }
 
 func (h *wsHandler) OnPong(socket *gws.Conn, payload []byte) {
@@ -648,6 +719,7 @@ func (h *wsHandler) handleRegister(socket *gws.Conn, msg *protocol.Message) {
 		InstanceID:  instanceID,
 		Version:     msg.ClientVersion,
 		Conn:        socket,
+		Transport:   &wsDeviceTransport{conn: socket},
 		ConnectedAt: time.Now(),
 		Password:    msg.Password,
 		Desktop:     cloneDesktopCapabilities(msg.DesktopCapabilities),
@@ -659,11 +731,11 @@ func (h *wsHandler) handleRegister(socket *gws.Conn, msg *protocol.Message) {
 	old, assignedID, duplicate := h.srv.registerClient(client)
 	socket.Session().Store("clientID", assignedID)
 
-	if old != nil && old.Conn != socket {
+	if old != nil && old.Transport != client.Transport {
 		log.Printf("client reconnected: requested=%s assigned=%s", clientID, assignedID)
 		closeClientResources(h.srv, old)
-		if old.Conn != nil {
-			_ = old.Conn.WriteClose(1000, []byte("connection replaced"))
+		if old.Transport != nil {
+			_ = old.Transport.Close("connection replaced")
 		}
 	} else if duplicate {
 		log.Printf("client duplicate ID assigned: requested=%s assigned=%s", clientID, assignedID)
@@ -788,6 +860,17 @@ func (s *Server) unregisterClient(id string, conn *gws.Conn) (*ClientConn, bool)
 	return client, true
 }
 
+func (s *Server) unregisterClientTransport(id string, transport DeviceTransport) (*ClientConn, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	client, ok := s.clients[id]
+	if !ok || client.Transport != transport {
+		return nil, false
+	}
+	delete(s.clients, id)
+	return client, true
+}
+
 func (s *Server) clientPingLoop(client *ClientConn) {
 	ticker := time.NewTicker(wsPingPeriod)
 	defer ticker.Stop()
@@ -796,7 +879,9 @@ func (s *Server) clientPingLoop(client *ClientConn) {
 			return
 		}
 		if err := client.SendPing(); err != nil {
-			_ = client.Conn.WriteClose(1001, []byte("ping failed"))
+			if client.Transport != nil {
+				_ = client.Transport.Close("ping failed")
+			}
 			return
 		}
 	}
@@ -812,16 +897,6 @@ func sendBytes(ch chan []byte, data []byte, label string) {
 
 // handleBinaryMessage processes binary data frames from device clients
 func (h *wsHandler) handleBinaryMessage(socket *gws.Conn, raw []byte) {
-	if h.srv.handleFileManagerBinary(raw) {
-		return
-	}
-	typ, id, payload, err := protocol.DecodeBinFrame(raw)
-	if err != nil {
-		return
-	}
-
-	// Avoid per-frame logs on hot data paths; this handler can run thousands of times per second.
-
 	clientID, _ := socket.Session().Load("clientID")
 	if clientID == nil {
 		return
@@ -833,37 +908,179 @@ func (h *wsHandler) handleBinaryMessage(socket *gws.Conn, raw []byte) {
 	if !ok || client.Conn != socket {
 		return
 	}
+	h.srv.handleClientBinary(client, raw)
+}
 
-	// Copy payload since message buffer will be recycled by gws
-	data := make([]byte, len(payload))
-	copy(data, payload)
+func (s *Server) ServeTCP(addr string) (net.Listener, error) {
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return nil, err
+	}
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go s.handleStreamDeviceConn(conn, "tcp")
+		}
+	}()
+	return ln, nil
+}
 
+func (s *Server) ServeKCP(addr string) (*kcp.Listener, error) {
+	ln, err := kcp.ListenWithOptions(addr, nil, 0, 0)
+	if err != nil {
+		return nil, err
+	}
+	go func() {
+		for {
+			conn, err := ln.AcceptKCP()
+			if err != nil {
+				return
+			}
+			conn.SetNoDelay(1, 20, 2, 1)
+			conn.SetWindowSize(256, 256)
+			conn.SetMtu(1200)
+			conn.SetStreamMode(true)
+			conn.SetWriteDelay(false)
+			go s.handleStreamDeviceConn(conn, "kcp")
+		}
+	}()
+	return ln, nil
+}
+
+func (s *Server) handleStreamDeviceConn(conn net.Conn, label string) {
+	transport := &streamDeviceTransport{conn: conn}
+	var clientID string
+	var registered bool
+	defer func() {
+		if registered {
+			if client, ok := s.unregisterClientTransport(clientID, transport); ok {
+				closeClientResources(s, client)
+				log.Printf("client unregistered: %s", clientID)
+			}
+		}
+		conn.Close()
+	}()
+
+	_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+	for {
+		frame, err := tframe.ReadFrame(conn)
+		if err != nil {
+			return
+		}
+		_ = conn.SetReadDeadline(time.Now().Add(wsReadWait))
+		switch frame.Kind {
+		case tframe.KindJSON:
+			msg, err := protocol.Decode(frame.Payload)
+			if err != nil {
+				continue
+			}
+			if !registered {
+				if msg.Type == protocol.MsgGPUDesktopTunnel {
+					s.handleGPUDesktopStreamTunnel(conn, msg)
+					return
+				}
+				if msg.Type != protocol.MsgRegister {
+					return
+				}
+				assigned, ok := s.registerStreamClient(transport, msg, label)
+				if !ok {
+					return
+				}
+				clientID = assigned
+				registered = true
+				continue
+			}
+			client := s.clientByID(clientID)
+			if client == nil || client.Transport != transport {
+				return
+			}
+			s.handleClientMessage(client, msg)
+		case tframe.KindBinary:
+			if !registered {
+				continue
+			}
+			client := s.clientByID(clientID)
+			if client == nil || client.Transport != transport {
+				return
+			}
+			s.handleClientBinary(client, frame.Payload)
+		case tframe.KindPing:
+			_ = transport.write(tframe.KindPong, frame.Payload)
+		case tframe.KindPong:
+		case tframe.KindClose:
+			return
+		}
+	}
+}
+
+func (s *Server) registerStreamClient(transport DeviceTransport, msg *protocol.Message, label string) (string, bool) {
+	clientID := strings.TrimSpace(msg.ClientID)
+	if clientID == "" {
+		_ = transport.Close("missing client id")
+		return "", false
+	}
+	instanceID := strings.TrimSpace(msg.InstanceID)
+	client := &ClientConn{
+		ID:          clientID,
+		RequestedID: clientID,
+		InstanceID:  instanceID,
+		Version:     msg.ClientVersion,
+		Transport:   transport,
+		ConnectedAt: time.Now(),
+		Password:    msg.Password,
+		Desktop:     cloneDesktopCapabilities(msg.DesktopCapabilities),
+		Sessions:    make(map[string]*ProxySession),
+		Forwards:    make(map[string]*ProxyForward),
+	}
+	old, assignedID, duplicate := s.registerClient(client)
+	if old != nil && old.Transport != transport {
+		log.Printf("client reconnected via %s: requested=%s assigned=%s", label, clientID, assignedID)
+		closeClientResources(s, old)
+		if old.Transport != nil {
+			_ = old.Transport.Close("connection replaced")
+		}
+	} else if duplicate {
+		log.Printf("client duplicate ID assigned via %s: requested=%s assigned=%s", label, clientID, assignedID)
+	} else {
+		log.Printf("client registered via %s: %s", label, assignedID)
+	}
+	_ = client.Send(&protocol.Message{Type: protocol.MsgRegister, ClientID: assignedID, InstanceID: instanceID, SSHPort: s.SSHPort, HTTPHost: s.HTTPHost})
+	go s.clientPingLoop(client)
+	return assignedID, true
+}
+
+func (s *Server) handleClientBinary(client *ClientConn, raw []byte) {
+	if s.handleFileManagerBinary(raw) {
+		return
+	}
+	typ, id, payload, err := protocol.DecodeBinFrame(raw)
+	if err != nil {
+		return
+	}
+	data := append([]byte(nil), payload...)
 	switch typ {
 	case protocol.BinData:
-		sess := h.srv.getSession(id)
+		sess := s.getSession(id)
 		if sess != nil && len(data) > 0 {
 			sendBytes(sess.WriteCh, data, "session stdout")
-			sess.BroadcastOutput(data) // notify observers
-		} else if len(data) > 0 {
-			log.Printf("dropping session stdout: session not found id=%s bytes=%d", id, len(data))
+			sess.BroadcastOutput(data)
 		}
-
 	case protocol.BinStderr:
-		sess := h.srv.getSession(id)
+		sess := s.getSession(id)
 		if sess != nil && len(data) > 0 {
 			sendBytes(sess.StderrCh, data, "session stderr")
-			sess.BroadcastStderr(data) // notify observers
-		} else if len(data) > 0 {
-			log.Printf("dropping session stderr: session not found id=%s bytes=%d", id, len(data))
+			sess.BroadcastStderr(data)
 		}
-
 	case protocol.BinTCPData:
-		fwd := h.srv.getForward(id)
+		fwd := s.getForward(id)
 		if fwd != nil && len(data) > 0 {
 			sendBytes(fwd.WriteCh, data, "tcp forward")
 		}
 	case protocol.BinDesktopFrame:
-		h.srv.handleDesktopFrame(id, data)
+		s.handleDesktopFrame(id, data)
 	}
 }
 
@@ -1361,6 +1578,8 @@ func (s *Server) HandleConfigAPI(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{
 		"sshPort":      s.SSHPort,
 		"httpHost":     s.HTTPHost,
+		"tcpPort":      s.TCPPort,
+		"kcpPort":      s.KCPPort,
 		"vncAddr":      s.VNCAddr,
 		"authRequired": map[bool]string{true: "true", false: "false"}[s.AdminToken != ""],
 	})

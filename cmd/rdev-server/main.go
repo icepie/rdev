@@ -20,6 +20,8 @@ var version = "dev"
 func main() {
 	var (
 		httpAddr         = ":8080"
+		tcpAddr          = ":8081"
+		kcpAddr          = ":8082"
 		sshAddr          = ":2222"
 		dataDir          = ""
 		adminToken       = ""
@@ -36,6 +38,16 @@ func main() {
 		case "--http", "-h":
 			if i+1 < len(os.Args) {
 				httpAddr = os.Args[i+1]
+				i++
+			}
+		case "--tcp":
+			if i+1 < len(os.Args) {
+				tcpAddr = os.Args[i+1]
+				i++
+			}
+		case "--kcp", "--udp":
+			if i+1 < len(os.Args) {
+				kcpAddr = os.Args[i+1]
 				i++
 			}
 		case "--ssh", "-s":
@@ -95,6 +107,8 @@ func main() {
 
 Options:
   --http, -h  HTTP/WS listen address (default :8080)
+  --tcp       TCP client listen address for control and GPU tunnel (default :8081)
+  --kcp       KCP/UDP client listen address for control and GPU tunnel (default :8082)
   --ssh, -s   SSH listen address (default :2222)
   --data, -d  Data directory for host key & authorized_keys (default ~/.rdev)
   --admin-token, -t  Token for Web UI APIs, terminal, batch, upload (optional)
@@ -128,6 +142,12 @@ Examples:
 	if env := os.Getenv("RDEV_AUTO_UPDATE"); env != "" {
 		autoUpdate = parseBoolDefault(env, autoUpdate)
 	}
+	if env := os.Getenv("RDEV_TCP_ADDR"); env != "" {
+		tcpAddr = env
+	}
+	if env := os.Getenv("RDEV_KCP_ADDR"); env != "" {
+		kcpAddr = env
+	}
 	if env := os.Getenv("RDEV_UPDATE_INTERVAL"); env != "" {
 		if d, err := time.ParseDuration(env); err == nil && d > 0 {
 			updateInterval = d
@@ -154,11 +174,15 @@ Examples:
 	// Detect outbound IP early for connection hints
 	outboundIP := detectOutboundIP()
 	httpPort := portFromAddr(httpAddr)
+	tcpPort := portFromAddr(tcpAddr)
+	kcpPort := portFromAddr(kcpAddr)
 	sshPort := portFromAddr(sshAddr)
 
 	srv := server.NewServer()
 	srv.SSHPort = sshPort
 	srv.HTTPHost = outboundIP + ":" + httpPort
+	srv.TCPPort = tcpPort
+	srv.KCPPort = kcpPort
 	srv.AdminToken = adminToken
 	if maxSessions > 0 {
 		srv.MaxSessions = maxSessions
@@ -214,12 +238,34 @@ Examples:
 			log.Fatalf("SSH server error: %v", err)
 		}
 	}()
+	if strings.TrimSpace(tcpAddr) != "" {
+		tcpListener, err := srv.ServeTCP(tcpAddr)
+		if err != nil {
+			log.Fatalf("TCP client listen error: %v", err)
+		}
+		defer tcpListener.Close()
+		log.Printf("TCP client server listening on %s", tcpAddr)
+	}
+	if strings.TrimSpace(kcpAddr) != "" {
+		kcpListener, err := srv.ServeKCP(kcpAddr)
+		if err != nil {
+			log.Fatalf("KCP client listen error: %v", err)
+		}
+		defer kcpListener.Close()
+		log.Printf("KCP client server listening on %s", kcpAddr)
+	}
 
 	fmt.Println()
 	fmt.Println("  ╔════════════════════════════════════════════════╗")
 	fmt.Println("  ║          RDev Remote Debug Server              ║")
 	fmt.Println("  ╠════════════════════════════════════════════════╣")
 	fmt.Printf("  ║  Web:    http://%s:%s                  ║\n", outboundIP, httpPort)
+	if tcpAddr != "" {
+		fmt.Printf("  ║  TCP:    %s:%s                       ║\n", outboundIP, tcpPort)
+	}
+	if kcpAddr != "" {
+		fmt.Printf("  ║  KCP:    %s:%s                       ║\n", outboundIP, kcpPort)
+	}
 	fmt.Printf("  ║  SSH:    %s:%s                       ║\n", outboundIP, sshPort)
 	fmt.Printf("  ║  Data:   %-37s║\n", dataDir)
 	if adminToken != "" {
@@ -239,7 +285,14 @@ Examples:
 	// Print connection examples — server is ready now
 	fmt.Println()
 	fmt.Println("  ── Connection ──────────────────────────────────")
-	fmt.Printf("  Client:   ./rdev-client -s ws://%s:%s -i <device-id>\n", outboundIP, httpPort)
+	if tcpAddr != "" {
+		fmt.Printf("  Client:   ./rdev-client -s tcp://%s:%s -i <device-id>\n", outboundIP, tcpPort)
+	}
+	if kcpAddr != "" {
+		fmt.Printf("  KCP:      ./rdev-client -s kcp://%s:%s -i <device-id>\n", outboundIP, kcpPort)
+	}
+	fmt.Printf("  WS:       ./rdev-client -s ws://%s:%s -i <device-id>\n", outboundIP, httpPort)
+	fmt.Printf("  Multi:    ./rdev-client -s tcp://%s:%s,kcp://%s:%s,ws://%s:%s -i <device-id>\n", outboundIP, tcpPort, outboundIP, kcpPort, outboundIP, httpPort)
 	fmt.Printf("  SSH:      ssh <device-id>@%s -p %s\n", outboundIP, sshPort)
 	fmt.Printf("  Dashboard: http://%s:%s\n", outboundIP, httpPort)
 	if vncAddr != "" {

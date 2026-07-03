@@ -9,12 +9,15 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/lxzan/gws"
+	"rdev/internal/protocol"
+	tframe "rdev/internal/transport"
 )
 
 const (
@@ -44,6 +47,8 @@ type gpuDesktopStream struct {
 type gpuDesktopTunnel struct {
 	deviceID string
 	conn     *gws.Conn
+	stream   net.Conn
+	streamMu sync.Mutex
 	send     chan []byte
 	streams  map[uint64]*gpuDesktopStream
 	mu       sync.Mutex
@@ -148,6 +153,16 @@ func newGPUDesktopTunnel(deviceID string, conn *gws.Conn) *gpuDesktopTunnel {
 	}
 }
 
+func newGPUDesktopStreamTunnel(deviceID string, conn net.Conn) *gpuDesktopTunnel {
+	return &gpuDesktopTunnel{
+		deviceID: deviceID,
+		stream:   conn,
+		send:     make(chan []byte, gpuDesktopTunnelSendQueue),
+		streams:  make(map[uint64]*gpuDesktopStream),
+		closed:   make(chan struct{}),
+	}
+}
+
 func (s *Server) registerGPUDesktopTunnel(tunnel *gpuDesktopTunnel) {
 	s.gpuDesktopMu.Lock()
 	if old := s.gpuDesktopTunnels[tunnel.deviceID]; old != nil {
@@ -192,14 +207,12 @@ func (t *gpuDesktopTunnel) writeLoop() {
 	for {
 		select {
 		case payload := <-t.send:
-			_ = t.conn.SetDeadline(time.Now().Add(gpuDesktopTunnelWriteWait))
-			if err := t.conn.WriteMessage(gws.OpcodeBinary, payload); err != nil {
+			if err := t.writePayload(payload); err != nil {
 				t.close()
 				return
 			}
 		case <-ticker.C:
-			_ = t.conn.SetDeadline(time.Now().Add(gpuDesktopTunnelWriteWait))
-			if err := t.conn.WritePing(nil); err != nil {
+			if err := t.writePing(); err != nil {
 				t.close()
 				return
 			}
@@ -207,6 +220,28 @@ func (t *gpuDesktopTunnel) writeLoop() {
 			return
 		}
 	}
+}
+
+func (t *gpuDesktopTunnel) writePayload(payload []byte) error {
+	if t.conn != nil {
+		_ = t.conn.SetDeadline(time.Now().Add(gpuDesktopTunnelWriteWait))
+		return t.conn.WriteMessage(gws.OpcodeBinary, payload)
+	}
+	t.streamMu.Lock()
+	defer t.streamMu.Unlock()
+	_ = t.stream.SetWriteDeadline(time.Now().Add(gpuDesktopTunnelWriteWait))
+	return tframe.WriteFrame(t.stream, tframe.KindBinary, payload)
+}
+
+func (t *gpuDesktopTunnel) writePing() error {
+	if t.conn != nil {
+		_ = t.conn.SetDeadline(time.Now().Add(gpuDesktopTunnelWriteWait))
+		return t.conn.WritePing(nil)
+	}
+	t.streamMu.Lock()
+	defer t.streamMu.Unlock()
+	_ = t.stream.SetWriteDeadline(time.Now().Add(gpuDesktopTunnelWriteWait))
+	return tframe.WriteFrame(t.stream, tframe.KindPing, []byte("gpu"))
 }
 
 func (t *gpuDesktopTunnel) openStream() (*gpuDesktopStream, error) {
@@ -301,7 +336,12 @@ func (t *gpuDesktopTunnel) sendFrame(frameType byte, streamID uint64, body []byt
 func (t *gpuDesktopTunnel) close() {
 	t.once.Do(func() {
 		close(t.closed)
-		_ = t.conn.WriteClose(1000, []byte("gpu desktop tunnel closed"))
+		if t.conn != nil {
+			_ = t.conn.WriteClose(1000, []byte("gpu desktop tunnel closed"))
+		}
+		if t.stream != nil {
+			_ = t.stream.Close()
+		}
 		t.mu.Lock()
 		for id, stream := range t.streams {
 			delete(t.streams, id)
@@ -312,6 +352,66 @@ func (t *gpuDesktopTunnel) close() {
 		}
 		t.mu.Unlock()
 	})
+}
+
+func (s *Server) handleGPUDesktopStreamTunnel(conn net.Conn, msg *protocol.Message) {
+	deviceID := strings.TrimSpace(msg.ClientID)
+	if deviceID == "" {
+		deviceID = strings.TrimSpace(msg.RequestID)
+	}
+	if deviceID == "" {
+		_ = conn.Close()
+		return
+	}
+	client := s.clientByID(deviceID)
+	if client == nil {
+		_ = conn.Close()
+		return
+	}
+	if client.Password != "" && passwordFingerprint(msg.Password) != passwordFingerprint(client.Password) {
+		_ = conn.Close()
+		return
+	}
+	if instanceID := strings.TrimSpace(msg.InstanceID); instanceID != "" && instanceID != client.InstanceID {
+		_ = conn.Close()
+		return
+	}
+	tunnel := newGPUDesktopStreamTunnel(deviceID, conn)
+	s.registerGPUDesktopTunnel(tunnel)
+	defer func() {
+		s.unregisterGPUDesktopTunnel(tunnel)
+		tunnel.close()
+	}()
+	go tunnel.writeLoop()
+	_ = conn.SetReadDeadline(time.Now().Add(gpuDesktopTunnelReadWait))
+	for {
+		frame, err := tframe.ReadFrame(conn)
+		if err != nil {
+			return
+		}
+		_ = conn.SetReadDeadline(time.Now().Add(gpuDesktopTunnelReadWait))
+		switch frame.Kind {
+		case tframe.KindBinary:
+			if len(frame.Payload) < 9 {
+				continue
+			}
+			frameType := frame.Payload[0]
+			streamID := binary.BigEndian.Uint64(frame.Payload[1:9])
+			body := frame.Payload[9:]
+			switch frameType {
+			case gpuDesktopTunnelFrameData:
+				tunnel.dispatchData(streamID, body)
+			case gpuDesktopTunnelFrameClose:
+				tunnel.closeStream(streamID)
+			}
+		case tframe.KindPing:
+			tunnel.streamMu.Lock()
+			_ = tframe.WriteFrame(conn, tframe.KindPong, frame.Payload)
+			tunnel.streamMu.Unlock()
+		case tframe.KindClose:
+			return
+		}
+	}
 }
 
 func (s *Server) HandleGPUDesktopProxy(w http.ResponseWriter, r *http.Request) {

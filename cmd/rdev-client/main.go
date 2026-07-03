@@ -84,7 +84,7 @@ func main() {
 			fmt.Print(`Usage: rdev-client -s <server-url> [options]
 
 Options:
-  --server, -s    Server URL (required, e.g. ws://1.2.3.4:8080)
+  --server, -s    Server URL(s), comma-separated fallback list (e.g. tcp://1.2.3.4:8081,kcp://1.2.3.4:8082,ws://1.2.3.4:8080)
   --id, -i        Client/Device ID (default: hostname)
   --password, -p  Password for SSH auth (optional, enables password login)
   --shell, -S     Shell to use (default: $SHELL or /bin/sh or cmd.exe)
@@ -98,7 +98,7 @@ Options:
 SSH port is auto-detected from server — no need to specify manually.
 
 Examples:
-  rdev-client -s ws://1.2.3.4:8080 -i mydevice -p secret123
+  rdev-client -s tcp://1.2.3.4:8081,kcp://1.2.3.4:8082,ws://1.2.3.4:8080 -i mydevice -p secret123
   rdev-client -s wss://rdev.example.com -i rpi4 --shell /usr/bin/fish
 
 Environment variables:
@@ -145,18 +145,11 @@ Environment variables:
 	if serverURL == "" {
 		fmt.Println("Error: --server is required")
 		fmt.Println("Usage: rdev-client -s <server-url> [options]")
-		fmt.Println("Example: rdev-client -s ws://1.2.3.4:8080 -i mydevice")
+		fmt.Println("Example: rdev-client -s tcp://1.2.3.4:8081,kcp://1.2.3.4:8082,ws://1.2.3.4:8080 -i mydevice")
 		os.Exit(1)
 	}
 
-	// Normalize: ensure exactly "ws://" or "wss://" (fix triple-slash from shell quoting)
-	if strings.HasPrefix(serverURL, "wss:///") {
-		serverURL = "wss://" + strings.TrimLeft(serverURL[len("wss://"):], "/")
-	} else if strings.HasPrefix(serverURL, "ws:///") {
-		serverURL = "ws://" + strings.TrimLeft(serverURL[len("ws://"):], "/")
-	} else if !strings.HasPrefix(serverURL, "ws://") && !strings.HasPrefix(serverURL, "wss://") {
-		serverURL = "ws://" + serverURL
-	}
+	serverURL = normalizeServerListForDisplay(serverURL)
 
 	if clientID == "" {
 		hostname, err := os.Hostname()
@@ -167,7 +160,7 @@ Environment variables:
 		}
 	}
 
-	serverHost := parseWSHost(serverURL)
+	serverHost := parseServerHost(serverURL)
 
 	fmt.Println()
 	fmt.Println("  ╔═══════════════════════════════════════════╗")
@@ -243,11 +236,30 @@ func parseBoolDefault(value string, fallback bool) bool {
 	}
 }
 
-// parseWSHost extracts the host portion from a ws:// or wss:// URL.
-func parseWSHost(wsURL string) string {
-	u := wsURL
-	u = strings.TrimPrefix(u, "ws://")
-	u = strings.TrimPrefix(u, "wss://")
+func normalizeServerListForDisplay(value string) string {
+	parts := strings.Split(value, ",")
+	for i, p := range parts {
+		u := strings.TrimSpace(p)
+		for _, scheme := range []string{"tcp", "kcp", "udp", "ws", "wss", "http", "https"} {
+			prefix := scheme + "://"
+			if strings.HasPrefix(u, scheme+":///") {
+				u = prefix + strings.TrimLeft(u[len(prefix):], "/")
+			}
+		}
+		if !strings.Contains(u, "://") {
+			u = "tcp://" + u
+		}
+		parts[i] = u
+	}
+	return strings.Join(parts, ",")
+}
+
+// parseServerHost extracts the host portion from the first endpoint.
+func parseServerHost(serverURL string) string {
+	u := strings.TrimSpace(strings.Split(serverURL, ",")[0])
+	for _, scheme := range []string{"tcp://", "kcp://", "udp://", "ws://", "wss://", "http://", "https://"} {
+		u = strings.TrimPrefix(u, scheme)
+	}
 	if idx := strings.Index(u, "/"); idx >= 0 {
 		u = u[:idx]
 	}

@@ -72,6 +72,8 @@ pub enum MessageType {
     DesktopReady,
     #[serde(rename = "desktop_close")]
     DesktopClose,
+    #[serde(rename = "gpu_desktop_tunnel")]
+    GpuDesktopTunnel,
     #[serde(other)]
     Unknown,
 }

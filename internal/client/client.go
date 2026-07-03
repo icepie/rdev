@@ -25,9 +25,11 @@ import (
 
 	"github.com/lxzan/gws"
 	"github.com/pkg/sftp"
+	kcp "github.com/xtaci/kcp-go/v5"
 	gossh "golang.org/x/crypto/ssh"
 	"rdev/internal/protocol"
 	"rdev/internal/ptyutil"
+	tframe "rdev/internal/transport"
 	"rdev/internal/wincompat"
 )
 
@@ -200,6 +202,7 @@ type Client struct {
 	shell           string
 	version         string
 	conn            *gws.Conn
+	transport       clientTransport
 	writeMu         sync.Mutex
 	sessions        map[string]*clientSession
 	forwards        map[string]net.Conn
@@ -221,6 +224,58 @@ type Client struct {
 
 	// OnConnect is called after successfully connecting and registering.
 	OnConnect func(c *Client)
+}
+
+type clientTransport interface {
+	WriteJSON([]byte) error
+	WriteBinary([]byte) error
+	WritePing([]byte) error
+	Close(string) error
+}
+
+type wsClientTransport struct{ conn *gws.Conn }
+
+func (t *wsClientTransport) WriteJSON(data []byte) error {
+	_ = t.conn.SetWriteDeadline(time.Now().Add(clientWriteWait))
+	defer t.conn.SetWriteDeadline(time.Time{})
+	return t.conn.WriteMessage(gws.OpcodeText, data)
+}
+func (t *wsClientTransport) WriteBinary(data []byte) error {
+	_ = t.conn.SetWriteDeadline(time.Now().Add(clientWriteWait))
+	defer t.conn.SetWriteDeadline(time.Time{})
+	return t.conn.WriteMessage(gws.OpcodeBinary, data)
+}
+func (t *wsClientTransport) WritePing(payload []byte) error {
+	_ = t.conn.SetWriteDeadline(time.Now().Add(clientWriteWait))
+	defer t.conn.SetWriteDeadline(time.Time{})
+	return t.conn.WritePing(payload)
+}
+func (t *wsClientTransport) Close(reason string) error {
+	return t.conn.WriteClose(1000, []byte(reason))
+}
+
+type streamClientTransport struct {
+	conn net.Conn
+	mu   sync.Mutex
+}
+
+func (t *streamClientTransport) write(kind byte, payload []byte) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	_ = t.conn.SetWriteDeadline(time.Now().Add(clientWriteWait))
+	defer t.conn.SetWriteDeadline(time.Time{})
+	return tframe.WriteFrame(t.conn, kind, payload)
+}
+func (t *streamClientTransport) WriteJSON(data []byte) error { return t.write(tframe.KindJSON, data) }
+func (t *streamClientTransport) WriteBinary(data []byte) error {
+	return t.write(tframe.KindBinary, data)
+}
+func (t *streamClientTransport) WritePing(payload []byte) error {
+	return t.write(tframe.KindPing, payload)
+}
+func (t *streamClientTransport) Close(reason string) error {
+	_ = t.write(tframe.KindClose, []byte(reason))
+	return t.conn.Close()
 }
 
 // NewClient creates a new client
@@ -322,6 +377,7 @@ func (h *wsEventHandler) OnOpen(socket *gws.Conn) {
 	_ = socket.SetDeadline(time.Now().Add(clientReadWait))
 	h.client.mu.Lock()
 	h.client.conn = socket
+	h.client.transport = &wsClientTransport{conn: socket}
 	h.client.mu.Unlock()
 	if err := h.client.send(&protocol.Message{
 		Type:                protocol.MsgRegister,
@@ -367,6 +423,7 @@ func (h *wsEventHandler) OnClose(socket *gws.Conn, err error) {
 		delete(h.client.desktopSessions, sid)
 	}
 	h.client.conn = nil
+	h.client.transport = nil
 	h.client.mu.Unlock()
 	select {
 	case h.client.done <- struct{}{}:
@@ -591,12 +648,75 @@ func normalizeWebSocketURL(value string) (string, error) {
 	return parsed.String(), nil
 }
 
+func splitServerEndpoints(value string) []string {
+	parts := strings.Split(value, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
+}
+
+func normalizeServerEndpoint(value string) (kind, endpoint string, err error) {
+	v := strings.TrimSpace(value)
+	if v == "" {
+		return "", "", fmt.Errorf("empty server endpoint")
+	}
+	fixTriple := func(prefix string) {
+		if strings.HasPrefix(v, prefix+":///") {
+			v = prefix + "://" + strings.TrimLeft(v[len(prefix+"://"):], "/")
+		}
+	}
+	for _, p := range []string{"tcp", "kcp", "udp", "ws", "wss", "http", "https"} {
+		fixTriple(p)
+	}
+	switch {
+	case strings.HasPrefix(v, "tcp://"):
+		return "tcp", v, nil
+	case strings.HasPrefix(v, "kcp://"), strings.HasPrefix(v, "udp://"):
+		return "kcp", v, nil
+	case strings.HasPrefix(v, "ws://"), strings.HasPrefix(v, "wss://"), strings.HasPrefix(v, "http://"), strings.HasPrefix(v, "https://"):
+		return "ws", v, nil
+	default:
+		return "tcp", "tcp://" + v, nil
+	}
+}
+
 func (c *Client) connect() error {
-	wsURL, err := resolveWebSocketURL(c.serverURL, 5)
+	var lastErr error
+	for _, endpoint := range splitServerEndpoints(c.serverURL) {
+		kind, normalized, err := normalizeServerEndpoint(endpoint)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if kind == "ws" {
+			if err := c.connectWebSocket(normalized); err != nil {
+				lastErr = err
+				continue
+			}
+			return nil
+		}
+		if err := c.connectStream(kind, normalized); err != nil {
+			lastErr = err
+			continue
+		}
+		return nil
+	}
+	if lastErr != nil {
+		return lastErr
+	}
+	return fmt.Errorf("no server endpoints")
+}
+
+func (c *Client) connectWebSocket(serverURL string) error {
+	wsURL, err := resolveWebSocketURL(serverURL, 5)
 	if err != nil {
 		return err
 	}
-
 	handler := &wsEventHandler{client: c}
 	socket, _, err := gws.NewClient(handler, &gws.ClientOption{
 		Addr:               wsURL,
@@ -617,6 +737,125 @@ func (c *Client) connect() error {
 	go socket.ReadLoop()
 	go c.pingLoop(socket)
 	return nil
+}
+
+func (c *Client) connectStream(kind, endpoint string) error {
+	addr := strings.TrimPrefix(strings.TrimPrefix(endpoint, "tcp://"), "kcp://")
+	addr = strings.TrimPrefix(addr, "udp://")
+	if strings.Contains(addr, "/") {
+		addr = strings.SplitN(addr, "/", 2)[0]
+	}
+	var conn net.Conn
+	var err error
+	if kind == "kcp" {
+		k, e := kcp.DialWithOptions(addr, nil, 0, 0)
+		if e != nil {
+			return fmt.Errorf("dial kcp: %w", e)
+		}
+		k.SetNoDelay(1, 20, 2, 1)
+		k.SetWindowSize(256, 256)
+		k.SetMtu(1200)
+		k.SetStreamMode(true)
+		k.SetWriteDelay(false)
+		conn = k
+	} else {
+		conn, err = net.DialTimeout("tcp", addr, 10*time.Second)
+		if err != nil {
+			return fmt.Errorf("dial tcp: %w", err)
+		}
+	}
+	transport := &streamClientTransport{conn: conn}
+	c.mu.Lock()
+	c.transport = transport
+	c.conn = nil
+	c.mu.Unlock()
+	if err := c.send(&protocol.Message{
+		Type:                protocol.MsgRegister,
+		ClientID:            c.requestedID,
+		InstanceID:          c.instanceID,
+		ClientVersion:       c.version,
+		Password:            c.password,
+		DesktopCapabilities: desktopCapabilities(),
+	}); err != nil {
+		conn.Close()
+		return err
+	}
+	log.Printf("connected to %s as '%s'", endpoint, c.requestedID)
+	go c.streamReadLoop(conn, transport)
+	go c.streamPingLoop(transport)
+	return nil
+}
+
+func (c *Client) isCurrentTransport(t clientTransport) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.transport == t
+}
+
+func (c *Client) streamReadLoop(conn net.Conn, transport clientTransport) {
+	defer func() {
+		c.closeCurrentTransport(transport, conn)
+	}()
+	_ = conn.SetReadDeadline(time.Now().Add(clientReadWait))
+	for {
+		frame, err := tframe.ReadFrame(conn)
+		if err != nil {
+			return
+		}
+		_ = conn.SetReadDeadline(time.Now().Add(clientReadWait))
+		if !c.isCurrentTransport(transport) {
+			return
+		}
+		switch frame.Kind {
+		case tframe.KindJSON:
+			msg, err := protocol.Decode(frame.Payload)
+			if err == nil {
+				c.handleMessage(msg)
+			}
+		case tframe.KindBinary:
+			(&wsEventHandler{client: c}).handleBinaryMessage(frame.Payload)
+		case tframe.KindPing:
+			_ = transport.(*streamClientTransport).write(tframe.KindPong, frame.Payload)
+		case tframe.KindClose:
+			return
+		}
+	}
+}
+
+func (c *Client) closeCurrentTransport(transport clientTransport, conn net.Conn) {
+	c.mu.Lock()
+	if c.transport != transport {
+		c.mu.Unlock()
+		return
+	}
+	for sid, sess := range c.sessions {
+		sess.close()
+		delete(c.sessions, sid)
+	}
+	for fid, tcpConn := range c.forwards {
+		tcpConn.Close()
+		delete(c.forwards, fid)
+	}
+	for tid, upload := range c.uploads {
+		upload.file.Close()
+		delete(c.uploads, tid)
+	}
+	for tid, cancel := range c.downloads {
+		close(cancel)
+		delete(c.downloads, tid)
+	}
+	for sid, session := range c.desktopSessions {
+		close(session.stop)
+		delete(c.desktopSessions, sid)
+	}
+	c.transport = nil
+	c.conn = nil
+	c.mu.Unlock()
+	conn.Close()
+	select {
+	case c.done <- struct{}{}:
+	default:
+	}
 }
 
 func (c *Client) handleMessage(msg *protocol.Message) {
@@ -676,10 +915,10 @@ func (c *Client) sendBinaryOffset(typ byte, id string, offset int64, data []byte
 	frame := protocol.EncodeBinFrameOffset(typ, id, offset, data)
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
-	if c.conn == nil {
+	if c.transport == nil {
 		return fmt.Errorf("not connected")
 	}
-	return c.conn.WriteMessage(gws.OpcodeBinary, frame)
+	return c.transport.WriteBinary(frame)
 }
 
 func (c *Client) sendFileTransferError(taskID, path, errText string) {
@@ -1557,9 +1796,9 @@ func generateClientForwardID() string {
 
 func (c *Client) send(msg *protocol.Message) error {
 	c.mu.Lock()
-	conn := c.conn
+	transport := c.transport
 	c.mu.Unlock()
-	if conn == nil {
+	if transport == nil {
 		return fmt.Errorf("not connected")
 	}
 	data, err := protocol.Encode(msg)
@@ -1568,26 +1807,20 @@ func (c *Client) send(msg *protocol.Message) error {
 	}
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
-	_ = conn.SetWriteDeadline(time.Now().Add(clientWriteWait))
-	err = conn.WriteMessage(gws.OpcodeText, data)
-	_ = conn.SetWriteDeadline(time.Time{})
-	return err
+	return transport.WriteJSON(data)
 }
 
 func (c *Client) sendBinary(typ byte, id string, data []byte) error {
 	c.mu.Lock()
-	conn := c.conn
+	transport := c.transport
 	c.mu.Unlock()
-	if conn == nil {
+	if transport == nil {
 		return fmt.Errorf("not connected")
 	}
 	frame := protocol.EncodeBinFrame(typ, id, data)
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
-	_ = conn.SetWriteDeadline(time.Now().Add(clientWriteWait))
-	err := conn.WriteMessage(gws.OpcodeBinary, frame)
-	_ = conn.SetWriteDeadline(time.Time{})
-	return err
+	return transport.WriteBinary(frame)
 }
 
 func (c *Client) pingLoop(conn *gws.Conn) {
@@ -1604,6 +1837,23 @@ func (c *Client) pingLoop(conn *gws.Conn) {
 		c.writeMu.Unlock()
 		if err != nil {
 			_ = conn.WriteClose(1001, []byte("ping failed"))
+			return
+		}
+	}
+}
+
+func (c *Client) streamPingLoop(transport clientTransport) {
+	ticker := time.NewTicker(clientPingPeriod)
+	defer ticker.Stop()
+	for range ticker.C {
+		if !c.isCurrentTransport(transport) {
+			return
+		}
+		c.writeMu.Lock()
+		err := transport.WritePing(nil)
+		c.writeMu.Unlock()
+		if err != nil {
+			_ = transport.Close("ping failed")
 			return
 		}
 	}

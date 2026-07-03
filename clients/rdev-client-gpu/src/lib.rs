@@ -10,6 +10,7 @@ pub mod protocol;
 pub mod rdev_desktop_service;
 pub mod session;
 pub mod sftp;
+pub mod stream_frame;
 pub mod updater;
 pub mod version;
 #[cfg(windows)]

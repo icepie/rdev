@@ -5,13 +5,13 @@
 ## 架构
 
 ```
-┌──────────────┐     WebSocket      ┌──────────────┐
+┌──────────────┐  TCP/KCP/WS 通道   ┌──────────────┐
 │  rdev-client │ ◄──────────────► │  rdev-server │ ◄── SSH Client (调试者)
 │  (被调试设备) │    控制通道+数据    │  SSH+Web UI  │
 └──────────────┘                   └──────────────┘
 ```
 
-- **客户端** 运行在被调试设备上，通过 WebSocket 连接服务端
+- **客户端** 运行在被调试设备上，通过 TCP、KCP/UDP 或 WebSocket 连接服务端；`--server` 支持逗号分隔的 fallback 地址列表
 - **服务端** 运行在公网可达的机器上，暴露 SSH 端口和 Web UI
 - **调试者** 使用标准 SSH/SCP/SFTP 连接服务端，用户名=设备ID
 
@@ -45,11 +45,11 @@
 ### 启动服务端
 
 ```bash
-# 默认端口: HTTP 8080, SSH 2222
+# 默认端口: HTTP/WS 8080, TCP 8081, KCP/UDP 8082, SSH 2222
 ./rdev-server
 
 # 自定义端口
-./rdev-server --http :9090 --ssh :2200
+./rdev-server --http :9090 --tcp :9091 --kcp :9092 --ssh :2200
 
 # 数据目录 (host key, authorized_keys)
 ./rdev-server --data /etc/rdev
@@ -62,16 +62,16 @@
 
 ```bash
 # 基本连接
-./rdev-client -s ws://your-server:8080 -i my-device
+./rdev-client -s tcp://your-server:8081,kcp://your-server:8082,ws://your-server:8080 -i my-device
 
 # 带密码认证
-./rdev-client -s ws://your-server:8080 -i my-device -p secret123
+./rdev-client -s tcp://your-server:8081,kcp://your-server:8082,ws://your-server:8080 -i my-device -p secret123
 
 # 指定 Shell
-./rdev-client -s ws://your-server:8080 -i my-device --shell /bin/bash
+./rdev-client -s tcp://your-server:8081,kcp://your-server:8082,ws://your-server:8080 -i my-device --shell /bin/bash
 
 # 环境变量
-export RDEV_SERVER=ws://your-server:8080
+export RDEV_SERVER=tcp://your-server:8081,kcp://your-server:8082,ws://your-server:8080
 export RDEV_ID=my-device
 export RDEV_SHELL=/bin/fish
 ./rdev-client -s $RDEV_SERVER -i $RDEV_ID
@@ -88,17 +88,17 @@ curl -sL https://rdev.singzer.cn/run.sh | sh -s -- wss://rdev.singzer.cn -p secr
 ```bash
 # 禁用自动更新
 ./rdev-server --no-auto-update
-./rdev-client -s ws://your-server:8080 --no-auto-update
-./rdev-client-gpu -s ws://your-server:8080 --no-auto-update
+./rdev-client -s tcp://your-server:8081,kcp://your-server:8082,ws://your-server:8080 --no-auto-update
+./rdev-client-gpu -s tcp://your-server:8081,kcp://your-server:8082,ws://your-server:8080 --no-auto-update
 
 # 调整检查间隔
 ./rdev-server --update-interval 10m
-RDEV_UPDATE_INTERVAL=10m ./rdev-client -s ws://your-server:8080
+RDEV_UPDATE_INTERVAL=10m ./rdev-client -s tcp://your-server:8081,kcp://your-server:8082,ws://your-server:8080
 
 # 自定义 GitHub 下载前缀，多个前缀逗号分隔；内置前缀会在直连失败后自动重试
 RDEV_UPDATE_PROXY=https://gh-proxy.com/ ./rdev-server
 
-# 标准 HTTP/HTTPS 代理会同时用于自动更新下载和客户端 WebSocket 主连接
+# 标准 HTTP/HTTPS 代理会同时用于自动更新下载和客户端 WebSocket 主连接；TCP/KCP 直连不走 HTTP 代理
 HTTPS_PROXY=http://127.0.0.1:7890 ./rdev-server
 HTTPS_PROXY=http://127.0.0.1:7890 ./rdev-client -s wss://your-server.com
 NO_PROXY=localhost,127.0.0.1,.lan ./rdev-client -s wss://your-server.com

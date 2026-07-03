@@ -34,13 +34,18 @@ require (
 	github.com/kevinburke/ssh_config v1.6.0 // indirect
 	github.com/klauspost/compress v1.18.6 // indirect
 	github.com/klauspost/cpuid/v2 v2.3.0 // indirect
+	github.com/klauspost/reedsolomon v1.12.0 // indirect
 	github.com/kr/fs v0.1.0 // indirect
 	github.com/pjbgf/sha1cd v0.6.0 // indirect
+	github.com/pkg/errors v0.9.1 // indirect
 	github.com/sergi/go-diff v1.4.0 // indirect
 	github.com/skeema/knownhosts v1.3.2 // indirect
+	github.com/tjfoc/gmsm v1.4.1 // indirect
 	github.com/u-root/u-root v0.16.0 // indirect
 	github.com/xanzy/ssh-agent v0.3.3 // indirect
+	github.com/xtaci/kcp-go/v5 v5.6.72 // indirect
 	golang.org/x/net v0.56.0 // indirect
+	golang.org/x/time v0.14.0 // indirect
 	gopkg.in/warnings.v0 v0.1.2 // indirect
 )
 

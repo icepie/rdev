@@ -16,7 +16,7 @@ import java.util.Locale;
 
 import javax.net.ssl.SSLSocketFactory;
 
-final class RDevWebSocketClient {
+final class RDevWebSocketClient implements RDevControlConnection {
     interface Listener {
         void onOpen();
         void onText(String text);
@@ -38,17 +38,26 @@ final class RDevWebSocketClient {
     private final SecureRandom random = new SecureRandom();
 
     RDevWebSocketClient(String rawUrl, Listener listener) {
-        this.rawUrl = normalizeUrl(rawUrl);
+        this.rawUrl = normalizeUrl(selectWebSocketEndpoint(rawUrl));
         this.listener = listener;
     }
 
-    void connect() {
+    RDevWebSocketClient(String rawUrl, RDevControlConnection.Listener listener) {
+        this(rawUrl, new Listener() {
+            @Override public void onOpen() { listener.onOpen(); }
+            @Override public void onText(String text) { listener.onText(text); }
+            @Override public void onBinary(byte[] data) { listener.onBinary(data); }
+            @Override public void onClosed(Exception error) { listener.onClosed(error); }
+        });
+    }
+
+    public void connect() {
         running = true;
         thread = new Thread(this::runLoop, "rdev-ws");
         thread.start();
     }
 
-    void close() {
+    public void close() {
         running = false;
         final Socket socketToClose = socket;
         socket = null;
@@ -58,11 +67,11 @@ final class RDevWebSocketClient {
         }, "rdev-ws-close").start();
     }
 
-    void sendText(String text) throws IOException {
+    public void sendText(String text) throws IOException {
         sendFrame(0x1, text.getBytes("UTF-8"));
     }
 
-    void sendBinary(byte[] data) throws IOException {
+    public void sendBinary(byte[] data) throws IOException {
         sendFrame(0x2, data);
     }
 
@@ -319,5 +328,36 @@ final class RDevWebSocketClient {
             if (!url.endsWith("/ws")) url += "/ws";
             return url;
         }
+    }
+
+    static String selectWebSocketEndpoint(String raw) {
+        String value = raw == null ? "" : raw.trim();
+        if (value.indexOf(',') < 0) return value;
+        String first = "";
+        for (String part : value.split(",")) {
+            String endpoint = part.trim();
+            if (endpoint.length() == 0) continue;
+            if (first.length() == 0) first = endpoint;
+            String lower = endpoint.toLowerCase(Locale.US);
+            if (lower.startsWith("ws://") || lower.startsWith("wss://") || lower.startsWith("http://") || lower.startsWith("https://")) {
+                return endpoint;
+            }
+        }
+        if (first.length() == 0) return value;
+        return deriveWsFromEndpoint(first);
+    }
+
+    static String deriveWsFromEndpoint(String endpoint) {
+        String value = endpoint == null ? "" : endpoint.trim();
+        String lower = value.toLowerCase(Locale.US);
+        if (lower.startsWith("tcp://")) value = value.substring(6);
+        else if (lower.startsWith("kcp://")) value = value.substring(6);
+        else if (lower.startsWith("udp://")) value = value.substring(6);
+        int slash = value.indexOf('/');
+        if (slash >= 0) value = value.substring(0, slash);
+        String host = value;
+        int colon = value.lastIndexOf(':');
+        if (colon > 0 && value.indexOf(']') < colon) host = value.substring(0, colon);
+        return "ws://" + host + ":8080";
     }
 }

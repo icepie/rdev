@@ -21,15 +21,21 @@ use rdev_client_gpu::{
     },
     rdev_desktop_service,
     session::{OutboundEvent, SessionManager},
-    updater, version,
+    stream_frame, updater, version,
     ws_redirect::connect_async_follow_redirects,
 };
+use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
+use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 use tokio::sync::watch;
+use tokio_kcp::{KcpConfig, KcpNoDelayConfig, KcpStream};
 use tokio_tungstenite::tungstenite::Message as WsMessage;
 use tracing::{debug, info, warn};
 use tracing_subscriber::EnvFilter;
 use url::Url;
+
+trait AsyncReadWrite: AsyncRead + AsyncWrite {}
+impl<T: AsyncRead + AsyncWrite + ?Sized> AsyncReadWrite for T {}
 
 struct ClientRuntime<'a> {
     args: &'a Args,
@@ -86,7 +92,7 @@ async fn main() -> Result<()> {
         ReconnectBackoff::new(args.reconnect_delay, Duration::from_secs(30));
 
     loop {
-        match run_once(
+        match run_once_any(
             &args,
             &instance_id,
             &server_host,
@@ -242,6 +248,175 @@ async fn run_once(
             }
         }
     }
+    sessions.close_all().await;
+    forwards.close_all().await;
+    files.close_all().await;
+    fileputs.close_all().await;
+    Ok(registered)
+}
+
+async fn run_once_any(
+    args: &Args,
+    instance_id: &str,
+    server_host: &str,
+    desktop_enabled: bool,
+    gpu_tunnel_device_tx: &watch::Sender<Option<String>>,
+    connect_printed: Arc<AtomicBool>,
+) -> Result<bool> {
+    let mut last_err: Option<anyhow::Error> = None;
+    for endpoint in server_endpoints(&args.server) {
+        match endpoint_kind(&endpoint) {
+            "tcp" => match run_once_tcp(
+                args,
+                instance_id,
+                server_host,
+                desktop_enabled,
+                gpu_tunnel_device_tx,
+                connect_printed.clone(),
+                &endpoint,
+            )
+            .await
+            {
+                Ok(v) => return Ok(v),
+                Err(err) => last_err = Some(err),
+            },
+            "ws" => match run_once(
+                args,
+                instance_id,
+                server_host,
+                desktop_enabled,
+                gpu_tunnel_device_tx,
+                connect_printed.clone(),
+            )
+            .await
+            {
+                Ok(v) => return Ok(v),
+                Err(err) => last_err = Some(err),
+            },
+            "kcp" => match run_once_stream(
+                args,
+                instance_id,
+                server_host,
+                desktop_enabled,
+                gpu_tunnel_device_tx,
+                connect_printed.clone(),
+                &endpoint,
+                true,
+            )
+            .await
+            {
+                Ok(v) => return Ok(v),
+                Err(err) => last_err = Some(err),
+            },
+            other => last_err = Some(anyhow::anyhow!("unsupported endpoint type {other}")),
+        }
+    }
+    Err(last_err.unwrap_or_else(|| anyhow::anyhow!("no server endpoints")))
+}
+
+async fn run_once_tcp(
+    args: &Args,
+    instance_id: &str,
+    server_host: &str,
+    desktop_enabled: bool,
+    gpu_tunnel_device_tx: &watch::Sender<Option<String>>,
+    connect_printed: Arc<AtomicBool>,
+    endpoint: &str,
+) -> Result<bool> {
+    run_once_stream(
+        args,
+        instance_id,
+        server_host,
+        desktop_enabled,
+        gpu_tunnel_device_tx,
+        connect_printed,
+        endpoint,
+        false,
+    )
+    .await
+}
+
+async fn run_once_stream(
+    args: &Args,
+    instance_id: &str,
+    server_host: &str,
+    desktop_enabled: bool,
+    gpu_tunnel_device_tx: &watch::Sender<Option<String>>,
+    connect_printed: Arc<AtomicBool>,
+    endpoint: &str,
+    kcp: bool,
+) -> Result<bool> {
+    let addr = endpoint_addr(endpoint)?;
+    info!("connecting to {endpoint} as {}", args.id);
+    let stream: Box<dyn AsyncReadWrite + Unpin + Send> = if kcp {
+        let socket_addr = addr.parse()?;
+        Box::new(KcpStream::connect(&kcp_config(), socket_addr).await?)
+    } else {
+        Box::new(TcpStream::connect(addr).await.context("connect tcp")?)
+    };
+    let (mut read_half, mut write_half) = tokio::io::split(stream);
+    let (out_tx, mut out_rx) = mpsc::channel::<OutboundEvent>(4096);
+    let sessions = SessionManager::new();
+    let forwards = ForwardManager::new();
+    let files = FileManager::new();
+    let fileputs = FilePutManager::new();
+    let mut registered = false;
+    let register = Message {
+        ty: Some(MessageType::Register),
+        client_id: args.id.clone(),
+        instance_id: instance_id.to_string(),
+        client_version: version::client_version(),
+        password: args.password.clone(),
+        desktop: Some(desktop::capabilities(!args.no_desktop && desktop_enabled)),
+        ..Default::default()
+    };
+    stream_frame::write_frame(
+        &mut write_half,
+        stream_frame::KIND_JSON,
+        protocol::encode_message(&register)?.as_bytes(),
+    )
+    .await?;
+    let mut ping_interval = tokio::time::interval(Duration::from_secs(25));
+    loop {
+        tokio::select! {
+            outbound = out_rx.recv() => {
+                match outbound {
+                    Some(OutboundEvent::Message(msg)) => {
+                        stream_frame::write_frame(&mut write_half, stream_frame::KIND_JSON, protocol::encode_message(&msg)?.as_bytes()).await?;
+                    }
+                    Some(OutboundEvent::Binary { typ, id, payload }) => {
+                        let frame = protocol::encode_bin_frame(typ, &id, &payload)?;
+                        stream_frame::write_frame(&mut write_half, stream_frame::KIND_BINARY, &frame).await?;
+                    }
+                    Some(OutboundEvent::BinaryOffset { typ, id, offset, payload }) => {
+                        let frame = protocol::encode_bin_frame_offset(typ, &id, offset, &payload)?;
+                        stream_frame::write_frame(&mut write_half, stream_frame::KIND_BINARY, &frame).await?;
+                    }
+                    None => break,
+                }
+            }
+            _ = ping_interval.tick() => {
+                stream_frame::write_frame(&mut write_half, stream_frame::KIND_PING, b"rdev").await?;
+            }
+            inbound = stream_frame::read_frame(&mut read_half) => {
+                let frame = inbound?;
+                match frame.kind {
+                    stream_frame::KIND_JSON => {
+                        let text = String::from_utf8(frame.payload)?;
+                        let runtime = ClientRuntime { args, server_host, desktop_enabled, gpu_tunnel_device_tx, connect_printed: connect_printed.clone() };
+                        if handle_text(&text, runtime, &sessions, &forwards, &files, &out_tx).await? {
+                            registered = true;
+                        }
+                    }
+                    stream_frame::KIND_BINARY => handle_binary(&frame.payload, &sessions, &forwards, &files, &fileputs, &out_tx).await?,
+                    stream_frame::KIND_PING => stream_frame::write_frame(&mut write_half, stream_frame::KIND_PONG, &frame.payload).await?,
+                    stream_frame::KIND_CLOSE => break,
+                    _ => {}
+                }
+            }
+        }
+    }
+    let _ = write_half.shutdown().await;
     sessions.close_all().await;
     forwards.close_all().await;
     files.close_all().await;
@@ -422,6 +597,14 @@ fn print_connection_hints(args: &Args, server_host: &str, registered_id: &str, s
 }
 
 fn normalize_server_url(server: &str) -> String {
+    server
+        .split(',')
+        .map(|part| normalize_server_endpoint(part))
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn normalize_server_endpoint(server: &str) -> String {
     let mut value = server.trim().to_string();
     if value.starts_with("wss:///") {
         value = format!("wss://{}", value["wss://".len()..].trim_start_matches('/'));
@@ -437,23 +620,36 @@ fn normalize_server_url(server: &str) -> String {
             "http://{}",
             value["http://".len()..].trim_start_matches('/')
         );
+    } else if value.starts_with("tcp:///") {
+        value = format!("tcp://{}", value["tcp://".len()..].trim_start_matches('/'));
+    } else if value.starts_with("kcp:///") {
+        value = format!("kcp://{}", value["kcp://".len()..].trim_start_matches('/'));
+    } else if value.starts_with("udp:///") {
+        value = format!("udp://{}", value["udp://".len()..].trim_start_matches('/'));
     } else if !value.starts_with("ws://")
         && !value.starts_with("wss://")
         && !value.starts_with("http://")
         && !value.starts_with("https://")
+        && !value.starts_with("tcp://")
+        && !value.starts_with("kcp://")
+        && !value.starts_with("udp://")
     {
-        value = format!("ws://{value}");
+        value = format!("tcp://{value}");
     }
     value
 }
 
-fn parse_ws_host(ws_url: &str) -> String {
-    let mut value = ws_url
+fn parse_ws_host(server_url: &str) -> String {
+    let first = server_url.split(',').next().unwrap_or(server_url);
+    let mut value = first
         .strip_prefix("ws://")
-        .or_else(|| ws_url.strip_prefix("wss://"))
-        .or_else(|| ws_url.strip_prefix("http://"))
-        .or_else(|| ws_url.strip_prefix("https://"))
-        .unwrap_or(ws_url);
+        .or_else(|| first.strip_prefix("wss://"))
+        .or_else(|| first.strip_prefix("http://"))
+        .or_else(|| first.strip_prefix("https://"))
+        .or_else(|| first.strip_prefix("tcp://"))
+        .or_else(|| first.strip_prefix("kcp://"))
+        .or_else(|| first.strip_prefix("udp://"))
+        .unwrap_or(first);
     if let Some((host, _path)) = value.split_once('/') {
         value = host;
     }
@@ -469,7 +665,17 @@ fn parse_ws_host(ws_url: &str) -> String {
 }
 
 fn websocket_url(server: &str) -> Result<String> {
-    let normalized = normalize_server_url(server);
+    let normalized = server_endpoints(server)
+        .into_iter()
+        .find(|endpoint| endpoint_kind(endpoint) == "ws")
+        .unwrap_or_else(|| {
+            derive_ws_endpoint(
+                server_endpoints(server)
+                    .first()
+                    .map(String::as_str)
+                    .unwrap_or(server),
+            )
+        });
     let mut parsed = Url::parse(&normalized)?;
     let path = parsed.path().trim_end_matches('/').to_string();
     if path.is_empty() || path == "/" {
@@ -488,6 +694,64 @@ fn websocket_url(server: &str) -> Result<String> {
         other => return Err(anyhow::anyhow!("unsupported websocket scheme: {other}")),
     }
     Ok(parsed.to_string())
+}
+
+fn server_endpoints(server: &str) -> Vec<String> {
+    server
+        .split(',')
+        .map(normalize_server_endpoint)
+        .filter(|value| !value.trim().is_empty())
+        .collect()
+}
+
+fn endpoint_kind(endpoint: &str) -> &'static str {
+    if endpoint.starts_with("tcp://") {
+        "tcp"
+    } else if endpoint.starts_with("ws://")
+        || endpoint.starts_with("wss://")
+        || endpoint.starts_with("http://")
+        || endpoint.starts_with("https://")
+    {
+        "ws"
+    } else if endpoint.starts_with("kcp://") || endpoint.starts_with("udp://") {
+        "kcp"
+    } else {
+        "tcp"
+    }
+}
+
+fn endpoint_addr(endpoint: &str) -> Result<String> {
+    let mut value = endpoint
+        .trim()
+        .trim_start_matches("tcp://")
+        .trim_start_matches("kcp://")
+        .trim_start_matches("udp://")
+        .to_string();
+    if let Some((addr, _)) = value.split_once('/') {
+        value = addr.to_string();
+    }
+    Ok(value)
+}
+
+fn derive_ws_endpoint(endpoint: &str) -> String {
+    let addr = endpoint_addr(endpoint).unwrap_or_else(|_| endpoint.to_string());
+    let host = addr.rsplit_once(':').map(|(host, _)| host).unwrap_or(&addr);
+    format!("ws://{host}:8080")
+}
+
+fn kcp_config() -> KcpConfig {
+    KcpConfig {
+        mtu: 1200,
+        nodelay: KcpNoDelayConfig {
+            nodelay: true,
+            interval: 20,
+            resend: 2,
+            nc: true,
+        },
+        wnd_size: (256, 256),
+        stream: true,
+        ..Default::default()
+    }
 }
 
 #[cfg(test)]

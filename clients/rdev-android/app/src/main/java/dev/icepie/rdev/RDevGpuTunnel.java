@@ -24,7 +24,7 @@ final class RDevGpuTunnel {
     private final String deviceId;
     private final String instanceId;
     private final String password;
-    private RDevWebSocketClient ws;
+    private RDevControlConnection ws;
     private volatile boolean closed;
     private int reconnectDelayMs = 1000;
     private volatile int reconnectGeneration;
@@ -49,11 +49,12 @@ final class RDevGpuTunnel {
 
     private void connectOnce() {
         final int generation = reconnectGeneration;
-        String url = tunnelUrl();
-        ws = new RDevWebSocketClient(url, new RDevWebSocketClient.Listener() {
+        String endpoint = tunnelEndpoint();
+        ws = newTunnelConnection(endpoint, new RDevControlConnection.Listener() {
             @Override public void onOpen() {
                 reconnectDelayMs = 1000;
-                Log.i(TAG, "gpu tunnel connected");
+                Log.i(TAG, "gpu tunnel connected " + endpoint);
+                if (endpoint.toLowerCase(Locale.US).startsWith("tcp://")) sendTcpTunnelHello();
             }
             @Override public void onText(String text) {}
             @Override public void onBinary(byte[] data) { handleTunnelFrame(data); }
@@ -64,6 +65,25 @@ final class RDevGpuTunnel {
             }
         });
         ws.connect();
+    }
+
+    private RDevControlConnection newTunnelConnection(String endpoint, RDevControlConnection.Listener listener) {
+        if (endpoint.toLowerCase(Locale.US).startsWith("tcp://")) return new RDevTcpClient(endpoint, listener);
+        return new RDevWebSocketClient(endpoint, listener);
+    }
+
+    private void sendTcpTunnelHello() {
+        try {
+            JSONObject hello = new JSONObject()
+                .put("type", "gpu_desktop_tunnel")
+                .put("clientId", deviceId)
+                .put("instanceId", instanceId)
+                .put("password", password);
+            ws.sendText(hello.toString());
+        } catch (Exception e) {
+            Log.w(TAG, "send tcp tunnel hello failed", e);
+            close();
+        }
     }
 
     void close() {
@@ -93,7 +113,11 @@ final class RDevGpuTunnel {
         streams.clear();
     }
 
-    private String tunnelUrl() {
+    private String tunnelEndpoint() {
+        for (String part : serverUrl.split(",")) {
+            String endpoint = part.trim();
+            if (endpoint.toLowerCase(Locale.US).startsWith("tcp://")) return endpoint;
+        }
         URI uri = URI.create(normalizeWsUrl(serverUrl));
         String scheme = "wss".equalsIgnoreCase(uri.getScheme()) ? "wss" : "ws";
         String authority = uri.getRawAuthority();
@@ -105,7 +129,8 @@ final class RDevGpuTunnel {
     }
 
     private String normalizeWsUrl(String value) {
-        String url = value == null ? "" : value.trim();
+        String url = RDevWebSocketClient.selectWebSocketEndpoint(value);
+        url = url == null ? "" : url.trim();
         if (url.startsWith("https://")) url = "wss://" + url.substring(8);
         else if (url.startsWith("http://")) url = "ws://" + url.substring(7);
         else if (!url.startsWith("ws://") && !url.startsWith("wss://")) url = "ws://" + url;

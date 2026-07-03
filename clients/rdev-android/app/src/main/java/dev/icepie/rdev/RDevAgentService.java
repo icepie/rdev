@@ -34,7 +34,7 @@ public class RDevAgentService extends Service {
     private static final String CHANNEL_ID = "rdev-agent";
 
     private ScreenCapturePipeline capture;
-    private RDevWebSocketClient client;
+    private RDevControlConnection client;
     private RDevGpuTunnel tunnel;
     private AndroidTerminalManager terminalManager;
     private AndroidFileManager fileManager;
@@ -185,7 +185,8 @@ public class RDevAgentService extends Service {
             scheduleReconnect();
             return;
         }
-        client = new RDevWebSocketClient(server, new RDevWebSocketClient.Listener() {
+        String endpoint = selectControlEndpoint(server);
+        client = newControlConnection(endpoint, new RDevControlConnection.Listener() {
             @Override public void onOpen() {
                 reconnectDelayMs = 1000;
                 sendRegister();
@@ -198,6 +199,30 @@ public class RDevAgentService extends Service {
             }
         });
         client.connect();
+    }
+
+    private RDevControlConnection newControlConnection(String endpoint, RDevControlConnection.Listener listener) {
+        String lower = endpoint == null ? "" : endpoint.trim().toLowerCase();
+        if (lower.startsWith("tcp://") || !lower.contains("://")) return new RDevTcpClient(endpoint, listener);
+        return new RDevWebSocketClient(endpoint, listener);
+    }
+
+    private String selectControlEndpoint(String server) {
+        String firstWs = "";
+        String firstSupported = "";
+        for (String part : server.split(",")) {
+            String endpoint = part.trim();
+            if (endpoint.length() == 0) continue;
+            String lower = endpoint.toLowerCase();
+            if (lower.startsWith("tcp://") || !lower.contains("://")) return endpoint;
+            if (lower.startsWith("ws://") || lower.startsWith("wss://") || lower.startsWith("http://") || lower.startsWith("https://")) {
+                if (firstWs.length() == 0) firstWs = endpoint;
+            }
+            if (firstSupported.length() == 0 && !lower.startsWith("kcp://") && !lower.startsWith("udp://")) firstSupported = endpoint;
+        }
+        if (firstSupported.length() > 0) return firstSupported;
+        if (firstWs.length() > 0) return firstWs;
+        return RDevWebSocketClient.deriveWsFromEndpoint(server.split(",")[0].trim());
     }
 
     private void scheduleReconnect() {
