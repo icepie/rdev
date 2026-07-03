@@ -60,6 +60,9 @@
 
 ### 启动客户端
 
+连接地址支持逗号分隔的优先级列表：`tcp://host:8081,kcp://host:8082,ws://host:8080`。裸 `host:port` 默认按 TCP 处理，`udp://` 是 KCP over UDP 的别名；Android APK、Go 客户端和 Rust GPU 客户端均支持 TCP/KCP/UDP/WS。
+
+
 ```bash
 # 基本连接
 ./rdev-client -s tcp://your-server:8081,kcp://your-server:8082,ws://your-server:8080 -i my-device

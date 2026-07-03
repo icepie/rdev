@@ -203,6 +203,7 @@ public class RDevAgentService extends Service {
 
     private RDevControlConnection newControlConnection(String endpoint, RDevControlConnection.Listener listener) {
         String lower = endpoint == null ? "" : endpoint.trim().toLowerCase();
+        if (lower.startsWith("kcp://") || lower.startsWith("udp://")) return new RDevKcpClient(endpoint, listener);
         if (lower.startsWith("tcp://") || !lower.contains("://")) return new RDevTcpClient(endpoint, listener);
         return new RDevWebSocketClient(endpoint, listener);
     }
@@ -214,11 +215,11 @@ public class RDevAgentService extends Service {
             String endpoint = part.trim();
             if (endpoint.length() == 0) continue;
             String lower = endpoint.toLowerCase();
-            if (lower.startsWith("tcp://") || !lower.contains("://")) return endpoint;
+            if (lower.startsWith("tcp://") || lower.startsWith("kcp://") || lower.startsWith("udp://") || !lower.contains("://")) return endpoint;
             if (lower.startsWith("ws://") || lower.startsWith("wss://") || lower.startsWith("http://") || lower.startsWith("https://")) {
                 if (firstWs.length() == 0) firstWs = endpoint;
             }
-            if (firstSupported.length() == 0 && !lower.startsWith("kcp://") && !lower.startsWith("udp://")) firstSupported = endpoint;
+            if (firstSupported.length() == 0) firstSupported = endpoint;
         }
         if (firstSupported.length() > 0) return firstSupported;
         if (firstWs.length() > 0) return firstWs;

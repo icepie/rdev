@@ -54,7 +54,7 @@ final class RDevGpuTunnel {
             @Override public void onOpen() {
                 reconnectDelayMs = 1000;
                 Log.i(TAG, "gpu tunnel connected " + endpoint);
-                if (endpoint.toLowerCase(Locale.US).startsWith("tcp://")) sendTcpTunnelHello();
+                if (isStreamEndpoint(endpoint)) sendStreamTunnelHello();
             }
             @Override public void onText(String text) {}
             @Override public void onBinary(byte[] data) { handleTunnelFrame(data); }
@@ -68,11 +68,18 @@ final class RDevGpuTunnel {
     }
 
     private RDevControlConnection newTunnelConnection(String endpoint, RDevControlConnection.Listener listener) {
-        if (endpoint.toLowerCase(Locale.US).startsWith("tcp://")) return new RDevTcpClient(endpoint, listener);
+        String lower = endpoint.toLowerCase(Locale.US);
+        if (lower.startsWith("kcp://") || lower.startsWith("udp://")) return new RDevKcpClient(endpoint, listener);
+        if (lower.startsWith("tcp://")) return new RDevTcpClient(endpoint, listener);
         return new RDevWebSocketClient(endpoint, listener);
     }
 
-    private void sendTcpTunnelHello() {
+    private boolean isStreamEndpoint(String endpoint) {
+        String lower = endpoint == null ? "" : endpoint.toLowerCase(Locale.US);
+        return lower.startsWith("tcp://") || lower.startsWith("kcp://") || lower.startsWith("udp://");
+    }
+
+    private void sendStreamTunnelHello() {
         try {
             JSONObject hello = new JSONObject()
                 .put("type", "gpu_desktop_tunnel")
@@ -81,7 +88,7 @@ final class RDevGpuTunnel {
                 .put("password", password);
             ws.sendText(hello.toString());
         } catch (Exception e) {
-            Log.w(TAG, "send tcp tunnel hello failed", e);
+            Log.w(TAG, "send stream tunnel hello failed", e);
             close();
         }
     }
@@ -116,7 +123,8 @@ final class RDevGpuTunnel {
     private String tunnelEndpoint() {
         for (String part : serverUrl.split(",")) {
             String endpoint = part.trim();
-            if (endpoint.toLowerCase(Locale.US).startsWith("tcp://")) return endpoint;
+            String lower = endpoint.toLowerCase(Locale.US);
+            if (lower.startsWith("tcp://") || lower.startsWith("kcp://") || lower.startsWith("udp://")) return endpoint;
         }
         URI uri = URI.create(normalizeWsUrl(serverUrl));
         String scheme = "wss".equalsIgnoreCase(uri.getScheme()) ? "wss" : "ws";
