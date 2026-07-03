@@ -346,7 +346,7 @@
         }
 
         function highlightCommand(text) {
-            return esc(text).replace(/(&lt;[^&]+&gt;)|(\b(?:自定义密码|your-password)\b)|(https?:\/\/[^\s'"|]+|wss?:\/\/[^\s'"|]+)|(\$[A-Za-z_]\w*)|(\|)|("(?:[^"]*)")|('(?:[^']*)')|(^|[\s;])(--?[A-Za-z][\w-]*|-[A-Za-z]\b)|(^|[\s;|])([A-Za-z][\w.-]*)(?=\s|$)/g,
+            return esc(text).replace(/(&lt;[^&]+&gt;)|(\b(?:自定义密码|your-password)\b)|((?:https?|wss?|tcp|kcp|udp):\/\/[^\s'"|,]+)|(\$[A-Za-z_]\w*)|(\|)|("(?:[^"]*)")|('(?:[^']*)')|(^|[\s;])(--?[A-Za-z][\w-]*|-[A-Za-z]\b)|(^|[\s;|])([A-Za-z][\w.-]*)(?=\s|$)/g,
                 (m, bracketPlaceholder, plainPlaceholder, url, variable, pipe, dquote, squote, flagPrefix, flag, cmdPrefix, cmd) => {
                     if (bracketPlaceholder || plainPlaceholder) return '<span class="placeholder">' + (bracketPlaceholder || plainPlaceholder) + '</span>';
                     if (url) return '<span class="url">' + url + '</span>';
@@ -409,6 +409,9 @@
             const lines = [
                 `RDev device: ${deviceID}`,
                 `Auth: ${hasPassword ? t('common.password') : t('common.open')}`,
+                '',
+                `Client endpoints: ${serverList()}`,
+                `Client command: rdev-client -s ${serverList()} -i ${deviceID}` + (hasPassword ? ` -p <password>` : ''),
                 '',
                 `SSH: ssh ${deviceID}@${sshHost} -p ${SP}`,
                 `SFTP: sftp -P ${SP} ${deviceID}@${sshHost}`,

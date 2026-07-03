@@ -43,9 +43,20 @@ function Convert-RDevMirrorUrl([string]$Mirror, [string]$Url) {
 }
 
 function Get-RDevServerHttpBase([string]$Server) {
-    if ($Server -like 'wss://*') { $Base = 'https://' + $Server.Substring(6) }
-    elseif ($Server -like 'ws://*') { $Base = 'http://' + $Server.Substring(5) }
-    elseif ($Server -like 'http://*' -or $Server -like 'https://*') { $Base = $Server }
+    $FirstAny = ''
+    foreach ($Part in ($Server -split ',')) {
+        $Endpoint = $Part.Trim()
+        if (-not $Endpoint) { continue }
+        if (-not $FirstAny) { $FirstAny = $Endpoint }
+        if ($Endpoint -like 'wss://*' -or $Endpoint -like 'ws://*' -or $Endpoint -like 'http://*' -or $Endpoint -like 'https://*') {
+            $FirstAny = $Endpoint
+            break
+        }
+    }
+    if (-not $FirstAny) { return '' }
+    if ($FirstAny -like 'wss://*') { $Base = 'https://' + $FirstAny.Substring(6) }
+    elseif ($FirstAny -like 'ws://*') { $Base = 'http://' + $FirstAny.Substring(5) }
+    elseif ($FirstAny -like 'http://*' -or $FirstAny -like 'https://*') { $Base = $FirstAny }
     else { return '' }
     if ($Base -match '^(https?://[^/?#]+)') { return $Matches[1] }
     return ''
@@ -171,7 +182,7 @@ function global:RDev {
     Download and run rdev-client (no install needed)
 
     .PARAMETER Server
-    Server WebSocket URL (e.g. ws://1.2.3.4:8080 or wss://example.com)
+    Server URL or comma-separated URL group (e.g. tcp://1.2.3.4:8081,kcp://1.2.3.4:8082,wss://example.com)
 
     .PARAMETER Id
     Device ID (default: hostname)

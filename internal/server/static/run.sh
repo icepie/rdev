@@ -45,7 +45,7 @@ while [ $# -gt 0 ]; do
             echo "  No installation or root required."
             echo ""
             echo "Options:"
-            echo "  -s, --server URL     Server WebSocket URL"
+            echo "  -s, --server URL     Server URL or comma-separated URL group"
             echo "  -i, --id ID          Device ID (default: hostname)"
             echo "  -p, --password PW    Password for SSH auth"
             echo "  -S, --shell PATH     Shell path (e.g. /bin/bash)"
@@ -60,7 +60,7 @@ while [ $# -gt 0 ]; do
             echo "  curl -sL http://SERVER/run.sh | sh -s -- ws://SERVER:8080 -i my-pc -p secret"
             echo "  curl -sL http://SERVER/run.sh | sh -s -- ws://SERVER:8080 --client rs"
             exit 0 ;;
-        ws://*|wss://*) RDEV_SERVER="$1"; shift ;;
+        ws://*|wss://*|tcp://*|kcp://*|udp://*) RDEV_SERVER="$1"; shift ;;
         http://*|https://*) RDEV_SERVER="$1"; shift ;;
         *) echo "Unknown option: $1" >&2; exit 1 ;;
     esac
@@ -170,10 +170,25 @@ mirror_url() {
 }
 
 server_http_base() {
-    case "$RDEV_SERVER" in
-        wss://*) base="https://${RDEV_SERVER#wss://}" ;;
-        ws://*)  base="http://${RDEV_SERVER#ws://}" ;;
-        http://*|https://*) base="$RDEV_SERVER" ;;
+    first_ws=""
+    first_any=""
+    old_ifs=$IFS
+    IFS=','
+    for endpoint in $RDEV_SERVER; do
+        endpoint=$(printf '%s' "$endpoint" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+        [ -n "$endpoint" ] || continue
+        [ -n "$first_any" ] || first_any="$endpoint"
+        case "$endpoint" in
+            wss://*|ws://*|http://*|https://*) first_ws="$endpoint"; break ;;
+        esac
+    done
+    IFS=$old_ifs
+    endpoint="${first_ws:-$first_any}"
+    case "$endpoint" in
+        wss://*) base="https://${endpoint#wss://}" ;;
+        ws://*)  base="http://${endpoint#ws://}" ;;
+        http://*|https://*) base="$endpoint" ;;
+        tcp://*|kcp://*|udp://*) return 1 ;;
         *) return 1 ;;
     esac
     proto="${base%%://*}"
