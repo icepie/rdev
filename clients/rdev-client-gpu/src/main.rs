@@ -251,11 +251,11 @@ async fn run_once(
                             gpu_tunnel_device_tx,
                             connect_printed: connect_printed.clone(),
                         };
-                        if handle_text(&text, runtime, &modules, &sessions, &forwards, &files, &out_tx).await? {
+                        if handle_text(&text, runtime, modules, &sessions, &forwards, &files, &out_tx).await? {
                             registered = true;
                         }
                     },
-                    Some(Ok(WsMessage::Binary(raw))) => handle_binary(&raw, &modules, &sessions, &forwards, &files, &fileputs, &out_tx).await?,
+                    Some(Ok(WsMessage::Binary(raw))) => handle_binary(&raw, modules, &sessions, &forwards, &files, &fileputs, &out_tx).await?,
                     Some(Ok(WsMessage::Close(frame))) => {
                         info!("websocket closed by server: {:?}", frame);
                         break;
@@ -339,6 +339,7 @@ async fn run_once_any(
     Err(last_err.unwrap_or_else(|| anyhow::anyhow!("no server endpoints")))
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_once_tcp(
     args: &Args,
     instance_id: &str,
@@ -363,6 +364,7 @@ async fn run_once_tcp(
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_once_stream(
     args: &Args,
     instance_id: &str,
@@ -432,11 +434,11 @@ async fn run_once_stream(
                     stream_frame::KIND_JSON => {
                         let text = String::from_utf8(frame.payload)?;
                         let runtime = ClientRuntime { args, server_host, desktop_enabled, gpu_tunnel_device_tx, connect_printed: connect_printed.clone() };
-                        if handle_text(&text, runtime, &modules, &sessions, &forwards, &files, &out_tx).await? {
+                        if handle_text(&text, runtime, modules, &sessions, &forwards, &files, &out_tx).await? {
                             registered = true;
                         }
                     }
-                    stream_frame::KIND_BINARY => handle_binary(&frame.payload, &modules, &sessions, &forwards, &files, &fileputs, &out_tx).await?,
+                    stream_frame::KIND_BINARY => handle_binary(&frame.payload, modules, &sessions, &forwards, &files, &fileputs, &out_tx).await?,
                     stream_frame::KIND_PING => stream_frame::write_frame(&mut write_half, stream_frame::KIND_PONG, &frame.payload).await?,
                     stream_frame::KIND_CLOSE => break,
                     _ => {}
@@ -669,7 +671,7 @@ fn print_connection_hints(args: &Args, server_host: &str, registered_id: &str, s
 fn normalize_server_url(server: &str) -> String {
     server
         .split(',')
-        .map(|part| normalize_server_endpoint(part))
+        .map(normalize_server_endpoint)
         .collect::<Vec<_>>()
         .join(",")
 }
