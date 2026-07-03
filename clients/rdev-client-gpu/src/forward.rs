@@ -132,11 +132,15 @@ impl ForwardManager {
         debug!("TCP forward opened by server: {forward_id}");
     }
 
-    pub async fn send_data(&self, forward_id: &str, data: Vec<u8>) {
+    pub fn send_data_nowait(&self, forward_id: &str, data: Vec<u8>) {
         let tx = self.connections.lock().unwrap().get(forward_id).cloned();
         if let Some(tx) = tx {
-            let _ = tx.send(ForwardInput::Data(data)).await;
+            let _ = tx.try_send(ForwardInput::Data(data));
         }
+    }
+
+    pub async fn send_data(&self, forward_id: &str, data: Vec<u8>) {
+        self.send_data_nowait(forward_id, data);
     }
 
     pub async fn close_forward(&self, forward_id: &str) {

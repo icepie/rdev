@@ -15,6 +15,7 @@ use rdev_client_gpu::{
     forward::ForwardManager,
     gpu_tunnel,
     identity::new_instance_id,
+    module_runtime::{spawn_runtime, ModuleRuntime},
     protocol::{
         self, Message, MessageType, BIN_DATA, BIN_FILE_CHUNK, BIN_FILE_END, BIN_FILE_PUT,
         BIN_FILE_START, BIN_TCP_DATA,
@@ -43,6 +44,23 @@ struct ClientRuntime<'a> {
     desktop_enabled: bool,
     gpu_tunnel_device_tx: &'a watch::Sender<Option<String>>,
     connect_printed: Arc<AtomicBool>,
+}
+
+#[derive(Clone)]
+struct ModuleRuntimes {
+    forwards: ModuleRuntime,
+    files: ModuleRuntime,
+    fileputs: ModuleRuntime,
+}
+
+impl ModuleRuntimes {
+    fn new() -> Self {
+        Self {
+            forwards: spawn_runtime("rdev-forward-runtime"),
+            files: spawn_runtime("rdev-file-runtime"),
+            fileputs: spawn_runtime("rdev-fileput-runtime"),
+        }
+    }
 }
 
 #[tokio::main]
@@ -88,6 +106,7 @@ async fn main() -> Result<()> {
         desktop_enabled,
     );
     let _rdev_desktop_service = rdev_desktop_service;
+    let modules = ModuleRuntimes::new();
     let mut reconnect_backoff =
         ReconnectBackoff::new(args.reconnect_delay, Duration::from_secs(30));
 
@@ -98,6 +117,7 @@ async fn main() -> Result<()> {
             &server_host,
             desktop_enabled,
             &gpu_tunnel_device_tx,
+            &modules,
             connect_printed.clone(),
         )
         .await
@@ -176,6 +196,7 @@ async fn run_once(
     server_host: &str,
     desktop_enabled: bool,
     gpu_tunnel_device_tx: &watch::Sender<Option<String>>,
+    modules: &ModuleRuntimes,
     connect_printed: Arc<AtomicBool>,
 ) -> Result<bool> {
     let ws_url = websocket_url(&args.server)?;
@@ -230,11 +251,11 @@ async fn run_once(
                             gpu_tunnel_device_tx,
                             connect_printed: connect_printed.clone(),
                         };
-                        if handle_text(&text, runtime, &sessions, &forwards, &files, &out_tx).await? {
+                        if handle_text(&text, runtime, &modules, &sessions, &forwards, &files, &out_tx).await? {
                             registered = true;
                         }
                     },
-                    Some(Ok(WsMessage::Binary(raw))) => handle_binary(&raw, &sessions, &forwards, &files, &fileputs, &out_tx).await?,
+                    Some(Ok(WsMessage::Binary(raw))) => handle_binary(&raw, &modules, &sessions, &forwards, &files, &fileputs, &out_tx).await?,
                     Some(Ok(WsMessage::Close(frame))) => {
                         info!("websocket closed by server: {:?}", frame);
                         break;
@@ -261,6 +282,7 @@ async fn run_once_any(
     server_host: &str,
     desktop_enabled: bool,
     gpu_tunnel_device_tx: &watch::Sender<Option<String>>,
+    modules: &ModuleRuntimes,
     connect_printed: Arc<AtomicBool>,
 ) -> Result<bool> {
     let mut last_err: Option<anyhow::Error> = None;
@@ -272,6 +294,7 @@ async fn run_once_any(
                 server_host,
                 desktop_enabled,
                 gpu_tunnel_device_tx,
+                modules,
                 connect_printed.clone(),
                 &endpoint,
             )
@@ -286,6 +309,7 @@ async fn run_once_any(
                 server_host,
                 desktop_enabled,
                 gpu_tunnel_device_tx,
+                modules,
                 connect_printed.clone(),
             )
             .await
@@ -299,6 +323,7 @@ async fn run_once_any(
                 server_host,
                 desktop_enabled,
                 gpu_tunnel_device_tx,
+                modules,
                 connect_printed.clone(),
                 &endpoint,
                 true,
@@ -320,6 +345,7 @@ async fn run_once_tcp(
     server_host: &str,
     desktop_enabled: bool,
     gpu_tunnel_device_tx: &watch::Sender<Option<String>>,
+    modules: &ModuleRuntimes,
     connect_printed: Arc<AtomicBool>,
     endpoint: &str,
 ) -> Result<bool> {
@@ -329,6 +355,7 @@ async fn run_once_tcp(
         server_host,
         desktop_enabled,
         gpu_tunnel_device_tx,
+        modules,
         connect_printed,
         endpoint,
         false,
@@ -342,6 +369,7 @@ async fn run_once_stream(
     server_host: &str,
     desktop_enabled: bool,
     gpu_tunnel_device_tx: &watch::Sender<Option<String>>,
+    modules: &ModuleRuntimes,
     connect_printed: Arc<AtomicBool>,
     endpoint: &str,
     kcp: bool,
@@ -404,11 +432,11 @@ async fn run_once_stream(
                     stream_frame::KIND_JSON => {
                         let text = String::from_utf8(frame.payload)?;
                         let runtime = ClientRuntime { args, server_host, desktop_enabled, gpu_tunnel_device_tx, connect_printed: connect_printed.clone() };
-                        if handle_text(&text, runtime, &sessions, &forwards, &files, &out_tx).await? {
+                        if handle_text(&text, runtime, &modules, &sessions, &forwards, &files, &out_tx).await? {
                             registered = true;
                         }
                     }
-                    stream_frame::KIND_BINARY => handle_binary(&frame.payload, &sessions, &forwards, &files, &fileputs, &out_tx).await?,
+                    stream_frame::KIND_BINARY => handle_binary(&frame.payload, &modules, &sessions, &forwards, &files, &fileputs, &out_tx).await?,
                     stream_frame::KIND_PING => stream_frame::write_frame(&mut write_half, stream_frame::KIND_PONG, &frame.payload).await?,
                     stream_frame::KIND_CLOSE => break,
                     _ => {}
@@ -427,6 +455,7 @@ async fn run_once_stream(
 async fn handle_text(
     text: &str,
     runtime: ClientRuntime<'_>,
+    modules: &ModuleRuntimes,
     sessions: &SessionManager,
     forwards: &ForwardManager,
     files: &FileManager,
@@ -463,8 +492,20 @@ async fn handle_text(
         Some(MessageType::StdinClose) => sessions.stdin_close(&msg.session_id).await,
         Some(MessageType::Resize) => sessions.resize(&msg.session_id, msg.rows, msg.cols).await,
         Some(MessageType::Close) => sessions.close(&msg.session_id).await,
-        Some(MessageType::TcpConnect) => forwards.connect(msg, out_tx.clone()).await,
-        Some(MessageType::TcpListen) => forwards.listen(msg, out_tx.clone()).await,
+        Some(MessageType::TcpConnect) => {
+            let forwards = forwards.clone();
+            let out_tx = out_tx.clone();
+            modules.forwards.spawn(async move {
+                forwards.connect(msg, out_tx).await;
+            });
+        }
+        Some(MessageType::TcpListen) => {
+            let forwards = forwards.clone();
+            let out_tx = out_tx.clone();
+            modules.forwards.spawn(async move {
+                forwards.listen(msg, out_tx).await;
+            });
+        }
         Some(MessageType::TcpOpen) => forwards.open(&msg.forward_id).await,
         Some(MessageType::TcpClose) => {
             if !msg.listen_id.is_empty() {
@@ -473,10 +514,34 @@ async fn handle_text(
                 forwards.close_forward(&msg.forward_id).await;
             }
         }
-        Some(MessageType::FileList) => files.list(msg, out_tx.clone()).await,
-        Some(MessageType::FileUploadStart) => files.upload_start(msg, out_tx.clone()).await,
-        Some(MessageType::FileUploadEnd) => files.upload_end(msg, out_tx.clone()).await,
-        Some(MessageType::FileDownloadStart) => files.download_start(msg, out_tx.clone()).await,
+        Some(MessageType::FileList) => {
+            let files = files.clone();
+            let out_tx = out_tx.clone();
+            modules.files.spawn(async move {
+                files.list(msg, out_tx).await;
+            });
+        }
+        Some(MessageType::FileUploadStart) => {
+            let files = files.clone();
+            let out_tx = out_tx.clone();
+            modules.files.spawn(async move {
+                files.upload_start(msg, out_tx).await;
+            });
+        }
+        Some(MessageType::FileUploadEnd) => {
+            let files = files.clone();
+            let out_tx = out_tx.clone();
+            modules.files.spawn(async move {
+                files.upload_end(msg, out_tx).await;
+            });
+        }
+        Some(MessageType::FileDownloadStart) => {
+            let files = files.clone();
+            let out_tx = out_tx.clone();
+            modules.files.spawn(async move {
+                files.download_start(msg, out_tx).await;
+            });
+        }
         Some(MessageType::FileTransferCancel) => files.cancel(&msg.task_id).await,
         Some(MessageType::DesktopStart) => {
             let error = if runtime.desktop_enabled {
@@ -503,6 +568,7 @@ async fn handle_text(
 
 async fn handle_binary(
     raw: &[u8],
+    modules: &ModuleRuntimes,
     sessions: &SessionManager,
     forwards: &ForwardManager,
     files: &FileManager,
@@ -511,19 +577,23 @@ async fn handle_binary(
 ) -> Result<()> {
     let (typ, id, payload) = protocol::decode_bin_frame(raw)?;
     match typ {
-        BIN_DATA => sessions.send_data(&id, payload).await,
-        BIN_TCP_DATA => forwards.send_data(&id, payload).await,
+        BIN_DATA => sessions.send_data_nowait(&id, payload),
+        BIN_TCP_DATA => forwards.send_data_nowait(&id, payload),
         protocol::BIN_FILE_UPLOAD_CHUNK => {
             let (_, task_id, offset, data) = protocol::decode_bin_frame_offset(raw)?;
-            files
-                .upload_chunk(&task_id, offset, data, out_tx.clone())
-                .await;
+            let files = files.clone();
+            let out_tx = out_tx.clone();
+            modules.files.spawn(async move {
+                files.upload_chunk(&task_id, offset, data, out_tx).await;
+            });
         }
         protocol::BIN_FILE_TRANSFER_CANCEL => files.cancel(&id).await,
         BIN_FILE_PUT | BIN_FILE_START | BIN_FILE_CHUNK | BIN_FILE_END => {
-            fileputs
-                .handle_frame(typ, id, payload, out_tx.clone())
-                .await;
+            let fileputs = fileputs.clone();
+            let out_tx = out_tx.clone();
+            modules.fileputs.spawn(async move {
+                fileputs.handle_frame(typ, id, payload, out_tx).await;
+            });
         }
         other => debug!("ignored binary frame type {other:#x} id={id}"),
     }

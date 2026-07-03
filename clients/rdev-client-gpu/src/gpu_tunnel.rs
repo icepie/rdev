@@ -14,7 +14,6 @@ use tokio::{
         mpsc::{self, error::TrySendError},
         watch,
     },
-    task::JoinHandle,
 };
 use tokio_kcp::{KcpConfig, KcpNoDelayConfig, KcpStream};
 use tokio_tungstenite::tungstenite::Message as WsMessage;
@@ -22,6 +21,7 @@ use tracing::{debug, info, warn};
 use url::Url;
 
 use crate::config::Args;
+use crate::module_runtime::spawn_tokio_thread;
 use crate::protocol::{self, Message, MessageType};
 use crate::stream_frame;
 use crate::ws_redirect::connect_async_follow_redirects;
@@ -95,21 +95,50 @@ struct TunnelFrame {
     payload: Vec<u8>,
 }
 
-pub fn spawn(args: Args, instance_id: String, local_desktop_ready: bool) -> Option<JoinHandle<()>> {
+pub struct TunnelWorker {
+    stop_tx: watch::Sender<bool>,
+    _thread: std::thread::JoinHandle<()>,
+}
+
+impl TunnelWorker {
+    fn stop(self) {
+        let _ = self.stop_tx.send(true);
+        drop(self._thread);
+    }
+}
+
+pub fn spawn(args: Args, instance_id: String, local_desktop_ready: bool) -> Option<TunnelWorker> {
     if args.no_desktop || args.no_gpu_desktop_tunnel || !local_desktop_ready {
         return None;
     }
-    Some(tokio::spawn(async move {
+    let (stop_tx, mut stop_rx) = watch::channel(false);
+    let thread = spawn_tokio_thread("rdev-gpu-tunnel", async move {
         let mut backoff = ReconnectBackoff::new(args.reconnect_delay, Duration::from_secs(30));
         loop {
-            if let Err(err) = run_once(&args, &instance_id).await {
-                warn!("gpu desktop tunnel disconnected: {err:#}");
-            } else {
-                backoff.reset();
+            if *stop_rx.borrow() {
+                break;
             }
-            tokio::time::sleep(backoff.next()).await;
+            tokio::select! {
+                result = run_once(&args, &instance_id) => {
+                    if let Err(err) = result {
+                        warn!("gpu desktop tunnel disconnected: {err:#}");
+                    } else {
+                        backoff.reset();
+                    }
+                }
+                _ = stop_rx.changed() => break,
+            }
+            let delay = backoff.next();
+            tokio::select! {
+                _ = tokio::time::sleep(delay) => {}
+                _ = stop_rx.changed() => break,
+            }
         }
-    }))
+    });
+    Some(TunnelWorker {
+        stop_tx,
+        _thread: thread,
+    })
 }
 
 pub fn spawn_supervisor(
@@ -117,34 +146,37 @@ pub fn spawn_supervisor(
     instance_id: String,
     mut device_rx: watch::Receiver<Option<String>>,
     local_desktop_ready: bool,
-) -> Option<JoinHandle<()>> {
+) -> Option<std::thread::JoinHandle<()>> {
     if args.no_desktop || args.no_gpu_desktop_tunnel || !local_desktop_ready {
         return None;
     }
-    Some(tokio::spawn(async move {
-        let mut current_device: Option<String> = None;
-        let mut worker: Option<JoinHandle<()>> = None;
-        loop {
-            let next_device = device_rx.borrow().clone();
-            if next_device != current_device {
-                current_device = next_device.clone();
-                if let Some(handle) = worker.take() {
-                    handle.abort();
+    Some(spawn_tokio_thread(
+        "rdev-gpu-tunnel-supervisor",
+        async move {
+            let mut current_device: Option<String> = None;
+            let mut worker: Option<TunnelWorker> = None;
+            loop {
+                let next_device = device_rx.borrow().clone();
+                if next_device != current_device {
+                    current_device = next_device.clone();
+                    if let Some(handle) = worker.take() {
+                        handle.stop();
+                    }
+                    if let Some(device_id) = next_device {
+                        let mut tunnel_args = args.clone();
+                        tunnel_args.id = device_id;
+                        worker = spawn(tunnel_args, instance_id.clone(), local_desktop_ready);
+                    }
                 }
-                if let Some(device_id) = next_device {
-                    let mut tunnel_args = args.clone();
-                    tunnel_args.id = device_id;
-                    worker = spawn(tunnel_args, instance_id.clone(), local_desktop_ready);
+                if device_rx.changed().await.is_err() {
+                    break;
                 }
             }
-            if device_rx.changed().await.is_err() {
-                break;
+            if let Some(handle) = worker.take() {
+                handle.stop();
             }
-        }
-        if let Some(handle) = worker.take() {
-            handle.abort();
-        }
-    }))
+        },
+    ))
 }
 
 async fn run_once(args: &Args, instance_id: &str) -> Result<()> {

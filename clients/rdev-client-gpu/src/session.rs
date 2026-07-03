@@ -17,6 +17,7 @@ use tokio::{
 use tracing::warn;
 
 use crate::{
+    module_runtime::spawn_tokio_thread,
     protocol::{Message, MessageType, BIN_DATA, BIN_STDERR},
     sftp::run_sftp_session,
 };
@@ -69,7 +70,7 @@ impl SessionManager {
         let (tx, rx) = mpsc::channel(1024);
         self.sessions.lock().unwrap().insert(session_id.clone(), tx);
         let manager = self.clone();
-        tokio::spawn(async move {
+        spawn_tokio_thread(format!("rdev-session-{session_id}"), async move {
             let result = if msg.subsystem == "sftp" {
                 run_sftp(msg, rx, outbound.clone()).await
             } else if msg.pty {
@@ -93,11 +94,15 @@ impl SessionManager {
         Ok(())
     }
 
-    pub async fn send_data(&self, session_id: &str, data: Vec<u8>) {
+    pub fn send_data_nowait(&self, session_id: &str, data: Vec<u8>) {
         let tx = self.sessions.lock().unwrap().get(session_id).cloned();
         if let Some(tx) = tx {
-            let _ = tx.send(SessionInput::Data(data)).await;
+            let _ = tx.try_send(SessionInput::Data(data));
         }
+    }
+
+    pub async fn send_data(&self, session_id: &str, data: Vec<u8>) {
+        self.send_data_nowait(session_id, data);
     }
 
     pub async fn stdin_close(&self, session_id: &str) {

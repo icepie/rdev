@@ -40,7 +40,7 @@ pub fn start(args: &Args) -> Option<GpuDesktopService> {
     };
     for bind_addr in candidate_bind_addrs(requested_addr) {
         let config = desktop_service_config(args, bind_addr);
-        match tokio::task::block_in_place(|| rdev_desktop::start_desktop_service(config)) {
+        match start_desktop_service_on_thread(config) {
             Some(weylus) => {
                 if bind_addr != requested_addr {
                     tracing::warn!(
@@ -59,6 +59,20 @@ pub fn start(args: &Args) -> Option<GpuDesktopService> {
         }
     }
     None
+}
+
+#[cfg(feature = "embedded-rdev-desktop")]
+fn start_desktop_service_on_thread(
+    config: rdev_desktop::DesktopServiceConfig,
+) -> Option<rdev_desktop::Weylus> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let _ = std::thread::Builder::new()
+        .name("rdev-desktop-start".into())
+        .spawn(move || {
+            let _ = tx.send(rdev_desktop::start_desktop_service(config));
+        })
+        .map_err(|err| tracing::warn!("failed to spawn desktop service starter: {err}"));
+    rx.recv().ok().flatten()
 }
 
 #[cfg(feature = "embedded-rdev-desktop")]
