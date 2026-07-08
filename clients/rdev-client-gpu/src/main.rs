@@ -8,6 +8,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use futures_util::{SinkExt, StreamExt};
 use rdev_client_gpu::{
+    client_logs::{global as log_collector, ClientLogLayer},
     config::Args,
     desktop, desktop_env,
     fileput::FilePutManager,
@@ -32,7 +33,7 @@ use tokio::sync::watch;
 use tokio_kcp::{KcpConfig, KcpNoDelayConfig, KcpStream};
 use tokio_tungstenite::tungstenite::Message as WsMessage;
 use tracing::{debug, info, warn};
-use tracing_subscriber::EnvFilter;
+use tracing_subscriber::{prelude::*, EnvFilter};
 use url::Url;
 
 trait AsyncReadWrite: AsyncRead + AsyncWrite {}
@@ -67,10 +68,10 @@ impl ModuleRuntimes {
 async fn main() -> Result<()> {
     install_default_tls_provider();
 
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
-        )
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::fmt::layer())
+        .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
+        .with(ClientLogLayer)
         .init();
 
     let mut args = Args::parse();
@@ -206,6 +207,7 @@ async fn run_once(
         .context("connect websocket")?;
     let (mut write, mut read) = ws.split();
     let (out_tx, mut out_rx) = mpsc::channel::<OutboundEvent>(4096);
+    log_collector().attach_sender(out_tx.clone());
     let sessions = SessionManager::new();
     let forwards = ForwardManager::new();
     let files = FileManager::new();
@@ -219,6 +221,7 @@ async fn run_once(
         client_version: version::client_version(),
         password: args.password.clone(),
         desktop: Some(desktop::capabilities(!args.no_desktop && desktop_enabled)),
+        log_supported: true,
         ..Default::default()
     };
     write
@@ -273,6 +276,7 @@ async fn run_once(
     forwards.close_all().await;
     files.close_all().await;
     fileputs.close_all().await;
+    log_collector().detach_sender();
     Ok(registered)
 }
 
@@ -386,6 +390,7 @@ async fn run_once_stream(
     };
     let (mut read_half, mut write_half) = tokio::io::split(stream);
     let (out_tx, mut out_rx) = mpsc::channel::<OutboundEvent>(4096);
+    log_collector().attach_sender(out_tx.clone());
     let sessions = SessionManager::new();
     let forwards = ForwardManager::new();
     let files = FileManager::new();
@@ -398,6 +403,7 @@ async fn run_once_stream(
         client_version: version::client_version(),
         password: args.password.clone(),
         desktop: Some(desktop::capabilities(!args.no_desktop && desktop_enabled)),
+        log_supported: true,
         ..Default::default()
     };
     stream_frame::write_frame(
@@ -451,6 +457,7 @@ async fn run_once_stream(
     forwards.close_all().await;
     files.close_all().await;
     fileputs.close_all().await;
+    log_collector().detach_sender();
     Ok(registered)
 }
 
@@ -489,6 +496,9 @@ async fn handle_text(
                     .gpu_tunnel_device_tx
                     .send(Some(registered_id.to_string()));
             }
+        }
+        Some(MessageType::LogConfig) => {
+            log_collector().configure(&msg);
         }
         Some(MessageType::NewSession) => sessions.start(msg, args.shell.clone(), out_tx.clone())?,
         Some(MessageType::StdinClose) => sessions.stdin_close(&msg.session_id).await,

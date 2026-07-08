@@ -56,6 +56,19 @@
         .term-btn { display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px; border-radius: 6px; font-size: 0.8rem; cursor: pointer; border: 1px solid rgba(34,211,238,0.3); background: rgba(34,211,238,0.08); color: var(--accent); text-decoration: none; transition: all 0.15s; white-space: nowrap; }
         .term-btn:hover { background: rgba(34,211,238,0.18); border-color: var(--accent); }
         .term-btn.ok { border-color: rgba(74,222,128,0.45); background: rgba(74,222,128,0.08); color: var(--green); }
+        .term-btn.warn { border-color: rgba(250,204,21,0.45); background: rgba(250,204,21,0.08); color: var(--yellow); }
+        .term-btn.danger { border-color: rgba(248,113,113,0.45); background: rgba(248,113,113,0.08); color: var(--red); }
+        .term-btn:disabled { opacity: 0.45; cursor: not-allowed; filter: grayscale(0.5); }
+        .modal-backdrop { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; padding: 1rem; background: rgba(0,0,0,0.55); z-index: 50; }
+        .modal-backdrop.open { display: flex; }
+        .modal { width: min(100%, 980px); max-height: 86vh; overflow: hidden; display: flex; flex-direction: column; background: var(--card); border: 1px solid var(--border); border-radius: 14px; box-shadow: 0 18px 60px rgba(0,0,0,0.35); }
+        .modal-head { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 1rem 1.2rem; border-bottom: 1px solid var(--border); }
+        .modal-title { font-weight: 700; color: var(--accent); }
+        .modal-body { padding: 1rem 1.2rem; overflow: auto; }
+        .log-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 0.9rem; }
+        .log-toolbar select { background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 5px 8px; }
+        .log-meta { color: var(--muted); font-size: 0.8rem; margin-bottom: 0.6rem; }
+        .log-tail { min-height: 360px; max-height: 58vh; overflow: auto; background: #000; color: #d4d4d8; border-radius: 8px; padding: 0.8rem; font: 12px/1.5 'SF Mono','Fira Code',Consolas,monospace; white-space: pre-wrap; word-break: break-word; }
         .install { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 1.5rem; margin-top: 2rem; }
         .install-head { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: 1rem; }
         .install h3 { font-size: 1rem; color: var(--accent); margin: 0; }
@@ -267,6 +280,33 @@
         </div>
     </div>
 
+    <div class="modal-backdrop" id="client-log-modal" onclick="if(event.target===this) closeClientLogModal()">
+        <div class="modal">
+            <div class="modal-head">
+                <div class="modal-title" id="client-log-title">客户端日志</div>
+                <button type="button" class="copy-btn" onclick="closeClientLogModal()">×</button>
+            </div>
+            <div class="modal-body">
+                <div class="log-toolbar">
+                    <select id="client-log-level">
+                        <option value="error">error</option>
+                        <option value="warn">warn</option>
+                        <option value="info" selected>info</option>
+                        <option value="debug">debug</option>
+                        <option value="trace">trace</option>
+                    </select>
+                    <button type="button" class="term-btn" onclick="setClientLogEnabled(true)">开启日志</button>
+                    <button type="button" class="term-btn warn" onclick="setClientLogEnabled(false)">关闭日志</button>
+                    <button type="button" class="term-btn" onclick="refreshClientLogTail()">刷新 tail</button>
+                    <button type="button" class="term-btn" onclick="downloadClientLog()">下载今日</button>
+                    <button type="button" class="term-btn danger" onclick="deleteClientLogFiles()">删除本地日志</button>
+                </div>
+                <div class="log-meta" id="client-log-meta">—</div>
+                <pre class="log-tail" id="client-log-tail">选择设备后查看最近 300 行日志。</pre>
+            </div>
+        </div>
+    </div>
+
     <script src="/i18n.js"></script>
     <script src="/ui.js"></script>
     <script>
@@ -446,9 +486,78 @@
         }
         document.querySelectorAll('[data-android-asset]').forEach(btn => btn.addEventListener('click', () => downloadAndroidAsset(btn.dataset.androidAsset)));
 
+        let currentLogDevice = '';
+        let clientLogStates = new Map();
+        function formatBytes(n) {
+            n = Number(n || 0);
+            if (n < 1024) return n + ' B';
+            if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+            if (n < 1024 * 1024 * 1024) return (n / 1024 / 1024).toFixed(1) + ' MB';
+            return (n / 1024 / 1024 / 1024).toFixed(1) + ' GB';
+        }
+        async function loadClientLogStates() {
+            try {
+                const r = await authFetch('/api/client-logs/devices');
+                if (!r.ok) return new Map();
+                const list = await r.json();
+                clientLogStates = new Map((list || []).map(x => [x.id, x]));
+                return clientLogStates;
+            } catch (_) { return clientLogStates; }
+        }
+        function clientLogButton(d) {
+            if (!d.logSupported) return `<button type="button" class="term-btn" disabled title="客户端版本不支持日志上报">日志不支持</button>`;
+            const st = clientLogStates.get(d.id) || {};
+            const label = st.enabled ? '日志:on' : '日志';
+            const cls = st.enabled ? 'term-btn ok' : 'term-btn';
+            return `<button type="button" class="${cls}" data-device="${esc(d.id)}" onclick="openClientLogModal(this.dataset.device)">${label}</button>`;
+        }
+        async function openClientLogModal(device) {
+            currentLogDevice = device;
+            await loadClientLogStates();
+            const st = clientLogStates.get(device) || {};
+            document.getElementById('client-log-title').textContent = '客户端日志 · ' + device;
+            document.getElementById('client-log-level').value = st.level || 'info';
+            document.getElementById('client-log-meta').textContent = `状态: ${st.enabled ? '已开启' : '未开启'} · 大小: ${formatBytes(st.size)} · 最新: ${st.latest || '-'} · 支持: ${st.supported === false ? '否' : '是'}`;
+            document.getElementById('client-log-modal').classList.add('open');
+            await refreshClientLogTail();
+        }
+        function closeClientLogModal() { document.getElementById('client-log-modal').classList.remove('open'); }
+        async function setClientLogEnabled(enabled) {
+            if (!currentLogDevice) return;
+            const level = document.getElementById('client-log-level').value || 'info';
+            const r = await authFetch('/api/client-logs/devices/' + encodeURIComponent(currentLogDevice) + '/config', {
+                method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({enabled, level})
+            });
+            if (!r.ok) return;
+            await loadClientLogStates();
+            await openClientLogModal(currentLogDevice);
+            refresh();
+        }
+        async function refreshClientLogTail() {
+            if (!currentLogDevice) return;
+            const out = document.getElementById('client-log-tail');
+            out.textContent = 'loading...';
+            const r = await authFetch('/api/client-logs/devices/' + encodeURIComponent(currentLogDevice) + '/tail?lines=300');
+            if (!r.ok) { out.textContent = '暂无日志或读取失败: HTTP ' + r.status; return; }
+            const data = await r.json();
+            out.textContent = (data.lines || []).join('\n') || '暂无日志。开启采集后客户端会先补发本地环形缓冲，再持续上传。';
+        }
+        function downloadClientLog() {
+            if (!currentLogDevice) return;
+            const day = new Date().toISOString().slice(0, 10);
+            location.href = authURL('/api/client-logs/devices/' + encodeURIComponent(currentLogDevice) + '/download?date=' + day);
+        }
+        async function deleteClientLogFiles() {
+            if (!currentLogDevice) return;
+            if (!confirm('删除该设备服务端已保存日志？')) return;
+            const r = await authFetch('/api/client-logs/devices/' + encodeURIComponent(currentLogDevice), { method: 'DELETE' });
+            if (r.ok) { await loadClientLogStates(); await refreshClientLogTail(); refresh(); }
+        }
+
         async function refresh() {
             try {
                 const r = await authFetch('/api/clients'); const c = await r.json();
+                await loadClientLogStates();
                 document.getElementById('stat-online').textContent = c.length;
                 document.getElementById('stat-sessions').textContent = c.reduce((s,x) => s + x.sessions, 0);
                 document.getElementById('stat-forwards').textContent = c.reduce((s,x) => s + x.forwards, 0);
@@ -467,6 +576,7 @@
                         <a href="/remote-desktop?device=${encodeURIComponent(d.id)}" class="term-btn">${icon('monitor')} ${t('index.navDesktop')}</a>
                         <a href="/files?device=${encodeURIComponent(d.id)}" class="term-btn">${icon('files')} ${t('index.navFiles')}</a>
                         <button type="button" class="term-btn" data-device="${esc(d.id)}" data-has-password="${d.hasPassword ? 'true' : 'false'}" onclick="copyDeviceConnection(this)">${t('index.copyConnection')}</button>
+                        ${clientLogButton(d)}
                     </div></td>
                 </tr>`).join('');
             } catch(e) {}

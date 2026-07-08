@@ -74,6 +74,10 @@ pub enum MessageType {
     DesktopClose,
     #[serde(rename = "gpu_desktop_tunnel")]
     GpuDesktopTunnel,
+    #[serde(rename = "log_config")]
+    LogConfig,
+    #[serde(rename = "log_batch")]
+    LogBatch,
     #[serde(other)]
     Unknown,
 }
@@ -155,6 +159,35 @@ pub struct Message {
     pub desktop: Option<DesktopCapabilities>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub error: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub log_supported: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub log_enabled: bool,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub log_level: String,
+    #[serde(default, skip_serializing_if = "is_zero_f64")]
+    pub sample_rate: f64,
+    #[serde(default, skip_serializing_if = "is_zero_i32")]
+    pub max_line_bytes: i32,
+    #[serde(default, skip_serializing_if = "is_zero_i32")]
+    pub flush_interval_ms: i32,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub logs: Vec<LogEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct LogEntry {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub ts: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub level: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub target: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub module: String,
+    #[serde(default, rename = "msg", skip_serializing_if = "String::is_empty")]
+    pub message: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -313,6 +346,10 @@ fn is_zero(v: &u16) -> bool {
 fn is_zero_i32(v: &i32) -> bool {
     *v == 0
 }
+fn is_zero_f64(v: &f64) -> bool {
+    *v == 0.0
+}
+
 fn is_zero_i64(v: &i64) -> bool {
     *v == 0
 }

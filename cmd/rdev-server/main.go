@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -19,18 +20,21 @@ var version = "dev"
 
 func main() {
 	var (
-		httpAddr         = ":8080"
-		tcpAddr          = ":8081"
-		kcpAddr          = ":8082"
-		sshAddr          = ":2222"
-		dataDir          = ""
-		adminToken       = ""
-		maxSessions      = 0
-		maxForwards      = 0
-		batchConcurrency = 0
-		vncAddr          = ""
-		autoUpdate       = true
-		updateInterval   = time.Minute
+		httpAddr                   = ":8080"
+		tcpAddr                    = ":8081"
+		kcpAddr                    = ":8082"
+		sshAddr                    = ":2222"
+		dataDir                    = ""
+		adminToken                 = ""
+		maxSessions                = 0
+		maxForwards                = 0
+		batchConcurrency           = 0
+		vncAddr                    = ""
+		clientLogDir               = ""
+		clientLogRetention         = 7 * 24 * time.Hour
+		clientLogMaxFileSize int64 = 32 * 1024 * 1024
+		autoUpdate                 = true
+		updateInterval             = time.Minute
 	)
 
 	for i := 1; i < len(os.Args); i++ {
@@ -75,6 +79,25 @@ func main() {
 				fmt.Sscanf(os.Args[i+1], "%d", &maxForwards)
 				i++
 			}
+		case "--client-log-dir":
+			if i+1 < len(os.Args) {
+				clientLogDir = os.Args[i+1]
+				i++
+			}
+		case "--client-log-retention":
+			if i+1 < len(os.Args) {
+				if d, err := time.ParseDuration(os.Args[i+1]); err == nil {
+					clientLogRetention = d
+				}
+				i++
+			}
+		case "--client-log-max-file-size":
+			if i+1 < len(os.Args) {
+				if n, err := strconv.ParseInt(os.Args[i+1], 10, 64); err == nil {
+					clientLogMaxFileSize = n
+				}
+				i++
+			}
 		case "--batch-concurrency":
 			if i+1 < len(os.Args) {
 				fmt.Sscanf(os.Args[i+1], "%d", &batchConcurrency)
@@ -116,6 +139,9 @@ Options:
   --max-forwards     Max concurrent TCP forwards per device (default 1024)
   --batch-concurrency Max concurrent batch operations (default GOMAXPROCS*8)
   --vnc             VNC/RFB listen address with username=deviceId auth (optional)
+  --client-log-dir  Client log storage directory (default ./data/client-logs)
+  --client-log-retention Client log retention duration (default 168h)
+  --client-log-max-file-size Client log max file size before rotation (default 33554432)
   --no-auto-update Disable built-in GitHub release auto-update
   --auto-update    Enable/disable auto-update explicitly (true/false)
   --update-interval Auto-update polling interval (default 1m)
@@ -153,6 +179,19 @@ Examples:
 			updateInterval = d
 		}
 	}
+	if env := os.Getenv("RDEV_CLIENT_LOG_DIR"); env != "" {
+		clientLogDir = env
+	}
+	if env := os.Getenv("RDEV_CLIENT_LOG_RETENTION"); env != "" {
+		if d, err := time.ParseDuration(env); err == nil && d > 0 {
+			clientLogRetention = d
+		}
+	}
+	if env := os.Getenv("RDEV_CLIENT_LOG_MAX_FILE_SIZE"); env != "" {
+		if n, err := strconv.ParseInt(env, 10, 64); err == nil && n > 0 {
+			clientLogMaxFileSize = n
+		}
+	}
 
 	if dataDir == "" {
 		home, _ := os.UserHomeDir()
@@ -180,6 +219,8 @@ Examples:
 
 	srv := server.NewServer()
 	srv.ReleaseVersion = version
+	srv.ClientLogs = server.NewClientLogManager(clientLogDir, clientLogRetention, clientLogMaxFileSize)
+	srv.ClientLogs.StartCleanup()
 	srv.SSHPort = sshPort
 	srv.HTTPHost = outboundIP + ":" + httpPort
 	srv.TCPPort = tcpPort
@@ -230,6 +271,8 @@ Examples:
 	mux.HandleFunc("/api/config", srv.HandleConfigAPI)
 	mux.HandleFunc("/api/release/latest", srv.HandleReleaseLatestAPI)
 	mux.HandleFunc("/api/vnc/settings", srv.HandleVNCSettingsAPI)
+	mux.HandleFunc("/api/client-logs/", srv.HandleClientLogsAPI)
+	mux.HandleFunc("/api/client-logs", srv.HandleClientLogsAPI)
 	mux.HandleFunc("/api/upload", srv.HandleFileUpload)
 	mux.HandleFunc("/download-release", srv.HandleReleaseDownload)
 	mux.HandleFunc("/download-release-proxy", srv.HandleReleaseDownloadProxy)

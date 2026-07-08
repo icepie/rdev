@@ -53,19 +53,20 @@ var releaseDownloadMirrors = []string{
 
 // ClientConn represents a connected client device
 type ClientConn struct {
-	ID          string
-	RequestedID string
-	InstanceID  string
-	Version     string
-	Conn        *gws.Conn
-	Transport   DeviceTransport
-	ConnectedAt time.Time
-	Password    string
-	Sessions    map[string]*ProxySession
-	Forwards    map[string]*ProxyForward
-	Desktop     *protocol.DesktopCapabilities
-	writeMu     sync.Mutex
-	mu          sync.Mutex
+	ID           string
+	RequestedID  string
+	InstanceID   string
+	Version      string
+	Conn         *gws.Conn
+	Transport    DeviceTransport
+	ConnectedAt  time.Time
+	Password     string
+	Sessions     map[string]*ProxySession
+	Forwards     map[string]*ProxyForward
+	Desktop      *protocol.DesktopCapabilities
+	LogSupported bool
+	writeMu      sync.Mutex
+	mu           sync.Mutex
 }
 
 type DeviceTransport interface {
@@ -550,6 +551,7 @@ type Server struct {
 	MaxForwards      int    // maximum concurrent forwards per device
 	BatchConcurrency int    // maximum concurrent batch operations
 	ReleaseVersion   string // server release version, injected by main
+	ClientLogs       *ClientLogManager
 }
 
 // NewServer creates a new Server
@@ -569,6 +571,7 @@ func NewServer() *Server {
 		MaxSessions:       256,
 		MaxForwards:       1024,
 		BatchConcurrency:  runtime.GOMAXPROCS(0) * 8,
+		ClientLogs:        NewClientLogManager("", 0, 0),
 	}
 	s.upgrader = gws.NewUpgrader(&wsHandler{srv: s}, &gws.ServerOption{
 		ReadMaxPayloadSize: 16 * 1024 * 1024,
@@ -719,17 +722,18 @@ func (h *wsHandler) handleRegister(socket *gws.Conn, msg *protocol.Message) {
 	}
 	instanceID := strings.TrimSpace(msg.InstanceID)
 	client := &ClientConn{
-		ID:          clientID,
-		RequestedID: clientID,
-		InstanceID:  instanceID,
-		Version:     msg.ClientVersion,
-		Conn:        socket,
-		Transport:   &wsDeviceTransport{conn: socket},
-		ConnectedAt: time.Now(),
-		Password:    msg.Password,
-		Desktop:     cloneDesktopCapabilities(msg.DesktopCapabilities),
-		Sessions:    make(map[string]*ProxySession),
-		Forwards:    make(map[string]*ProxyForward),
+		ID:           clientID,
+		RequestedID:  clientID,
+		InstanceID:   instanceID,
+		Version:      msg.ClientVersion,
+		Conn:         socket,
+		Transport:    &wsDeviceTransport{conn: socket},
+		ConnectedAt:  time.Now(),
+		Password:     msg.Password,
+		Desktop:      cloneDesktopCapabilities(msg.DesktopCapabilities),
+		LogSupported: msg.LogSupported,
+		Sessions:     make(map[string]*ProxySession),
+		Forwards:     make(map[string]*ProxyForward),
 	}
 
 	socket.Session().Store("clientID", clientID)
@@ -754,6 +758,7 @@ func (h *wsHandler) handleRegister(socket *gws.Conn, msg *protocol.Message) {
 		SSHPort:    h.srv.SSHPort,
 		HTTPHost:   h.srv.HTTPHost,
 	})
+	h.srv.sendClientLogConfig(client)
 	go h.srv.clientPingLoop(client)
 }
 
@@ -1029,16 +1034,17 @@ func (s *Server) registerStreamClient(transport DeviceTransport, msg *protocol.M
 	}
 	instanceID := strings.TrimSpace(msg.InstanceID)
 	client := &ClientConn{
-		ID:          clientID,
-		RequestedID: clientID,
-		InstanceID:  instanceID,
-		Version:     msg.ClientVersion,
-		Transport:   transport,
-		ConnectedAt: time.Now(),
-		Password:    msg.Password,
-		Desktop:     cloneDesktopCapabilities(msg.DesktopCapabilities),
-		Sessions:    make(map[string]*ProxySession),
-		Forwards:    make(map[string]*ProxyForward),
+		ID:           clientID,
+		RequestedID:  clientID,
+		InstanceID:   instanceID,
+		Version:      msg.ClientVersion,
+		Transport:    transport,
+		ConnectedAt:  time.Now(),
+		Password:     msg.Password,
+		Desktop:      cloneDesktopCapabilities(msg.DesktopCapabilities),
+		LogSupported: msg.LogSupported,
+		Sessions:     make(map[string]*ProxySession),
+		Forwards:     make(map[string]*ProxyForward),
 	}
 	old, assignedID, duplicate := s.registerClient(client)
 	if old != nil && old.Transport != transport {
@@ -1053,6 +1059,7 @@ func (s *Server) registerStreamClient(transport DeviceTransport, msg *protocol.M
 		log.Printf("client registered via %s: %s", label, assignedID)
 	}
 	_ = client.Send(&protocol.Message{Type: protocol.MsgRegister, ClientID: assignedID, InstanceID: instanceID, SSHPort: s.SSHPort, HTTPHost: s.HTTPHost})
+	s.sendClientLogConfig(client)
 	go s.clientPingLoop(client)
 	return assignedID, true
 }
@@ -1161,6 +1168,8 @@ func (s *Server) handleClientMessage(client *ClientConn, msg *protocol.Message) 
 		s.handleFileManagerMessage(msg)
 	case protocol.MsgDesktopReady, protocol.MsgDesktopClose:
 		s.handleDesktopMessage(msg)
+	case protocol.MsgLogBatch:
+		s.handleClientLogBatch(client, msg)
 	}
 }
 
@@ -1396,16 +1405,17 @@ func (s *Server) HandleAPI(w http.ResponseWriter, r *http.Request) {
 	defer s.mu.RUnlock()
 
 	type clientInfo struct {
-		ID          string                        `json:"id"`
-		RequestedID string                        `json:"requestedId,omitempty"`
-		InstanceID  string                        `json:"instanceId,omitempty"`
-		Version     string                        `json:"version,omitempty"`
-		ConnectedAt string                        `json:"connectedAt"`
-		Sessions    int                           `json:"sessions"`
-		Forwards    int                           `json:"forwards"`
-		HasPassword bool                          `json:"hasPassword"`
-		Desktop     *protocol.DesktopCapabilities `json:"desktop,omitempty"`
-		GPUDesktop  bool                          `json:"gpuDesktop,omitempty"`
+		ID           string                        `json:"id"`
+		RequestedID  string                        `json:"requestedId,omitempty"`
+		InstanceID   string                        `json:"instanceId,omitempty"`
+		Version      string                        `json:"version,omitempty"`
+		ConnectedAt  string                        `json:"connectedAt"`
+		Sessions     int                           `json:"sessions"`
+		Forwards     int                           `json:"forwards"`
+		HasPassword  bool                          `json:"hasPassword"`
+		Desktop      *protocol.DesktopCapabilities `json:"desktop,omitempty"`
+		GPUDesktop   bool                          `json:"gpuDesktop,omitempty"`
+		LogSupported bool                          `json:"logSupported,omitempty"`
 	}
 
 	clients := make([]clientInfo, 0, len(s.clients))
@@ -1415,16 +1425,17 @@ func (s *Server) HandleAPI(w http.ResponseWriter, r *http.Request) {
 		f := len(c.Forwards)
 		c.mu.Unlock()
 		clients = append(clients, clientInfo{
-			ID:          c.ID,
-			RequestedID: c.RequestedID,
-			InstanceID:  c.InstanceID,
-			Version:     c.Version,
-			ConnectedAt: c.ConnectedAt.Format(time.RFC3339),
-			Sessions:    n,
-			Forwards:    f,
-			HasPassword: c.Password != "",
-			Desktop:     cloneDesktopCapabilities(c.Desktop),
-			GPUDesktop:  s.clientGPUDesktopAvailable(c),
+			ID:           c.ID,
+			RequestedID:  c.RequestedID,
+			InstanceID:   c.InstanceID,
+			Version:      c.Version,
+			ConnectedAt:  c.ConnectedAt.Format(time.RFC3339),
+			Sessions:     n,
+			Forwards:     f,
+			HasPassword:  c.Password != "",
+			Desktop:      cloneDesktopCapabilities(c.Desktop),
+			GPUDesktop:   s.clientGPUDesktopAvailable(c),
+			LogSupported: c.LogSupported,
 		})
 	}
 
@@ -1674,25 +1685,27 @@ func (s *Server) HandleTerminalAPI(w http.ResponseWriter, r *http.Request) {
 	defer s.mu.RUnlock()
 
 	type deviceInfo struct {
-		ID          string                        `json:"id"`
-		RequestedID string                        `json:"requestedId,omitempty"`
-		ConnectedAt string                        `json:"connectedAt"`
-		Version     string                        `json:"version,omitempty"`
-		HasPassword bool                          `json:"hasPassword"`
-		Desktop     *protocol.DesktopCapabilities `json:"desktop,omitempty"`
-		GPUDesktop  bool                          `json:"gpuDesktop,omitempty"`
+		ID           string                        `json:"id"`
+		RequestedID  string                        `json:"requestedId,omitempty"`
+		ConnectedAt  string                        `json:"connectedAt"`
+		Version      string                        `json:"version,omitempty"`
+		HasPassword  bool                          `json:"hasPassword"`
+		Desktop      *protocol.DesktopCapabilities `json:"desktop,omitempty"`
+		GPUDesktop   bool                          `json:"gpuDesktop,omitempty"`
+		LogSupported bool                          `json:"logSupported,omitempty"`
 	}
 
 	devices := make([]deviceInfo, 0, len(s.clients))
 	for _, c := range s.clients {
 		devices = append(devices, deviceInfo{
-			ID:          c.ID,
-			RequestedID: c.RequestedID,
-			ConnectedAt: c.ConnectedAt.Format(time.RFC3339),
-			Version:     c.Version,
-			HasPassword: c.Password != "",
-			Desktop:     cloneDesktopCapabilities(c.Desktop),
-			GPUDesktop:  s.clientGPUDesktopAvailable(c),
+			ID:           c.ID,
+			RequestedID:  c.RequestedID,
+			ConnectedAt:  c.ConnectedAt.Format(time.RFC3339),
+			Version:      c.Version,
+			HasPassword:  c.Password != "",
+			Desktop:      cloneDesktopCapabilities(c.Desktop),
+			GPUDesktop:   s.clientGPUDesktopAvailable(c),
+			LogSupported: c.LogSupported,
 		})
 	}
 
