@@ -191,7 +191,6 @@ fn redact_key(input: &str, key: &str) -> String {
         .join(" ")
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -206,7 +205,9 @@ mod tests {
 
     #[test]
     fn sanitize_redacts_secret_like_tokens() {
-        let got = sanitize("connect token=abc password=hunter2 authorization=Bearer cookie=x secret=y key=z");
+        let got = sanitize(
+            "connect token=abc password=hunter2 authorization=Bearer cookie=x secret=y key=z",
+        );
         assert!(got.contains("[redacted]"));
         assert!(!got.contains("abc"));
         assert!(!got.contains("hunter2"));
