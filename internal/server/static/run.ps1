@@ -273,7 +273,7 @@ function global:RDev {
     [CmdletBinding()]
     param(
         [Parameter(Position=0, Mandatory=$true)]
-        [string]$Server,
+        [object]$Server,
 
         [string]$Id = '',
         [string]$Password = '',
@@ -284,6 +284,11 @@ function global:RDev {
         [string]$Client = 'go',
         [string]$Mirror = 'auto'
     )
+
+    if ($Server -is [Array]) { $Server = ($Server -join ',') }
+    $Server = [string]$Server
+    $Server = $Server.Trim()
+    if (-not $Server) { Write-Error "Server is required"; return }
 
     $Elevate = $false
     if (-not (Test-RDevAdministrator)) {
