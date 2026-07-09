@@ -61,27 +61,109 @@ jobs:
 
   build:
     name: Build ${{ matrix.name }}
-    needs: test
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - name: linux-amd64
+          - name: linux-amd64-debian13
             os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             artifact: rdev-client-gpu
             asset: rdev-client-gpu-linux-amd64
             package_linux: true
-            distro: debian11
+            linux_distro: debian13
+            linux_image: debian:13
+            linux_features: embedded-rdev-desktop-wayland
+            enable_vaapi: y
             arch: amd64
-          - name: linux-arm64
+          - name: linux-amd64-debian12
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact: rdev-client-gpu
+            asset: rdev-client-gpu-linux-amd64-debian12
+            package_linux: true
+            linux_distro: debian12
+            linux_image: debian:12
+            linux_features: embedded-rdev-desktop
+            enable_vaapi: n
+            arch: amd64
+          - name: linux-amd64-debian11
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact: rdev-client-gpu
+            asset: rdev-client-gpu-linux-amd64-debian11
+            package_linux: true
+            linux_distro: debian11
+            linux_image: debian:11
+            linux_features: embedded-rdev-desktop
+            enable_vaapi: n
+            arch: amd64
+          - name: linux-amd64-centos7
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact: rdev-client-gpu
+            asset: rdev-client-gpu-linux-amd64-centos7
+            package_linux: true
+            linux_distro: centos7
+            linux_image: centos:7
+            linux_features: embedded-rdev-desktop
+            enable_vaapi: n
+            arch: amd64
+          - name: linux-amd64-centos8
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact: rdev-client-gpu
+            asset: rdev-client-gpu-linux-amd64-centos8
+            package_linux: true
+            linux_distro: centos8
+            linux_image: rockylinux:8
+            linux_features: embedded-rdev-desktop
+            enable_vaapi: n
+            arch: amd64
+          - name: linux-arm64-debian13
             os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
             artifact: rdev-client-gpu
             asset: rdev-client-gpu-linux-arm64
             package_linux: true
-            distro: debian11
+            linux_distro: debian13
+            linux_image: debian:13
+            linux_features: embedded-rdev-desktop-wayland
+            enable_vaapi: y
+            arch: arm64
+          - name: linux-arm64-debian12
+            os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            artifact: rdev-client-gpu
+            asset: rdev-client-gpu-linux-arm64-debian12
+            package_linux: true
+            linux_distro: debian12
+            linux_image: debian:12
+            linux_features: embedded-rdev-desktop
+            enable_vaapi: n
+            arch: arm64
+          - name: linux-arm64-debian11
+            os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            artifact: rdev-client-gpu
+            asset: rdev-client-gpu-linux-arm64-debian11
+            package_linux: true
+            linux_distro: debian11
+            linux_image: debian:11
+            linux_features: embedded-rdev-desktop
+            enable_vaapi: n
+            arch: arm64
+          - name: linux-arm64-centos8
+            os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            artifact: rdev-client-gpu
+            asset: rdev-client-gpu-linux-arm64-centos8
+            package_linux: true
+            linux_distro: centos8
+            linux_image: rockylinux:8
+            linux_features: embedded-rdev-desktop
+            enable_vaapi: n
             arch: arm64
           - name: windows-amd64
             os: ubuntu-latest
@@ -228,7 +310,18 @@ jobs:
           workspaces: clients/rdev-client-gpu -> target
           key: desktop-${{ matrix.target }}-${{ matrix.name }}
 
-      - name: Build Linux embedded desktop packages
+      - name: Cache Linux package Rust toolchain
+        if: matrix.package_linux == true
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin
+            ~/.cargo/env
+            ~/.rustup/toolchains
+            ~/.rustup/update-hashes
+          key: rustup-linux-package-${{ runner.os }}-${{ runner.arch }}-stable
+
+      - name: Build Linux embedded desktop package
         if: matrix.package_linux == true
         working-directory: .
         env:
@@ -242,48 +335,39 @@ jobs:
           RDEV_GPU_ARCH: ${{ matrix.arch }}
           RDEV_GPU_RUST_TOOLCHAIN: stable
           RDEV_VERSION: ${{ github.ref_name }}
+          RDEV_GPU_ASSET: ${{ matrix.asset }}
+          RDEV_GPU_FEATURES: ${{ matrix.linux_features }}
+          ENABLE_VAAPI: ${{ matrix.enable_vaapi }}
+          ENABLE_NVENC: n
           TMPDIR: /tmp
         run: |
           set -euo pipefail
-
-          run_linux_package() {
-            local distro="$1"
-            local image="$2"
-            local asset="$3"
-            local features="$4"
-            local enable_vaapi="$5"
-            echo "::group::${asset} (${image})"
-            docker run --rm \
-              -v "$PWD:/work" \
-              -w /work \
-              -e CARGO_NET_RETRY \
-              -e RDEV_GPU_PROXY \
-              -e RDEV_GPU_APT_MIRROR \
-              -e RDEV_GPU_CARGO_REGISTRY \
-              -e RDEV_GPU_RUSTUP_DIST_SERVER \
-              -e RDEV_GPU_RUSTUP_UPDATE_ROOT \
-              -e RDEV_GPU_TARGET \
-              -e RDEV_GPU_ARCH \
-              -e RDEV_GPU_RUST_TOOLCHAIN \
-              -e RDEV_VERSION \
-              -e TMPDIR \
-              -e RDEV_GPU_ASSET="$asset" \
-              -e RDEV_GPU_FEATURES="$features" \
-              -e ENABLE_VAAPI="$enable_vaapi" \
-              -e ENABLE_NVENC=n \
-              "$image" \
-              bash clients/rdev-client-gpu/scripts/package-linux-desktop.sh "$distro"
-            sudo chown -R "$USER:$USER" clients/rdev-client-gpu/dist
-            echo "::endgroup::"
-          }
-
-          run_linux_package debian13 debian:13 "${{ matrix.asset }}" embedded-rdev-desktop-wayland y
-          run_linux_package debian12 debian:12 "${{ matrix.asset }}-debian12" embedded-rdev-desktop n
-          run_linux_package debian11 debian:11 "${{ matrix.asset }}-debian11" embedded-rdev-desktop n
-          if [ "${{ matrix.arch }}" = "amd64" ]; then
-            run_linux_package centos7 centos:7 "${{ matrix.asset }}-centos7" embedded-rdev-desktop n
-          fi
-          run_linux_package centos8 rockylinux:8 "${{ matrix.asset }}-centos8" embedded-rdev-desktop n
+          mkdir -p "$HOME/.cargo" "$HOME/.rustup" clients/rdev-client-gpu/target
+          echo "::group::${RDEV_GPU_ASSET} (${{ matrix.linux_image }})"
+          docker run --rm \
+            -v "$PWD:/work" \
+            -v "$HOME/.cargo:/root/.cargo" \
+            -v "$HOME/.rustup:/root/.rustup" \
+            -w /work \
+            -e CARGO_NET_RETRY \
+            -e RDEV_GPU_PROXY \
+            -e RDEV_GPU_APT_MIRROR \
+            -e RDEV_GPU_CARGO_REGISTRY \
+            -e RDEV_GPU_RUSTUP_DIST_SERVER \
+            -e RDEV_GPU_RUSTUP_UPDATE_ROOT \
+            -e RDEV_GPU_TARGET \
+            -e RDEV_GPU_ARCH \
+            -e RDEV_GPU_RUST_TOOLCHAIN \
+            -e RDEV_VERSION \
+            -e RDEV_GPU_ASSET \
+            -e RDEV_GPU_FEATURES \
+            -e ENABLE_VAAPI \
+            -e ENABLE_NVENC \
+            -e TMPDIR \
+            "${{ matrix.linux_image }}" \
+            bash clients/rdev-client-gpu/scripts/package-linux-desktop.sh "${{ matrix.linux_distro }}"
+          sudo chown -R "$USER:$USER" clients/rdev-client-gpu/dist clients/rdev-client-gpu/target "$HOME/.cargo" "$HOME/.rustup"
+          echo "::endgroup::"
 
       - name: Build Android Termux release
         if: matrix.android == true
@@ -371,7 +455,7 @@ jobs:
 
   release:
     name: Release Rust GPU client
-    needs: build
+    needs: [test, build]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
     steps:
