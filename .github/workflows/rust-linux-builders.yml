@@ -1,0 +1,126 @@
+name: Rust Linux Builders
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/rust-linux-builders.yml'
+      - 'clients/rdev-client-gpu/docker/Dockerfile.linux-builder'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: rust-linux-builders-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ${{ github.repository_owner }}/rdev-rs-builder
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: debian13-amd64
+            runner: ubuntu-latest
+            platform: linux/amd64
+            base_image: debian:13
+            distro: debian13
+            target: x86_64-unknown-linux-gnu
+            suffix: debian13-amd64
+          - name: debian12-amd64
+            runner: ubuntu-latest
+            platform: linux/amd64
+            base_image: debian:12
+            distro: debian12
+            target: x86_64-unknown-linux-gnu
+            suffix: debian12-amd64
+          - name: debian11-amd64
+            runner: ubuntu-latest
+            platform: linux/amd64
+            base_image: debian:11
+            distro: debian11
+            target: x86_64-unknown-linux-gnu
+            suffix: debian11-amd64
+          - name: centos7-amd64
+            runner: ubuntu-latest
+            platform: linux/amd64
+            base_image: centos:7
+            distro: centos7
+            target: x86_64-unknown-linux-gnu
+            suffix: centos7-amd64
+          - name: centos8-amd64
+            runner: ubuntu-latest
+            platform: linux/amd64
+            base_image: rockylinux:8
+            distro: centos8
+            target: x86_64-unknown-linux-gnu
+            suffix: centos8-amd64
+          - name: debian13-arm64
+            runner: ubuntu-24.04-arm
+            platform: linux/arm64
+            base_image: debian:13
+            distro: debian13
+            target: aarch64-unknown-linux-gnu
+            suffix: debian13-arm64
+          - name: debian12-arm64
+            runner: ubuntu-24.04-arm
+            platform: linux/arm64
+            base_image: debian:12
+            distro: debian12
+            target: aarch64-unknown-linux-gnu
+            suffix: debian12-arm64
+          - name: debian11-arm64
+            runner: ubuntu-24.04-arm
+            platform: linux/arm64
+            base_image: debian:11
+            distro: debian11
+            target: aarch64-unknown-linux-gnu
+            suffix: debian11-arm64
+          - name: centos8-arm64
+            runner: ubuntu-24.04-arm
+            platform: linux/arm64
+            base_image: rockylinux:8
+            distro: centos8
+            target: aarch64-unknown-linux-gnu
+            suffix: centos8-arm64
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push builder image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: clients/rdev-client-gpu/docker/Dockerfile.linux-builder
+          platforms: ${{ matrix.platform }}
+          push: true
+          build-args: |
+            BASE_IMAGE=${{ matrix.base_image }}
+            DISTRO=${{ matrix.distro }}
+            TARGET=${{ matrix.target }}
+            RUST_TOOLCHAIN=stable
+            RDEV_DISABLE_ASM=y
+            CARGO_REGISTRY=${{ vars.RDEV_GPU_CARGO_REGISTRY }}
+            RUSTUP_DIST_SERVER=${{ vars.RDEV_GPU_RUSTUP_DIST_SERVER }}
+            RUSTUP_UPDATE_ROOT=${{ vars.RDEV_GPU_RUSTUP_UPDATE_ROOT }}
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}:${{ matrix.suffix }}
+          cache-from: type=gha,scope=rs-builder-${{ matrix.suffix }}
+          cache-to: type=gha,mode=max,scope=rs-builder-${{ matrix.suffix }}

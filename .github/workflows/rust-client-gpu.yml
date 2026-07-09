@@ -74,6 +74,7 @@ jobs:
             package_linux: true
             linux_distro: debian13
             linux_image: debian:13
+            builder_suffix: debian13-amd64
             linux_features: embedded-rdev-desktop-wayland
             enable_vaapi: y
             arch: amd64
@@ -85,6 +86,7 @@ jobs:
             package_linux: true
             linux_distro: debian12
             linux_image: debian:12
+            builder_suffix: debian12-amd64
             linux_features: embedded-rdev-desktop
             enable_vaapi: n
             arch: amd64
@@ -96,6 +98,7 @@ jobs:
             package_linux: true
             linux_distro: debian11
             linux_image: debian:11
+            builder_suffix: debian11-amd64
             linux_features: embedded-rdev-desktop
             enable_vaapi: n
             arch: amd64
@@ -107,6 +110,7 @@ jobs:
             package_linux: true
             linux_distro: centos7
             linux_image: centos:7
+            builder_suffix: centos7-amd64
             linux_features: embedded-rdev-desktop
             enable_vaapi: n
             arch: amd64
@@ -118,6 +122,7 @@ jobs:
             package_linux: true
             linux_distro: centos8
             linux_image: rockylinux:8
+            builder_suffix: centos8-amd64
             linux_features: embedded-rdev-desktop
             enable_vaapi: n
             arch: amd64
@@ -129,6 +134,7 @@ jobs:
             package_linux: true
             linux_distro: debian13
             linux_image: debian:13
+            builder_suffix: debian13-arm64
             linux_features: embedded-rdev-desktop-wayland
             enable_vaapi: y
             arch: arm64
@@ -140,6 +146,7 @@ jobs:
             package_linux: true
             linux_distro: debian12
             linux_image: debian:12
+            builder_suffix: debian12-arm64
             linux_features: embedded-rdev-desktop
             enable_vaapi: n
             arch: arm64
@@ -151,6 +158,7 @@ jobs:
             package_linux: true
             linux_distro: debian11
             linux_image: debian:11
+            builder_suffix: debian11-arm64
             linux_features: embedded-rdev-desktop
             enable_vaapi: n
             arch: arm64
@@ -162,6 +170,7 @@ jobs:
             package_linux: true
             linux_distro: centos8
             linux_image: rockylinux:8
+            builder_suffix: centos8-arm64
             linux_features: embedded-rdev-desktop
             enable_vaapi: n
             arch: arm64
@@ -310,6 +319,14 @@ jobs:
           workspaces: clients/rdev-client-gpu -> target
           key: desktop-${{ matrix.target }}-${{ matrix.name }}
 
+      - name: Log in to GHCR for Linux builder image
+        if: matrix.package_linux == true
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Cache Linux package Rust toolchain
         if: matrix.package_linux == true
         uses: actions/cache@v4
@@ -320,6 +337,15 @@ jobs:
             ~/.rustup/toolchains
             ~/.rustup/update-hashes
           key: rustup-linux-package-${{ runner.os }}-${{ runner.arch }}-stable
+
+      - name: Set Linux builder image
+        if: matrix.package_linux == true
+        env:
+          IMAGE_OWNER: ${{ github.repository_owner }}
+          IMAGE_SUFFIX: ${{ matrix.builder_suffix }}
+        run: |
+          owner=$(printf '%s' "$IMAGE_OWNER" | tr '[:upper:]' '[:lower:]')
+          echo "RDEV_GPU_BUILDER_IMAGE=ghcr.io/${owner}/rdev-rs-builder:${IMAGE_SUFFIX}" >> "$GITHUB_ENV"
 
       - name: Build Linux embedded desktop package
         if: matrix.package_linux == true
@@ -343,7 +369,13 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$HOME/.cargo" "$HOME/.rustup" clients/rdev-client-gpu/target
-          echo "::group::${RDEV_GPU_ASSET} (${{ matrix.linux_image }})"
+          image="$RDEV_GPU_BUILDER_IMAGE"
+          if ! docker pull "$image"; then
+            echo "::warning::prebuilt Linux builder image $image is unavailable; falling back to ${{ matrix.linux_image }}"
+            image="${{ matrix.linux_image }}"
+            export RDEV_GPU_INSTALL_DEPS=auto
+          fi
+          echo "::group::${RDEV_GPU_ASSET} ($image)"
           docker run --rm \
             -v "$PWD:/work" \
             -v "$HOME/.cargo:/root/.cargo" \
@@ -364,7 +396,8 @@ jobs:
             -e ENABLE_VAAPI \
             -e ENABLE_NVENC \
             -e TMPDIR \
-            "${{ matrix.linux_image }}" \
+            -e RDEV_GPU_INSTALL_DEPS \
+            "$image" \
             bash clients/rdev-client-gpu/scripts/package-linux-desktop.sh "${{ matrix.linux_distro }}"
           sudo chown -R "$USER:$USER" clients/rdev-client-gpu/dist clients/rdev-client-gpu/target "$HOME/.cargo" "$HOME/.rustup"
           echo "::endgroup::"
