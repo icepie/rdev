@@ -180,18 +180,32 @@ pub fn spawn_supervisor(
 }
 
 async fn run_once(args: &Args, instance_id: &str) -> Result<()> {
-    for endpoint in server_endpoints(&args.server) {
-        if endpoint.starts_with("tcp://")
-            || endpoint.starts_with("kcp://")
-            || endpoint.starts_with("udp://")
-        {
-            match run_once_stream_tunnel(args, instance_id, &endpoint).await {
+    let endpoints = server_endpoints(&args.server);
+    let mut tried_stream = false;
+    let mut last_stream_error: Option<anyhow::Error> = None;
+    for endpoint in &endpoints {
+        if is_stream_endpoint(endpoint) {
+            tried_stream = true;
+            match run_once_stream_tunnel(args, instance_id, endpoint).await {
                 Ok(()) => return Ok(()),
-                Err(err) => warn!("gpu desktop stream tunnel failed for {endpoint}: {err:#}"),
+                Err(err) => {
+                    warn!("gpu desktop stream tunnel failed for {endpoint}: {err:#}");
+                    last_stream_error = Some(err);
+                }
             }
         }
     }
-    let tunnel_url = tunnel_url(args, instance_id)?;
+    let Some(ws_endpoint) = endpoints.iter().find(|endpoint| is_ws_endpoint(endpoint)) else {
+        if tried_stream {
+            return Err(last_stream_error
+                .unwrap_or_else(|| anyhow!("all gpu desktop stream tunnel endpoints failed")));
+        }
+        return Err(anyhow!(
+            "no usable gpu desktop tunnel endpoint in {}",
+            args.server
+        ));
+    };
+    let tunnel_url = tunnel_url_for_endpoint(args, instance_id, ws_endpoint)?;
     let local_addr: SocketAddr = args
         .gpu_desktop_local
         .parse()
@@ -319,7 +333,9 @@ async fn run_once_stream_tunnel(args: &Args, instance_id: &str, endpoint: &str) 
                 last_control = Instant::now();
                 match frame.kind {
                     stream_frame::KIND_BINARY => {
-                        let frame = decode_frame(&frame.payload)?;
+                        let Some(frame) = decode_frame_or_warn(&frame.payload, endpoint) else {
+                            continue;
+                        };
                         match frame.typ {
                             FRAME_OPEN => {
                                 let open = serde_json::from_slice::<TunnelOpen>(&frame.payload).ok();
@@ -376,6 +392,19 @@ fn endpoint_addr(endpoint: &str) -> String {
         value = addr.to_string();
     }
     value
+}
+
+fn is_stream_endpoint(endpoint: &str) -> bool {
+    endpoint.starts_with("tcp://")
+        || endpoint.starts_with("kcp://")
+        || endpoint.starts_with("udp://")
+}
+
+fn is_ws_endpoint(endpoint: &str) -> bool {
+    endpoint.starts_with("ws://")
+        || endpoint.starts_with("wss://")
+        || endpoint.starts_with("http://")
+        || endpoint.starts_with("https://")
 }
 
 fn kcp_config() -> KcpConfig {
@@ -476,7 +505,10 @@ fn encode_frame(typ: u8, stream_id: u64, payload: &[u8]) -> Vec<u8> {
 
 fn decode_frame(raw: &[u8]) -> Result<TunnelFrame> {
     if raw.len() < 9 {
-        return Err(anyhow!("gpu desktop tunnel frame too short"));
+        return Err(anyhow!(
+            "gpu desktop tunnel frame too short: {} bytes",
+            raw.len()
+        ));
     }
     let mut id = [0_u8; 8];
     id.copy_from_slice(&raw[1..9]);
@@ -487,8 +519,30 @@ fn decode_frame(raw: &[u8]) -> Result<TunnelFrame> {
     })
 }
 
-fn tunnel_url(args: &Args, instance_id: &str) -> Result<Url> {
-    let mut url = Url::parse(args.server.trim_end_matches('/'))?;
+fn decode_frame_or_warn(raw: &[u8], endpoint: &str) -> Option<TunnelFrame> {
+    match decode_frame(raw) {
+        Ok(frame) => Some(frame),
+        Err(err) => {
+            warn!(
+                "ignored invalid gpu desktop tcp tunnel frame from {endpoint}: {err:#}; bytes={} head={}",
+                raw.len(),
+                hex_head(raw)
+            );
+            None
+        }
+    }
+}
+
+fn hex_head(raw: &[u8]) -> String {
+    raw.iter()
+        .take(16)
+        .map(|b| format!("{b:02x}"))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn tunnel_url_for_endpoint(args: &Args, instance_id: &str, endpoint: &str) -> Result<Url> {
+    let mut url = Url::parse(endpoint.trim_end_matches('/'))?;
     match url.scheme() {
         "http" => url
             .set_scheme("ws")
@@ -512,6 +566,44 @@ fn tunnel_url(args: &Args, instance_id: &str) -> Result<Url> {
 mod tests {
     use super::*;
 
+    fn test_args() -> Args {
+        Args {
+            version: false,
+            server: "tcp://127.0.0.1:8081,ws://127.0.0.1:8080".to_string(),
+            id: "dev".to_string(),
+            password: String::new(),
+            shell: None,
+            instance_id: None,
+            reconnect_delay: Duration::from_secs(1),
+            no_auto_update: true,
+            auto_update: false,
+            update_interval: Duration::from_secs(60),
+            no_desktop: false,
+            gpu_desktop_local: "127.0.0.1:1701".to_string(),
+            no_gpu_desktop_tunnel: false,
+            #[cfg(target_os = "linux")]
+            gpu_desktop_wayland: false,
+            #[cfg(target_os = "linux")]
+            gpu_desktop_kms: false,
+            #[cfg(target_os = "linux")]
+            gpu_desktop_kms_device: None,
+            #[cfg(target_os = "linux")]
+            gpu_desktop_nvfbc: false,
+            #[cfg(target_os = "linux")]
+            gpu_desktop_vaapi: false,
+            #[cfg(any(target_os = "linux", target_os = "windows"))]
+            gpu_desktop_nvenc: false,
+            #[cfg(target_os = "linux")]
+            gpu_desktop_vulkan_video: false,
+            #[cfg(target_os = "macos")]
+            gpu_desktop_videotoolbox: false,
+            #[cfg(target_os = "windows")]
+            gpu_desktop_mediafoundation: false,
+            #[cfg(target_os = "windows")]
+            gpu_desktop_windows_capture_source: "auto".to_string(),
+        }
+    }
+
     #[test]
     fn tunnel_frame_roundtrip() {
         let encoded = encode_frame(FRAME_DATA, 42, b"hello");
@@ -519,6 +611,36 @@ mod tests {
         assert_eq!(decoded.typ, FRAME_DATA);
         assert_eq!(decoded.stream_id, 42);
         assert_eq!(decoded.payload, b"hello");
+    }
+
+    #[test]
+    fn stream_endpoint_classification() {
+        assert!(is_stream_endpoint("tcp://host:8481"));
+        assert!(is_stream_endpoint("kcp://host:8482"));
+        assert!(is_ws_endpoint("ws://host/ws"));
+        assert!(is_ws_endpoint("https://host"));
+        assert!(!is_ws_endpoint("tcp://host:8481"));
+    }
+
+    #[test]
+    fn tunnel_url_uses_explicit_ws_endpoint_from_multi_server() {
+        let args = Args {
+            server: "tcp://host:8481,ws://host:8480".to_string(),
+            id: "dev1".to_string(),
+            password: "pw".to_string(),
+            ..test_args()
+        };
+        let url = tunnel_url_for_endpoint(&args, "inst", "ws://host:8480").unwrap();
+        assert_eq!(url.scheme(), "ws");
+        assert_eq!(url.path(), "/gpu-desktop-tunnel");
+        assert!(url.as_str().contains("device=dev1"));
+        assert!(url.as_str().contains("instanceId=inst"));
+    }
+
+    #[test]
+    fn short_tunnel_frames_are_ignored_by_stream_tunnel() {
+        assert!(decode_frame_or_warn(&[], "tcp://host:8481").is_none());
+        assert!(decode_frame_or_warn(&[1, 2, 3], "tcp://host:8481").is_none());
     }
 
     #[test]
