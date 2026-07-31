@@ -18,9 +18,9 @@ jobs:
     name: Test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version: '1.25'
 
@@ -72,9 +72,9 @@ jobs:
             goarch: arm64
             ext: ""
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version: '1.25'
 
@@ -111,7 +111,7 @@ jobs:
           upx --best rdev-client-raw -o rdev-client${{ matrix.ext }} || cp rdev-client-raw rdev-client${{ matrix.ext }}
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: rdev-${{ matrix.goos }}-${{ matrix.goarch }}
           path: |
@@ -144,13 +144,13 @@ jobs:
             goarm: ''
             cc: i686-linux-android24-clang
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version: '1.25'
 
-      - uses: android-actions/setup-android@v3
+      - uses: android-actions/setup-android@v4
 
       - name: Install Android NDK
         run: sdkmanager "ndk;27.1.12297006"
@@ -169,7 +169,7 @@ jobs:
           file rdev-client
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: rdev-android-${{ matrix.name }}
           path: rdev-client
@@ -180,7 +180,7 @@ jobs:
     needs: test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: oven-sh/setup-bun@v2
 
@@ -191,7 +191,7 @@ jobs:
 
       - name: Cache go-win7
         id: cache-go-win7
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: /home/runner/go-win7
           key: go-win7-${{ env.GO_WIN7_VERSION }}
@@ -243,7 +243,7 @@ jobs:
           upx --best rdev-client-raw -o dist/windows-arm64/rdev-client.exe || cp rdev-client-raw dist/windows-arm64/rdev-client.exe
 
       - name: Upload windows/amd64
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: rdev-windows-amd64
           path: |
@@ -251,7 +251,7 @@ jobs:
             dist/windows-amd64/rdev-client.exe
 
       - name: Upload windows/arm64
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: rdev-windows-arm64
           path: |
@@ -266,7 +266,7 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     steps:
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: artifacts
 
@@ -290,7 +290,7 @@ jobs:
           ls -lh
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           generate_release_notes: true
           files: artifacts/*
