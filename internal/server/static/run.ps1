@@ -325,12 +325,20 @@ function global:RDev {
         }
     }
 
-    # ── Detect arch ─────────────────────────────────────────
-    $Arch = 'amd64'
-    if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64' -or $env:PROCESSOR_ARCHITEW6432 -eq 'ARM64') { $Arch = 'arm64' }
+    # ── Detect native architecture ──────────────────────────
+    # A 32-bit PowerShell process on 64-bit Windows reports x86 in
+    # PROCESSOR_ARCHITECTURE; PROCESSOR_ARCHITEW6432 carries the native CPU.
+    $NativeArch = $env:PROCESSOR_ARCHITEW6432
+    if (-not $NativeArch) { $NativeArch = $env:PROCESSOR_ARCHITECTURE }
+    switch (([string]$NativeArch).ToUpperInvariant()) {
+        'ARM64' { $Arch = 'arm64' }
+        'AMD64' { $Arch = 'amd64' }
+        default { $Arch = '386' }
+    }
 
     # ── Resolve version & URL ───────────────────────────────
-    $WindowsMajor = Get-WindowsMajorVersion
+    $WindowsVersion = Get-WindowsVersion
+    $WindowsMajor = $WindowsVersion.Major
     if ($Version) { if ($Version -like 'v*') { $Tag = $Version } else { $Tag = "v$Version" } } else {
         $Tag = 'latest'
     }
@@ -341,6 +349,10 @@ function global:RDev {
 
     $Base = "https://github.com/$script:Repo/releases"
     if ($Client -eq 'rs') {
+        if ($Arch -eq '386') {
+            Write-Error 'The performance client is unavailable on 32-bit Windows; use the compatible client (omit -Client rs).'
+            return
+        }
         if ($WindowsMajor -gt 0 -and $WindowsMajor -lt 10) {
             $Asset = 'rdev-client-gpu-windows-win7-amd64.zip'
         } elseif ($Arch -eq 'arm64') {

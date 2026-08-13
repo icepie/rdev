@@ -99,7 +99,8 @@ cross-darwin: \
 
 cross-windows: \
 	rdev-server-windows-amd64.exe \
-	rdev-client-windows-amd64.exe
+	rdev-client-windows-amd64.exe \
+	rdev-client-windows-386.exe
 
 rdev-server-linux-%: web
 	CGO_ENABLED=0 GOOS=linux GOARCH=$* go build -ldflags "$(LDFLAGS)" -o $@ ./cmd/rdev-server
@@ -118,6 +119,9 @@ rdev-server-windows-amd64.exe: web
 
 rdev-client-windows-amd64.exe:
 	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags "$(LDFLAGS)" -o $@ ./cmd/rdev-client
+
+rdev-client-windows-386.exe:
+	CGO_ENABLED=0 GOOS=windows GOARCH=386 go build -ldflags "$(LDFLAGS)" -o $@ ./cmd/rdev-client
 
 test:
 	go test ./...

@@ -228,6 +228,18 @@ jobs:
           go build -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" -o rdev-client-raw ./cmd/rdev-client
           upx --best rdev-client-raw -o dist/windows-amd64/rdev-client.exe || cp rdev-client-raw dist/windows-amd64/rdev-client.exe
 
+      - name: Build & compress windows/386 client
+        env:
+          GOOS: windows
+          GOARCH: 386
+          CGO_ENABLED: 0
+          GOROOT: /home/runner/go-win7
+        run: |
+          export PATH="/home/runner/go-win7/bin:$PATH"
+          mkdir -p dist/windows-386
+          go build -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" -o rdev-client-raw ./cmd/rdev-client
+          upx --best rdev-client-raw -o dist/windows-386/rdev-client.exe || cp rdev-client-raw dist/windows-386/rdev-client.exe
+
       - name: Build & compress windows/arm64
         env:
           GOOS: windows
@@ -249,6 +261,12 @@ jobs:
           path: |
             dist/windows-amd64/rdev-server.exe
             dist/windows-amd64/rdev-client.exe
+
+      - name: Upload windows/386 client
+        uses: actions/upload-artifact@v7
+        with:
+          name: rdev-windows-386
+          path: dist/windows-386/rdev-client.exe
 
       - name: Upload windows/arm64
         uses: actions/upload-artifact@v7
