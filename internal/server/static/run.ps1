@@ -140,8 +140,33 @@ $script:WinPTYAsset = "winpty-$script:WinPTYVersion-msvc2015.zip"
 $script:WinPTYRepo = 'rprichard/winpty'
 $script:WinPTYDir = Join-Path $env:TEMP 'rdev-winpty'
 
-function Get-WindowsMajorVersion {
-    try { return [int]([Environment]::OSVersion.Version.Major) } catch { return 0 }
+function Get-WindowsVersion {
+    $major = 0
+    $build = 0
+    try {
+        $version = [Environment]::OSVersion.Version
+        $major = [int]$version.Major
+        $build = [int]$version.Build
+    } catch {}
+    try {
+        # CurrentMajorVersionNumber and CurrentBuildNumber are not subject to
+        # GetVersionEx application-manifest compatibility reporting.
+        $current = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' -ErrorAction Stop
+        if ($null -ne $current.CurrentMajorVersionNumber) {
+            $major = [int]$current.CurrentMajorVersionNumber
+        }
+        if ($null -ne $current.CurrentBuildNumber) {
+            $build = [int]$current.CurrentBuildNumber
+        }
+    } catch {}
+    return @{ Major = $major; Build = $build }
+}
+
+function Requires-WinPTY {
+    $version = Get-WindowsVersion
+    # ConPTY was introduced in Windows 10 version 1809 (build 17763). Earlier
+    # Windows 10 releases must use WinPTY for an interactive SSH terminal.
+    return ($version.Major -lt 10 -or ($version.Major -eq 10 -and $version.Build -lt 17763))
 }
 
 function Expand-ZipLegacy([string]$Zip, [string]$Dest) {
@@ -181,8 +206,8 @@ function Test-RDevPackage([string]$Path, [string]$PackageKind) {
     return $false
 }
 
-function Install-WinPTYIfLegacy([string]$Arch, [string]$Mirror) {
-    if ((Get-WindowsMajorVersion) -ge 10) { return '' }
+function Install-WinPTYIfRequired([string]$Arch, [string]$Mirror) {
+    if (-not (Requires-WinPTY)) { return '' }
     $Dll = Join-Path $script:WinPTYDir 'winpty.dll'
     $Agent = Join-Path $script:WinPTYDir 'winpty-agent.exe'
     if ((Test-Path $Dll) -and (Test-Path $Agent)) { return $script:WinPTYDir }
@@ -412,7 +437,7 @@ function global:RDev {
     if ($Published) { $RunPath = $Published }
     }
 
-    $WinPTYDir = Install-WinPTYIfLegacy $Arch $Mirror
+    $WinPTYDir = Install-WinPTYIfRequired $Arch $Mirror
 
     # ── Run ──────────────────────────────────────────────────
     $A = @("-s", $Server)
