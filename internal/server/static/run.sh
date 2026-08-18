@@ -343,6 +343,42 @@ linux_rs_asset_suffix() {
     fi
 }
 
+extract_zip() {
+    zip_file="$1"
+    dest_dir="$2"
+    if command -v unzip >/dev/null 2>&1 && unzip -q "$zip_file" -d "$dest_dir" 2>/dev/null; then
+        return 0
+    fi
+    # Windows 10+ ships bsdtar as tar.exe and it reads zip; GNU tar does not,
+    # so probe by running it rather than by presence.
+    for tar_bin in bsdtar tar; do
+        command -v "$tar_bin" >/dev/null 2>&1 || continue
+        if (cd "$dest_dir" && "$tar_bin" -xf "$zip_file") 2>/dev/null; then
+            return 0
+        fi
+    done
+    for zip_bin in 7z 7za 7zz; do
+        command -v "$zip_bin" >/dev/null 2>&1 || continue
+        if "$zip_bin" x -y -o"$dest_dir" "$zip_file" >/dev/null 2>&1; then
+            return 0
+        fi
+    done
+    # Last resort for Windows shells (Git Bash / busybox) with no archiver.
+    for ps_bin in powershell.exe pwsh.exe powershell pwsh; do
+        command -v "$ps_bin" >/dev/null 2>&1 || continue
+        ps_zip="$zip_file"
+        ps_dest="$dest_dir"
+        if command -v cygpath >/dev/null 2>&1; then
+            ps_zip="$(cygpath -w "$zip_file" 2>/dev/null || echo "$zip_file")"
+            ps_dest="$(cygpath -w "$dest_dir" 2>/dev/null || echo "$dest_dir")"
+        fi
+        if "$ps_bin" -NoProfile -NonInteractive -Command "Add-Type -AssemblyName System.IO.Compression.FileSystem; [System.IO.Compression.ZipFile]::ExtractToDirectory('$ps_zip','$ps_dest')" >/dev/null 2>&1; then
+            return 0
+        fi
+    done
+    return 1
+}
+
 # ── Resolve asset and download ─────────────────────────────
 TMPBASE="${TMPDIR:-/tmp}"
 CACHE_BASE="$TMPBASE/rdev-cache"
@@ -404,8 +440,7 @@ if [ "$RDEV_CLIENT" = "rs" ]; then
             RUN_BIN="$(find "$EXTRACT_DIR" -type f -name rdev-client-gpu | head -1)"
             ;;
         *.zip)
-            command -v unzip >/dev/null 2>&1 || { echo "Error: unzip is required for Rust client package" >&2; exit 1; }
-            unzip -q "$ARCHIVE" -d "$EXTRACT_DIR"
+            extract_zip "$ARCHIVE" "$EXTRACT_DIR" || { echo "Error: need unzip, bsdtar, 7z, or PowerShell to extract Rust client package" >&2; exit 1; }
             RUN_BIN="$(find "$EXTRACT_DIR" -type f -name rdev-client-gpu.exe | head -1)"
             ;;
     esac

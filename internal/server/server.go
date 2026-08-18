@@ -34,6 +34,10 @@ const (
 	wsReadWait       = 75 * time.Second
 	wsPingPeriod     = 25 * time.Second
 	releaseLatestTTL = 5 * time.Minute
+
+	releaseDownloadProbeBytes   = 64 * 1024
+	releaseDownloadProbeTimeout = 4 * time.Second
+	releaseDownloadChoiceTTL    = 10 * time.Minute
 )
 
 var releaseDownloadMirrors = []string{
@@ -50,6 +54,16 @@ var releaseDownloadMirrors = []string{
 	"ghproxy.1888866.xyz",
 	"ghproxy.sakuramoe.dev",
 }
+
+type releaseDownloadChoice struct {
+	url       string
+	expiresAt time.Time
+}
+
+var (
+	releaseDownloadChoiceMu sync.Mutex
+	releaseDownloadChoices  = make(map[string]releaseDownloadChoice)
+)
 
 // ClientConn represents a connected client device
 type ClientConn struct {
@@ -1497,32 +1511,105 @@ func releaseDownloadProxyCandidates(asset, tag string) []string {
 	return candidates
 }
 
-// HandleReleaseDownload redirects release downloads through the first reachable mirror.
+func releaseDownloadChoiceKey(asset, tag string) string {
+	return tag + "\x00" + asset
+}
+
+func cachedReleaseDownloadChoice(key string, now time.Time) string {
+	releaseDownloadChoiceMu.Lock()
+	defer releaseDownloadChoiceMu.Unlock()
+	choice, ok := releaseDownloadChoices[key]
+	if !ok || !choice.expiresAt.After(now) {
+		delete(releaseDownloadChoices, key)
+		return ""
+	}
+	return choice.url
+}
+
+func cacheReleaseDownloadChoice(key, candidate string, now time.Time) {
+	releaseDownloadChoiceMu.Lock()
+	releaseDownloadChoices[key] = releaseDownloadChoice{url: candidate, expiresAt: now.Add(releaseDownloadChoiceTTL)}
+	releaseDownloadChoiceMu.Unlock()
+}
+
+type releaseDownloadProbeResult struct {
+	candidate string
+	bytes     int64
+	duration  time.Duration
+}
+
+// fastestReleaseDownloadCandidate measures a small range from every source.
+// The selected URL is cached so ordinary client installs redirect immediately.
+func fastestReleaseDownloadCandidate(ctx context.Context, candidates []string) string {
+	ctx, cancel := context.WithTimeout(ctx, releaseDownloadProbeTimeout)
+	defer cancel()
+
+	results := make(chan releaseDownloadProbeResult, len(candidates))
+	var wg sync.WaitGroup
+	for _, candidate := range candidates {
+		candidate := candidate
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			started := time.Now()
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet, candidate, nil)
+			if err != nil {
+				return
+			}
+			req.Header.Set("Range", "bytes=0-65535")
+			req.Header.Set("User-Agent", "rdev-server")
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				return
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusPartialContent {
+				return
+			}
+			n, _ := io.CopyN(io.Discard, resp.Body, releaseDownloadProbeBytes)
+			if n > 0 {
+				results <- releaseDownloadProbeResult{candidate: candidate, bytes: n, duration: time.Since(started)}
+			}
+		}()
+	}
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	best := ""
+	var bestRate float64
+	for result := range results {
+		if result.duration <= 0 {
+			continue
+		}
+		rate := float64(result.bytes) / result.duration.Seconds()
+		if rate > bestRate {
+			best, bestRate = result.candidate, rate
+		}
+	}
+	return best
+}
+
+// HandleReleaseDownload redirects clients to the fastest reachable release source.
+// Unlike the streaming proxy, the client downloads directly from the selected source.
 func (s *Server) HandleReleaseDownload(w http.ResponseWriter, r *http.Request) {
 	asset, tag, ok := releaseDownloadParams(r)
 	if !ok {
 		http.Error(w, "bad asset", http.StatusBadRequest)
 		return
 	}
-	client := &http.Client{Timeout: 2500 * time.Millisecond}
-	for _, candidate := range releaseDownloadCandidates(asset, tag) {
-		ctx, cancel := context.WithTimeout(r.Context(), 2500*time.Millisecond)
-		req, err := http.NewRequestWithContext(ctx, http.MethodHead, candidate, nil)
-		if err == nil {
-			req.Header.Set("User-Agent", "rdev-server")
-			resp, err := client.Do(req)
-			if err == nil {
-				resp.Body.Close()
-				if resp.StatusCode >= 200 && resp.StatusCode < 400 {
-					cancel()
-					http.Redirect(w, r, candidate, http.StatusFound)
-					return
-				}
-			}
-		}
-		cancel()
+	key := releaseDownloadChoiceKey(asset, tag)
+	if candidate := cachedReleaseDownloadChoice(key, time.Now()); candidate != "" {
+		http.Redirect(w, r, candidate, http.StatusFound)
+		return
 	}
-	http.Redirect(w, r, releaseDownloadDirectURL(asset, tag), http.StatusFound)
+	candidate := fastestReleaseDownloadCandidate(r.Context(), releaseDownloadCandidates(asset, tag))
+	if candidate == "" {
+		candidate = releaseDownloadDirectURL(asset, tag)
+	}
+	cacheReleaseDownloadChoice(key, candidate, time.Now())
+	http.Redirect(w, r, candidate, http.StatusFound)
 }
 
 // HandleReleaseDownloadProxy streams a release asset through the RDev server as a last-resort fallback.

@@ -69,6 +69,13 @@ function Get-RDevProxyUrl([string]$Server, [string]$Asset, [string]$Tag) {
     return "$Base/download-release-proxy?asset=$([Uri]::EscapeDataString($Asset))&tag=$([Uri]::EscapeDataString($Tag))"
 }
 
+function Get-RDevReleaseUrl([string]$Server, [string]$Asset, [string]$Tag) {
+    $Base = Get-RDevServerHttpBase $Server
+    if (-not $Base) { return '' }
+    if (-not $Tag) { $Tag = 'latest' }
+    return "$Base/download-release?asset=$([Uri]::EscapeDataString($Asset))&tag=$([Uri]::EscapeDataString($Tag))"
+}
+
 function Convert-RDevSafeName([string]$Value) {
     if (-not $Value) { return 'unknown' }
     return ($Value -replace '[^A-Za-z0-9_.-]', '-')
@@ -113,8 +120,11 @@ function Exit-RDevCacheLock([string]$Lock) {
 
 function Test-RDevCache([string]$RunPath, [string]$CacheDir) {
     $Complete = Join-Path $CacheDir '.complete'
+    # The runtime marker invalidates caches created before companion DLLs
+    # were preserved for the Rust GPU client.
+    $RuntimeComplete = Join-Path $CacheDir '.runtime-complete'
     $f = Get-Item $RunPath -EA SilentlyContinue
-    return ((Test-Path $Complete) -and $f -and $f.Length -gt 0)
+    return ((Test-Path $Complete) -and (Test-Path $RuntimeComplete) -and $f -and $f.Length -gt 0)
 }
 
 function Publish-RDevCache([string]$SourceRunPath, [string]$CacheDir, [string]$CacheRunName) {
@@ -125,7 +135,16 @@ function Publish-RDevCache([string]$SourceRunPath, [string]$CacheDir, [string]$C
         Remove-Item -Recurse -Force $Part -EA SilentlyContinue
         New-Item -ItemType Directory -Force -Path $Part | Out-Null
         Copy-Item $SourceRunPath (Join-Path $Part $CacheRunName) -Force
+
+        # Rust GPU Windows packages require lib*.dll beside the executable.
+        # Keep this PS 2.0-compatible: avoid the newer Get-ChildItem -File.
+        $SourceDir = Split-Path $SourceRunPath -Parent
+        foreach ($Dll in (Get-ChildItem -Path $SourceDir -Filter '*.dll' -EA SilentlyContinue | Where-Object { -not $_.PSIsContainer })) {
+            Copy-Item $Dll.FullName (Join-Path $Part $Dll.Name) -Force
+        }
+
         New-Item -ItemType File -Force -Path (Join-Path $Part '.complete') | Out-Null
+        New-Item -ItemType File -Force -Path (Join-Path $Part '.runtime-complete') | Out-Null
         Remove-Item -Recurse -Force $CacheDir -EA SilentlyContinue
         Move-Item $Part $CacheDir -Force
         return (Join-Path $CacheDir $CacheRunName)
@@ -402,11 +421,13 @@ function global:RDev {
     } else {
     Write-Host "  Downloading $ClientName package (windows/$Arch)..." -ForegroundColor Cyan
 
-    $ProxyUrl = Get-RDevProxyUrl $Server $Asset $Tag
-    if ($ProxyUrl) {
-        Write-Host "  Trying RDev server proxy..." -ForegroundColor DarkGray
-        if (Dl $ProxyUrl $OutPath) {
-            if (Test-RDevPackage $OutPath $PackageKind) { $OK = $true; Write-Host "  OK via RDev server proxy" -ForegroundColor Green }
+    # Prefer a redirect selected by the RDev server's cached speed probe. This
+    # keeps the client download direct while retaining PS 2.0 compatibility.
+    $ReleaseUrl = Get-RDevReleaseUrl $Server $Asset $Tag
+    if ($ReleaseUrl) {
+        Write-Host "  Selecting fastest release source..." -ForegroundColor DarkGray
+        if (Dl $ReleaseUrl $OutPath) {
+            if (Test-RDevPackage $OutPath $PackageKind) { $OK = $true; Write-Host "  OK via measured release source" -ForegroundColor Green }
         }
         if (-not $OK) { Remove-Item $OutPath -Force -EA SilentlyContinue }
     }
@@ -425,6 +446,19 @@ function global:RDev {
             if (Test-RDevPackage $OutPath $PackageKind) { $OK = $true; Write-Host "  OK via $Mirror" -ForegroundColor Green }
         }
         if (-not $OK) { Remove-Item $OutPath -Force -EA SilentlyContinue }
+    }
+
+    # Older servers may not support /download-release. Keep the streaming
+    # proxy as a last-resort fallback after direct sources have failed.
+    if (-not $OK) {
+        $ProxyUrl = Get-RDevProxyUrl $Server $Asset $Tag
+        if ($ProxyUrl) {
+            Write-Host "  Trying RDev server proxy..." -ForegroundColor DarkGray
+            if (Dl $ProxyUrl $OutPath) {
+                if (Test-RDevPackage $OutPath $PackageKind) { $OK = $true; Write-Host "  OK via RDev server proxy" -ForegroundColor Green }
+            }
+            if (-not $OK) { Remove-Item $OutPath -Force -EA SilentlyContinue }
+        }
     }
 
     if (-not $OK) {

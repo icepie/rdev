@@ -2,6 +2,9 @@ package server
 
 import (
 	"bytes"
+	"context"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -54,9 +57,52 @@ func TestProxySessionHistoryReplayAndLimit(t *testing.T) {
 	}
 }
 
+func TestFastestReleaseDownloadCandidate(t *testing.T) {
+	payload := bytes.Repeat([]byte("x"), releaseDownloadProbeBytes)
+	fast := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Range"); got != "bytes=0-65535" {
+			t.Errorf("Range = %q, want bytes=0-65535", got)
+		}
+		_, _ = w.Write(payload)
+	}))
+	defer fast.Close()
+	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(50 * time.Millisecond)
+		_, _ = w.Write(payload)
+	}))
+	defer slow.Close()
+
+	got := fastestReleaseDownloadCandidate(context.Background(), []string{slow.URL, fast.URL})
+	if got != fast.URL {
+		t.Fatalf("fastestReleaseDownloadCandidate() = %q, want %q", got, fast.URL)
+	}
+}
+
+func TestHandleReleaseDownloadRedirectsCachedChoice(t *testing.T) {
+	asset, tag := "rdev-client-windows-amd64.exe", "v0.2.114"
+	key := releaseDownloadChoiceKey(asset, tag)
+	candidate := "https://downloads.example/rdev-client-windows-amd64.exe"
+	cacheReleaseDownloadChoice(key, candidate, time.Now())
+	defer func() {
+		releaseDownloadChoiceMu.Lock()
+		delete(releaseDownloadChoices, key)
+		releaseDownloadChoiceMu.Unlock()
+	}()
+
+	req := httptest.NewRequest(http.MethodGet, "/download-release?asset="+asset+"&tag="+tag, nil)
+	res := httptest.NewRecorder()
+	NewServer().HandleReleaseDownload(res, req)
+	if res.Code != http.StatusFound {
+		t.Fatalf("status = %d, want %d", res.Code, http.StatusFound)
+	}
+	if got := res.Header().Get("Location"); got != candidate {
+		t.Fatalf("Location = %q, want %q", got, candidate)
+	}
+}
 func TestRegisterClientReplacesSameInstanceReconnect(t *testing.T) {
 	s := NewServer()
 	oldConn := &gws.Conn{}
+
 	newConn := &gws.Conn{}
 	oldClient := &ClientConn{ID: "device", RequestedID: "device", InstanceID: "inst-1", Conn: oldConn, Sessions: make(map[string]*ProxySession), Forwards: make(map[string]*ProxyForward)}
 	newClient := &ClientConn{ID: "device", RequestedID: "device", InstanceID: "inst-1", Conn: newConn, Sessions: make(map[string]*ProxySession), Forwards: make(map[string]*ProxyForward)}
