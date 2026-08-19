@@ -79,16 +79,34 @@ CLIENT_SSH_OPTS=(
 rm -rf "$BASE"
 mkdir -p "$BASE/data"
 
+stop_remote_client() {
+  sshpass -p "$PASSWORD" ssh "${SSH_OPTS[@]}" "$REMOTE" \
+    "C:\\Windows\\System32\\taskkill.exe /F /T /IM rdev-client-gpu.exe" \
+    >/dev/null 2>&1 || true
+  for _ in $(seq 1 40); do
+    if ! sshpass -p "$PASSWORD" ssh "${SSH_OPTS[@]}" "$REMOTE" \
+      "C:\\Windows\\System32\\tasklist.exe /FI \"IMAGENAME eq rdev-client-gpu.exe\" | C:\\Windows\\System32\\find.exe /I \"rdev-client-gpu.exe\"" \
+      >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 0.25
+  done
+  echo "remote rdev-client-gpu.exe is still running; refusing to overwrite it" >&2
+  return 1
+}
+
 cleanup() {
   kill "${REMOTE_SSH_PID:-}" "${SERVER_PID:-}" 2>/dev/null || true
   wait "${REMOTE_SSH_PID:-}" "${SERVER_PID:-}" 2>/dev/null || true
-  sshpass -p "$PASSWORD" ssh "${SSH_OPTS[@]}" "$REMOTE" "C:\\Windows\\System32\\taskkill.exe /F /IM rdev-client-gpu.exe" >/dev/null 2>&1 || true
+  sshpass -p "$PASSWORD" ssh "${SSH_OPTS[@]}" "$REMOTE" "C:\\Windows\\System32\\taskkill.exe /F /T /IM rdev-client-gpu.exe" >/dev/null 2>&1 || true
 }
+
 trap cleanup EXIT
 
 make -C "$ROOT" rust-client-gpu-win7-package
 go build -o "$SERVER_BIN" "$ROOT/cmd/rdev-server"
 
+stop_remote_client
 sshpass -p "$PASSWORD" ssh "${SSH_OPTS[@]}" "$REMOTE" "C:\\Windows\\System32\\cmd.exe /c \"if not exist $REMOTE_DIR_WIN mkdir $REMOTE_DIR_WIN & del /q $REMOTE_DIR_WIN\\* 2>nul\"" >/dev/null
 sshpass -p "$PASSWORD" scp -P "$PORT" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$ROOT"/clients/rdev-client-gpu/target/win7-dist/* "$REMOTE:$REMOTE_DIR/" >/dev/null
 

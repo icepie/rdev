@@ -45,8 +45,18 @@ fn run(cfg: Config) {
     let mut failures = FailureLog::default();
     thread::sleep(Duration::from_secs(60));
     loop {
+        #[cfg(windows)]
+        let executable = env::current_exe().ok();
         match check_and_apply(&cfg) {
             Ok(true) => {
+                info!("auto-update applied; restarting rdev-client-gpu");
+                #[cfg(windows)]
+                if let Some(executable) = executable.as_deref() {
+                    restart_self(executable).unwrap_or_else(|err| {
+                        warn!("auto-update restart failed: {err:#}");
+                    });
+                }
+                #[cfg(not(windows))]
                 info!("auto-update applied; restart rdev-client-gpu to use the new version");
                 return;
             }
@@ -54,6 +64,42 @@ fn run(cfg: Config) {
             Err(err) => failures.record(&err),
         }
         thread::sleep(cfg.interval);
+    }
+}
+
+#[cfg(windows)]
+fn restart_self(executable: &std::path::Path) -> Result<()> {
+    use std::process::Command;
+
+    let parent_pid = std::process::id().to_string();
+    Command::new(executable)
+        .args(env::args_os().skip(1))
+        .env("RDEV_UPDATE_PARENT_PID", parent_pid)
+        .spawn()
+        .with_context(|| format!("spawn updated executable {}", executable.display()))?;
+    std::process::exit(0);
+}
+
+#[cfg(windows)]
+pub fn wait_for_update_parent() {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Threading::{OpenProcess, WaitForSingleObject, INFINITE};
+
+    const SYNCHRONIZE: u32 = 0x0010_0000;
+
+    let Ok(pid) = env::var("RDEV_UPDATE_PARENT_PID") else {
+        return;
+    };
+    let Ok(pid) = pid.parse::<u32>() else {
+        return;
+    };
+    let handle = unsafe { OpenProcess(SYNCHRONIZE, 0, pid) };
+    if handle.is_null() {
+        return;
+    }
+    unsafe {
+        WaitForSingleObject(handle, INFINITE);
+        CloseHandle(handle);
     }
 }
 

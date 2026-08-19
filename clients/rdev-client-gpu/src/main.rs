@@ -66,6 +66,8 @@ impl ModuleRuntimes {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    #[cfg(windows)]
+    updater::wait_for_update_parent();
     install_default_tls_provider();
 
     tracing_subscriber::registry()
