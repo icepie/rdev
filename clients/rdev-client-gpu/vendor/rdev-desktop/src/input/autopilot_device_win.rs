@@ -742,6 +742,9 @@ fn send_mouse_pointer_event(event: &PointerEvent, screen_x: i32, screen_y: i32) 
             }
         }
     }
+    if matches!(event.event_type, PointerEventType::DOWN) {
+        focus_window_at_point(screen_x, screen_y);
+    }
     let mut lines = Vec::new();
     let cursor_ok = set_cursor_pos_for_mouse(screen_x, screen_y);
     lines.push(format!(
@@ -958,6 +961,24 @@ fn find_text_input_child(hwnd: HWND) -> Option<HWND> {
         None
     } else {
         Some(data.hwnd)
+    }
+}
+
+fn focus_window_at_point(screen_x: i32, screen_y: i32) -> bool {
+    unsafe {
+        let point = POINT {
+            x: screen_x,
+            y: screen_y,
+        };
+        let mut hwnd = WindowFromPoint(point);
+        if hwnd.is_null() {
+            return false;
+        }
+        let root = GetAncestor(hwnd, GA_ROOT);
+        if !root.is_null() {
+            hwnd = root;
+        }
+        force_foreground_window(hwnd) != FALSE
     }
 }
 
