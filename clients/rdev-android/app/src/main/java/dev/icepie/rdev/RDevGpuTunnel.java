@@ -1,5 +1,9 @@
 package dev.icepie.rdev;
 
+import android.content.ClipData;
+import android.content.ClipboardManager;
+import android.content.Context;
+
 import android.util.Log;
 
 import org.json.JSONObject;
@@ -13,6 +17,8 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
+import android.util.Base64;
+
 import java.util.Map;
 
 final class RDevGpuTunnel {
@@ -21,6 +27,9 @@ final class RDevGpuTunnel {
     private static final byte FRAME_DATA = 2;
     private static final byte FRAME_CLOSE = 3;
     private final String serverUrl;
+    private static final int MAX_CLIPBOARD_BYTES = 16 * 1024 * 1024;
+    private final Context context;
+
     private final String deviceId;
     private final String instanceId;
     private final String password;
@@ -34,7 +43,8 @@ final class RDevGpuTunnel {
     private final List<PointerTrace> completedPointers = new ArrayList<>();
     private boolean inputPermissionWarned;
 
-    RDevGpuTunnel(String serverUrl, String deviceId, String instanceId, String password) {
+    RDevGpuTunnel(Context context, String serverUrl, String deviceId, String instanceId, String password) {
+        this.context = context.getApplicationContext();
         this.serverUrl = serverUrl;
         this.deviceId = deviceId;
         this.instanceId = instanceId;
@@ -256,7 +266,11 @@ final class RDevGpuTunnel {
                 if (frame == null || frame.opcode != 1) return;
                 String text = new String(frame.payload, "UTF-8");
                 Log.i(TAG, "desktop ws " + text);
-                if (text.contains("GetCapturableList")) {
+                if (text.contains("GetClipboard")) {
+                    handleGetClipboard(id);
+                } else if (text.contains("SetClipboard")) {
+                    handleSetClipboard(id, text);
+                } else if (text.contains("GetCapturableList")) {
                     sendWsText(id, new JSONObject().put("CapturableList", new org.json.JSONArray().put("Android Screen (MediaProjection)")).toString());
                 } else if (text.contains("PointerEvent") || text.contains("\"op\":\"input\"")) {
                     handlePointerEvent(text);
@@ -455,6 +469,7 @@ final class RDevGpuTunnel {
             sendWsText(streamId, new JSONObject().put("CapturableList", new org.json.JSONArray().put("Android Screen (MediaProjection)")).toString());
             sendWsText(streamId, encoderCapabilities());
             sendWsText(streamId, inputCapabilities());
+            sendWsText(streamId, clipboardCapabilities());
         } catch (Exception e) {
             Log.w(TAG, "send initial desktop capabilities failed", e);
         }
@@ -611,6 +626,70 @@ final class RDevGpuTunnel {
         long durationMs() {
             return Math.max(80, endMs - startMs);
         }
+    }
+
+    private ClipboardManager clipboardManager() {
+        return (ClipboardManager) context.getSystemService(Context.CLIPBOARD_SERVICE);
+    }
+
+    private void handleGetClipboard(long streamId) {
+        try {
+            ClipboardManager manager = clipboardManager();
+            ClipData clip = manager == null ? null : manager.getPrimaryClip();
+            if (clip == null || clip.getItemCount() == 0) throw new IOException("clipboard is empty");
+            CharSequence value = clip.getItemAt(0).coerceToText(context);
+            byte[] bytes = (value == null ? "" : value.toString()).getBytes("UTF-8");
+            if (bytes.length > MAX_CLIPBOARD_BYTES) throw new IOException("clipboard payload exceeds " + MAX_CLIPBOARD_BYTES + " bytes");
+            JSONObject item = new JSONObject().put("mime", "text/plain").put("data", Base64.encodeToString(bytes, Base64.NO_WRAP));
+            sendWsText(streamId, new JSONObject().put("ClipboardContent", new JSONObject()
+                .put("items", new org.json.JSONArray().put(item))
+                .put("text", value == null ? "" : value.toString())).toString());
+        } catch (Exception e) {
+            sendClipboardError(streamId, e);
+        }
+    }
+
+    private void handleSetClipboard(long streamId, String text) {
+        try {
+            JSONObject event = new JSONObject(text).optJSONObject("SetClipboard");
+            if (event == null) throw new IOException("clipboard payload is missing");
+            String value = event.optString("text", "");
+            org.json.JSONArray items = event.optJSONArray("items");
+            if (items != null) {
+                for (int index = 0; index < items.length(); index++) {
+                    JSONObject item = items.optJSONObject(index);
+                    if (item == null || !"text/plain".equals(item.optString("mime"))) continue;
+                    byte[] bytes = Base64.decode(item.optString("data", ""), Base64.DEFAULT);
+                    if (bytes.length > MAX_CLIPBOARD_BYTES) throw new IOException("clipboard payload exceeds " + MAX_CLIPBOARD_BYTES + " bytes");
+                    value = new String(bytes, "UTF-8");
+                    break;
+                }
+            }
+            byte[] bytes = value.getBytes("UTF-8");
+            if (bytes.length > MAX_CLIPBOARD_BYTES) throw new IOException("clipboard payload exceeds " + MAX_CLIPBOARD_BYTES + " bytes");
+            ClipboardManager manager = clipboardManager();
+            if (manager == null) throw new IOException("clipboard is unavailable");
+            manager.setPrimaryClip(ClipData.newPlainText("RDev", value));
+            JSONObject item = new JSONObject().put("mime", "text/plain").put("data", Base64.encodeToString(bytes, Base64.NO_WRAP));
+            sendWsText(streamId, new JSONObject().put("ClipboardContent", new JSONObject()
+                .put("items", new org.json.JSONArray().put(item)).put("text", value)).toString());
+        } catch (Exception e) {
+            sendClipboardError(streamId, e);
+        }
+    }
+
+    private void sendClipboardError(long streamId, Exception error) {
+        try { sendWsText(streamId, new JSONObject().put("Error", "clipboard: " + error.getMessage()).toString()); }
+        catch (Exception ignored) {}
+    }
+
+    private String clipboardCapabilities() throws Exception {
+        return new JSONObject().put("ClipboardCapabilities", new JSONObject()
+            .put("supported", clipboardManager() != null)
+            .put("read", true)
+            .put("write", true)
+            .put("formats", new org.json.JSONArray().put("text/plain"))
+            .put("maxBytes", MAX_CLIPBOARD_BYTES)).toString();
     }
 
     private void sendWsText(long streamId, String text) {

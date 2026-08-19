@@ -40,6 +40,10 @@ document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n
     const gpuPointerBackend = document.getElementById('gpuPointerBackend');
     const gpuKeyboardBackend = document.getElementById('gpuKeyboardBackend');
     const gpuMinPressure = document.getElementById('gpuMinPressure');
+    const clipboardPull = document.getElementById('clipboardPull');
+    const clipboardPush = document.getElementById('clipboardPush');
+    const clipboardStatus = document.getElementById('clipboardStatus');
+
     const frameInfo = document.getElementById('frameInfo');
     const statusEl = document.getElementById('status');
     const stage = document.getElementById('stage');
@@ -59,7 +63,8 @@ document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n
     let gpuReconnectDelay = 1000;
     let gpuMediaSource = null, gpuSourceBuffer = null, gpuQueue = [], gpuLastPointer = new Map(), gpuHeldKeys = new Map();
     let gpuVideoDecoder = null, gpuVideoMode = 'mse', gpuNeedKeyFrame = false;
-    let controlPreferenceSet = false;
+    let controlPreferenceSet = false, clipboardCapabilities = null, clipboardWritePending = false, gpuComposing = false, gpuIgnoreNextTextInput = false;
+
 
     function frameRateScale(value) {
         return Math.pow(Number(value) / 100, 1.5);
@@ -100,6 +105,90 @@ document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n
     }
     function getCoalescedPointerEvents(event) {
         return typeof event.getCoalescedEvents === 'function' ? event.getCoalescedEvents() : [event];
+    }
+    function setClipboardCapabilities(capabilities) {
+        clipboardCapabilities = capabilities && capabilities.supported ? capabilities : null;
+        const connected = !!clipboardCapabilities;
+        clipboardPull.disabled = !connected || clipboardCapabilities.read === false;
+        clipboardPush.disabled = !connected || clipboardCapabilities.write === false;
+        clipboardStatus.textContent = connected ? `剪贴板：${(clipboardCapabilities.formats || ['text/plain']).join(', ')}` : '';
+    }
+
+    function bytesToBase64(bytes) {
+        let binary = '';
+        const chunk = 0x8000;
+        for (let offset = 0; offset < bytes.length; offset += chunk) binary += String.fromCharCode(...bytes.subarray(offset, offset + chunk));
+        return btoa(binary);
+    }
+
+    function base64ToBytes(value) {
+        const binary = atob(value || '');
+        const bytes = new Uint8Array(binary.length);
+        for (let index = 0; index < binary.length; index++) bytes[index] = binary.charCodeAt(index);
+        return bytes;
+    }
+
+    async function readBrowserClipboardItems() {
+        const allowed = Object.fromEntries((clipboardCapabilities?.formats || ['text/plain']).map(format => [format, true]));
+        const result = [];
+        if (navigator.clipboard?.read) {
+            for (const clipboardItem of await navigator.clipboard.read()) {
+                for (const type of clipboardItem.types) {
+                    const mime = type.split(';', 1)[0].toLowerCase();
+                    if (!allowed[mime]) continue;
+                    const blob = await clipboardItem.getType(type);
+                    result.push({mime, data: bytesToBase64(new Uint8Array(await blob.arrayBuffer()))});
+                }
+            }
+        }
+        if (!result.length && navigator.clipboard?.readText && allowed['text/plain']) {
+            const text = await navigator.clipboard.readText();
+            result.push({mime:'text/plain', data:bytesToBase64(new TextEncoder().encode(text))});
+        }
+        return result;
+    }
+
+    async function writeBrowserClipboardItems(event) {
+        const items = Array.isArray(event?.items) && event.items.length
+            ? event.items
+            : (event?.text ? [{mime:'text/plain', data:bytesToBase64(new TextEncoder().encode(event.text))}] : []);
+        if (!items.length) throw new Error('远程剪贴板为空');
+        if (navigator.clipboard?.write && typeof ClipboardItem === 'function') {
+            const data = {};
+            for (const item of items) data[item.mime] = new Blob([base64ToBytes(item.data)], {type:item.mime});
+            await navigator.clipboard.write([new ClipboardItem(data)]);
+        } else {
+            const text = items.find(item => item.mime === 'text/plain');
+            if (!text || !navigator.clipboard?.writeText) throw new Error('浏览器不支持该剪贴板格式');
+            await navigator.clipboard.writeText(new TextDecoder().decode(base64ToBytes(text.data)));
+        }
+        clipboardStatus.textContent = `已复制远程剪贴板（${items.map(item => item.mime).join(', ')}）`;
+    }
+
+    function requestRemoteClipboard() {
+        if (!clipboardCapabilities || clipboardCapabilities.read === false) return;
+        clipboardWritePending = true;
+        if (connectionMode === 'gpu') gpuSend('GetClipboard');
+        else if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({op:'clipboard_get'}));
+    }
+
+    async function sendLocalClipboard() {
+        if (!clipboardCapabilities || clipboardCapabilities.write === false) return;
+        try {
+            const items = await readBrowserClipboardItems();
+            if (!items.length) throw new Error('本地剪贴板没有兼容内容');
+            if (connectionMode === 'gpu') gpuSend({SetClipboard:{items}});
+            else if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({op:'clipboard_set', clipboardItems:items}));
+            clipboardStatus.textContent = `已发送本地剪贴板（${items.map(item => item.mime).join(', ')}）`;
+        } catch (err) {
+            clipboardStatus.textContent = err.message || String(err);
+        }
+    }
+
+    function handleRemoteClipboard(event) {
+        if (!clipboardWritePending) return;
+        clipboardWritePending = false;
+        writeBrowserClipboardItems(event).catch(err => { clipboardStatus.textContent = err.message || String(err); });
     }
 
     function loadSavedDesktopSettings() {
@@ -331,6 +420,8 @@ document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n
         closeGPUVideo();
         connectionMode = '';
         remoteInput = false;
+        clipboardWritePending = false;
+        setClipboardCapabilities(null);
         controlInput.disabled = false;
         stage.dataset.gpu = 'false';
         gpuViewer.style.display = 'none';
@@ -560,6 +651,8 @@ document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n
             else if (msg && msg.CapturableList) gpuSetSources(msg.CapturableList);
             else if (msg && msg.EncoderCapabilities) gpuSetEncoders(msg.EncoderCapabilities.options || []);
             else if (msg && msg.InputCapabilities) gpuSetInputCapabilities(msg.InputCapabilities);
+            else if (msg && msg.ClipboardCapabilities) setClipboardCapabilities(msg.ClipboardCapabilities);
+            else if (msg && msg.ClipboardContent) handleRemoteClipboard(msg.ClipboardContent);
             else if (msg && msg.RuntimeStatus) gpuUpdateFrameInfo();
             else if (msg && msg.ConfigError) { lastCloseMessage = msg.ConfigError; setStatus(msg.ConfigError, 'err'); }
             else if (msg && msg.Error) { lastCloseMessage = msg.Error; setStatus(msg.Error, 'err'); }
@@ -613,12 +706,18 @@ document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n
                 updateFrameInfo();
                 const source = currentSource ? ` · ${currentSource}` : '';
                 setStatus(`${t('index.desktopReady')} · ${canvas.width}×${canvas.height}${source}`, 'ok');
+                setClipboardCapabilities(msg.desktop && msg.desktop.clipboard ? {supported:true, read:true, write:true, formats:['text/plain','text/html','image/png','text/uri-list'], maxBytes:16777216} : null);
             } else if (msg.op === 'error') {
                 lastCloseMessage = msg.message || t('common.error');
                 setStatus(lastCloseMessage, 'err');
             } else if (msg.op === 'closed') {
                 lastCloseMessage = msg.message || t('desktop.closed');
                 setStatus(lastCloseMessage, msg.message ? 'err' : 'warn');
+            } else if (msg.op === 'clipboard_content') {
+                handleRemoteClipboard({items:msg.clipboardItems || [], text:msg.text || ''});
+            } else if (msg.op === 'clipboard_error') {
+                clipboardWritePending = false;
+                clipboardStatus.textContent = msg.message || '远程剪贴板错误';
             } else if (msg.op === 'input_error') {
                 setStatus(msg.message || t('common.error'), 'err');
             }
@@ -814,6 +913,11 @@ document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n
     }, {passive:false});
     gpuOverlay.addEventListener('keydown', e => {
         if (connectionMode !== 'gpu' || !controlInput.checked || !remoteInput) return;
+        if (gpuComposing || e.isComposing || e.key === 'Process' || e.keyCode === 229) {
+            e.preventDefault();
+            e.stopPropagation();
+            return;
+        }
         const eventType = e.repeat ? 'repeat' : 'down';
         const msg = gpuKeyMessage(e, eventType);
         if (eventType === 'down') gpuHeldKeys.set(`${msg.KeyboardEvent.code}:${msg.KeyboardEvent.location}`, msg.KeyboardEvent);
@@ -823,6 +927,11 @@ document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n
     });
     gpuOverlay.addEventListener('keyup', e => {
         if (connectionMode !== 'gpu' || !controlInput.checked || !remoteInput) return;
+        if (gpuComposing || e.isComposing || e.key === 'Process' || e.keyCode === 229) {
+            e.preventDefault();
+            e.stopPropagation();
+            return;
+        }
         const msg = gpuKeyMessage(e, 'up');
         gpuHeldKeys.delete(`${msg.KeyboardEvent.code}:${msg.KeyboardEvent.location}`);
         gpuSend(msg);
@@ -835,6 +944,8 @@ document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n
     document.getElementById('screenshot').addEventListener('click', saveScreenshot);
     document.getElementById('syncVNC').addEventListener('click', syncVNCSettings);
     document.getElementById('fullscreen').addEventListener('click', toggleFullscreen);
+    clipboardPull.addEventListener('click', requestRemoteClipboard);
+    clipboardPush.addEventListener('click', sendLocalClipboard);
     gpuAdvancedToggle.addEventListener('click', () => { gpuAdvanced.classList.toggle('open'); saveGpuDesktopSettings(); });
     gpuSourceSelect.addEventListener('change', gpuSendConfig);
     gpuEncoderSelect.addEventListener('change', gpuSendConfig);
@@ -855,6 +966,12 @@ document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n
     window.addEventListener('beforeinput', e => {
         if (connectionMode !== 'gpu' || !controlInput.checked || !remoteInput) return;
         if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLSelectElement) return;
+        if (e.inputType === 'insertCompositionText' || (e.inputType === 'insertText' && gpuIgnoreNextTextInput)) {
+            gpuIgnoreNextTextInput = false;
+            e.preventDefault();
+            e.stopPropagation();
+            return;
+        }
         if (e.inputType !== 'insertText' && e.inputType !== 'insertLineBreak') return;
         gpuTextInput(e.inputType === 'insertLineBreak' ? '\n' : e.data);
         e.preventDefault();
@@ -868,10 +985,20 @@ document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n
         e.preventDefault();
         e.stopPropagation();
     }, true);
+    window.addEventListener('compositionstart', e => {
+        if (connectionMode !== 'gpu' || !controlInput.checked || !remoteInput) return;
+        if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLSelectElement) return;
+        gpuComposing = true;
+        e.preventDefault();
+        e.stopPropagation();
+    }, true);
     window.addEventListener('compositionend', e => {
         if (connectionMode !== 'gpu' || !controlInput.checked || !remoteInput) return;
         if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLSelectElement) return;
+        gpuComposing = false;
+        gpuIgnoreNextTextInput = true;
         gpuTextInput(e.data || '');
+        setTimeout(() => { gpuIgnoreNextTextInput = false; }, 0);
         e.preventDefault();
         e.stopPropagation();
     }, true);

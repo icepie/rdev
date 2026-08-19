@@ -10,12 +10,14 @@ use std::time::{Duration, Instant};
 use tokio::sync::mpsc::channel;
 use tracing::{debug, info, trace, warn};
 
+use crate::clipboard::ClipboardBridge;
+
 use crate::capturable::{get_capturables, Capturable, Recorder, RecorderPreferences};
 use crate::input::device::{InputDevice, InputDeviceType};
 use crate::protocol::{
-    ClientConfiguration, EncoderCapabilities, EncoderOption, InputCapabilities, InputOption,
-    KeyboardEvent, MessageInbound, MessageOutbound, PointerEvent, RuntimeStatus, TextInputEvent,
-    WeylusReceiver, WeylusSender, WheelEvent,
+    ClientConfiguration, ClipboardEvent, EncoderCapabilities, EncoderOption, InputCapabilities,
+    InputOption, KeyboardEvent, MessageInbound, MessageOutbound, PointerEvent, RuntimeStatus,
+    TextInputEvent, WeylusReceiver, WeylusSender, WheelEvent,
 };
 
 use crate::cerror::CErrorCode;
@@ -380,6 +382,8 @@ pub struct WeylusClientHandler<S, R, FnUInput> {
     capturables: Vec<Box<dyn Capturable>>,
     on_uinput_inaccessible: FnUInput,
     config: WeylusClientConfig,
+    clipboard: ClipboardBridge,
+
     #[cfg(target_os = "linux")]
     capture_cursor: bool,
     client_name: Option<String>,
@@ -419,6 +423,7 @@ impl<S, R, FnUInput> WeylusClientHandler<S, R, FnUInput> {
             spawn(move || handle_video(video_receiver, sender, config.encoder_options))
         };
 
+        let clipboard = ClipboardBridge::new(sender.clone());
         Self {
             sender,
             receiver: Some(receiver),
@@ -429,6 +434,7 @@ impl<S, R, FnUInput> WeylusClientHandler<S, R, FnUInput> {
             capturables: vec![],
             on_uinput_inaccessible,
             config,
+            clipboard,
             #[cfg(target_os = "linux")]
             capture_cursor: false,
             client_name: None,
@@ -446,6 +452,10 @@ impl<S, R, FnUInput> WeylusClientHandler<S, R, FnUInput> {
             self.config.encoder_options,
         )));
         self.send_message(MessageOutbound::InputCapabilities(input_capabilities()));
+        self.send_message(MessageOutbound::ClipboardCapabilities(
+            self.clipboard.capabilities(),
+        ));
+
         for message in self.receiver.take().unwrap() {
             match message {
                 Ok(message) => {
@@ -457,6 +467,8 @@ impl<S, R, FnUInput> WeylusClientHandler<S, R, FnUInput> {
                         MessageInbound::TextInputEvent(event) => {
                             self.process_text_input_event(&event)
                         }
+                        MessageInbound::GetClipboard => self.get_clipboard(),
+                        MessageInbound::SetClipboard(event) => self.set_clipboard(event),
                         MessageInbound::ReleaseKeyboard => self.release_keyboard(),
                         MessageInbound::GetCapturableList => self.send_capturable_list(),
                         MessageInbound::Config(config) => self.update_config(config),
@@ -504,6 +516,25 @@ impl<S, R, FnUInput> WeylusClientHandler<S, R, FnUInput> {
         S: WeylusSender,
     {
         send_message(&mut self.sender, message)
+    }
+    fn get_clipboard(&mut self)
+    where
+        S: WeylusSender,
+    {
+        match self.clipboard.get() {
+            Ok(event) => self.send_message(MessageOutbound::ClipboardContent(event)),
+            Err(err) => self.send_message(MessageOutbound::Error(format!("clipboard: {err}"))),
+        }
+    }
+
+    fn set_clipboard(&mut self, event: ClipboardEvent)
+    where
+        S: WeylusSender,
+    {
+        match self.clipboard.set(event) {
+            Ok(event) => self.send_message(MessageOutbound::ClipboardContent(event)),
+            Err(err) => self.send_message(MessageOutbound::Error(format!("clipboard: {err}"))),
+        }
     }
 
     fn keyboard_device_mut(&mut self) -> Option<&mut Box<dyn InputDevice>> {
@@ -945,7 +976,9 @@ impl<S, R, FnUInput> WeylusClientHandler<S, R, FnUInput> {
                 InputBackendSelection::XTest => {
                     self.try_select_xtest(slot, capturable.clone(), client_name_changed)
                 }
-                InputBackendSelection::AutoPilot => Err("AutoPilot input is not available in the embedded Linux build".to_string()),
+                InputBackendSelection::AutoPilot => {
+                    Err("AutoPilot input is not available in the embedded Linux build".to_string())
+                }
                 InputBackendSelection::None => unreachable!(),
             };
 

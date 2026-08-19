@@ -28,6 +28,8 @@ pub enum MessageInbound {
     WheelEvent(WheelEvent),
     KeyboardEvent(KeyboardEvent),
     TextInputEvent(TextInputEvent),
+    GetClipboard,
+    SetClipboard(ClipboardEvent),
     ReleaseKeyboard,
     GetCapturableList,
     Config(ClientConfiguration),
@@ -45,9 +47,37 @@ pub enum MessageOutbound {
     RuntimeStatus(RuntimeStatus),
     EncoderCapabilities(EncoderCapabilities),
     InputCapabilities(InputCapabilities),
+    ClipboardCapabilities(ClipboardCapabilities),
+    ClipboardContent(ClipboardEvent),
     CustomInputAreas(CustomInputAreas),
     ConfigError(String),
     Error(String),
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
+#[serde(rename_all = "camelCase")]
+pub struct ClipboardEvent {
+    #[serde(default)]
+    pub items: Vec<ClipboardItem>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub text: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
+#[serde(rename_all = "camelCase")]
+pub struct ClipboardItem {
+    pub mime: String,
+    pub data: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ClipboardCapabilities {
+    pub supported: bool,
+    pub read: bool,
+    pub write: bool,
+    pub formats: Vec<String>,
+    pub max_bytes: usize,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

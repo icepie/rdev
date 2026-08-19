@@ -162,7 +162,11 @@ unsafe extern "system" fn enum_display_monitor(
     let data = &mut *(lparam as *mut MonitorEnumData);
     let mut info: MONITORINFOEXW = mem::zeroed();
     info.cbSize = mem::size_of::<MONITORINFOEXW>() as u32;
-    if GetMonitorInfoW(monitor, &mut info as *mut MONITORINFOEXW as *mut MONITORINFO) == 0 {
+    if GetMonitorInfoW(
+        monitor,
+        &mut info as *mut MONITORINFOEXW as *mut MONITORINFO,
+    ) == 0
+    {
         return TRUE;
     }
     let mut desc: DXGI_OUTPUT_DESC = mem::zeroed();

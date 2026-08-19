@@ -290,12 +290,6 @@ impl InputDevice for WindowsInput {
         let desktop = attach_thread_to_input_desktop();
         self.pending_keyboard_status
             .push(desktop.status_line("wheel attach desktop"));
-        if let Err(err) = self.capturable.before_input() {
-            warn!("Failed to activate target before wheel input ({})", err);
-            self.pending_keyboard_status
-                .push(format!("wheel before_input failed: {err}"));
-            return;
-        }
         if event.dy != 0 {
             let data = event.dy as DWORD;
             let (ok, fallback) = dispatch_mouse_input(MOUSEEVENTF_WHEEL, data);
@@ -324,12 +318,6 @@ impl InputDevice for WindowsInput {
         let desktop = attach_thread_to_input_desktop();
         self.pending_keyboard_status
             .push(desktop.status_line("pointer attach desktop"));
-        if let Err(err) = self.capturable.before_input() {
-            warn!("Failed to activate window, sending no input ({})", err);
-            self.pending_keyboard_status
-                .push(format!("pointer before_input failed: {err}"));
-            return;
-        }
         let Geometry::VirtualScreen(offset_x, offset_y, width, height, left, top) =
             self.capturable.geometry().unwrap()
         else {
@@ -496,17 +484,6 @@ impl InputDevice for WindowsInput {
         let desktop = attach_thread_to_input_desktop();
         self.pending_keyboard_status
             .push(desktop.status_line("keyboard attach desktop"));
-        if let Err(err) = self.capturable.before_input() {
-            warn!("Failed to activate target before keyboard input ({})", err);
-            self.pending_keyboard_status
-                .push(format!("keyboard before_input failed: {err}"));
-            return;
-        }
-        let focused = focus_window_under_cursor();
-        self.pending_keyboard_status.push(format!(
-            "keyboard focus under cursor={focused} target={}",
-            foreground_window_label()
-        ));
         for status in self.keyboard.send_keyboard_event(event) {
             warn!("Windows keyboard status: {}", status);
             self.pending_keyboard_status.push(status);
@@ -520,17 +497,8 @@ impl InputDevice for WindowsInput {
         if event.text.is_empty() {
             return;
         }
-        if let Err(err) = self.capturable.before_input() {
-            warn!("Failed to activate target before text input ({})", err);
-            self.pending_keyboard_status
-                .push(format!("text before_input failed: {err}"));
-            return;
-        }
-        let focused = focus_window_under_cursor();
-        self.pending_keyboard_status.push(format!(
-            "text focus under cursor={focused} target={}",
-            foreground_window_label()
-        ));
+        self.pending_keyboard_status
+            .push(format!("text target={}", foreground_window_label()));
         let ok = send_unicode_text(&event.text);
         let text_len = event.text.chars().count();
         let preview: String = event.text.chars().take(16).collect();
@@ -633,12 +601,14 @@ fn windows_legacy_mouse_preferred() -> bool {
 }
 
 fn windows_mouse_legacy_env() -> Option<bool> {
-    std::env::var("RDEV_WINDOWS_MOUSE_LEGACY").ok().map(|value| {
-        matches!(
-            value.to_ascii_lowercase().as_str(),
-            "1" | "true" | "yes" | "on"
-        )
-    })
+    std::env::var("RDEV_WINDOWS_MOUSE_LEGACY")
+        .ok()
+        .map(|value| {
+            matches!(
+                value.to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
 }
 
 fn windows_major_version() -> Option<u32> {
@@ -771,9 +741,6 @@ fn send_mouse_pointer_event(event: &PointerEvent, screen_x: i32, screen_y: i32) 
                 mouse_data |= XBUTTON2 as DWORD;
             }
         }
-    }
-    if matches!(event.event_type, PointerEventType::DOWN) {
-        focus_window_at_point(screen_x, screen_y);
     }
     let mut lines = Vec::new();
     let cursor_ok = set_cursor_pos_for_mouse(screen_x, screen_y);
@@ -1133,38 +1100,6 @@ fn send_keyboard_input(vk: WORD, scan: WORD, flags: DWORD) -> bool {
         }
     }
     true
-}
-
-fn focus_window_under_cursor() -> bool {
-    unsafe {
-        let mut point = POINT { x: 0, y: 0 };
-        if GetCursorPos(&mut point) == FALSE {
-            warn!(
-                "GetCursorPos failed before keyboard focus: {}",
-                std::io::Error::last_os_error()
-            );
-            return false;
-        }
-        focus_window_at_point(point.x, point.y)
-    }
-}
-
-fn focus_window_at_point(screen_x: i32, screen_y: i32) -> bool {
-    unsafe {
-        let point = POINT {
-            x: screen_x,
-            y: screen_y,
-        };
-        let mut hwnd = WindowFromPoint(point);
-        if hwnd.is_null() {
-            return false;
-        }
-        let root = GetAncestor(hwnd, GA_ROOT);
-        if !root.is_null() {
-            hwnd = root;
-        }
-        force_foreground_window(hwnd) != FALSE
-    }
 }
 
 fn desktop_name(desktop: HDESK) -> Option<String> {

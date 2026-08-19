@@ -917,6 +917,8 @@ func (c *Client) handleMessage(msg *protocol.Message) {
 		go c.handleDesktopStart(msg)
 	case protocol.MsgDesktopInput:
 		c.handleDesktopInput(msg)
+	case protocol.MsgDesktopClipboard:
+		c.handleDesktopClipboard(msg)
 	case protocol.MsgDesktopClose:
 		c.handleDesktopClose(msg.SessionID)
 	}

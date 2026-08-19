@@ -1,9 +1,13 @@
 package client
 
 import (
+	"encoding/base64"
 	"image"
 	"runtime"
+	"strings"
 	"testing"
+
+	"rdev/internal/protocol"
 )
 
 func TestDesktopCursorPositionFallsBackWhenProviderOutOfBounds(t *testing.T) {
@@ -69,5 +73,36 @@ func TestDesktopCapabilitiesReportsCurrentPlatform(t *testing.T) {
 	}
 	if caps.Reason == "" {
 		t.Fatal("expected an unavailable reason")
+	}
+}
+
+func TestValidateDesktopClipboardItemsAcceptsSupportedFormats(t *testing.T) {
+	items := []protocol.ClipboardItem{
+		{MIME: "text/plain;charset=utf-8", Data: base64.StdEncoding.EncodeToString([]byte("hello 世界"))},
+		{MIME: "image/png", Data: base64.StdEncoding.EncodeToString([]byte("png"))},
+	}
+	if err := validateDesktopClipboardItems(items); err != nil {
+		t.Fatalf("validateDesktopClipboardItems() error = %v", err)
+	}
+}
+
+func TestValidateDesktopClipboardItemsRejectsInvalidPayloads(t *testing.T) {
+	tests := []struct {
+		name  string
+		items []protocol.ClipboardItem
+		want  string
+	}{
+		{name: "empty", want: "empty"},
+		{name: "unsupported", items: []protocol.ClipboardItem{{MIME: "application/octet-stream", Data: "eA=="}}, want: "unsupported"},
+		{name: "invalid base64", items: []protocol.ClipboardItem{{MIME: "text/plain", Data: "!"}}, want: "base64"},
+		{name: "oversized", items: []protocol.ClipboardItem{{MIME: "image/png", Data: base64.StdEncoding.EncodeToString(make([]byte, maxDesktopClipboardBytes+1))}}, want: "exceeds"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := validateDesktopClipboardItems(test.items)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("error = %v, want containing %q", err, test.want)
+			}
+		})
 	}
 }

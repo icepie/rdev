@@ -48,10 +48,11 @@ const (
 	MsgFileTransferCancel MessageType = "file_transfer_cancel" // bidir: cancel transfer
 
 	// Remote desktop (text frames for control, binary for frames)
-	MsgDesktopStart MessageType = "desktop_start" // S->C: start desktop capture
-	MsgDesktopReady MessageType = "desktop_ready" // C->S: desktop capture status/metadata
-	MsgDesktopInput MessageType = "desktop_input" // S->C: inject desktop mouse/keyboard input
-	MsgDesktopClose MessageType = "desktop_close" // bidir: close desktop session
+	MsgDesktopStart     MessageType = "desktop_start"     // S->C: start desktop capture
+	MsgDesktopReady     MessageType = "desktop_ready"     // C->S: desktop capture status/metadata
+	MsgDesktopInput     MessageType = "desktop_input"     // S->C: inject desktop mouse/keyboard input
+	MsgDesktopClose     MessageType = "desktop_close"     // bidir: close desktop session
+	MsgDesktopClipboard MessageType = "desktop_clipboard" // bidir: request, set, or report session clipboard text
 
 	// GPU desktop tunnel over shared TCP/KCP transport.
 	MsgGPUDesktopTunnel MessageType = "gpu_desktop_tunnel"
@@ -182,6 +183,10 @@ type Message struct {
 	PointerID           int                  `json:"pointerId,omitempty"`
 	Pressure            float64              `json:"pressure,omitempty"`
 
+	ClipboardAction string          `json:"clipboardAction,omitempty"`
+	Text            string          `json:"text,omitempty"`
+	ClipboardItems  []ClipboardItem `json:"clipboardItems,omitempty"`
+
 	// Client log collection
 	LogSupported    bool       `json:"logSupported,omitempty"`
 	LogEnabled      bool       `json:"logEnabled,omitempty"`
@@ -194,6 +199,12 @@ type Message struct {
 	// Legacy fields (text frames)
 	Data   string `json:"data,omitempty"`
 	Stderr string `json:"stderr,omitempty"`
+}
+
+// ClipboardItem is one base64-encoded clipboard representation.
+type ClipboardItem struct {
+	MIME string `json:"mime"`
+	Data string `json:"data"`
 }
 
 // LogEntry is one client-side log event uploaded to the server.

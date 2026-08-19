@@ -404,6 +404,7 @@ public class RDevAgentService extends Service {
         SharedPreferences prefs = getSharedPreferences("rdev", MODE_PRIVATE);
         if (tunnel != null) tunnel.close();
         tunnel = new RDevGpuTunnel(
+            this,
             prefs.getString("server", ""),
             registeredId,
             instanceId,

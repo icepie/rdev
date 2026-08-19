@@ -23,7 +23,7 @@ pub fn capabilities(enabled: bool) -> DesktopCapabilities {
             supported: true,
             view_only: false,
             input: true,
-            clipboard: false,
+            clipboard: true,
             backends: desktop_backends(),
             input_backends: vec!["rdev-desktop".to_string()],
             video_codecs: vec!["h264".to_string()],

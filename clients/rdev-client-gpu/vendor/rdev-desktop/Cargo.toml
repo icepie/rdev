@@ -11,6 +11,7 @@ name = "rdev_desktop"
 path = "src/lib.rs"
 
 [dependencies]
+arboard = { version = "3.6.1", default-features = false, features = ["image-data", "wayland-data-control"] }
 base64 = "0.22"
 bitflags = { version = "^2.6", features = ["serde"] }
 bytes = "1.7.1"

@@ -23,7 +23,9 @@ fn shell_path(path: &Path) -> String {
     let path = path.to_string_lossy();
     #[cfg(target_os = "windows")]
     {
-        path.strip_prefix(r"\\?\").unwrap_or(&path).replace('\\', "/")
+        path.strip_prefix(r"\\?\")
+            .unwrap_or(&path)
+            .replace('\\', "/")
     }
     #[cfg(not(target_os = "windows"))]
     {
@@ -43,8 +45,15 @@ fn host_tool_path(path: PathBuf) -> PathBuf {
     }
 }
 
-fn build_ffmpeg(dist_dir: &Path, enable_libnpp: bool, enable_nvenc: bool, enable_vulkan_video: bool) {
-    if dist_dir.join("include/libavcodec/avcodec.h").exists() && dist_dir.join("lib/libavcodec.a").exists() {
+fn build_ffmpeg(
+    dist_dir: &Path,
+    enable_libnpp: bool,
+    enable_nvenc: bool,
+    enable_vulkan_video: bool,
+) {
+    if dist_dir.join("include/libavcodec/avcodec.h").exists()
+        && dist_dir.join("lib/libavcodec.a").exists()
+    {
         return;
     }
 
@@ -55,8 +64,18 @@ fn build_ffmpeg(dist_dir: &Path, enable_libnpp: bool, enable_nvenc: bool, enable
         .env("DIST", dist_env)
         .env("ENABLE_LIBNPP", if enable_libnpp { "y" } else { "n" })
         .env("ENABLE_NVENC", if enable_nvenc { "y" } else { "n" })
-        .env("ENABLE_VULKAN_VIDEO", if enable_vulkan_video { "y" } else { "n" })
-        .env("ENABLE_VAAPI", if env::var("CARGO_FEATURE_VAAPI").is_ok() { "y" } else { "n" })
+        .env(
+            "ENABLE_VULKAN_VIDEO",
+            if enable_vulkan_video { "y" } else { "n" },
+        )
+        .env(
+            "ENABLE_VAAPI",
+            if env::var("CARGO_FEATURE_VAAPI").is_ok() {
+                "y"
+            } else {
+                "n"
+            },
+        )
         .status()
         .expect("failed to run deps/build.sh");
     if !status.success() {
@@ -73,7 +92,9 @@ fn main() {
     let vulkan_video_enabled = env::var("CARGO_FEATURE_VULKAN_VIDEO").is_ok();
     let ffmpeg_system = env::var("CARGO_FEATURE_FFMPEG_SYSTEM").is_ok();
 
-    let deps_dir = Path::new("deps").canonicalize().expect("deps directory exists");
+    let deps_dir = Path::new("deps")
+        .canonicalize()
+        .expect("deps directory exists");
     let dist_dir = deps_dir.join({
         let mut name = format!("dist_{}", target_os);
         if (target_os == "windows" || target_os == "macos") && !target_arch.is_empty() {
@@ -109,7 +130,12 @@ fn main() {
     });
 
     if !ffmpeg_system {
-        build_ffmpeg(&dist_dir, enable_libnpp, nvenc_enabled, target_os == "linux" && vulkan_video_enabled);
+        build_ffmpeg(
+            &dist_dir,
+            enable_libnpp,
+            nvenc_enabled,
+            target_os == "linux" && vulkan_video_enabled,
+        );
     }
 
     println!("cargo:rerun-if-changed=deps/build.sh");
@@ -166,12 +192,28 @@ fn main() {
     }
     cc_log.compile("log");
 
-    let link_kind = if target_os == "windows" || ffmpeg_system { "dylib" } else { "static" };
-    for lib in ["avdevice", "avformat", "avfilter", "avcodec", "swresample", "swscale", "avutil", "x264"] {
+    let link_kind = if target_os == "windows" || ffmpeg_system {
+        "dylib"
+    } else {
+        "static"
+    };
+    for lib in [
+        "avdevice",
+        "avformat",
+        "avfilter",
+        "avcodec",
+        "swresample",
+        "swscale",
+        "avutil",
+        "x264",
+    ] {
         println!("cargo:rustc-link-lib={}={}", link_kind, lib);
     }
     if !ffmpeg_system {
-        println!("cargo:rustc-link-search={}", host_tool_path(dist_dir.join("lib")).display());
+        println!(
+            "cargo:rustc-link-search={}",
+            host_tool_path(dist_dir.join("lib")).display()
+        );
     }
 
     if target_os == "linux" {
@@ -221,7 +263,11 @@ fn linux(vaapi_enabled: bool, vulkan_video_enabled: bool) {
     println!("cargo:rustc-link-lib=Xcomposite");
     println!("cargo:rustc-link-lib=Xi");
     if vaapi_enabled {
-        let va_link_kind = if env::var("CARGO_FEATURE_VA_STATIC").is_ok() { "static" } else { "dylib" };
+        let va_link_kind = if env::var("CARGO_FEATURE_VA_STATIC").is_ok() {
+            "static"
+        } else {
+            "dylib"
+        };
         println!("cargo:rustc-link-lib={}=va", va_link_kind);
         println!("cargo:rustc-link-lib={}=va-drm", va_link_kind);
         println!("cargo:rustc-link-lib={}=va-x11", va_link_kind);

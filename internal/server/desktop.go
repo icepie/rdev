@@ -14,37 +14,42 @@ import (
 )
 
 type desktopMsg struct {
-	Op           string                        `json:"op"`
-	Message      string                        `json:"message,omitempty"`
-	Device       string                        `json:"device,omitempty"`
-	Session      string                        `json:"session,omitempty"`
-	StatusCode   int                           `json:"statusCode,omitempty"`
-	Width        int                           `json:"width,omitempty"`
-	Height       int                           `json:"height,omitempty"`
-	Format       string                        `json:"format,omitempty"`
-	Mode         string                        `json:"mode,omitempty"`
-	Source       string                        `json:"source,omitempty"`
-	Quality      int                           `json:"quality,omitempty"`
-	FPS          int                           `json:"fps,omitempty"`
-	InputBackend string                        `json:"inputBackend,omitempty"`
-	ShowCursor   *bool                         `json:"showCursor,omitempty"`
-	Desktop      *protocol.DesktopCapabilities `json:"desktop,omitempty"`
-	Pass         string                        `json:"password,omitempty"`
-	InputType    string                        `json:"inputType,omitempty"`
-	X            int                           `json:"x,omitempty"`
-	Y            int                           `json:"y,omitempty"`
-	Button       int                           `json:"button,omitempty"`
-	DeltaX       int                           `json:"deltaX,omitempty"`
-	DeltaY       int                           `json:"deltaY,omitempty"`
-	Key          string                        `json:"key,omitempty"`
-	KeyCode      string                        `json:"code,omitempty"`
-	CtrlKey      bool                          `json:"ctrlKey,omitempty"`
-	AltKey       bool                          `json:"altKey,omitempty"`
-	ShiftKey     bool                          `json:"shiftKey,omitempty"`
-	MetaKey      bool                          `json:"metaKey,omitempty"`
-	PointerType  string                        `json:"pointerType,omitempty"`
-	PointerID    int                           `json:"pointerId,omitempty"`
-	Pressure     float64                       `json:"pressure,omitempty"`
+	Op              string                        `json:"op"`
+	Message         string                        `json:"message,omitempty"`
+	Device          string                        `json:"device,omitempty"`
+	Session         string                        `json:"session,omitempty"`
+	StatusCode      int                           `json:"statusCode,omitempty"`
+	Width           int                           `json:"width,omitempty"`
+	Height          int                           `json:"height,omitempty"`
+	Format          string                        `json:"format,omitempty"`
+	Mode            string                        `json:"mode,omitempty"`
+	Source          string                        `json:"source,omitempty"`
+	Quality         int                           `json:"quality,omitempty"`
+	FPS             int                           `json:"fps,omitempty"`
+	InputBackend    string                        `json:"inputBackend,omitempty"`
+	ShowCursor      *bool                         `json:"showCursor,omitempty"`
+	Desktop         *protocol.DesktopCapabilities `json:"desktop,omitempty"`
+	Pass            string                        `json:"password,omitempty"`
+	InputType       string                        `json:"inputType,omitempty"`
+	X               int                           `json:"x,omitempty"`
+	Y               int                           `json:"y,omitempty"`
+	Button          int                           `json:"button,omitempty"`
+	DeltaX          int                           `json:"deltaX,omitempty"`
+	DeltaY          int                           `json:"deltaY,omitempty"`
+	Key             string                        `json:"key,omitempty"`
+	KeyCode         string                        `json:"code,omitempty"`
+	CtrlKey         bool                          `json:"ctrlKey,omitempty"`
+	AltKey          bool                          `json:"altKey,omitempty"`
+	ShiftKey        bool                          `json:"shiftKey,omitempty"`
+	MetaKey         bool                          `json:"metaKey,omitempty"`
+	PointerType     string                        `json:"pointerType,omitempty"`
+	PointerID       int                           `json:"pointerId,omitempty"`
+	Pressure        float64                       `json:"pressure,omitempty"`
+	ClipboardAction string                        `json:"clipboardAction,omitempty"`
+	ClipboardItems  []protocol.ClipboardItem      `json:"clipboardItems,omitempty"`
+	Text            string                        `json:"text,omitempty"`
+	MaxBytes        int                           `json:"maxBytes,omitempty"`
+	Formats         []string                      `json:"formats,omitempty"`
 }
 
 type desktopRoute struct {
@@ -147,6 +152,15 @@ func (h *desktopWSHandler) OnMessage(socket *gws.Conn, message *gws.Message) {
 			return
 		}
 		bc.client.Send(input)
+	case "clipboard_get":
+		if bc.authOK && bc.session != "" && bc.client.Desktop != nil && bc.client.Desktop.Clipboard {
+			bc.client.Send(&protocol.Message{Type: protocol.MsgDesktopClipboard, SessionID: bc.session, ClipboardAction: "get"})
+		}
+	case "clipboard_set":
+		if bc.authOK && bc.session != "" && bc.client.Desktop != nil && bc.client.Desktop.Clipboard {
+			bc.client.Send(&protocol.Message{Type: protocol.MsgDesktopClipboard, SessionID: bc.session, ClipboardAction: "set", ClipboardItems: msg.ClipboardItems, Text: msg.Text})
+		}
+
 	case "close":
 		bc.close()
 	}
@@ -521,6 +535,15 @@ func (s *Server) handleDesktopMessage(msg *protocol.Message) {
 		route.conn.frameHeight = msg.Height
 		route.conn.inputMu.Unlock()
 		route.conn.writeJSON(desktopMsg{Op: op, Session: msg.SessionID, Width: msg.Width, Height: msg.Height, Format: msg.Format, Source: msg.Source, InputBackend: msg.InputBackend, Desktop: msg.DesktopCapabilities, Message: msg.Error})
+	case protocol.MsgDesktopClipboard:
+		if route.conn == nil {
+			return
+		}
+		op := "clipboard_content"
+		if msg.ClipboardAction == "error" || msg.Error != "" {
+			op = "clipboard_error"
+		}
+		route.conn.writeJSON(desktopMsg{Op: op, Session: msg.SessionID, ClipboardItems: msg.ClipboardItems, Text: msg.Text, Message: msg.Error})
 	case protocol.MsgDesktopClose:
 		if route.vnc != nil {
 			route.vnc.handleClose(msg)

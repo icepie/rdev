@@ -2,6 +2,7 @@ package client
 
 import (
 	"bytes"
+	"encoding/base64"
 	"fmt"
 	"hash/crc32"
 	"image"
@@ -25,8 +26,10 @@ type desktopSourceReporter interface {
 }
 
 type desktopSession struct {
-	stop     chan struct{}
-	input    desktopInput
+	stop      chan struct{}
+	input     desktopInput
+	clipboard desktopClipboard
+
 	inputMu  sync.Mutex
 	frameMu  sync.RWMutex
 	bounds   image.Rectangle
@@ -119,6 +122,11 @@ func (c *Client) handleDesktopStart(msg *protocol.Message) {
 			inputBackend = ""
 		}
 	}
+	if clipboard, err := newDesktopClipboard(); err == nil {
+		session.clipboard = clipboard
+	} else {
+		log.Printf("desktop clipboard unavailable: %v", err)
+	}
 
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
@@ -148,7 +156,7 @@ func (c *Client) handleDesktopStart(msg *protocol.Message) {
 		caps.InputBackends = append([]string(nil), availableInputs...)
 		caps.InputOptions = desktopInputOptions()
 	}
-	caps.Clipboard = false
+	caps.Clipboard = session.clipboard != nil
 	caps.Reason = ""
 	size := scaledDimension(bounds.Dx(), bounds.Dy(), msg.Width, msg.Height)
 	session.setFrame(bounds, size.X, size.Y)
@@ -308,6 +316,51 @@ func scaledDimension(sourceWidth, sourceHeight, maxWidth, maxHeight int) image.P
 		height = maxHeight
 	}
 	return image.Pt(width, height)
+}
+
+func (c *Client) handleDesktopClipboard(msg *protocol.Message) {
+	if msg.SessionID == "" {
+		return
+	}
+	c.mu.Lock()
+	session := c.desktopSessions[msg.SessionID]
+	c.mu.Unlock()
+	if session == nil || session.clipboard == nil {
+		return
+	}
+
+	switch msg.ClipboardAction {
+	case "get":
+		items, err := session.clipboard.Get()
+		if err != nil {
+			c.send(&protocol.Message{Type: protocol.MsgDesktopClipboard, SessionID: msg.SessionID, ClipboardAction: "error", Error: err.Error()})
+			return
+		}
+		c.send(&protocol.Message{Type: protocol.MsgDesktopClipboard, SessionID: msg.SessionID, ClipboardAction: "content", ClipboardItems: items, Text: desktopClipboardPlainText(items)})
+	case "set":
+		items := msg.ClipboardItems
+		if len(items) == 0 && msg.Text != "" {
+			items = []protocol.ClipboardItem{{MIME: "text/plain", Data: base64.StdEncoding.EncodeToString([]byte(msg.Text))}}
+		}
+		if err := session.clipboard.Set(items); err != nil {
+			c.send(&protocol.Message{Type: protocol.MsgDesktopClipboard, SessionID: msg.SessionID, ClipboardAction: "error", Error: err.Error()})
+			return
+		}
+		c.send(&protocol.Message{Type: protocol.MsgDesktopClipboard, SessionID: msg.SessionID, ClipboardAction: "content", ClipboardItems: items, Text: desktopClipboardPlainText(items)})
+	}
+}
+
+func desktopClipboardPlainText(items []protocol.ClipboardItem) string {
+	for _, item := range items {
+		if canonicalDesktopClipboardMIME(item.MIME) != "text/plain" {
+			continue
+		}
+		data, err := base64.StdEncoding.DecodeString(item.Data)
+		if err == nil {
+			return string(data)
+		}
+	}
+	return ""
 }
 
 func (c *Client) handleDesktopInput(msg *protocol.Message) {
