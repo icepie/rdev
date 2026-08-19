@@ -104,9 +104,8 @@
         <button class="btn legacy-setting" id="syncVNC" data-i18n="desktop.syncVNC">Sync to VNC</button>
         <button class="btn" id="screenshot" data-i18n="desktop.screenshot">Screenshot</button>
         <button class="btn" id="fullscreen" data-i18n="desktop.fullscreen">Fullscreen</button>
-        <button class="btn" id="clipboardPull" type="button" disabled>从远程剪贴板复制</button>
-        <button class="btn" id="clipboardPush" type="button" disabled>发送本地剪贴板</button>
-        <span id="clipboardStatus" class="status"></span>
+        <label><span data-i18n="desktop.clipboardSync">Clipboard sync</span><select id="clipboardSyncMode" class="fit-select" disabled><option value="off" data-i18n="desktop.clipboardOff">Off</option><option value="remote-to-local" data-i18n="desktop.clipboardRemoteToLocal">Remote → local</option><option value="local-to-remote" data-i18n="desktop.clipboardLocalToRemote">Local → remote</option><option value="bidirectional" data-i18n="desktop.clipboardBidirectional">Bidirectional</option></select></label>
+        <span id="clipboardStatus" class="status" aria-live="polite"></span>
         <span id="frameInfo" class="status"></span>
         <div class="advanced-settings gpu-setting" id="gpuAdvanced">
             <label><input id="gpuEnableVideo" type="checkbox" checked> 视频</label>

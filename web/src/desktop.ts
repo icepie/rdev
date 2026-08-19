@@ -40,8 +40,7 @@ document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n
     const gpuPointerBackend = document.getElementById('gpuPointerBackend');
     const gpuKeyboardBackend = document.getElementById('gpuKeyboardBackend');
     const gpuMinPressure = document.getElementById('gpuMinPressure');
-    const clipboardPull = document.getElementById('clipboardPull');
-    const clipboardPush = document.getElementById('clipboardPush');
+    const clipboardSyncMode = document.getElementById('clipboardSyncMode');
     const clipboardStatus = document.getElementById('clipboardStatus');
 
     const frameInfo = document.getElementById('frameInfo');
@@ -63,7 +62,7 @@ document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n
     let gpuReconnectDelay = 1000;
     let gpuMediaSource = null, gpuSourceBuffer = null, gpuQueue = [], gpuLastPointer = new Map(), gpuHeldKeys = new Map();
     let gpuVideoDecoder = null, gpuVideoMode = 'mse', gpuNeedKeyFrame = false;
-    let controlPreferenceSet = false, clipboardCapabilities = null, clipboardWritePending = false, gpuComposing = false, gpuIgnoreNextTextInput = false;
+    let controlPreferenceSet = false, clipboardCapabilities = null, clipboardPollTimer = null, clipboardSyncGeneration = 0, clipboardReadPending = false, clipboardLocalReadPending = false, clipboardLastLocalFingerprint = null, clipboardLastRemoteFingerprint = null, clipboardPendingRemoteFingerprint = null, gpuComposing = false, gpuIgnoreNextTextInput = false;
 
 
     function frameRateScale(value) {
@@ -106,12 +105,27 @@ document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n
     function getCoalescedPointerEvents(event) {
         return typeof event.getCoalescedEvents === 'function' ? event.getCoalescedEvents() : [event];
     }
+    function clipboardSyncsRemoteToLocal() {
+        return (clipboardSyncMode.value === 'remote-to-local' || clipboardSyncMode.value === 'bidirectional')
+            && clipboardCapabilities?.read !== false;
+    }
+
+    function clipboardSyncsLocalToRemote() {
+        return (clipboardSyncMode.value === 'local-to-remote' || clipboardSyncMode.value === 'bidirectional')
+            && clipboardCapabilities?.write !== false;
+    }
+
     function setClipboardCapabilities(capabilities) {
         clipboardCapabilities = capabilities && capabilities.supported ? capabilities : null;
-        const connected = !!clipboardCapabilities;
-        clipboardPull.disabled = !connected || clipboardCapabilities.read === false;
-        clipboardPush.disabled = !connected || clipboardCapabilities.write === false;
-        clipboardStatus.textContent = connected ? `剪贴板：${(clipboardCapabilities.formats || ['text/plain']).join(', ')}` : '';
+        clipboardSyncMode.disabled = !clipboardCapabilities;
+        if (!clipboardCapabilities) {
+            stopClipboardSync();
+            clipboardStatus.textContent = '';
+            return;
+        }
+        const formats = clipboardCapabilities.formats || ['text/plain'];
+        clipboardStatus.textContent = `${t('desktop.clipboardAvailable')}：${formats.join(', ')}`;
+        startClipboardSync();
     }
 
     function bytesToBase64(bytes) {
@@ -143,7 +157,7 @@ document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n
         }
         if (!result.length && navigator.clipboard?.readText && allowed['text/plain']) {
             const text = await navigator.clipboard.readText();
-            result.push({mime:'text/plain', data:bytesToBase64(new TextEncoder().encode(text))});
+            if (text) result.push({mime:'text/plain', data:bytesToBase64(new TextEncoder().encode(text))});
         }
         return result;
     }
@@ -152,43 +166,113 @@ document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n
         const items = Array.isArray(event?.items) && event.items.length
             ? event.items
             : (event?.text ? [{mime:'text/plain', data:bytesToBase64(new TextEncoder().encode(event.text))}] : []);
-        if (!items.length) throw new Error('远程剪贴板为空');
+        if (!items.length) throw new Error(t('desktop.clipboardEmpty'));
         if (navigator.clipboard?.write && typeof ClipboardItem === 'function') {
             const data = {};
-            for (const item of items) data[item.mime] = new Blob([base64ToBytes(item.data)], {type:item.mime});
-            await navigator.clipboard.write([new ClipboardItem(data)]);
+            for (const item of items) {
+                if (typeof ClipboardItem.supports !== 'function' || ClipboardItem.supports(item.mime)) data[item.mime] = new Blob([base64ToBytes(item.data)], {type:item.mime});
+            }
+            if (Object.keys(data).length) await navigator.clipboard.write([new ClipboardItem(data)]);
+            else throw new Error(t('desktop.clipboardFormatUnsupported'));
         } else {
             const text = items.find(item => item.mime === 'text/plain');
-            if (!text || !navigator.clipboard?.writeText) throw new Error('浏览器不支持该剪贴板格式');
+            if (!text || !navigator.clipboard?.writeText) throw new Error(t('desktop.clipboardFormatUnsupported'));
             await navigator.clipboard.writeText(new TextDecoder().decode(base64ToBytes(text.data)));
         }
-        clipboardStatus.textContent = `已复制远程剪贴板（${items.map(item => item.mime).join(', ')}）`;
+        clipboardStatus.textContent = `${t('desktop.clipboardSyncedLocal')}（${items.map(item => item.mime).join(', ')}）`;
+    }
+
+    function clipboardItems(event) {
+        const items = Array.isArray(event?.items) && event.items.length
+            ? event.items
+            : (event?.text ? [{mime:'text/plain', data:bytesToBase64(new TextEncoder().encode(event.text))}] : []);
+        return items.map(item => ({mime:String(item.mime || '').split(';', 1)[0].toLowerCase(), data:item.data || ''}));
+    }
+
+    function clipboardFingerprint(items) {
+        return items.map(item => `${item.mime}:${item.data}`).sort().join('|');
     }
 
     function requestRemoteClipboard() {
-        if (!clipboardCapabilities || clipboardCapabilities.read === false) return;
-        clipboardWritePending = true;
+        if (!clipboardCapabilities || !clipboardSyncsRemoteToLocal() || clipboardReadPending) return;
+        clipboardReadPending = true;
         if (connectionMode === 'gpu') gpuSend('GetClipboard');
         else if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({op:'clipboard_get'}));
+        else clipboardReadPending = false;
     }
 
-    async function sendLocalClipboard() {
-        if (!clipboardCapabilities || clipboardCapabilities.write === false) return;
+    async function syncLocalClipboard() {
+        if (!clipboardCapabilities || !clipboardSyncsLocalToRemote() || clipboardLocalReadPending) return;
+        const generation = clipboardSyncGeneration;
+        clipboardLocalReadPending = true;
         try {
             const items = await readBrowserClipboardItems();
-            if (!items.length) throw new Error('本地剪贴板没有兼容内容');
+            if (generation !== clipboardSyncGeneration || !clipboardSyncsLocalToRemote() || !items.length) return;
+            const fingerprint = clipboardFingerprint(items);
+            if (clipboardLastLocalFingerprint === null) {
+                clipboardLastLocalFingerprint = fingerprint;
+                if (clipboardSyncMode.value === 'bidirectional') return;
+            } else if (fingerprint === clipboardLastLocalFingerprint) {
+                return;
+            } else {
+                clipboardLastLocalFingerprint = fingerprint;
+            }
+            clipboardPendingRemoteFingerprint = fingerprint;
             if (connectionMode === 'gpu') gpuSend({SetClipboard:{items}});
             else if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({op:'clipboard_set', clipboardItems:items}));
-            clipboardStatus.textContent = `已发送本地剪贴板（${items.map(item => item.mime).join(', ')}）`;
+            clipboardStatus.textContent = `${t('desktop.clipboardSyncedRemote')}（${items.map(item => item.mime).join(', ')}）`;
         } catch (err) {
-            clipboardStatus.textContent = err.message || String(err);
+            if (generation === clipboardSyncGeneration) clipboardStatus.textContent = `${t('desktop.clipboardReadFailed')}：${err.message || String(err)}`;
+        } finally {
+            if (generation === clipboardSyncGeneration) clipboardLocalReadPending = false;
         }
     }
 
     function handleRemoteClipboard(event) {
-        if (!clipboardWritePending) return;
-        clipboardWritePending = false;
-        writeBrowserClipboardItems(event).catch(err => { clipboardStatus.textContent = err.message || String(err); });
+        clipboardReadPending = false;
+        const items = clipboardItems(event);
+        if (!clipboardSyncsRemoteToLocal() || !items.length) return;
+        const fingerprint = clipboardFingerprint(items);
+        if (clipboardPendingRemoteFingerprint !== null) {
+            if (fingerprint === clipboardPendingRemoteFingerprint) {
+                clipboardLastRemoteFingerprint = fingerprint;
+                clipboardPendingRemoteFingerprint = null;
+            }
+            return;
+        }
+        if (clipboardLastRemoteFingerprint === null) {
+            clipboardLastRemoteFingerprint = fingerprint;
+            if (clipboardSyncMode.value === 'bidirectional') return;
+        } else if (fingerprint === clipboardLastRemoteFingerprint) {
+            return;
+        } else {
+            clipboardLastRemoteFingerprint = fingerprint;
+        }
+        clipboardLastLocalFingerprint = fingerprint;
+        writeBrowserClipboardItems({items}).catch(err => { clipboardStatus.textContent = `${t('desktop.clipboardWriteFailed')}：${err.message || String(err)}`; });
+    }
+
+    function stopClipboardSync() {
+        clipboardSyncGeneration++;
+        clearInterval(clipboardPollTimer);
+        clipboardPollTimer = null;
+        clipboardReadPending = false;
+        clipboardLocalReadPending = false;
+    }
+
+    function pollClipboardSync() {
+        requestRemoteClipboard();
+        syncLocalClipboard();
+    }
+
+    function startClipboardSync() {
+        stopClipboardSync();
+        clipboardLastLocalFingerprint = null;
+        clipboardLastRemoteFingerprint = null;
+        clipboardPendingRemoteFingerprint = null;
+        if (!clipboardCapabilities || clipboardSyncMode.value === 'off') return;
+        pollClipboardSync();
+        clipboardPollTimer = setInterval(pollClipboardSync, 1000);
     }
 
     function loadSavedDesktopSettings() {
@@ -207,6 +291,9 @@ document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n
         if (control === 'true') controlInput.checked = true;
         if (control === 'false') controlInput.checked = false;
         showCursorInput.checked = localStorage.getItem(storagePrefix + 'showCursor') === 'true';
+        const clipboardMode = localStorage.getItem(storagePrefix + 'clipboardSyncMode');
+        if (['off', 'remote-to-local', 'local-to-remote', 'bidirectional'].includes(clipboardMode)) clipboardSyncMode.value = clipboardMode;
+        else clipboardSyncMode.value = 'bidirectional';
         gpuSourceSelect.value = localStorage.getItem(gpuStoragePrefix + 'source') || '';
         gpuEncoderSelect.value = localStorage.getItem(gpuStoragePrefix + 'encoder') || 'auto';
         gpuPointerBackend.value = localStorage.getItem(gpuStoragePrefix + 'pointerBackend') || 'auto';
@@ -233,6 +320,7 @@ document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n
         localStorage.setItem(storagePrefix + 'fit', fitModeSelect.value);
         localStorage.setItem(storagePrefix + 'control', String(controlInput.checked));
         localStorage.setItem(storagePrefix + 'showCursor', String(showCursorInput.checked));
+        localStorage.setItem(storagePrefix + 'clipboardSyncMode', clipboardSyncMode.value);
         localStorage.setItem(storagePrefix + 'fps', String(clampInt(fpsInput.value, 1, 12, 4)));
         localStorage.setItem(storagePrefix + 'quality', String(clampInt(qualityInput.value, 25, 90, 50)));
         localStorage.setItem(storagePrefix + 'width', String(clampInt(maxWidthInput.value, 320, 3840, 1600)));
@@ -420,7 +508,7 @@ document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n
         closeGPUVideo();
         connectionMode = '';
         remoteInput = false;
-        clipboardWritePending = false;
+        stopClipboardSync();
         setClipboardCapabilities(null);
         controlInput.disabled = false;
         stage.dataset.gpu = 'false';
@@ -626,7 +714,7 @@ document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n
         setStatus(reconnecting ? t('common.connecting') : t('common.connecting'));
         ws.onopen = () => { if (connID !== connectionSeq) return; resetGPUReconnectBackoff(); setStatus(t('desktop.starting')); gpuSend('GetCapturableList'); gpuSendConfig(); };
         ws.onerror = () => { if (connID !== connectionSeq) return; setStatus(t('common.error'), 'err'); };
-        ws.onclose = () => { if (connID !== connectionSeq) return; ws = null; setStatus(lastCloseMessage || t('desktop.closed'), lastCloseMessage ? 'err' : 'warn'); scheduleGPUReconnect(device, connID); };
+        ws.onclose = () => { if (connID !== connectionSeq) return; ws = null; stopClipboardSync(); setClipboardCapabilities(null); setStatus(lastCloseMessage || t('desktop.closed'), lastCloseMessage ? 'err' : 'warn'); scheduleGPUReconnect(device, connID); };
         ws.onmessage = evt => {
             if (connID !== connectionSeq) return;
             if (evt.data instanceof ArrayBuffer) {
@@ -655,7 +743,16 @@ document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n
             else if (msg && msg.ClipboardContent) handleRemoteClipboard(msg.ClipboardContent);
             else if (msg && msg.RuntimeStatus) gpuUpdateFrameInfo();
             else if (msg && msg.ConfigError) { lastCloseMessage = msg.ConfigError; setStatus(msg.ConfigError, 'err'); }
-            else if (msg && msg.Error) { lastCloseMessage = msg.Error; setStatus(msg.Error, 'err'); }
+            else if (msg && msg.Error) {
+                if (String(msg.Error).startsWith('clipboard:')) {
+                    clipboardReadPending = false;
+                    clipboardPendingRemoteFingerprint = null;
+                    clipboardStatus.textContent = msg.Error;
+                } else {
+                    lastCloseMessage = msg.Error;
+                    setStatus(msg.Error, 'err');
+                }
+            }
         };
     }
     async function connect() {
@@ -716,13 +813,14 @@ document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n
             } else if (msg.op === 'clipboard_content') {
                 handleRemoteClipboard({items:msg.clipboardItems || [], text:msg.text || ''});
             } else if (msg.op === 'clipboard_error') {
-                clipboardWritePending = false;
-                clipboardStatus.textContent = msg.message || '远程剪贴板错误';
+                clipboardReadPending = false;
+                clipboardPendingRemoteFingerprint = null;
+                clipboardStatus.textContent = msg.message || t('desktop.clipboardRemoteError');
             } else if (msg.op === 'input_error') {
                 setStatus(msg.message || t('common.error'), 'err');
             }
         };
-        ws.onclose = () => { if (connID !== connectionSeq) return; ws = null; setStatus(lastCloseMessage || t('desktop.closed'), lastCloseMessage ? 'err' : 'warn'); };
+        ws.onclose = () => { if (connID !== connectionSeq) return; ws = null; stopClipboardSync(); setClipboardCapabilities(null); setStatus(lastCloseMessage || t('desktop.closed'), lastCloseMessage ? 'err' : 'warn'); };
     }
     function drawFrame(data) {
         pendingFrame = data;
@@ -944,8 +1042,7 @@ document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n
     document.getElementById('screenshot').addEventListener('click', saveScreenshot);
     document.getElementById('syncVNC').addEventListener('click', syncVNCSettings);
     document.getElementById('fullscreen').addEventListener('click', toggleFullscreen);
-    clipboardPull.addEventListener('click', requestRemoteClipboard);
-    clipboardPush.addEventListener('click', sendLocalClipboard);
+    clipboardSyncMode.addEventListener('change', () => { saveDesktopSettings(); startClipboardSync(); });
     gpuAdvancedToggle.addEventListener('click', () => { gpuAdvanced.classList.toggle('open'); saveGpuDesktopSettings(); });
     gpuSourceSelect.addEventListener('change', gpuSendConfig);
     gpuEncoderSelect.addEventListener('change', gpuSendConfig);
@@ -961,8 +1058,16 @@ document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n
     fitModeSelect.addEventListener('change', () => { stage.dataset.fit = fitModeSelect.value; saveDesktopSettings(); });
     [fpsInput, qualityInput, maxWidthInput, maxHeightInput].forEach(input => input.addEventListener('change', () => { saveDesktopSettings(); scheduleReconnectIfActive(); }));
     passwordInput.addEventListener('keydown', e => { if (e.key === 'Enter') connect(); });
-    window.addEventListener('blur', gpuReleaseKeyboard, true);
-    document.addEventListener('visibilitychange', () => { if (document.hidden) { gpuReleaseKeyboard(); if (connectionMode === 'gpu') gpuSend('PauseVideo'); } else if (connectionMode === 'gpu' && gpuEnableVideo.checked) gpuSend('ResumeVideo'); }, true);
+    window.addEventListener('focus', pollClipboardSync, true);
+    document.addEventListener('visibilitychange', () => {
+        if (document.hidden) {
+            gpuReleaseKeyboard();
+            if (connectionMode === 'gpu') gpuSend('PauseVideo');
+            return;
+        }
+        pollClipboardSync();
+        if (connectionMode === 'gpu' && gpuEnableVideo.checked) gpuSend('ResumeVideo');
+    }, true);
     window.addEventListener('beforeinput', e => {
         if (connectionMode !== 'gpu' || !controlInput.checked || !remoteInput) return;
         if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLSelectElement) return;
