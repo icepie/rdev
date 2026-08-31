@@ -136,7 +136,9 @@ func postDarwinKey(key uint16, down bool, flags uint64) error {
 	if flags != 0 {
 		cgEventSetFlags(event, flags)
 	}
-	cgEventPost(cgAnnotatedSessionEventTap, event)
+	// Post at the HID tap so macOS updates modifier state before dispatching the
+	// key. Annotated-session events type single keys but can lose combinations.
+	cgEventPost(cgHIDEventTap, event)
 	cfRelease(event)
 	return nil
 }
