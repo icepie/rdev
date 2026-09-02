@@ -26,6 +26,7 @@ import java.security.SecureRandom;
 import java.util.UUID;
 
 public class RDevAgentService extends Service {
+    public static final String ACTION_CONNECT = "dev.icepie.rdev.CONNECT";
     public static final String ACTION_START_CAPTURE = "dev.icepie.rdev.START_CAPTURE";
     public static final String EXTRA_RESULT_CODE = "resultCode";
     public static final String EXTRA_RESULT_DATA = "resultData";
@@ -65,7 +66,11 @@ public class RDevAgentService extends Service {
 
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
         stopping = false;
-        if (client == null) startWebSocket();
+        if (intent != null && ACTION_CONNECT.equals(intent.getAction())) {
+            reconnectNow();
+        } else if (client == null) {
+            startWebSocket();
+        }
         if (intent != null && ACTION_START_CAPTURE.equals(intent.getAction())) {
             startCapture(intent.getIntExtra(EXTRA_RESULT_CODE, 0), intent.getParcelableExtra(EXTRA_RESULT_DATA));
         }

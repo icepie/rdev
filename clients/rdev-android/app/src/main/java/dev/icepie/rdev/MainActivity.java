@@ -37,53 +37,92 @@ public class MainActivity extends Activity {
     private TextView statusView;
     private SharedPreferences prefs;
     private String statusMessage = "本机可作为 RDev 被控端，支持终端、文件管理和远程桌面。";
+    private boolean pendingAutoConnect;
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
         prefs = getSharedPreferences("rdev", MODE_PRIVATE);
         setContentView(createContentView());
-        applyDeepLink(getIntent(), false);
+        applyDeepLink(getIntent());
         requestNotificationPermissionIfNeeded();
     }
 
     @Override protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
         setIntent(intent);
-        applyDeepLink(intent, true);
+        applyDeepLink(intent);
     }
 
-    private void applyDeepLink(Intent intent, boolean showStatus) {
-        if (intent == null) return;
-        Uri uri = intent.getData();
-        if (uri == null) return;
-        if (!"rdev".equalsIgnoreCase(uri.getScheme())) return;
-        String server = firstNonEmpty(uri.getQueryParameter("server"), uri.getQueryParameter("s"));
-        String id = firstNonEmpty(uri.getQueryParameter("id"), uri.getQueryParameter("device"));
-        String password = firstPresent(uri, "password", "p");
-        if (server == null && uri.getHost() != null && uri.getHost().length() > 0 && !"connect".equalsIgnoreCase(uri.getHost())) {
-            server = uri.getHost();
-            if (uri.getPort() > 0) server += ":" + uri.getPort();
-            if (uri.getPath() != null && uri.getPath().length() > 1) server += uri.getPath();
-        }
-        if (server != null) serverField.setText(server);
-        if (id != null) idField.setText(id);
-        if (password != null) passwordField.setText(password);
-        if (server != null || id != null || password != null) {
-            saveConfig();
-            if (showStatus) setStatus("已从链接填充配置");
+    private void applyDeepLink(Intent intent) {
+        DeepLinkConfig config = DeepLinkConfig.parse(intent == null ? null : intent.getData());
+        if (config == null) return;
+        serverField.setText(config.server);
+        idField.setText(config.id);
+        passwordField.setText(config.password);
+        saveConfig(false);
+        if (config.connect) {
+            pendingAutoConnect = true;
+            setStatus("已从链接保存连接配置，正在启动在线服务");
+            startOnlineService();
+        } else {
+            setStatus("已从链接填充并保存连接配置");
         }
     }
 
-    private String firstNonEmpty(String a, String b) {
-        if (a != null && a.length() > 0) return a;
-        if (b != null && b.length() > 0) return b;
-        return null;
-    }
+    static final class DeepLinkConfig {
+        final String server;
+        final String id;
+        final String password;
+        final boolean connect;
 
-    private String firstPresent(Uri uri, String a, String b) {
-        String value = uri.getQueryParameter(a);
-        if (value != null) return value;
-        return uri.getQueryParameter(b);
+        DeepLinkConfig(String server, String id, String password, boolean connect) {
+            this.server = server;
+            this.id = id;
+            this.password = password;
+            this.connect = connect;
+        }
+
+        static DeepLinkConfig parse(Uri uri) {
+            return parse(uri == null ? null : uri.toString());
+        }
+
+        static DeepLinkConfig parse(String rawUri) {
+            if (rawUri == null) return null;
+            try {
+                java.net.URI uri = new java.net.URI(rawUri);
+                if (!"rdev".equalsIgnoreCase(uri.getScheme()) || !"connect".equalsIgnoreCase(uri.getHost())) return null;
+                java.util.Map<String, String> query = parseQuery(uri.getRawQuery());
+                String server = firstNonEmpty(query.get("server"), query.get("s"));
+                String id = firstNonEmpty(query.get("id"), query.get("device"));
+                if (server == null || id == null) return null;
+                String password = query.containsKey("password") ? query.get("password") : query.get("p");
+                if (password == null) password = "";
+                String action = query.get("action");
+                boolean connect = action == null || action.length() == 0 || "connect".equalsIgnoreCase(action) || "start".equalsIgnoreCase(action);
+                return new DeepLinkConfig(server.trim(), id.trim(), password, connect);
+            } catch (Exception ignored) {
+                return null;
+            }
+        }
+
+        private static java.util.Map<String, String> parseQuery(String rawQuery) throws java.io.UnsupportedEncodingException {
+            java.util.Map<String, String> values = new java.util.LinkedHashMap<>();
+            if (rawQuery == null || rawQuery.length() == 0) return values;
+            for (String part : rawQuery.split("&", -1)) {
+                int equals = part.indexOf('=');
+                String rawKey = equals < 0 ? part : part.substring(0, equals);
+                String rawValue = equals < 0 ? "" : part.substring(equals + 1);
+                String key = java.net.URLDecoder.decode(rawKey, "UTF-8");
+                if (!values.containsKey(key)) values.put(key, java.net.URLDecoder.decode(rawValue, "UTF-8"));
+            }
+            return values;
+        }
+
+        private static String firstNonEmpty(String a, String b) {
+            if (a != null && a.trim().length() > 0) return a;
+            if (b != null && b.trim().length() > 0) return b;
+            return null;
+        }
     }
 
     private View createContentView() {
@@ -279,43 +318,51 @@ public class MainActivity extends Activity {
     }
 
     private void saveConfig() {
+        saveConfig(true);
+    }
+
+    private void saveConfig(boolean showStatus) {
         prefs.edit()
             .putString("server", serverField.getText().toString().trim())
             .putString("id", idField.getText().toString().trim())
             .putString("password", passwordField.getText().toString())
             .apply();
-        setStatus("配置已保存");
+        if (showStatus) setStatus("配置已保存");
     }
 
     private void copySchemeLink() {
-        saveConfig();
+        saveConfig(false);
         Uri.Builder builder = new Uri.Builder().scheme("rdev").authority("connect");
         String server = serverField.getText().toString().trim();
         String id = idField.getText().toString().trim();
         String password = passwordField.getText().toString();
         if (server.length() > 0) builder.appendQueryParameter("server", server);
         if (id.length() > 0) builder.appendQueryParameter("id", id);
-        if (password.length() > 0) builder.appendQueryParameter("password", password);
+        builder.appendQueryParameter("password", password);
+        builder.appendQueryParameter("action", "connect");
         String link = builder.build().toString();
         ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
         if (cm != null) cm.setPrimaryClip(ClipData.newPlainText("RDev Android", link));
-        setStatus("已复制填充链接：" + link);
+        setStatus("已复制连接链接：" + link);
     }
 
     private void startOnlineService() {
-        saveConfig();
-        if (serverField.getText().toString().trim().length() == 0) {
-            setStatus("请先填写服务器地址，或通过 rdev:// 链接填充配置。");
+        saveConfig(false);
+        if (serverField.getText().toString().trim().length() == 0 || idField.getText().toString().trim().length() == 0) {
+            pendingAutoConnect = false;
+            setStatus("请填写服务器地址和设备 ID，或打开完整的 rdev://connect 链接。");
             return;
         }
         requestStoragePermissionIfNeeded();
         Intent intent = new Intent(this, RDevAgentService.class);
+        intent.setAction(RDevAgentService.ACTION_CONNECT);
         if (Build.VERSION.SDK_INT >= 26) {
             startForegroundService(intent);
         } else {
             startService(intent);
         }
-        setStatus("在线服务已启动：终端和文件可用；桌面控制需要录屏授权。");
+        setStatus(pendingAutoConnect ? "连接链接已应用，在线服务正在连接" : "在线服务已启动：终端和文件可用；桌面控制需要录屏授权。");
+        pendingAutoConnect = false;
     }
 
     private void requestProjection() {
