@@ -31,6 +31,7 @@ clone_repo() {
 }
 
 clone_repo x264 stable \
+    https://github.com/mirror/x264.git \
     https://code.videolan.org/videolan/x264.git \
     https://github.com/videolan/x264.git
 clone_repo ffmpeg n8.0 \
