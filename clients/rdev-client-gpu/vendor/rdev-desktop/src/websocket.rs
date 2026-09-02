@@ -19,10 +19,22 @@ use crate::protocol::{
     InputOption, KeyboardEvent, MessageInbound, MessageOutbound, PointerEvent, RuntimeStatus,
     TextInputEvent, WeylusReceiver, WeylusSender, WheelEvent,
 };
-
 use crate::cerror::CErrorCode;
 use crate::video::{EncoderOptions, VideoEncoder};
-
+fn is_expected_disconnect(err: &WebSocketError) -> bool {
+    match err {
+        WebSocketError::ConnectionClosed | WebSocketError::UnexpectedEOF => true,
+        WebSocketError::IoError(err) => matches!(
+            err.kind(),
+            std::io::ErrorKind::UnexpectedEof
+                | std::io::ErrorKind::ConnectionReset
+                | std::io::ErrorKind::ConnectionAborted
+                | std::io::ErrorKind::BrokenPipe
+                | std::io::ErrorKind::NotConnected
+        ),
+        _ => false,
+    }
+}
 struct VideoConfig {
     capturable: Box<dyn Capturable>,
     capture_cursor: bool,
@@ -1394,8 +1406,8 @@ fn handle_video<S: WeylusSender + Clone + 'static>(
                         width_out,
                         height_out,
                         move |data| {
-                            if let Err(err) = video_sender.send_video(data) {
-                                warn!("Failed to send video frame: {err}!");
+                            if video_sender.send_video(data).is_err() {
+                                debug!("Desktop video receiver disconnected.");
                             }
                         },
                         active_encoder_options,
@@ -1551,6 +1563,10 @@ pub fn weylus_websocket_channel(
                     _ = semaphore_shutdown.acquire() => break,
                     frame = fut => match frame {
                         Ok(frame) => frame,
+                        Err(err) if is_expected_disconnect(&err) => {
+                            debug!("Desktop websocket disconnected while receiving.");
+                            break;
+                        }
                         Err(err) => {
                             warn!("Invalid websocket frame: {err}.");
                             break;
@@ -1584,7 +1600,7 @@ pub fn weylus_websocket_channel(
             match msg {
                 WsMessage::Frame(frame) => {
                     if let Err(err) = tx.write_frame(frame).await {
-                        if let WebSocketError::ConnectionClosed = err {
+                        if is_expected_disconnect(&err) {
                             break;
                         }
                         warn!("Failed to send frame: {err}");
@@ -1592,7 +1608,7 @@ pub fn weylus_websocket_channel(
                 }
                 WsMessage::Video(data) => {
                     if let Err(err) = tx.write_frame(Frame::binary(data.into())).await {
-                        if let WebSocketError::ConnectionClosed = err {
+                        if is_expected_disconnect(&err) {
                             break;
                         }
                         warn!("Failed to send video frame: {err}");
@@ -1602,7 +1618,7 @@ pub fn weylus_websocket_channel(
                     let json_string = serde_json::to_string(&msg).unwrap();
                     let data = json_string.as_bytes();
                     if let Err(err) = tx.write_frame(Frame::text(data.into())).await {
-                        if let WebSocketError::ConnectionClosed = err {
+                        if is_expected_disconnect(&err) {
                             break;
                         }
                         warn!("Failed to send outbound message: {err}");

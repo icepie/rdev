@@ -16,7 +16,10 @@ use tokio::{
     },
 };
 use tokio_kcp::{KcpConfig, KcpNoDelayConfig, KcpStream};
-use tokio_tungstenite::tungstenite::Message as WsMessage;
+use tokio_tungstenite::tungstenite::{
+    error::ProtocolError as WsProtocolError, protocol::frame::coding::CloseCode, Error as WsError,
+    Message as WsMessage,
+};
 use tracing::{debug, info, warn};
 use url::Url;
 
@@ -120,10 +123,12 @@ pub fn spawn(args: Args, instance_id: String, local_desktop_ready: bool) -> Opti
             }
             tokio::select! {
                 result = run_once(&args, &instance_id) => {
-                    if let Err(err) = result {
-                        warn!("gpu desktop tunnel disconnected: {err:#}");
-                    } else {
-                        backoff.reset();
+                    match result {
+                        Ok(()) => backoff.reset(),
+                        Err(err) if is_expected_disconnect(&err) => {
+                            info!("gpu desktop tunnel disconnected; reconnecting");
+                        }
+                        Err(err) => warn!("gpu desktop tunnel failed: {err:#}"),
                     }
                 }
                 _ = stop_rx.changed() => break,
@@ -210,7 +215,12 @@ async fn run_once(args: &Args, instance_id: &str) -> Result<()> {
         .gpu_desktop_local
         .parse()
         .with_context(|| format!("invalid --gpu-desktop-local {}", args.gpu_desktop_local))?;
-    info!("connecting gpu desktop tunnel to {tunnel_url}; local={local_addr}");
+    info!(
+        "connecting gpu desktop tunnel to {}://{}{}; local={local_addr}",
+        tunnel_url.scheme(),
+        tunnel_url.host_str().unwrap_or("unknown"),
+        tunnel_url.path()
+    );
     let (ws, _) = tokio::time::timeout(
         TUNNEL_CONNECT_TIMEOUT,
         connect_async_follow_redirects(tunnel_url.as_str(), 5),
@@ -267,10 +277,16 @@ async fn run_once(args: &Args, instance_id: &str) -> Result<()> {
                     Some(Ok(WsMessage::Pong(_))) => {
                         last_control = Instant::now();
                     }
-                    Some(Ok(WsMessage::Close(frame))) => return Err(anyhow!("gpu desktop tunnel closed by server: {frame:?}")),
+                    Some(Ok(WsMessage::Close(frame))) => {
+                        if frame.as_ref().is_some_and(|frame| !is_normal_close_code(frame.code)) {
+                            return Err(anyhow!("gpu desktop tunnel closed by server: {frame:?}"));
+                        }
+                        return Ok(());
+                    }
                     Some(Ok(WsMessage::Text(_))) | Some(Ok(WsMessage::Frame(_))) => {}
+                    Some(Err(err)) if is_expected_ws_disconnect(&err) => return Ok(()),
                     Some(Err(err)) => return Err(err.into()),
-                    None => return Err(anyhow!("gpu desktop tunnel websocket ended")),
+                    None => return Ok(()),
                 }
             }
         }
@@ -541,6 +557,47 @@ fn hex_head(raw: &[u8]) -> String {
         .join(" ")
 }
 
+fn is_normal_close_code(code: CloseCode) -> bool {
+    matches!(
+        code,
+        CloseCode::Normal | CloseCode::Away | CloseCode::Restart | CloseCode::Again
+    )
+}
+
+fn is_expected_ws_disconnect(err: &WsError) -> bool {
+    match err {
+        WsError::ConnectionClosed | WsError::AlreadyClosed => true,
+        WsError::Protocol(WsProtocolError::ResetWithoutClosingHandshake) => true,
+        WsError::Io(err) => matches!(
+            err.kind(),
+            std::io::ErrorKind::UnexpectedEof
+                | std::io::ErrorKind::ConnectionReset
+                | std::io::ErrorKind::ConnectionAborted
+                | std::io::ErrorKind::BrokenPipe
+                | std::io::ErrorKind::NotConnected
+        ),
+        _ => false,
+    }
+}
+
+fn is_expected_disconnect(err: &anyhow::Error) -> bool {
+    err.chain().any(|cause| {
+        cause
+            .downcast_ref::<WsError>()
+            .is_some_and(is_expected_ws_disconnect)
+            || cause.downcast_ref::<std::io::Error>().is_some_and(|err| {
+                matches!(
+                    err.kind(),
+                    std::io::ErrorKind::UnexpectedEof
+                        | std::io::ErrorKind::ConnectionReset
+                        | std::io::ErrorKind::ConnectionAborted
+                        | std::io::ErrorKind::BrokenPipe
+                        | std::io::ErrorKind::NotConnected
+                )
+            })
+    })
+}
+
 fn tunnel_url_for_endpoint(args: &Args, instance_id: &str, endpoint: &str) -> Result<Url> {
     let mut url = Url::parse(endpoint.trim_end_matches('/'))?;
     match url.scheme() {
@@ -655,5 +712,27 @@ mod tests {
         backoff.reset();
         let reset = backoff.next();
         assert!(reset >= Duration::from_millis(800) && reset <= Duration::from_millis(1200));
+    }
+
+    #[test]
+    fn common_websocket_disconnects_are_expected() {
+        assert!(is_expected_ws_disconnect(&WsError::ConnectionClosed));
+        assert!(is_expected_ws_disconnect(&WsError::Protocol(
+            WsProtocolError::ResetWithoutClosingHandshake,
+        )));
+        assert!(is_expected_ws_disconnect(&WsError::Io(
+            std::io::Error::from(std::io::ErrorKind::BrokenPipe),
+        )));
+        assert!(!is_expected_ws_disconnect(&WsError::Io(
+            std::io::Error::from(std::io::ErrorKind::PermissionDenied),
+        )));
+    }
+
+    #[test]
+    fn websocket_close_codes_preserve_abnormal_failures() {
+        assert!(is_normal_close_code(CloseCode::Normal));
+        assert!(is_normal_close_code(CloseCode::Restart));
+        assert!(!is_normal_close_code(CloseCode::Protocol));
+        assert!(!is_normal_close_code(CloseCode::Error));
     }
 }

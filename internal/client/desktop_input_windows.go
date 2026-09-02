@@ -83,11 +83,25 @@ type pointerTouchInfo struct {
 }
 
 func platformDesktopInputOptions() []protocol.DesktopInputBackend {
-	options := []protocol.DesktopInputBackend{{ID: "win32", Label: "Win32 input", Kinds: []string{"mouse", "keyboard"}, Requires: []string{"Windows 7+"}}}
-	if windowsTouchInjectionAvailable() {
-		options = append(options, protocol.DesktopInputBackend{ID: "win32-touch", Label: "Win32 Touch Injection", Kinds: []string{"mouse", "keyboard", "touch", "pen"}, Requires: []string{"Windows 8+", "interactive desktop"}, Reason: "pen input is accepted and injected through the Windows touch injection path until native pen injection is available"})
+	win32 := protocol.DesktopInputBackend{
+		ID:       "win32",
+		Label:    "Win32 mouse and keyboard",
+		Kinds:    []string{"mouse", "keyboard"},
+		Requires: []string{"Windows 7+"},
 	}
-	return options
+	if !windowsTouchInjectionAvailable() {
+		return []protocol.DesktopInputBackend{win32}
+	}
+	return []protocol.DesktopInputBackend{
+		{
+			ID:       "win32-touch",
+			Label:    "Windows touch and pen",
+			Kinds:    []string{"mouse", "keyboard", "touch", "pen"},
+			Requires: []string{"Windows 8+", "interactive desktop"},
+			Reason:   "Mouse and keyboard use Win32 input; touch and pen use Windows Touch Injection.",
+		},
+		win32,
+	}
 }
 
 func newDesktopInput(backend string) (desktopInput, error) {

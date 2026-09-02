@@ -58,7 +58,7 @@ document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n
     const storagePrefix = 'rdevDesktop.';
     const gpuStoragePrefix = 'rdevGpuDesktop.';
     let ws = null, drawing = false, pendingFrame = null, deviceCache = [], lastCloseMessage = '', connectionSeq = 0, connectionMode = '', manualDisconnect = false;
-    let frameCount = 0, frameBytes = 0, statsStartedAt = 0, lastFrameAt = 0, currentSource = '', remoteInput = false, resizeTimer = null, reconnectTimer = null, lastMouseSent = 0;
+    let frameCount = 0, frameBytes = 0, statsStartedAt = 0, lastFrameAt = 0, currentSource = '', remoteInput = false, resizeTimer = null, reconnectTimer = null, lastMouseSent = 0, lastAdaptiveSize = null;
     let gpuReconnectDelay = 1000;
     let gpuMediaSource = null, gpuSourceBuffer = null, gpuQueue = [], gpuLastPointer = new Map(), gpuHeldKeys = new Map();
     let gpuVideoDecoder = null, gpuVideoMode = 'mse', gpuNeedKeyFrame = false;
@@ -85,9 +85,10 @@ document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n
             return { width: 1080, height: 1920 };
         }
         const scale = Math.max(0.1, Math.min(2, gpuScaleInput.valueAsNumber || 1));
+        const ratio = Math.min(window.devicePixelRatio || 1, 2);
         return {
-            width: Math.max(320, Math.round(scale * Math.max(1, gpuViewer.clientWidth || window.innerWidth) * (window.devicePixelRatio || 1))),
-            height: Math.max(240, Math.round(scale * Math.max(1, gpuViewer.clientHeight || window.innerHeight) * (window.devicePixelRatio || 1))),
+            width: Math.max(320, Math.min(3840, Math.round(scale * Math.max(1, gpuViewer.clientWidth || window.innerWidth) * ratio))),
+            height: Math.max(240, Math.min(2160, Math.round(scale * Math.max(1, gpuViewer.clientHeight || window.innerHeight) * ratio))),
         };
     }
     function updateGpuRangeLabels() {
@@ -361,7 +362,8 @@ document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n
     function updateInputBackendOptions(desktop) {
         const backends = (desktop.inputOptions && desktop.inputOptions.length) ? desktop.inputOptions : ((desktop.inputBackends || []).map(b => ({id:b, label:inputBackendLabel(b), kinds:[]})));
         const saved = localStorage.getItem(storagePrefix + 'inputBackend') || 'auto';
-        const options = [{id:'auto', label:t('desktop.inputAuto')}].concat(backends.map(b => ({id:b.id || b, label:inputBackendLabel(b)})));
+        const automatic = backends[0] ? inputBackendLabel(backends[0]) : '';
+        const options = [{id:'auto', label:automatic ? `${t('desktop.inputAuto')} · ${automatic}` : t('desktop.inputAuto')}].concat(backends.map(b => ({id:b.id || b, label:inputBackendLabel(b)})));
         inputBackendSelect.innerHTML = options.map(o => `<option value="${esc(o.id)}">${esc(o.label)}</option>`).join('');
         inputBackendSelect.value = options.some(o => o.id === saved) ? saved : 'auto';
         inputBackendSelect.disabled = backends.length === 0;
@@ -538,6 +540,7 @@ document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n
         updateGpuRangeLabels();
         applyGpuVideoFit();
         const size = gpuMaxVideoSize();
+        lastAdaptiveSize = size;
         gpuSend({Config:{
             capturable_id:Number(gpuSourceSelect.value),
             capture_cursor:showCursorInput.checked,
@@ -552,7 +555,7 @@ document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n
         gpuSend(gpuEnableVideo.checked ? 'ResumeVideo' : 'PauseVideo');
     }
     function applyGpuVideoFit() {
-        const fit = gpuStretch.checked ? 'fill' : 'contain';
+        const fit = fitModeSelect.value === 'actual' ? 'none' : (gpuStretch.checked ? 'fill' : 'contain');
         gpuVideo.style.objectFit = fit;
         gpuCanvas.style.objectFit = fit;
     }
@@ -911,7 +914,15 @@ document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n
         const rect = gpuOverlay.getBoundingClientRect();
         const videoWidth = gpuVideoMode === 'webcodecs' ? (gpuCanvas.width || 0) : (gpuVideo.videoWidth || 0);
         const videoHeight = gpuVideoMode === 'webcodecs' ? (gpuCanvas.height || 0) : (gpuVideo.videoHeight || 0);
-        if (!videoWidth || !videoHeight || !rect.width || !rect.height) return rect;
+        if (!videoWidth || !videoHeight || !rect.width || !rect.height || gpuStretch.checked) return rect;
+        if (fitModeSelect.value === 'actual') {
+            return {
+                left: rect.left + (rect.width - videoWidth) / 2,
+                top: rect.top + (rect.height - videoHeight) / 2,
+                width: videoWidth,
+                height: videoHeight,
+            };
+        }
         const containerRatio = rect.width / rect.height;
         const videoRatio = videoWidth / videoHeight;
         if (containerRatio > videoRatio) {
@@ -945,10 +956,22 @@ document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n
     }
     function scheduleAdaptiveReconnect() {
         if (!ws) return;
-        if (connectionMode === 'gpu') { clearTimeout(resizeTimer); resizeTimer = setTimeout(gpuSendConfig, 300); return; }
-        if (modeSelect.value !== 'auto') return;
         clearTimeout(resizeTimer);
-        resizeTimer = setTimeout(() => connect(), 500);
+        resizeTimer = setTimeout(() => {
+            if (!ws) return;
+            if (connectionMode === 'gpu') {
+                const next = gpuMaxVideoSize();
+                if (lastAdaptiveSize && Math.abs(next.width - lastAdaptiveSize.width) < 64 && Math.abs(next.height - lastAdaptiveSize.height) < 64) return;
+                lastAdaptiveSize = next;
+                gpuSendConfig();
+                return;
+            }
+            if (modeSelect.value !== 'auto') return;
+            const next = adaptiveSize();
+            if (lastAdaptiveSize && Math.abs(next.width - lastAdaptiveSize.width) < 64 && Math.abs(next.height - lastAdaptiveSize.height) < 64) return;
+            lastAdaptiveSize = next;
+            connect();
+        }, 300);
     }
     function saveScreenshot() {
         if (connectionMode === 'gpu' && gpuVideoMode === 'webcodecs' && gpuCanvas.width && gpuCanvas.height) {
@@ -984,7 +1007,8 @@ document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n
     canvas.addEventListener('auxclick', e => e.preventDefault());
     canvas.addEventListener('pointermove', e => sendMouse('mouse_move', e));
     canvas.addEventListener('pointerdown', e => { e.preventDefault(); canvas.focus(); canvas.setPointerCapture && canvas.setPointerCapture(e.pointerId); sendMouse('mouse_down', e); });
-    canvas.addEventListener('pointerup', e => { e.preventDefault(); sendMouse('mouse_up', e); });
+    canvas.addEventListener('pointerup', e => { e.preventDefault(); sendMouse('mouse_up', e); canvas.releasePointerCapture && canvas.hasPointerCapture?.(e.pointerId) && canvas.releasePointerCapture(e.pointerId); });
+    canvas.addEventListener('pointercancel', e => { sendMouse('mouse_up', e); canvas.releasePointerCapture && canvas.hasPointerCapture?.(e.pointerId) && canvas.releasePointerCapture(e.pointerId); });
     canvas.addEventListener('wheel', e => { if (!controlInput.checked || !remoteInput) return; e.preventDefault(); const point = canvasPoint(e); sendInput({inputType:'wheel', x:point.x, y:point.y, deltaX:Math.round(e.deltaX), deltaY:Math.round(e.deltaY)}); }, {passive:false});
     canvas.addEventListener('keydown', e => sendKey('key_down', e));
     canvas.addEventListener('keyup', e => sendKey('key_up', e));
@@ -1036,7 +1060,7 @@ document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n
         e.preventDefault();
         e.stopPropagation();
     });
-    window.addEventListener('resize', scheduleAdaptiveReconnect);
+    new ResizeObserver(scheduleAdaptiveReconnect).observe(stage);
     document.getElementById('connect').addEventListener('click', connect);
     document.getElementById('disconnect').addEventListener('click', disconnect);
     document.getElementById('screenshot').addEventListener('click', saveScreenshot);
@@ -1055,7 +1079,7 @@ document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n
     modeSelect.addEventListener('change', () => { updateMode(); saveDesktopSettings(); scheduleReconnectIfActive(); });
     sourceSelect.addEventListener('change', () => { saveDesktopSettings(); scheduleReconnectIfActive(); });
     inputBackendSelect.addEventListener('change', () => { saveDesktopSettings(); scheduleReconnectIfActive(); });
-    fitModeSelect.addEventListener('change', () => { stage.dataset.fit = fitModeSelect.value; saveDesktopSettings(); });
+    fitModeSelect.addEventListener('change', () => { stage.dataset.fit = fitModeSelect.value; applyGpuVideoFit(); saveDesktopSettings(); });
     [fpsInput, qualityInput, maxWidthInput, maxHeightInput].forEach(input => input.addEventListener('change', () => { saveDesktopSettings(); scheduleReconnectIfActive(); }));
     passwordInput.addEventListener('keydown', e => { if (e.key === 'Enter') connect(); });
     window.addEventListener('focus', pollClipboardSync, true);

@@ -76,6 +76,19 @@ func TestDesktopCapabilitiesReportsCurrentPlatform(t *testing.T) {
 	}
 }
 
+func TestChooseDesktopInputBackendUsesAdvertisedPreferenceOrder(t *testing.T) {
+	available := []string{"win32-touch", "win32"}
+	if got := chooseDesktopInputBackend("auto", available); got != "win32-touch" {
+		t.Fatalf("auto backend = %q, want first advertised backend", got)
+	}
+	if got := chooseDesktopInputBackend("win32", available); got != "win32" {
+		t.Fatalf("explicit backend = %q, want win32", got)
+	}
+	if got := chooseDesktopInputBackend("missing", available); got != "win32-touch" {
+		t.Fatalf("unavailable backend fallback = %q, want first advertised backend", got)
+	}
+}
+
 func TestValidateDesktopClipboardItemsAcceptsSupportedFormats(t *testing.T) {
 	items := []protocol.ClipboardItem{
 		{MIME: "text/plain;charset=utf-8", Data: base64.StdEncoding.EncodeToString([]byte("hello 世界"))},

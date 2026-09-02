@@ -43,7 +43,7 @@
         .status.ok { color:var(--green); }
         .status.warn { color:var(--yellow); }
         .status.err { color:var(--red); }
-        .stage { flex:1; min-height:0; display:flex; align-items:center; justify-content:center; padding:12px; overflow:auto; }
+        .stage { flex:1; min-height:0; display:flex; align-items:center; justify-content:center; padding:12px; overflow:auto; overscroll-behavior:contain; }
         .settings[data-gpu-device="true"] .legacy-setting { display:none; }
         .gpu-setting { display:none !important; }
         .settings[data-gpu-device="true"] .gpu-setting { display:inline-flex !important; }
@@ -53,15 +53,15 @@
         .stage[data-control="true"] canvas, .stage[data-control="true"] .gpu-overlay { cursor:crosshair; }
         .stage[data-cursor="true"] canvas { cursor:none; }
         canvas { background:#000; border:1px solid var(--border); border-radius:10px; image-rendering:auto; outline:none; }
-        .stage[data-fit="fit"] canvas { max-width:100%; max-height:100%; }
-        .stage[data-fit="actual"] canvas { max-width:none; max-height:none; }
+        .stage[data-fit="fit"] > #screen { width:auto; height:auto; max-width:100%; max-height:100%; }
+        .stage[data-fit="actual"] > #screen { width:auto; height:auto; max-width:none; max-height:none; }
         .gpu-viewer { position:relative; flex:1; min-height:0; width:100%; border:1px solid var(--border); border-radius:10px; background:#000; overflow:hidden; box-shadow:0 16px 40px rgba(0,0,0,.20); }
         .gpu-viewer video, .gpu-viewer canvas { width:100%; height:100%; object-fit:contain; background:#000; display:block; }
         .gpu-overlay { position:absolute; inset:0; outline:none; touch-action:none; }
         .gpu-empty { position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; color:var(--muted); line-height:1.8; padding:24px; pointer-events:none; background:radial-gradient(circle at center, rgba(34,211,238,.07), transparent 42%); }
         .gpu-empty strong { color:var(--text); font-size:1rem; margin-bottom:4px; }
         .empty { color:var(--muted); text-align:center; line-height:1.8; }
-        @media (max-width:720px) { .toolbar { flex-wrap:wrap; } .nav { width:100%; overflow-x:auto; } .controls > * { flex:1 1 auto; } }
+        @media (max-width:720px) { .toolbar { flex-wrap:wrap; } .nav { width:100%; overflow-x:auto; } .controls > * { flex:1 1 auto; } .stage { padding:6px; } }
     </style>
 </head>
 <body>
