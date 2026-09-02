@@ -295,7 +295,7 @@ final class AndroidFileManager {
         } catch (Exception e) {
             sendError(taskId, path, e.getMessage());
         } finally {
-            downloads.remove(taskId, download);
+            if (downloads.get(taskId) == download) downloads.remove(taskId);
         }
     }
 

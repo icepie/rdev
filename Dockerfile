@@ -7,7 +7,7 @@ COPY web ./web
 COPY internal/server/static ./internal/server/static
 RUN bun install --frozen-lockfile && bun run build
 
-FROM golang:1.25-alpine AS go-build
+FROM golang:1.26-alpine AS go-build
 WORKDIR /src
 ARG TARGETOS=linux
 ARG TARGETARCH=amd64

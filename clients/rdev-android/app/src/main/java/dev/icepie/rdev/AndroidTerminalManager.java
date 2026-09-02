@@ -118,7 +118,7 @@ final class AndroidTerminalManager {
         try { session.process.destroy(); } catch (Throwable ignored) {}
         new Thread(() -> {
             try { Thread.sleep(1200); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
-            try { session.process.destroyForcibly(); } catch (Throwable ignored) {}
+            try { session.process.destroy(); } catch (Throwable ignored) {}
         }, "rdev-term-kill").start();
     }
 
@@ -148,7 +148,7 @@ final class AndroidTerminalManager {
                     try { active.destroy(); } catch (Throwable ignored) {}
                     new Thread(() -> {
                         try { Thread.sleep(500); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
-                        try { active.destroyForcibly(); } catch (Throwable ignored) {}
+                        try { active.destroy(); } catch (Throwable ignored) {}
                     }, "rdev-term-interrupt").start();
                     sendRaw(session, "^C\r\n");
                 } else {
@@ -463,7 +463,8 @@ final class AndroidTerminalManager {
     private void waitSession(Session session) {
         int code = -1;
         try { code = session.process.waitFor(); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
-        if (sessions.remove(session.id, session)) {
+        if (sessions.get(session.id) == session) {
+            sessions.remove(session.id);
             session.closed = true;
             service.sendExitCode(session.id, code);
             service.sendClose(session.id);

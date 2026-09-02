@@ -1,6 +1,7 @@
 package client
 
 import (
+	"context"
 	"encoding/base64"
 	"fmt"
 	"strings"
@@ -28,13 +29,21 @@ func newDesktopClipboard() (desktopClipboard, error) {
 }
 
 func (systemDesktopClipboard) Get() ([]protocol.ClipboardItem, error) {
-	items := make([]protocol.ClipboardItem, 0, len(desktopClipboardFormats))
-	for _, format := range clipboard.Formats() {
+	ctx := context.Background()
+	formats, err := clipboard.Formats(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list clipboard formats: %w", err)
+	}
+	items := make([]protocol.ClipboardItem, 0, len(formats))
+	for _, format := range formats {
 		mime := canonicalDesktopClipboardMIME(format.MIME())
 		if !supportedDesktopClipboardMIME(mime) {
 			continue
 		}
-		data := clipboard.Read(format)
+		data, err := clipboard.Read(ctx, format)
+		if err != nil {
+			return nil, fmt.Errorf("read clipboard format %s: %w", mime, err)
+		}
 		if data == nil {
 			continue
 		}
@@ -66,8 +75,8 @@ func (systemDesktopClipboard) Set(items []protocol.ClipboardItem) error {
 			case "text/html", "text/uri-list":
 				format = clipboard.Register(mime)
 			}
-			if clipboard.Write(format, data) == nil {
-				return fmt.Errorf("clipboard write failed for %s", mime)
+			if _, err := clipboard.Write(context.Background(), format, data); err != nil {
+				return fmt.Errorf("clipboard write failed for %s: %w", mime, err)
 			}
 			return nil
 		}

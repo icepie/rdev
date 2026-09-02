@@ -41,10 +41,11 @@ public class RDevAgentService extends Service {
     private PowerManager.WakeLock wakeLock;
     private WifiManager.WifiLock wifiLock;
     private ConnectivityManager.NetworkCallback networkCallback;
+    private volatile Network activeNetwork;
+    private volatile int networkGeneration;
     private String instanceId;
     private volatile boolean stopping;
     private volatile boolean videoDemandActive;
-    private volatile long suppressReconnectUntilMs;
     private int reconnectDelayMs = 1000;
     private volatile int reconnectGeneration;
     private int captureStopGeneration;
@@ -136,16 +137,24 @@ public class RDevAgentService extends Service {
         try {
             ConnectivityManager manager = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
             if (Build.VERSION.SDK_INT < 24 || manager == null || networkCallback != null) return;
+            activeNetwork = manager.getActiveNetwork();
             networkCallback = new ConnectivityManager.NetworkCallback() {
                 @Override public void onAvailable(Network network) {
+                    Network previous = activeNetwork;
+                    activeNetwork = network;
+                    if (network.equals(previous)) {
+                        Log.i(TAG, "network available");
+                        return;
+                    }
                     if (client == null) {
                         Log.i(TAG, "network available");
                         return;
                     }
-                    Log.i(TAG, "network available, reconnecting websockets");
-                    reconnectNow();
+                    Log.i(TAG, "network changed, scheduling reconnect");
+                    scheduleNetworkReconnect();
                 }
                 @Override public void onLost(Network network) {
+                    if (network.equals(activeNetwork)) activeNetwork = null;
                     Log.i(TAG, "network lost");
                 }
             };
@@ -161,13 +170,22 @@ public class RDevAgentService extends Service {
             if (manager != null && networkCallback != null) manager.unregisterNetworkCallback(networkCallback);
         } catch (Throwable ignored) {}
         networkCallback = null;
+        activeNetwork = null;
     }
+    private void scheduleNetworkReconnect() {
+        final int generation = ++networkGeneration;
+        new Thread(() -> {
+            try { Thread.sleep(1000); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+            if (!stopping && generation == networkGeneration) reconnectNow();
+        }, "rdev-agent-network").start();
+    }
+
 
     private void reconnectNow() {
         if (stopping) return;
+        networkGeneration++;
         reconnectGeneration++;
         reconnectDelayMs = 1000;
-        suppressReconnectUntilMs = System.currentTimeMillis() + 5000;
         if (client != null) client.close();
         if (tunnel != null) {
             tunnel.close();
@@ -195,8 +213,8 @@ public class RDevAgentService extends Service {
             @Override public void onText(String text) { handleText(text); }
             @Override public void onBinary(byte[] data) { handleBinary(data); }
             @Override public void onClosed(Exception error) {
-                Log.i(TAG, "websocket closed error=" + error);
-                if (!stopping && generation == reconnectGeneration && System.currentTimeMillis() >= suppressReconnectUntilMs) scheduleReconnect();
+                Log.i(TAG, "connection closed error=" + error);
+                if (!stopping && generation == reconnectGeneration) scheduleReconnect();
             }
         });
         client.connect();
