@@ -13,7 +13,6 @@ use core_foundation::{
     string::{CFString, CFStringRef},
 };
 use core_graphics::{
-    display,
     display::{CGDisplay, CGRect},
     image::CGImage,
     window,
@@ -259,7 +258,7 @@ struct WindowInfo {
 fn get_window_infos() -> Vec<WindowInfo> {
     let mut win_infos = vec![];
     let wins = CGDisplay::window_list_info(
-        display::kCGWindowListExcludeDesktopElements | display::kCGWindowListOptionOnScreenOnly,
+        window::kCGWindowListExcludeDesktopElements | window::kCGWindowListOptionOnScreenOnly,
         None,
     );
     if let Some(wins) = wins {
