@@ -312,6 +312,8 @@ document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n
         updateGpuRangeLabels();
         stage.dataset.control = String(controlInput.checked);
         stage.dataset.cursor = String(showCursorInput.checked);
+        stage.dataset.fit = fitModeSelect.value;
+        applyGpuVideoFit();
     }
     function saveDesktopSettings() {
         if (deviceSelect.value) localStorage.setItem(storagePrefix + 'device', deviceSelect.value);
