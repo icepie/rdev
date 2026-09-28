@@ -183,6 +183,7 @@
                     <div class="cmd-row">
                         <div class="cmd-code" data-tpl="curl -sL {{HTTP}}{{H}}/run.sh | sh -s -- {{SERVER}} -p {{PW}}{{CLIENT_ARG}}"></div>
                         <button class="copy-btn" onclick="cp(this)"><span data-i18n="common.copy">复制</span></button>
+                        <button class="copy-btn" onclick="cpRandomPassword(this)"><span data-i18n="index.copyRandomPassword">复制（随机密码）</span></button>
                     </div>
                 </div>
                 <div class="cmd-group">
@@ -190,6 +191,7 @@
                     <div class="cmd-row">
                         <div class="cmd-code" data-tpl="wget -qO- {{HTTP}}{{H}}/run.sh | sh -s -- {{SERVER}} -p {{PW}}{{CLIENT_ARG}}"></div>
                         <button class="copy-btn" onclick="cp(this)"><span data-i18n="common.copy">复制</span></button>
+                        <button class="copy-btn" onclick="cpRandomPassword(this)"><span data-i18n="index.copyRandomPassword">复制（随机密码）</span></button>
                     </div>
                 </div>
                 <div class="cmd-group">
@@ -207,6 +209,7 @@
                     <div class="cmd-row">
                         <div class="cmd-code" data-tpl='powershell -Command "iwr -useb {{HTTP}}{{H}}/run.ps1 | iex; RDev &#39;{{SERVER}}&#39; -Password {{PW}}{{CLIENT_PS_ARG}}"'></div>
                         <button class="copy-btn" onclick="cp(this)"><span data-i18n="common.copy">复制</span></button>
+                        <button class="copy-btn" onclick="cpRandomPassword(this)"><span data-i18n="index.copyRandomPassword">复制（随机密码）</span></button>
                     </div>
                 </div>
                 <div class="cmd-group">
@@ -231,6 +234,7 @@
                     <div class="cmd-row">
                         <div class="cmd-code" id="c-w7-pw"></div>
                         <button class="copy-btn" onclick="cp(this)"><span data-i18n="common.copy">复制</span></button>
+                        <button class="copy-btn" onclick="cpRandomPassword(this)"><span data-i18n="index.copyRandomPassword">复制（随机密码）</span></button>
                     </div>
                 </div>
                 <div class="cmd-group">
@@ -426,6 +430,26 @@
             navigator.clipboard.writeText((code.dataset.copy || code.textContent).trim()).then(() => {
                 btn.innerHTML = icon('check'); btn.classList.add('ok');
                 setTimeout(() => { btn.innerHTML = '<span data-i18n="common.copy">' + t('common.copy') + '</span>'; btn.classList.remove('ok'); }, 1500);
+            });
+        }
+
+        function randomPassword() {
+            const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+            const bytes = crypto.getRandomValues(new Uint8Array(16));
+            return Array.from(bytes, byte => alphabet[byte & 63]).join('');
+        }
+
+        function cpRandomPassword(btn) {
+            const code = btn.closest('.cmd-row').querySelector('.cmd-code');
+            const command = (code.dataset.copy || code.textContent).trim();
+            const password = randomPassword();
+            copyText(command.replaceAll(t('index.passwordPlaceholder'), password)).then(() => {
+                btn.innerHTML = icon('check');
+                btn.classList.add('ok');
+                setTimeout(() => {
+                    btn.innerHTML = '<span data-i18n="index.copyRandomPassword">' + t('index.copyRandomPassword') + '</span>';
+                    btn.classList.remove('ok');
+                }, 1500);
             });
         }
 
