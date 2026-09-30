@@ -71,6 +71,18 @@ Recommended phases:
 
 For a non-cgo default build, avoid mandatory Go bindings to FFmpeg, GStreamer, VAAPI, MediaFoundation, VideoToolbox, or NVENC. Also avoid making external encoder processes mandatory. If hardware encoding is desired later, expose it as an optional backend behind capability detection.
 
+### GPU client hardware encoder overrides
+
+The embedded desktop encoder in `clients/rdev-client-gpu/vendor/rdev-desktop` defaults to the driver-aware VAAPI rate control (`auto`, resolving to VBR/CBR) with a ~0.1 bit-per-pixel-per-frame bitrate, and falls back to CBR when a driver rejects the requested mode entirely. Runtime overrides:
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `RDEV_VAAPI_RC` | `auto` | Rate control mode: `auto`, `cbr`, `vbr`, `icq`, `qvbr`, `cqp` (case-insensitive; FFmpeg renamed the constants in v8) |
+| `RDEV_VAAPI_BIT_RATE` | `width * height * 6` | Target bitrate in bit/s for rate-based modes |
+| `RDEV_VAAPI_QP` | unset | Constant QP when `RDEV_VAAPI_RC=cqp` |
+| `RDEV_VAAPI_QUALITY` | unset | ICQ quality when `RDEV_VAAPI_RC=icq` |
+| `WEYLUS_VAAPI_DEVICE` / `WEYLUS_DRM_DEVICE` | auto-probe | DRM render node override for the VAAPI device and DRM-PRIME input |
+
 ## Implemented capture backends
 
 - **Windows Win32/GDI**: pure Go syscall backend, compatible with Windows 7 and newer. It supports all-screen, monitor, and visible-window capture. Input defaults to Win7-compatible mouse/keyboard APIs; Windows 8+ systems can additionally expose a Touch Injection backend at runtime.

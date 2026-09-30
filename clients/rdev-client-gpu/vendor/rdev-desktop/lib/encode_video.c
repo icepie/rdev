@@ -1,6 +1,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <unistd.h>
 #include <errno.h>
 
@@ -769,6 +770,86 @@ void scale_frame(ScaleContext* ctx, Error* err)
 	}
 }
 
+/*
+ * Returns 1 when the codec context is open successfully. On failure the codec
+ * context and scalers are released, but ownership of ctx->hw_device_ctx stays
+ * with the caller so a fallback attempt can reuse the same device.
+ */
+static int try_open_vaapi_encoder(
+	VideoContext* ctx,
+	const AVCodec* codec,
+	const char* rc_mode,
+	int qp,
+	int quality,
+	int64_t bit_rate,
+	int* open_ret)
+{
+	Error err = {0};
+	*open_ret = AVERROR_EXTERNAL;
+
+	ctx->c = avcodec_alloc_context3(codec);
+	if (!ctx->c)
+		return 0;
+
+	init_scalers(
+		&ctx->scalers,
+		ctx->width_in,
+		ctx->height_in,
+		ctx->width_out,
+		ctx->height_out,
+		AV_PIX_FMT_VAAPI,
+		AV_PIX_FMT_NV12,
+		ctx->hw_device_ctx,
+		&err);
+	if (err.code)
+	{
+		log_warn("Failed to initialize scaler: %s", err.error_str);
+		avcodec_free_context(&ctx->c);
+		return 0;
+	}
+
+	ctx->c->pix_fmt = AV_PIX_FMT_VAAPI;
+	ctx->c->hw_frames_ctx = ctx->scalers.hw_frames_ctx;
+	// "auto" keeps the codec's own driver-aware mode selection. The rc_mode
+	// constants are lowercase before FFmpeg 8 and uppercase since, so retry
+	// with the other case before giving up and staying on auto.
+	if (strcmp(rc_mode, "auto") != 0)
+	{
+		char upper[16];
+		size_t i;
+		for (i = 0; rc_mode[i] != '\0' && i < sizeof(upper) - 1; i++)
+			upper[i] = (char)((rc_mode[i] >= 'a' && rc_mode[i] <= 'z') ? rc_mode[i] - 32
+																	: rc_mode[i]);
+		upper[i] = '\0';
+		if (av_opt_set(ctx->c->priv_data, "rc_mode", rc_mode, 0) < 0
+			&& av_opt_set(ctx->c->priv_data, "rc_mode", upper, 0) < 0)
+			log_warn("VAAPI: unknown rc_mode '%s', using auto", rc_mode);
+	}
+	if (qp > 0)
+	{
+		char buf[16];
+		snprintf(buf, sizeof(buf), "%d", qp);
+		av_opt_set(ctx->c->priv_data, "qp", buf, 0);
+	}
+	if (quality > 0)
+	{
+		char buf[16];
+		snprintf(buf, sizeof(buf), "%d", quality);
+		av_opt_set(ctx->c->priv_data, "quality", buf, 0);
+	}
+	if (bit_rate > 0)
+		ctx->c->bit_rate = bit_rate;
+	set_codec_params(ctx);
+
+	*open_ret = avcodec_open2(ctx->c, codec, NULL);
+	if (*open_ret == 0)
+		return 1;
+
+	avcodec_free_context(&ctx->c);
+	destroy_scalers(&ctx->scalers);
+	return 0;
+}
+
 void open_video(VideoContext* ctx, Error* err)
 {
 	if (ctx->width_out <= 1 || ctx->height_out <= 1)
@@ -819,44 +900,44 @@ void open_video(VideoContext* ctx, Error* err)
 		codec = avcodec_find_encoder_by_name("h264_vaapi");
 		if (codec)
 		{
-			ctx->c = avcodec_alloc_context3(codec);
-			if (ctx->c)
-			{
-				Error err = {0};
-				init_scalers(
-					&ctx->scalers,
-					ctx->width_in,
-					ctx->height_in,
-					ctx->width_out,
-					ctx->height_out,
-					AV_PIX_FMT_VAAPI,
-					AV_PIX_FMT_NV12,
-					ctx->hw_device_ctx,
-					&err);
-				if (err.code)
-				{
-					log_warn("Failed to initialize scaler: %s", err.error_str);
-					avcodec_free_context(&ctx->c);
-				}
-				else
-				{
-					ctx->c->pix_fmt = AV_PIX_FMT_VAAPI;
-					ctx->c->hw_frames_ctx = ctx->scalers.hw_frames_ctx;
-					av_opt_set(ctx->c->priv_data, "quality", "7", 0);
-					av_opt_set(ctx->c->priv_data, "qp", "23", 0);
-					set_codec_params(ctx);
+			// Rate control defaults to the codec's driver-aware auto mode fed
+			// with a ~0.1 bit-per-pixel-per-frame bitrate (at 60 fps), which
+			// works across Intel and AMD drivers. Constant-quality is available
+			// via RDEV_VAAPI_RC=CQP + RDEV_VAAPI_QP (see options below); if a
+			// driver rejects the requested mode outright, retry once with CBR.
+			const char* rc_mode = env_or_default("RDEV_VAAPI_RC", "auto");
+			int qp = atoi(env_or_default("RDEV_VAAPI_QP", "0"));
+			int quality = atoi(env_or_default("RDEV_VAAPI_QUALITY", "0"));
+			int64_t bit_rate = atoll(env_or_default("RDEV_VAAPI_BIT_RATE", "0"));
+			if (bit_rate <= 0)
+				bit_rate = (int64_t)ctx->width_out * ctx->height_out * 6;
 
-					ret = avcodec_open2(ctx->c, codec, NULL);
-					if (ret == 0)
-						using_hw = 1;
-					else
-					{
-						log_warn("Could not open VAAPI codec: %s!", av_err2str(ret));
-						avcodec_free_context(&ctx->c);
-						av_buffer_unref(&ctx->hw_device_ctx);
-						destroy_scalers(&ctx->scalers);
-					}
+			if (try_open_vaapi_encoder(ctx, codec, rc_mode, qp, quality, bit_rate, &ret))
+			{
+				log_info(
+					"VAAPI encoder opened with rc_mode=%s bit_rate=%lld",
+					rc_mode,
+					(long long)bit_rate);
+				using_hw = 1;
+			}
+			else if (strcasecmp(rc_mode, "auto") != 0 && strcasecmp(rc_mode, "cbr") != 0)
+			{
+				log_warn(
+					"VAAPI rc_mode=%s unavailable (%s), retrying with CBR at %lld bit/s",
+					rc_mode,
+					av_err2str(ret),
+					(long long)bit_rate);
+				if (try_open_vaapi_encoder(ctx, codec, "cbr", 0, 0, bit_rate, &ret))
+				{
+					log_info("VAAPI encoder opened with rc_mode=cbr");
+					using_hw = 1;
 				}
+			}
+
+			if (!using_hw)
+			{
+				log_warn("Could not open VAAPI codec: %s!", av_err2str(ret));
+				av_buffer_unref(&ctx->hw_device_ctx);
 			}
 		}
 		else
