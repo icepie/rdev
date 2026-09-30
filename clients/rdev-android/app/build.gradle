@@ -2,7 +2,7 @@ plugins { id 'com.android.application' }
 
 android {
     namespace 'dev.icepie.rdev'
-    compileSdk 36
+    compileSdk 37
 
     defaultConfig {
         applicationId 'dev.icepie.rdev'
