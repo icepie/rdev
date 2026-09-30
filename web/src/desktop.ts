@@ -489,10 +489,10 @@ document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n
         gpuQueue = [];
         gpuSourceBuffer = null;
         if (gpuMediaSource && gpuMediaSource.readyState === 'open') {
-            try { gpuMediaSource.endOfStream(); } catch (_) {}
+            try { gpuMediaSource.endOfStream(); } catch {}
         }
         if (gpuVideoDecoder) {
-            try { gpuVideoDecoder.close(); } catch (_) {}
+            try { gpuVideoDecoder.close(); } catch {}
         }
         gpuVideoDecoder = null;
         gpuVideoMode = 'mse';
@@ -561,8 +561,12 @@ document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n
         gpuVideo.style.objectFit = fit;
         gpuCanvas.style.objectFit = fit;
     }
+    let gpuLastStatsAt = 0;
     function gpuUpdateFrameInfo() {
-        const elapsed = statsStartedAt ? Math.max(0.001, (performance.now() - statsStartedAt) / 1000) : 0;
+        const now = performance.now();
+        if (now - gpuLastStatsAt < 500) return;
+        gpuLastStatsAt = now;
+        const elapsed = statsStartedAt ? Math.max(0.001, (now - statsStartedAt) / 1000) : 0;
         const fps = elapsed ? (frameCount / elapsed).toFixed(1) : '0.0';
         const kbps = elapsed ? ((frameBytes * 8 / elapsed) / 1024).toFixed(0) : '0';
         const size = gpuVideoMode === 'webcodecs' ? `${gpuCanvas.width || 0}×${gpuCanvas.height || 0}` : (gpuVideo.videoWidth && gpuVideo.videoHeight ? `${gpuVideo.videoWidth}×${gpuVideo.videoHeight}` : 'video');
@@ -571,7 +575,21 @@ document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n
     }
     function gpuUpdateBuffer() {
         if (!gpuSourceBuffer || gpuSourceBuffer.updating || !gpuMediaSource || gpuMediaSource.readyState !== 'open' || gpuQueue.length === 0) return;
+        gpuTrimBuffer();
+        if (gpuSourceBuffer.updating) return;
         try { gpuSourceBuffer.appendBuffer(gpuQueue.shift()); } catch (err) { gpuQueue = []; setStatus(err.message || String(err), 'err'); }
+    }
+    // Long sessions would otherwise grow the buffered ranges without bound;
+    // keep a sliding window behind the playhead.
+    function gpuTrimBuffer() {
+        if (!gpuSourceBuffer || gpuSourceBuffer.updating || !gpuMediaSource || gpuMediaSource.readyState !== 'open') return;
+        const buffered = gpuSourceBuffer.buffered;
+        if (buffered.length === 0) return;
+        const start = buffered.start(0);
+        const removeUntil = gpuVideo.currentTime - 10;
+        if (removeUntil - start > 20) {
+            try { gpuSourceBuffer.remove(start, removeUntil); } catch {}
+        }
     }
     function gpuStartMedia() {
         const MS = window.ManagedMediaSource || window.MediaSource;
@@ -588,6 +606,9 @@ document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n
             let mime = 'video/mp4; codecs="avc1.4D403D"';
             if (!MS.isTypeSupported(mime)) mime = 'video/mp4';
             gpuSourceBuffer = gpuMediaSource.addSourceBuffer(mime);
+            // Sequence mode makes appends order-authoritative, which suits a
+            // live stream where we keep chasing the newest fragment.
+            try { gpuSourceBuffer.mode = 'sequence'; } catch {}
             gpuSourceBuffer.addEventListener('updateend', gpuUpdateBuffer);
         }, {once:true});
     }
@@ -620,7 +641,8 @@ document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n
             codec: config.codec || 'avc1.42E01F',
             codedWidth: config.width || 320,
             codedHeight: config.height || 640,
-            optimizeForLatency: true
+            optimizeForLatency: true,
+            hardwareAcceleration: 'prefer-hardware'
         });
         gpuNeedKeyFrame = true;
         setStatus(t('index.desktopReady'), 'ok');
@@ -727,13 +749,19 @@ document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n
                 frameCount++;
                 frameBytes += evt.data.byteLength || 0;
                 lastFrameAt = performance.now();
+                if (gpuQueue.length > 30) gpuQueue.splice(0, gpuQueue.length - 30);
                 gpuQueue.push(evt.data);
                 gpuUpdateBuffer();
                 gpuUpdateFrameInfo();
                 if (gpuVideo.seekable.length > 0) {
                     const end = gpuVideo.seekable.end(gpuVideo.seekable.length - 1);
-                    const readyState = gpuLowLatency.checked ? 3 : 4;
-                    if (Number.isFinite(end) && (gpuVideo.readyState >= readyState || end - gpuVideo.currentTime > 3)) gpuVideo.currentTime = end;
+                    if (Number.isFinite(end)) {
+                        // Chase the live edge while keeping a small playback
+                        // buffer; bounds latency even when decoding briefly
+                        // stalls and readyState drops.
+                        const keep = gpuLowLatency.checked ? 0.15 : 0.75;
+                        if (end - gpuVideo.currentTime > keep + 0.75) gpuVideo.currentTime = end - keep;
+                    }
                 }
                 return;
             }

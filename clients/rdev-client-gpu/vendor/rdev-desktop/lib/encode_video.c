@@ -861,7 +861,7 @@ void open_video(VideoContext* ctx, Error* err)
 			ctx->height_out);
 
 	const AVCodec* codec;
-	int ret;
+	int ret = 0;
 
 	avformat_alloc_output_context2(&ctx->oc, NULL, "mp4", NULL);
 	if (!ctx->oc)
@@ -1036,12 +1036,21 @@ void open_video(VideoContext* ctx, Error* err)
 				{
 					ctx->c->pix_fmt = AV_PIX_FMT_CUDA;
 					ctx->c->hw_frames_ctx = ctx->scalers.hw_frames_ctx;
-					av_opt_set(ctx->c->priv_data, "preset", "p1", 0);
+					// p1 is the fastest and lowest-quality preset; p4 keeps
+					// realtime performance with usable quality. VBR with a
+					// quality target suits desktop content; a plain CBR
+					// without a set bitrate used to fail the open entirely.
+					av_opt_set(ctx->c->priv_data, "preset", "p4", 0);
 					av_opt_set(ctx->c->priv_data, "zerolatency", "1", 0);
 					av_opt_set(ctx->c->priv_data, "tune", "ull", 0);
-					av_opt_set(ctx->c->priv_data, "rc", "cbr", 0);
-					av_opt_set(ctx->c->priv_data, "cq", "21", 0);
+					av_opt_set(ctx->c->priv_data, "rc", "vbr", 0);
+					av_opt_set(ctx->c->priv_data, "cq", "23", 0);
 					av_opt_set(ctx->c->priv_data, "delay", "0", 0);
+					// ~0.1 bit per pixel per frame at 60 fps, matching the
+					// VAAPI default; VBR still targets cq within this cap.
+					ctx->c->bit_rate =
+						(int64_t)ctx->width_out * ctx->height_out * 6;
+					ctx->c->rc_max_rate = ctx->c->bit_rate;
 					set_codec_params(ctx);
 
 					int ret = avcodec_open2(ctx->c, codec, NULL);
@@ -1173,7 +1182,10 @@ void open_video(VideoContext* ctx, Error* err)
 					ctx->c->pix_fmt = AV_PIX_FMT_YUV420P;
 					av_opt_set(ctx->c->priv_data, "realtime", "true", 0);
 					av_opt_set(ctx->c->priv_data, "allow_sw", "true", 0);
-					av_opt_set(ctx->c->priv_data, "profile", "extended", 0);
+					// High profile matches the avc1.4D403D codec string the web
+					// MSE/WebCodecs paths declare; "extended" (profile_idc 88)
+					// is 4:2:2-oriented and breaks browser playback.
+					av_opt_set(ctx->c->priv_data, "profile", "high", 0);
 					av_opt_set(ctx->c->priv_data, "level", "5.2", 0);
 					set_codec_params(ctx);
 					if (avcodec_open2(ctx->c, codec, NULL) == 0)
