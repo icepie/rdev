@@ -320,7 +320,7 @@ jobs:
           curl -fSL --retry 5 --retry-delay 10 -o /tmp/upx.tar.xz \
             "https://github.com/upx/upx/releases/download/v4.2.4/upx-4.2.4-${arch}_linux.tar.xz"
           tar xf /tmp/upx.tar.xz -C /tmp
-          sudo cp "/tmp/upx-4.2.4-${arch}/upx" /usr/local/bin/
+          sudo cp "/tmp/upx-4.2.4-${arch}_linux/upx" /usr/local/bin/
           upx --version | head -1
 
       - name: Cache Cargo
