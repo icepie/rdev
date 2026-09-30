@@ -125,7 +125,7 @@ pub fn check_and_apply(cfg: &Config) -> Result<bool> {
         return Ok(false);
     };
 
-    let latest = normalize_version(&release.version);
+    let latest = normalize_version(release.version());
     if latest.is_empty() || !newer_version(&latest, &current) {
         return Ok(false);
     }
@@ -138,27 +138,27 @@ pub fn check_and_apply(cfg: &Config) -> Result<bool> {
         )
     })?;
     let asset = release
-        .assets
+        .assets()
         .iter()
-        .find(|asset| asset.name == asset_name)
+        .find(|asset| asset.name() == asset_name)
         .ok_or_else(|| {
             anyhow!(
                 "release v{} asset {} not found",
-                release.version,
+                release.version(),
                 asset_name
             )
         })?;
 
     let tmp = TempDir::new().context("create updater temp dir")?;
-    let archive_path = tmp.path().join(&asset.name);
-    let download_url = github_download_url(&release.version, &asset.name);
+    let archive_path = tmp.path().join(asset.name());
+    let download_url = github_download_url(release.version(), asset.name());
     download_with_proxies(&download_url, &archive_path)
-        .with_context(|| format!("download release asset {}", asset.name))?;
+        .with_context(|| format!("download release asset {}", asset.name()))?;
 
-    let bin_path = PathBuf::from(package_dir_name(&asset.name)).join(binary_name());
+    let bin_path = PathBuf::from(package_dir_name(asset.name())).join(binary_name());
     Extract::from_source(&archive_path)
         .extract_file(tmp.path(), &bin_path)
-        .with_context(|| format!("extract {} from {}", bin_path.display(), asset.name))?;
+        .with_context(|| format!("extract {} from {}", bin_path.display(), asset.name()))?;
 
     let new_exe = tmp.path().join(&bin_path);
     self_replace::self_replace(&new_exe).context("replace current executable")?;
@@ -173,8 +173,8 @@ fn download_with_proxies(target: &str, archive_path: &Path) -> Result<()> {
         let mut file = File::create(archive_path)
             .with_context(|| format!("create {}", archive_path.display()))?;
         let mut download = Download::from_url(&url);
-        let _ = download.header("User-Agent", "rdev-auto-updater");
-        let _ = download.header("Accept", "application/octet-stream");
+        let _ = download.request_header("User-Agent", "rdev-auto-updater");
+        let _ = download.request_header("Accept", "application/octet-stream");
         if let Err(err) = download.download_to(&mut file) {
             last_err = Some(err);
             continue;
