@@ -2,14 +2,14 @@ plugins { id 'com.android.application' }
 
 android {
     namespace 'dev.icepie.rdev'
-    compileSdk 36
+    compileSdk 37
 
     defaultConfig {
         applicationId 'dev.icepie.rdev'
         minSdk 21
         targetSdk 33
-        versionCode 1
-        versionName '0.1.0'
+        versionCode 119
+        versionName '0.2.119'
     }
 
     packaging {
@@ -25,6 +25,6 @@ android {
 
 dependencies {
     implementation 'io.jpower.kcp:kcp-netty:1.5.2'
-    implementation 'com.squareup.okhttp3:okhttp:4.12.0'
+    implementation 'com.squareup.okhttp3:okhttp:5.5.0'
     testImplementation 'junit:junit:4.13.2'
 }
