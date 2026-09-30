@@ -155,6 +155,13 @@ jobs:
       - name: Install Android NDK
         run: sdkmanager "ndk;27.1.12297006"
 
+      - name: Install UPX
+        run: |
+          curl -fSL --retry 3 -o /tmp/upx.tar.xz \
+            "https://github.com/upx/upx/releases/download/v4.2.4/upx-4.2.4-amd64_linux.tar.xz"
+          tar xf /tmp/upx.tar.xz -C /tmp
+          sudo cp /tmp/upx-4.2.4-amd64_linux/upx /usr/local/bin/
+
       - name: Build Android client
         env:
           GOOS: android
@@ -166,6 +173,7 @@ jobs:
           export PATH="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH"
           if [ -n "${{ matrix.goarm }}" ]; then export GOARM="${{ matrix.goarm }}"; fi
           go build -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" -o rdev-client ./cmd/rdev-client
+          upx --best rdev-client || true
           file rdev-client
 
       - name: Upload artifact

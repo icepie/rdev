@@ -313,6 +313,16 @@ jobs:
         if: startsWith(matrix.target, 'x86_64-apple') || startsWith(matrix.target, 'aarch64-apple')
         run: brew install nasm yasm pkg-config
 
+      - name: Install UPX
+        if: runner.os == 'Linux'
+        run: |
+          arch=$(dpkg --print-architecture)
+          curl -fSL --retry 5 --retry-delay 10 -o /tmp/upx.tar.xz \
+            "https://github.com/upx/upx/releases/download/v4.2.4/upx-4.2.4-${arch}_linux.tar.xz"
+          tar xf /tmp/upx.tar.xz -C /tmp
+          sudo cp "/tmp/upx-4.2.4-${arch}/upx" /usr/local/bin/
+          upx --version | head -1
+
       - name: Cache Cargo
         uses: Swatinem/rust-cache@v2
         with:
@@ -427,6 +437,7 @@ jobs:
               found=1
               package_name="$(basename "$package_dir")"
               [ -s "$package_dir/VERSION.txt" ] || echo "rdev-client-gpu" > "$package_dir/VERSION.txt"
+              upx --best "$package_dir/rdev-client-gpu" || true
               tar -C dist -czf "dist/${package_name}.tar.gz" "$package_name"
             done
             [ "$found" = "1" ] || { echo "no Linux packages found for ${{ matrix.asset }}" >&2; exit 1; }
@@ -451,11 +462,13 @@ jobs:
             mkdir -p "dist/${{ matrix.asset }}"
             cp "target/${{ matrix.target }}/release/${{ matrix.artifact }}" "dist/${{ matrix.asset }}/rdev-client-gpu"
             chmod +x "dist/${{ matrix.asset }}/rdev-client-gpu"
+            upx --best "dist/${{ matrix.asset }}/rdev-client-gpu" || true
             echo "rdev-client-gpu ${GITHUB_REF_NAME}" > "dist/${{ matrix.asset }}/VERSION.txt"
             tar -C dist -czf "dist/${{ matrix.asset }}.tar.gz" "${{ matrix.asset }}"
           elif [[ "${{ matrix.target }}" == *windows* ]]; then
             mkdir -p "dist/${{ matrix.asset }}"
             cp "target/${{ matrix.target }}/release/${{ matrix.artifact }}" "dist/${{ matrix.asset }}/rdev-client-gpu.exe"
+            upx --best "dist/${{ matrix.asset }}/rdev-client-gpu.exe" || true
             case "${{ matrix.target }}" in
               aarch64-*) runtime_arch="aarch64" ;;
               *) runtime_arch="x86_64" ;;
