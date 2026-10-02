@@ -22,6 +22,8 @@ type desktopMsg struct {
 	Width           int                           `json:"width,omitempty"`
 	Height          int                           `json:"height,omitempty"`
 	Format          string                        `json:"format,omitempty"`
+	Codec           string                        `json:"codec,omitempty"`
+	Description     []byte                        `json:"description,omitempty"`
 	Mode            string                        `json:"mode,omitempty"`
 	Source          string                        `json:"source,omitempty"`
 	Quality         int                           `json:"quality,omitempty"`
@@ -199,6 +201,7 @@ func desktopRequestFromQuery(r *http.Request) protocol.Message {
 		Quality:      parseDesktopInt(q.Get("quality")),
 		Width:        parseDesktopInt(q.Get("width")),
 		Height:       parseDesktopInt(q.Get("height")),
+		Format:       q.Get("format"),
 		Source:       q.Get("source"),
 		InputBackend: q.Get("inputBackend"),
 		ShowCursor:   parseDesktopBool(q.Get("showCursor"), false),
@@ -236,6 +239,9 @@ func mergeDesktopRequest(base protocol.Message, msg desktopMsg) protocol.Message
 			base.ShowCursor = *msg.ShowCursor
 		}
 	}
+	if msg.Format != "" {
+		base.Format = msg.Format
+	}
 	return normalizeDesktopRequest(base)
 }
 
@@ -244,6 +250,11 @@ func defaultDesktopRequest() protocol.Message {
 }
 
 func normalizeDesktopRequest(request protocol.Message) protocol.Message {
+	switch request.Format {
+	case "h264", "mjpeg":
+	default:
+		request.Format = ""
+	}
 	if request.FPS <= 0 {
 		request.FPS = 4
 	}
@@ -359,6 +370,17 @@ func (bc *desktopBrowserConn) enqueueFrame(data []byte) {
 		return
 	}
 	frame := append([]byte(nil), data...)
+	// H.264 P-frames depend on every earlier frame. Dropping a queued H.264
+	// frame corrupts the decoder chain until the next IDR, unlike MJPEG where
+	// retaining only the latest image bounds latency safely.
+	if bc.request.Format == "h264" {
+		select {
+		case <-bc.done:
+			return
+		case bc.frameCh <- frame:
+		}
+		return
+	}
 	select {
 	case bc.frameCh <- frame:
 		return
@@ -533,8 +555,11 @@ func (s *Server) handleDesktopMessage(msg *protocol.Message) {
 		route.conn.inputMu.Lock()
 		route.conn.frameWidth = msg.Width
 		route.conn.frameHeight = msg.Height
+		if msg.Error == "" {
+			route.conn.request.Format = msg.Format
+		}
 		route.conn.inputMu.Unlock()
-		route.conn.writeJSON(desktopMsg{Op: op, Session: msg.SessionID, Width: msg.Width, Height: msg.Height, Format: msg.Format, Source: msg.Source, InputBackend: msg.InputBackend, Desktop: msg.DesktopCapabilities, Message: msg.Error})
+		route.conn.writeJSON(desktopMsg{Op: op, Session: msg.SessionID, Width: msg.Width, Height: msg.Height, Format: msg.Format, Codec: msg.Codec, Description: msg.Description, Source: msg.Source, FPS: msg.FPS, InputBackend: msg.InputBackend, Desktop: msg.DesktopCapabilities, Message: msg.Error})
 	case protocol.MsgDesktopClipboard:
 		if route.conn == nil {
 			return

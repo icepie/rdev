@@ -1,11 +1,13 @@
 package client
 
 import (
+	"bytes"
 	"encoding/base64"
 	"image"
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"rdev/internal/protocol"
 )
@@ -117,5 +119,83 @@ func TestValidateDesktopClipboardItemsRejectsInvalidPayloads(t *testing.T) {
 				t.Fatalf("error = %v, want containing %q", err, test.want)
 			}
 		})
+	}
+}
+
+type testDesktopEncoder struct {
+	format  string
+	encoded int
+}
+
+func (e *testDesktopEncoder) Format() string              { return e.format }
+func (e *testDesktopEncoder) CodecInfo() desktopCodecInfo { return desktopCodecInfo{} }
+func (e *testDesktopEncoder) Close()                      {}
+func (e *testDesktopEncoder) Encode(_ *image.RGBA, out *bytes.Buffer) error {
+	e.encoded++
+	out.WriteByte(byte(e.encoded))
+	return nil
+}
+
+func TestDesktopFrameSenderMJPEGSkipsUnchangedFramesAndResendsCachedPayload(t *testing.T) {
+	encoder := &testDesktopEncoder{format: desktopFormatMJPEG}
+	sender := newDesktopFrameSender(encoder)
+	frame := image.NewRGBA(image.Rect(0, 0, 2, 2))
+	now := time.Unix(100, 0)
+
+	payload, send, err := sender.tick(frame, now)
+	if err != nil || !send || !bytes.Equal(payload, []byte{1}) {
+		t.Fatalf("first tick = (%v, %t, %v), want encoded frame", payload, send, err)
+	}
+	if payload, send, err = sender.tick(frame, now.Add(time.Second)); err != nil || send || payload != nil {
+		t.Fatalf("unchanged tick = (%v, %t, %v), want skipped", payload, send, err)
+	}
+	payload, send, err = sender.tick(frame, now.Add(desktopIdleResendInterval))
+	if err != nil || !send || !bytes.Equal(payload, []byte{1}) || encoder.encoded != 1 {
+		t.Fatalf("idle resend = (%v, %t, %v), encodes=%d; want cached frame", payload, send, err, encoder.encoded)
+	}
+}
+
+func TestDesktopFrameSenderH264EncodesEveryFrame(t *testing.T) {
+	encoder := &testDesktopEncoder{format: desktopFormatH264}
+	sender := newDesktopFrameSender(encoder)
+	frame := image.NewRGBA(image.Rect(0, 0, 2, 2))
+	now := time.Unix(100, 0)
+	for i := 1; i <= 2; i++ {
+		payload, send, err := sender.tick(frame, now.Add(time.Duration(i)*time.Second))
+		if err != nil || !send || !bytes.Equal(payload, []byte{byte(i)}) {
+			t.Fatalf("tick %d = (%v, %t, %v), want newly encoded frame", i, payload, send, err)
+		}
+	}
+	if encoder.encoded != 2 {
+		t.Fatalf("H264 encoded %d frames, want 2", encoder.encoded)
+	}
+}
+
+func TestNormalizeH264FrameSizeRoundsDownWithoutExceedingLimit(t *testing.T) {
+	for _, test := range []struct {
+		width, height int
+		wantW, wantH  int
+	}{
+		{1600, 1000, 1600, 1000},
+		{1601, 1001, 1600, 1000},
+		{1, 1, 1, 1},
+	} {
+		gotW, gotH := normalizeH264FrameSize(test.width, test.height)
+		if gotW != test.wantW || gotH != test.wantH {
+			t.Fatalf("normalizeH264FrameSize(%d, %d) = %d, %d; want %d, %d", test.width, test.height, gotW, gotH, test.wantW, test.wantH)
+		}
+	}
+}
+
+func TestResizeDesktopFrameIntoReusesMatchingDestination(t *testing.T) {
+	source := image.NewRGBA(image.Rect(0, 0, 4, 4))
+	destination := image.NewRGBA(image.Rect(0, 0, 2, 2))
+	first, err := resizeDesktopFrameInto(destination, source, 2, 2)
+	if err != nil || first != destination {
+		t.Fatalf("first resize = (%p, %v), want provided buffer %p", first, err, destination)
+	}
+	second, err := resizeDesktopFrameInto(first, source, 2, 2)
+	if err != nil || second != destination {
+		t.Fatalf("second resize = (%p, %v), want reused buffer %p", second, err, destination)
 	}
 }

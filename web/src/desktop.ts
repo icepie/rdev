@@ -60,6 +60,7 @@ document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n
     let ws = null, drawing = false, pendingFrame = null, deviceCache = [], lastCloseMessage = '', connectionSeq = 0, connectionMode = '', manualDisconnect = false;
     let frameCount = 0, frameBytes = 0, statsStartedAt = 0, lastFrameAt = 0, currentSource = '', remoteInput = false, resizeTimer = null, reconnectTimer = null, lastMouseSent = 0, lastAdaptiveSize = null;
     let gpuReconnectDelay = 1000;
+    let h264Decoder = null, h264FrameIndex = 0, h264FrameDurationUs = 125000, h264NeedKeyframe = false, forcedFormat = null, videoFormat = '';
     let gpuMediaSource = null, gpuSourceBuffer = null, gpuQueue = [], gpuLastPointer = new Map(), gpuHeldKeys = new Map();
     let gpuVideoDecoder = null, gpuVideoMode = 'mse', gpuNeedKeyFrame = false;
     let controlPreferenceSet = false, clipboardCapabilities = null, clipboardPollTimer = null, clipboardSyncGeneration = 0, clipboardReadPending = false, clipboardLocalReadPending = false, clipboardLastLocalFingerprint = null, clipboardLastRemoteFingerprint = null, clipboardPendingRemoteFingerprint = null, gpuComposing = false, gpuIgnoreNextTextInput = false;
@@ -407,11 +408,12 @@ document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n
             height: manual ? clampInt(maxHeightInput.value, 240, 2160, 1000) : adaptive.height,
             inputBackend: inputBackendSelect.value || 'auto',
             showCursor: showCursorInput.checked,
+            format: forcedFormat || (typeof VideoDecoder === 'function' ? 'h264' : 'mjpeg'),
         };
     }
     function desktopQuery() {
         const opts = desktopOptions();
-        const q = new URLSearchParams({ device: deviceSelect.value, mode: opts.mode, source: opts.source, fps: String(opts.fps), quality: String(opts.quality), width: String(opts.width), height: String(opts.height), inputBackend: opts.inputBackend, showCursor: String(opts.showCursor) });
+        const q = new URLSearchParams({ device: deviceSelect.value, mode: opts.mode, source: opts.source, fps: String(opts.fps), quality: String(opts.quality), width: String(opts.width), height: String(opts.height), inputBackend: opts.inputBackend, showCursor: String(opts.showCursor), format: opts.format });
         return q.toString();
     }
     function authPayload() {
@@ -450,6 +452,74 @@ document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n
     function resetFrameStats() {
         frameCount = 0; frameBytes = 0; statsStartedAt = 0; lastFrameAt = 0; currentSource = ''; frameInfo.textContent = '';
     }
+    function closeH264Decoder() {
+        if (h264Decoder) {
+            try { h264Decoder.close(); } catch (e) { /* already closed */ }
+            h264Decoder = null;
+        }
+        videoFormat = '';
+        h264FrameIndex = 0;
+        h264NeedKeyframe = false;
+    }
+    function setupH264Decoder(msg) {
+        closeH264Decoder();
+        if (typeof VideoDecoder !== 'function' || !msg.codec || !msg.description) return false;
+        try {
+            const config = { codec: msg.codec, description: base64ToBytes(msg.description), optimizeForLatency: true };
+            const decoder = new VideoDecoder({
+                output: frame => {
+                    try {
+                        paintImage(frame, frame.displayWidth || frame.codedWidth, frame.displayHeight || frame.codedHeight);
+                    } finally {
+                        frame.close();
+                    }
+                },
+                error: e => { console.error('h264 decoder error', e); fallbackToMjpeg(); },
+            });
+            decoder.configure(config);
+            h264Decoder = decoder;
+            videoFormat = 'h264';
+            h264FrameIndex = 0;
+            h264NeedKeyframe = true;
+            h264FrameDurationUs = Math.max(1000, Math.round(1000000 / (msg.fps || 8)));
+            return true;
+        } catch (e) {
+            console.error('h264 configure failed', e);
+            return false;
+        }
+    }
+    function fallbackToMjpeg() {
+        if (forcedFormat === 'mjpeg') return;
+        forcedFormat = 'mjpeg';
+        pendingFrame = null;
+        closeH264Decoder();
+        const socket = ws;
+        if (!socket || socket.readyState !== WebSocket.OPEN) return;
+        clearTimeout(reconnectTimer);
+        reconnectTimer = setTimeout(() => {
+            if (ws === socket) connect(false);
+        }, 150);
+    }
+    function feedH264Frame(data) {
+        if (!h264Decoder || h264Decoder.state !== 'configured' || data.byteLength < 5) return false;
+        const keyframe = (new Uint8Array(data, 0, 1)[0] & 1) !== 0;
+        if (h264NeedKeyframe && !keyframe) return false;
+        const chunk = new Uint8Array(data, 1);
+        try {
+            h264Decoder.decode(new EncodedVideoChunk({
+                type: keyframe ? 'key' : 'delta',
+                timestamp: h264FrameIndex * h264FrameDurationUs,
+                data: chunk,
+            }));
+            h264NeedKeyframe = false;
+            h264FrameIndex++;
+            return true;
+        } catch (e) {
+            console.error('h264 decode feed failed', e);
+            fallbackToMjpeg();
+            return false;
+        }
+    }
     function formatBytes(bytes) {
         if (bytes >= 1024 * 1024) return (bytes / 1024 / 1024).toFixed(1) + ' MB';
         if (bytes >= 1024) return (bytes / 1024).toFixed(1) + ' KB';
@@ -483,7 +553,7 @@ document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n
         if (!ws) return;
         if (connectionMode === 'gpu') { gpuSendConfig(); return; }
         clearTimeout(reconnectTimer);
-        reconnectTimer = setTimeout(() => connect(), 150);
+        reconnectTimer = setTimeout(() => connect(false), 150);
     }
     function closeGPUVideo() {
         gpuQueue = [];
@@ -507,10 +577,10 @@ document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n
         manualDisconnect = true;
         connectionSeq++;
         clearTimeout(reconnectTimer);
-        if (ws) { ws.close(); ws = null; }
-        gpuReleaseKeyboard();
-        closeGPUVideo();
-        connectionMode = '';
+	        if (ws) { ws.close(); ws = null; }
+	        gpuReleaseKeyboard();
+	        closeH264Decoder();
+	        closeGPUVideo();
         remoteInput = false;
         stopClipboardSync();
         setClipboardCapabilities(null);
@@ -788,16 +858,18 @@ document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n
             }
         };
     }
-    async function connect() {
+    async function connect(resetFormat = true) {
         disconnect();
+        if (resetFormat) forcedFormat = null;
         manualDisconnect = false;
-        saveDesktopSettings();
         const device = deviceSelect.value;
         if (!device) return setStatus(t('common.noDevices'), 'err');
         const selectedDevice = deviceCache.find(d => d.id === device) || {};
         if (selectedDevice.gpuDesktop) return connectGPUDesktop(device);
+        connectionMode = 'desktop';
         const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
         remoteInput = false;
+        closeH264Decoder();
         resetFrameStats();
         ws = RDevUI.socket(`${proto}//${location.host}${authURL('/desktop?' + desktopQuery())}`);
         const connID = ++connectionSeq;
@@ -825,6 +897,7 @@ document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n
                 canvas.width = msg.width || 1; canvas.height = msg.height || 1;
                 canvas.style.display = 'block'; empty.style.display = 'none';
                 currentSource = msg.source || '';
+                if (msg.format === 'h264' && !setupH264Decoder(msg)) fallbackToMjpeg();
                 if (msg.inputBackend) inputBackendSelect.value = msg.inputBackend;
                 remoteInput = !!(msg.desktop && msg.desktop.input);
                 controlInput.disabled = !remoteInput;
@@ -853,7 +926,7 @@ document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n
                 setStatus(msg.message || t('common.error'), 'err');
             }
         };
-        ws.onclose = () => { if (connID !== connectionSeq) return; ws = null; stopClipboardSync(); setClipboardCapabilities(null); setStatus(lastCloseMessage || t('desktop.closed'), lastCloseMessage ? 'err' : 'warn'); };
+        ws.onclose = () => { if (connID !== connectionSeq) return; ws = null; stopClipboardSync(); setClipboardCapabilities(null); closeH264Decoder(); setStatus(lastCloseMessage || t('desktop.closed'), lastCloseMessage ? 'err' : 'warn'); };
     }
     function drawFrame(data) {
         pendingFrame = data;
@@ -861,26 +934,39 @@ document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n
         drawing = true;
         requestAnimationFrame(async () => {
             const frame = pendingFrame; pendingFrame = null;
+            const format = videoFormat;
             try {
-                const blob = new Blob([frame], {type:'image/jpeg'});
-                if (window.createImageBitmap) {
-                    try {
-                        const bitmap = await createImageBitmap(blob);
-                        paintImage(bitmap, bitmap.width, bitmap.height);
-                        bitmap.close && bitmap.close();
-                    } catch (e) {
-                        const img = await decodeImage(blob);
-                        paintImage(img, img.naturalWidth || img.width, img.naturalHeight || img.height);
+                if (format === 'h264') {
+                    if (feedH264Frame(frame)) {
+                        frameCount++;
+                        frameBytes += frame.byteLength || frame.size || 0;
+                        if (!statsStartedAt) statsStartedAt = performance.now();
+                        lastFrameAt = performance.now();
+                        updateFrameInfo();
                     }
                 } else {
-                    const img = await decodeImage(blob);
-                    paintImage(img, img.naturalWidth || img.width, img.naturalHeight || img.height);
+                    const blob = new Blob([frame], {type:'image/jpeg'});
+                    if (window.createImageBitmap) {
+                        try {
+                            const bitmap = await createImageBitmap(blob);
+                            if (videoFormat === format) paintImage(bitmap, bitmap.width, bitmap.height);
+                            bitmap.close && bitmap.close();
+                        } catch (e) {
+                            const img = await decodeImage(blob);
+                            if (videoFormat === format) paintImage(img, img.naturalWidth || img.width, img.naturalHeight || img.height);
+                        }
+                    } else {
+                        const img = await decodeImage(blob);
+                        if (videoFormat === format) paintImage(img, img.naturalWidth || img.width, img.naturalHeight || img.height);
+                    }
+                    if (videoFormat === format) {
+                        frameCount++;
+                        frameBytes += frame.byteLength || frame.size || 0;
+                        if (!statsStartedAt) statsStartedAt = performance.now();
+                        lastFrameAt = performance.now();
+                        updateFrameInfo();
+                    }
                 }
-                frameCount++;
-                frameBytes += frame.byteLength || frame.size || 0;
-                if (!statsStartedAt) statsStartedAt = performance.now();
-                lastFrameAt = performance.now();
-                updateFrameInfo();
             } catch (e) { console.error(e); }
             drawing = false;
             if (pendingFrame) drawFrame(pendingFrame);
@@ -1000,7 +1086,7 @@ document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n
             const next = adaptiveSize();
             if (lastAdaptiveSize && Math.abs(next.width - lastAdaptiveSize.width) < 64 && Math.abs(next.height - lastAdaptiveSize.height) < 64) return;
             lastAdaptiveSize = next;
-            connect();
+            connect(false);
         }, 300);
     }
     function saveScreenshot() {

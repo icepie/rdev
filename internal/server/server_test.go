@@ -99,6 +99,39 @@ func TestHandleReleaseDownloadRedirectsCachedChoice(t *testing.T) {
 		t.Fatalf("Location = %q, want %q", got, candidate)
 	}
 }
+
+func TestDesktopRequestNegotiatesKnownFormats(t *testing.T) {
+	request := desktopRequestFromQuery(httptest.NewRequest(http.MethodGet, "/desktop?format=h264", nil))
+	if request.Format != "h264" {
+		t.Fatalf("h264 request format = %q, want h264", request.Format)
+	}
+	request = desktopRequestFromQuery(httptest.NewRequest(http.MethodGet, "/desktop?format=unknown", nil))
+	if request.Format != "" {
+		t.Fatalf("unknown request format = %q, want MJPEG default marker", request.Format)
+	}
+}
+
+func TestVNCDesktopRequestForcesMJPEG(t *testing.T) {
+	s := NewServer()
+	s.vncSettings["device"] = protocol.Message{Format: "h264", FPS: 8, Quality: 60, Width: 1280, Height: 720}
+	request := s.vncDesktopRequest("device")
+	if request.Format != "mjpeg" {
+		t.Fatalf("VNC request format = %q, want mjpeg", request.Format)
+	}
+}
+
+func TestDesktopH264QueueRetainsDependentFrames(t *testing.T) {
+	bc := &desktopBrowserConn{request: protocol.Message{Format: "h264"}, frameCh: make(chan []byte, 4), done: make(chan struct{})}
+	bc.enqueueFrame([]byte{1})
+	bc.enqueueFrame([]byte{2})
+	if first := <-bc.frameCh; !bytes.Equal(first, []byte{1}) {
+		t.Fatalf("first H264 frame = %v, want [1]", first)
+	}
+	if second := <-bc.frameCh; !bytes.Equal(second, []byte{2}) {
+		t.Fatalf("second H264 frame = %v, want [2]", second)
+	}
+}
+
 func TestRegisterClientReplacesSameInstanceReconnect(t *testing.T) {
 	s := NewServer()
 	oldConn := &gws.Conn{}

@@ -126,10 +126,12 @@ func (s *Server) vncDesktopRequest(deviceID string) protocol.Message {
 	s.vncMu.RLock()
 	request, ok := s.vncSettings[deviceID]
 	s.vncMu.RUnlock()
-	if ok {
-		return normalizeDesktopRequest(request)
+	if !ok {
+		request = defaultVNCDesktopRequest()
 	}
-	return defaultVNCDesktopRequest()
+	// VNC bridges decode full-frame JPEG only; always request MJPEG.
+	request.Format = "mjpeg"
+	return normalizeDesktopRequest(request)
 }
 
 func (s *Server) updateVNCDesktopRequest(deviceID string, request protocol.Message) bool {

@@ -9,6 +9,8 @@ This document describes a cross-platform remote desktop feature for RDev. It is 
 - Capture source selection now supports Auto, all screens, individual monitors, and visible windows on Windows GDI and Linux X11; Linux framebuffer exposes framebuffer screen sources; Linux DRM/KMS exposes active scanout screen/connector sources when available. Legacy `primary`/`virtual` source IDs are accepted only for compatibility and are not shown in the UI.
 - Phase 3 input control is implemented for Windows Win32 mouse/keyboard, optional Windows Touch Injection when available, Linux X11/XTEST mouse/keyboard, optional Linux uinput mouse/keyboard/touch/pen, and macOS Quartz mouse/keyboard through no-cgo dynamic CoreGraphics calls. Wayland portal input and macOS touch/pen semantics remain planned and are not advertised as available in the default no-cgo build.
 - The default stream is JPEG frames over binary WebSocket frames, rendered on a browser Canvas; this is effectively an MJPEG-style transport over the existing relay.
+- Browsers with WebCodecs request an optional H.264/AVCC stream. When the client can runtime-load a user-installed `libx264` shared library, it encodes Baseline H.264 and the browser decodes it with `VideoDecoder`; unavailable libraries, unsupported decoders, and decoder failures fall back to MJPEG. H.264 output dimensions are rounded down to even values because its I420 input requires 4:2:0 chroma pairs.
+- `libx264` is GPL-2.0-only. RDev does not bundle, download, or require it; deployment operators must install it themselves and ensure their own distribution complies with its license. The base Go client remains `CGO_ENABLED=0`.
 - Browser auto mode requests an adaptive resolution based on viewport size and device pixel ratio; manual mode keeps explicit FPS/quality/max-size controls.
 - Capability discovery is intentionally non-invasive: clients enumerate metadata and sources with lightweight OS APIs/ioctls, but they do not start capture, export PRIME buffers, mmap framebuffer memory, or inject input during registration. Expensive or stateful operations happen only after an authenticated `desktop_start` selects a source.
 - Linux Wayland reports the native `wayland-portal` backend as planned and never shells out to `grim`/`slurp`; root/no-display sessions can fall back to `drm-kms` when active linear scanout metadata is visible, otherwise to `fbdev` when a readable, unblanked framebuffer is present.
@@ -52,9 +54,9 @@ The server should remain a relay and policy point. The device client owns screen
 
 Add a new logical channel family alongside terminal, file, and TCP forwarding:
 
-- `desktop_start`: server asks a device to start a desktop session with source/FPS/quality/max-size settings. Source IDs are structured as `screen:all`, `monitor:<id>`, `window:<id>`, or `fbdev:<path>`; `auto` chooses the best default.
-- `desktop_ready`: device reports supported capture backends, input backends (`inputBackends`), detailed input options (`inputOptions` with `kinds`, `requires`, and `reason`), sources, pixel format, dimensions, and permissions.
-- `desktop_frame`: device sends encoded JPEG frame bytes as `BinDesktopFrame` binary WebSocket frames.
+- `desktop_start`: server asks a device to start a desktop session with source/FPS/quality/max-size and requested `format` (`h264` or `mjpeg`). Source IDs are structured as `screen:all`, `monitor:<id>`, `window:<id>`, or `fbdev:<path>`; `auto` chooses the best default.
+- `desktop_ready`: device reports supported capture backends, input backends (`inputBackends`), detailed input options (`inputOptions` with `kinds`, `requires`, and `reason`), sources, dimensions, and the selected stream `format`. H.264 readiness includes the WebCodecs codec string and base64 AVCC decoder description.
+- `desktop_frame`: device sends either encoded JPEG bytes or an H.264 access unit as `BinDesktopFrame` binary WebSocket frames. H.264 payloads begin with a one-byte keyframe flag followed by AVCC 4-byte-length-prefixed NAL units.
 - `desktop_input`: browser sends normalized pointer and keyboard events through the server to the device, including `pointerType` (`mouse`, `touch`, `pen`), `pointerId`, `pressure`, and the selected `inputBackend`.
 - `desktop_close`: either side closes the desktop session.
 
@@ -64,10 +66,11 @@ Use binary frames for high-volume data. Keep JSON text frames for metadata and c
 
 Recommended phases:
 
-1. **MVP MJPEG/JPEG stream**: simple, debuggable, works with pure Go image encoders, acceptable for low-FPS support sessions. This is the current default.
-2. **Tile diffing / dirty regions**: keep JPEG/PNG compatibility while avoiding full-frame uploads when only small regions change.
-3. **WASM codec in browser**: decode optimized delta/tile stream in browser without server CPU cost.
-4. **WebCodecs/WebRTC optional path**: use browser hardware decode where available and fall back to the WASM/tile path.
+1. **MVP MJPEG/JPEG stream**: simple, debuggable, works with pure Go image encoders, acceptable for low-FPS support sessions. This remains the universal fallback.
+2. **Optional libx264 H.264 stream**: browser WebCodecs clients request `h264`; the device runtime-loads a locally installed `libx264` through purego, produces AVCC Baseline H.264, and falls back to MJPEG if either side cannot support the path. VNC always requests MJPEG because its bridge decodes JPEG frames.
+3. **Tile diffing / dirty regions**: keep JPEG/PNG compatibility while avoiding full-frame uploads when only small regions change.
+4. **WASM codec in browser**: decode optimized delta/tile stream in browser without server CPU cost.
+5. **WebRTC optional path**: use browser hardware decode where available and fall back to the MJPEG path.
 
 For a non-cgo default build, avoid mandatory Go bindings to FFmpeg, GStreamer, VAAPI, MediaFoundation, VideoToolbox, or NVENC. Also avoid making external encoder processes mandatory. If hardware encoding is desired later, expose it as an optional backend behind capability detection.
 

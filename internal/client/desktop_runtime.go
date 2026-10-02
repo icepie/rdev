@@ -1,12 +1,10 @@
 package client
 
 import (
-	"bytes"
 	"encoding/base64"
+	"errors"
 	"fmt"
-	"hash/crc32"
 	"image"
-	"image/jpeg"
 	"log"
 	"runtime"
 	"sync"
@@ -159,6 +157,9 @@ func (c *Client) handleDesktopStart(msg *protocol.Message) {
 	caps.Clipboard = session.clipboard != nil
 	caps.Reason = ""
 	size := scaledDimension(bounds.Dx(), bounds.Dy(), msg.Width, msg.Height)
+	if normalizeDesktopFormat(msg.Format) == desktopFormatH264 {
+		size.X, size.Y = normalizeH264FrameSize(size.X, size.Y)
+	}
 	session.setFrame(bounds, size.X, size.Y)
 	sourceID := desktopSourceLabel(msg.Source)
 	if reporter, ok := capturer.(desktopSourceReporter); ok {
@@ -166,16 +167,6 @@ func (c *Client) handleDesktopStart(msg *protocol.Message) {
 			sourceID = source.ID
 		}
 	}
-	c.send(&protocol.Message{
-		Type:                protocol.MsgDesktopReady,
-		SessionID:           msg.SessionID,
-		DesktopCapabilities: caps,
-		Width:               size.X,
-		Height:              size.Y,
-		Format:              "jpeg",
-		Source:              sourceID,
-		InputBackend:        inputBackend,
-	})
 
 	fps := msg.FPS
 	if fps <= 0 {
@@ -195,15 +186,35 @@ func (c *Client) handleDesktopStart(msg *protocol.Message) {
 		quality = 20
 	}
 
-	var lastChecksum uint32
-	lastSent := time.Now().Add(-time.Hour)
-	encodeBuf := bytes.NewBuffer(make([]byte, 0, 512*1024))
 	sourceName := desktopSourceLabel(msg.Source)
 	if reporter, ok := capturer.(desktopSourceReporter); ok {
 		if source := reporter.Source(); source.ID != "" {
 			sourceName = source.ID
 		}
 	}
+	requestedFormat := normalizeDesktopFormat(msg.Format)
+	encoder := newDesktopEncoder(requestedFormat, size.X, size.Y, quality, fps)
+	defer encoder.Close()
+	codecInfo := encoder.CodecInfo()
+	format := encoder.Format()
+	if requestedFormat == desktopFormatH264 && format != desktopFormatH264 {
+		log.Printf("desktop h264 encoder unavailable for source %s, falling back to mjpeg", sourceName)
+	}
+	c.send(&protocol.Message{
+		Type:                protocol.MsgDesktopReady,
+		SessionID:           msg.SessionID,
+		DesktopCapabilities: caps,
+		Width:               size.X,
+		Height:              size.Y,
+		Format:              format,
+		Codec:               codecInfo.Codec,
+		Description:         codecInfo.Description,
+		Source:              sourceID,
+		FPS:                 fps,
+		InputBackend:        inputBackend,
+	})
+	sender := newDesktopFrameSender(encoder)
+	var frameScratch *image.RGBA
 	ticker := time.NewTicker(time.Second / time.Duration(fps))
 	defer ticker.Stop()
 	for {
@@ -218,33 +229,42 @@ func (c *Client) handleDesktopStart(msg *protocol.Message) {
 				c.send(&protocol.Message{Type: protocol.MsgDesktopClose, SessionID: msg.SessionID, Error: err.Error()})
 				return
 			}
-			frame := resizeDesktopFrame(img, msg.Width, msg.Height)
+			frame, err := resizeDesktopFrameInto(frameScratch, img, size.X, size.Y)
+			if err != nil && !errors.Is(err, errResizeNoPixels) {
+				log.Printf("desktop resize error for source %s: %v", sourceName, err)
+				continue
+			}
+			// Keep the scratch buffer only when the helper allocated it;
+			// the zero-copy path returns the capturer's own image.
+			if frame != img {
+				frameScratch = frame
+			}
+			if err != nil {
+				continue
+			}
 			bounds := capturer.Bounds()
 			if msg.ShowCursor {
 				if cursor, ok := desktopCursorPosition(session, capturer); ok {
 					overlayDesktopCursor(frame, bounds, cursor)
 				}
 			}
-			session.setFrame(bounds, frame.Bounds().Dx(), frame.Bounds().Dy())
-			checksum := crc32.ChecksumIEEE(frame.Pix)
-			if checksum == lastChecksum && time.Since(lastSent) < 2*time.Second {
-				continue
-			}
-			lastChecksum = checksum
-			encodeBuf.Reset()
-			if err := jpeg.Encode(encodeBuf, frame, &jpeg.Options{Quality: quality}); err != nil {
+			session.setFrame(bounds, size.X, size.Y)
+			payload, send, err := sender.tick(frame, time.Now())
+			if err != nil {
 				log.Printf("desktop encode error for source %s: %v", sourceName, err)
 				continue
 			}
+			if !send {
+				continue
+			}
 			started := time.Now()
-			if err := c.sendBinary(protocol.BinDesktopFrame, msg.SessionID, encodeBuf.Bytes()); err != nil {
-				log.Printf("desktop frame send error for source %s: %v", sourceName, err)
+			if err := c.sendBinary(protocol.BinDesktopFrame, msg.SessionID, payload); err != nil {
+				log.Printf("desktop frame send error for source %s: %s", sourceName, err)
 				return
 			}
 			if elapsed := time.Since(started); elapsed > time.Second {
 				log.Printf("desktop frame send slow for source %s: %s", sourceName, elapsed)
 			}
-			lastSent = time.Now()
 		}
 	}
 }
@@ -254,51 +274,6 @@ func desktopSourceLabel(source string) string {
 		return "auto"
 	}
 	return source
-}
-
-func resizeDesktopFrame(img image.Image, maxWidth, maxHeight int) *image.RGBA {
-	bounds := img.Bounds()
-	sourceWidth := bounds.Dx()
-	sourceHeight := bounds.Dy()
-	size := scaledDimension(sourceWidth, sourceHeight, maxWidth, maxHeight)
-	if sourceWidth == size.X && sourceHeight == size.Y {
-		if src, ok := img.(*image.RGBA); ok && bounds.Min.X == 0 && bounds.Min.Y == 0 {
-			return src
-		}
-	}
-	dst := image.NewRGBA(image.Rect(0, 0, size.X, size.Y))
-	if sourceWidth <= 0 || sourceHeight <= 0 || size.X <= 0 || size.Y <= 0 {
-		return dst
-	}
-	if src, ok := img.(*image.RGBA); ok {
-		parallelDesktopRows(size.X, size.Y, func(y0, y1 int) {
-			for y := y0; y < y1; y++ {
-				sourceY := bounds.Min.Y + y*sourceHeight/size.Y
-				for x := 0; x < size.X; x++ {
-					sourceX := bounds.Min.X + x*sourceWidth/size.X
-					sourceOffset := src.PixOffset(sourceX, sourceY)
-					destOffset := dst.PixOffset(x, y)
-					copy(dst.Pix[destOffset:destOffset+4], src.Pix[sourceOffset:sourceOffset+4])
-				}
-			}
-		})
-		return dst
-	}
-	parallelDesktopRows(size.X, size.Y, func(y0, y1 int) {
-		for y := y0; y < y1; y++ {
-			sourceY := bounds.Min.Y + y*sourceHeight/size.Y
-			for x := 0; x < size.X; x++ {
-				sourceX := bounds.Min.X + x*sourceWidth/size.X
-				r, g, b, a := img.At(sourceX, sourceY).RGBA()
-				offset := dst.PixOffset(x, y)
-				dst.Pix[offset+0] = byte(r >> 8)
-				dst.Pix[offset+1] = byte(g >> 8)
-				dst.Pix[offset+2] = byte(b >> 8)
-				dst.Pix[offset+3] = byte(a >> 8)
-			}
-		}
-	})
-	return dst
 }
 
 func scaledDimension(sourceWidth, sourceHeight, maxWidth, maxHeight int) image.Point {
