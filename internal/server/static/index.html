@@ -43,6 +43,7 @@
                 <h3 class="icon-inline"><span data-icon="rocket"></span><span data-i18n="index.installTitle">一键启动客户端</span></h3>
                 <div class="client-switch" aria-label="Client flavor">
                     <button type="button" class="client-tag active" data-client="go" onclick="setClientFlavor('go')" data-i18n="index.clientCompat">兼容版(go)</button>
+                    <button type="button" class="client-tag" data-client="cgo" onclick="setClientFlavor('cgo')" data-i18n="index.clientFeature">特性版(cgo)</button>
                     <button type="button" class="client-tag" data-client="rs" onclick="setClientFlavor('rs')" data-i18n="index.clientPerf">性能版(rs)</button>
                 </div>
             </div>
@@ -241,13 +242,13 @@
                 setCmdCode(el, el.dataset.tpl
                     .replace(/\{\{WS\}\}/g, WS).replace(/\{\{HTTP\}\}/g, HTTP).replace(/\{\{SERVER\}\}/g, serverList())
                     .replace(/\{\{H\}\}/g, H).replace(/\{\{SP\}\}/g, SP).replace(/\{\{VP\}\}/g, VP || t('index.vncUnavailable'))
-                    .replace(/\{\{CLIENT_ARG\}\}/g, clientFlavor === 'rs' ? ' --client rs' : '')
-                    .replace(/\{\{CLIENT_PS_ARG\}\}/g, clientFlavor === 'rs' ? ' -Client rs' : '')
+                    .replace(/\{\{CLIENT_ARG\}\}/g, clientFlavor === 'go' ? '' : ' --client ' + clientFlavor)
+                    .replace(/\{\{CLIENT_PS_ARG\}\}/g, clientFlavor === 'go' ? '' : ' -Client ' + clientFlavor)
                     .replace(/\{\{PW\}\}/g, passwordPlaceholder));
             });
             // Win7/8 PS2.0 commands (nested quotes break data-tpl, render via JS)
             const el = id => document.getElementById(id);
-            const clientPSArg = clientFlavor === 'rs' ? ' -Client rs' : '';
+            const clientPSArg = clientFlavor === 'go' ? '' : ' -Client ' + clientFlavor;
             if (el('c-w7-pw'))   setCmdCode(el('c-w7-pw'), `[Net.ServicePointManager]::SecurityProtocol=[Enum]::ToObject([Net.SecurityProtocolType],3072); $wc=New-Object Net.WebClient; $wc.DownloadString('${HTTP}${H}/run.ps1') | iex; RDev '${serverList()}' -Password ${passwordPlaceholder}${clientPSArg}`);
             if (el('c-w7-open')) setCmdCode(el('c-w7-open'), `[Net.ServicePointManager]::SecurityProtocol=[Enum]::ToObject([Net.SecurityProtocolType],3072); $wc=New-Object Net.WebClient; $wc.DownloadString('${HTTP}${H}/run.ps1') | iex; RDev '${serverList()}'${clientPSArg}`);
             document.querySelectorAll('[data-vnc-only]').forEach(el => { el.style.display = VP ? '' : 'none'; });
@@ -296,7 +297,7 @@
         }
 
         function setClientFlavor(flavor) {
-            clientFlavor = flavor === 'rs' ? 'rs' : 'go';
+            clientFlavor = flavor === 'rs' || flavor === 'cgo' ? flavor : 'go';
             document.querySelectorAll('.client-tag').forEach(btn => btn.classList.toggle('active', btn.dataset.client === clientFlavor));
             render();
         }

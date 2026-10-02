@@ -6,6 +6,7 @@
 # Usage:
 #   curl -sL http://SERVER:PORT/run.sh | sh -s -- ws://SERVER:PORT
 #   curl -sL http://SERVER:PORT/run.sh | sh -s -- ws://SERVER:PORT --client rs
+#   curl -sL http://SERVER:PORT/run.sh | sh -s -- ws://SERVER:PORT --client cgo
 #   wget -qO- http://SERVER:PORT/run.sh | sh -s -- ws://SERVER:PORT
 
 set -e
@@ -36,12 +37,13 @@ while [ $# -gt 0 ]; do
         --client)      RDEV_CLIENT="$2"; shift 2 ;;
         --go)          RDEV_CLIENT="go"; shift ;;
         --rs)          RDEV_CLIENT="rs"; shift ;;
+        --cgo)         RDEV_CLIENT="cgo"; shift ;;
         --no-mirror)   MIRRORS=""; shift ;;
         -h|--help)
             echo "Usage: sh run.sh SERVER_URL [options]"
             echo ""
             echo "  Downloads a client to /tmp and runs it directly."
-            echo "  Default client is compatible Go; use --client rs for performance Rust."
+            echo "  Default client is compatible Go; use --client rs for performance Rust, --client cgo for feature x264 H.264."
             echo "  No installation or root required."
             echo ""
             echo "Options:"
@@ -51,14 +53,15 @@ while [ $# -gt 0 ]; do
             echo "  -S, --shell PATH     Shell path (e.g. /bin/bash)"
             echo "  --ssh-port PORT      Server SSH port hint (Go client only)"
             echo "  -v, --version VER    Client version (default: latest)"
-            echo "  --client go|rs       Client flavor: compatible Go or performance Rust"
-            echo "  --go, --rs           Shorthand for --client go|rs"
+            echo "  --client go|rs|cgo   Client flavor: compatible Go, performance Rust, or feature cgo (x264 H.264, GPL-2.0-only)"
+            echo "  --go, --rs, --cgo    Shorthand for --client go|rs|cgo"
             echo "  --no-mirror          Skip CN mirrors (server proxy is still tried first)"
             echo ""
             echo "Examples:"
             echo "  curl -sL http://SERVER/run.sh | sh -s -- ws://SERVER:8080"
             echo "  curl -sL http://SERVER/run.sh | sh -s -- ws://SERVER:8080 -i my-pc -p secret"
             echo "  curl -sL http://SERVER/run.sh | sh -s -- ws://SERVER:8080 --client rs"
+            echo "  curl -sL http://SERVER/run.sh | sh -s -- ws://SERVER:8080 --client cgo"
             exit 0 ;;
         ws://*|wss://*|tcp://*|kcp://*|udp://*) RDEV_SERVER="$1"; shift ;;
         http://*|https://*) RDEV_SERVER="$1"; shift ;;
@@ -69,7 +72,8 @@ done
 case "$RDEV_CLIENT" in
     go|GO|Go) RDEV_CLIENT="go" ;;
     rs|RS|Rust|rust) RDEV_CLIENT="rs" ;;
-    *) echo "Error: unsupported client: $RDEV_CLIENT (expected go or rs)" >&2; exit 1 ;;
+    cgo|CGO|Cgo) RDEV_CLIENT="cgo" ;;
+    *) echo "Error: unsupported client: $RDEV_CLIENT (expected go, rs, or cgo)" >&2; exit 1 ;;
 esac
 
 if [ -z "$RDEV_SERVER" ]; then
@@ -462,25 +466,38 @@ if [ "$RDEV_CLIENT" = "rs" ]; then
     fi
 else
     ASSET_ARCH="$ARCH"
-    if [ "$OS" = "android" ]; then
-        case "$ARCH" in
-            amd64|arm64|armv7) ;;
-            386) ASSET_ARCH="x86" ;;
-            *) echo "Error: compatible Go client is not published for ${OS}/${ARCH}" >&2; exit 1 ;;
+    if [ "$RDEV_CLIENT" = "cgo" ]; then
+        case "$OS/$ARCH" in
+            linux/amd64|linux/arm64|darwin/arm64|windows/amd64|windows/386|windows/arm64) ;;
+            *) echo "Error: feature cgo client is not published for ${OS}/${ARCH}; use --client go or --client rs" >&2; exit 1 ;;
         esac
+        CLIENT_LABEL="rdev-client-cgo"
+        DOWNLOAD_NAME="rdev-client-cgo"
+        BINARY="rdev-client-cgo-${OS}-${ASSET_ARCH}"
+        FLAVOR_KEY="cgo"
+    else
+        if [ "$OS" = "android" ]; then
+            case "$ARCH" in
+                amd64|arm64|armv7) ;;
+                386) ASSET_ARCH="x86" ;;
+                *) echo "Error: compatible Go client is not published for ${OS}/${ARCH}" >&2; exit 1 ;;
+            esac
+        fi
+        DOWNLOAD_NAME="rdev-client"
+        BINARY="rdev-client-${OS}-${ASSET_ARCH}"
+        FLAVOR_KEY="go"
     fi
-    BINARY="rdev-client-${OS}-${ASSET_ARCH}"
     [ "$OS" = "windows" ] && BINARY="${BINARY}.exe"
     GH_URL="$(release_url "$BINARY")"
-    CACHE_KEY="go-${SAFE_TAG}-${OS}-${ASSET_ARCH}-$(safe_name "$BINARY")"
+    CACHE_KEY="${FLAVOR_KEY}-${SAFE_TAG}-${OS}-${ASSET_ARCH}-$(safe_name "$BINARY")"
     CACHE_DIR="$CACHE_BASE/$CACHE_KEY"
     CACHE_BIN="$CACHE_DIR/$BINARY"
     if cache_complete "$CACHE_BIN" "$CACHE_DIR"; then
         RUN_BIN="$CACHE_BIN"
-        echo "  Using cached rdev-client (${RESOLVED_TAG}, ${OS}/${ARCH})." >&2
+        echo "  Using cached ${DOWNLOAD_NAME} (${RESOLVED_TAG}, ${OS}/${ARCH})." >&2
     else
-    RUN_BIN="$TMPBASE/rdev-client-${SAFE_TAG}-${OS}-${ASSET_ARCH}-$$"
-    echo "  Downloading rdev-client (${OS}/${ARCH})..." >&2
+    RUN_BIN="$TMPBASE/${DOWNLOAD_NAME}-${SAFE_TAG}-${OS}-${ASSET_ARCH}-$$"
+    echo "  Downloading ${DOWNLOAD_NAME} (${OS}/${ARCH})..." >&2
     if ! download_with_fallback "$GH_URL" "$RUN_BIN" "$BINARY"; then
         echo "Error: download failed" >&2
         rm -f "$RUN_BIN" 2>/dev/null

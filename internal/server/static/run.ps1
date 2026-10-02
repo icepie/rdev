@@ -309,7 +309,7 @@ function global:RDev {
     Client version to download (default: latest)
 
     .PARAMETER Client
-    Client flavor: go compatible client or rs performance client (default: go)
+    Client flavor: go compatible client, rs performance client, or cgo feature client (default: go)
 
     .PARAMETER Mirror
     Download mirror: auto|none|host (default: auto)
@@ -324,7 +324,7 @@ function global:RDev {
         [string]$Shell = '',
         [string]$SshPort = '',
         [string]$Version = '',
-        [ValidateSet('go','rs')]
+        [ValidateSet('go','rs','cgo')]
         [string]$Client = 'go',
         [string]$Mirror = 'auto'
     )
@@ -380,6 +380,9 @@ function global:RDev {
             $Asset = 'rdev-client-gpu-windows-amd64.zip'
         }
         $PackageKind = 'zip'
+    } elseif ($Client -eq 'cgo') {
+        $Asset = "rdev-client-cgo-windows-$Arch.exe"
+        $PackageKind = 'exe'
     } else {
         $Asset = "rdev-client-windows-$Arch.exe"
         $PackageKind = 'exe'
@@ -401,13 +404,17 @@ function global:RDev {
     }
 
     # ── Download (RDev server proxy → mirror → github) ───────
-    if ($PackageKind -eq 'zip') { $OutPath = Join-Path $env:TEMP "rdev-client-gpu-$SafeTag-windows-$Arch.zip" } else { $OutPath = Join-Path $env:TEMP "rdev-client-$SafeTag-windows-$Arch.exe" }
+    if ($PackageKind -eq 'zip') { $OutPath = Join-Path $env:TEMP "rdev-client-gpu-$SafeTag-windows-$Arch.zip" } else { $OutPath = Join-Path $env:TEMP "$SafeTag-$Asset" }
     $OK = $false
 
     if ($Client -eq 'rs') {
         $ClientName = 'rdev-client-gpu'
         $CacheKey = "rs-$SafeTag-windows-$Arch-$(Convert-RDevSafeName $Asset)"
         $CacheRunName = 'rdev-client-gpu.exe'
+    } elseif ($Client -eq 'cgo') {
+        $ClientName = 'rdev-client-cgo'
+        $CacheKey = "cgo-$SafeTag-windows-$Arch-$(Convert-RDevSafeName $Asset)"
+        $CacheRunName = $Asset
     } else {
         $ClientName = 'rdev-client'
         $CacheKey = "go-$SafeTag-windows-$Arch-$(Convert-RDevSafeName $Asset)"
