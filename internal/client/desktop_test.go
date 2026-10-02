@@ -216,15 +216,43 @@ func TestAnnexBToAVCCRejectsDataWithoutStartCode(t *testing.T) {
 	}
 }
 
-func TestResizeDesktopFrameIntoReusesMatchingDestination(t *testing.T) {
+func TestResizeDesktopFrameToSizeReusesMatchingDestination(t *testing.T) {
 	source := image.NewRGBA(image.Rect(0, 0, 4, 4))
 	destination := image.NewRGBA(image.Rect(0, 0, 2, 2))
-	first, err := resizeDesktopFrameInto(destination, source, 2, 2)
+	first, err := resizeDesktopFrameToSize(destination, source, 2, 2)
 	if err != nil || first != destination {
 		t.Fatalf("first resize = (%p, %v), want provided buffer %p", first, err, destination)
 	}
-	second, err := resizeDesktopFrameInto(first, source, 2, 2)
+	second, err := resizeDesktopFrameToSize(first, source, 2, 2)
 	if err != nil || second != destination {
 		t.Fatalf("second resize = (%p, %v), want reused buffer %p", second, err, destination)
+	}
+}
+
+// TestResizeDesktopFrameToSizeKeepsEvenH264Geometry guards the encoder
+// contract: after normalizeH264FrameSize rounds a requested size down to even
+// values, frames must still be produced at exactly that size. Re-deriving a
+// proportional size from the normalized target used to shrink the frame
+// (1600x905 -> encoder 1600x904 -> frame 1598x904), which the x264 encoder
+// rejects with "frame size does not match encoder".
+func TestResizeDesktopFrameToSizeKeepsEvenH264Geometry(t *testing.T) {
+	for _, test := range []struct {
+		sourceW, sourceH int
+		maxW, maxH       int
+	}{
+		{1600, 905, 1600, 905},
+		{1600, 904, 1600, 903},
+		{1921, 1081, 1920, 1080},
+		{905, 1600, 905, 1600},
+	} {
+		size := scaledDimension(test.sourceW, test.sourceH, test.maxW, test.maxH)
+		size.X, size.Y = normalizeH264FrameSize(size.X, size.Y)
+		frame, err := resizeDesktopFrameToSize(nil, image.NewRGBA(image.Rect(0, 0, test.sourceW, test.sourceH)), size.X, size.Y)
+		if err != nil {
+			t.Fatalf("source %dx%d -> %dx%d: %v", test.sourceW, test.sourceH, size.X, size.Y, err)
+		}
+		if frame.Bounds().Dx() != size.X || frame.Bounds().Dy() != size.Y {
+			t.Fatalf("source %dx%d -> %dx%d produced frame %v", test.sourceW, test.sourceH, size.X, size.Y, frame.Bounds().Size())
+		}
 	}
 }

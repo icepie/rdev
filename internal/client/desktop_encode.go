@@ -198,32 +198,36 @@ func (s *desktopFrameSender) tick(frame *image.RGBA, now time.Time) (payload []b
 // errResizeNoPixels reports an unusable source image for the resize helpers.
 var errResizeNoPixels = errors.New("desktop frame has no pixels")
 
-// resizeDesktopFrameInto resizes img to fit maxWidth/maxHeight into dst,
-// reusing dst when its geometry already matches. It returns img itself when
-// no scaling is needed and img is a zero-origin *image.RGBA; callers should
-// treat the result as valid only until the next capture.
-func resizeDesktopFrameInto(dst *image.RGBA, img image.Image, maxWidth, maxHeight int) (*image.RGBA, error) {
+// resizeDesktopFrameToSize scales img to exactly width x height with nearest
+// neighbor, reusing dst when its geometry already matches. It returns img
+// itself when img already has the target size and is a zero-origin
+// *image.RGBA; callers should treat the result as valid only until the next
+// capture.
+//
+// The target geometry is authoritative: H.264 frames must match the encoder
+// size exactly, so callers must pass the same size the encoder was created
+// with instead of re-deriving a proportional size from it.
+func resizeDesktopFrameToSize(dst *image.RGBA, img image.Image, width, height int) (*image.RGBA, error) {
 	bounds := img.Bounds()
 	sourceWidth := bounds.Dx()
 	sourceHeight := bounds.Dy()
-	size := scaledDimension(sourceWidth, sourceHeight, maxWidth, maxHeight)
-	if sourceWidth == size.X && sourceHeight == size.Y {
+	if sourceWidth <= 0 || sourceHeight <= 0 || width <= 0 || height <= 0 {
+		return dst, errResizeNoPixels
+	}
+	if sourceWidth == width && sourceHeight == height {
 		if src, ok := img.(*image.RGBA); ok && bounds.Min.X == 0 && bounds.Min.Y == 0 {
 			return src, nil
 		}
 	}
-	if dst == nil || dst.Bounds().Dx() != size.X || dst.Bounds().Dy() != size.Y || dst.Bounds().Min.X != 0 || dst.Bounds().Min.Y != 0 {
-		dst = image.NewRGBA(image.Rect(0, 0, size.X, size.Y))
-	}
-	if sourceWidth <= 0 || sourceHeight <= 0 || size.X <= 0 || size.Y <= 0 {
-		return dst, errResizeNoPixels
+	if dst == nil || dst.Bounds().Dx() != width || dst.Bounds().Dy() != height || dst.Bounds().Min.X != 0 || dst.Bounds().Min.Y != 0 {
+		dst = image.NewRGBA(image.Rect(0, 0, width, height))
 	}
 	if src, ok := img.(*image.RGBA); ok {
-		parallelDesktopRows(size.X, size.Y, func(y0, y1 int) {
+		parallelDesktopRows(width, height, func(y0, y1 int) {
 			for y := y0; y < y1; y++ {
-				sourceY := bounds.Min.Y + y*sourceHeight/size.Y
-				for x := range size.X {
-					sourceX := bounds.Min.X + x*sourceWidth/size.X
+				sourceY := bounds.Min.Y + y*sourceHeight/height
+				for x := range width {
+					sourceX := bounds.Min.X + x*sourceWidth/width
 					sourceOffset := src.PixOffset(sourceX, sourceY)
 					destOffset := dst.PixOffset(x, y)
 					copy(dst.Pix[destOffset:destOffset+4], src.Pix[sourceOffset:sourceOffset+4])
@@ -232,11 +236,11 @@ func resizeDesktopFrameInto(dst *image.RGBA, img image.Image, maxWidth, maxHeigh
 		})
 		return dst, nil
 	}
-	parallelDesktopRows(size.X, size.Y, func(y0, y1 int) {
+	parallelDesktopRows(width, height, func(y0, y1 int) {
 		for y := y0; y < y1; y++ {
-			sourceY := bounds.Min.Y + y*sourceHeight/size.Y
-			for x := range size.X {
-				sourceX := bounds.Min.X + x*sourceWidth/size.X
+			sourceY := bounds.Min.Y + y*sourceHeight/height
+			for x := range width {
+				sourceX := bounds.Min.X + x*sourceWidth/width
 				r, g, b, a := img.At(sourceX, sourceY).RGBA()
 				offset := dst.PixOffset(x, y)
 				dst.Pix[offset+0] = byte(r >> 8)

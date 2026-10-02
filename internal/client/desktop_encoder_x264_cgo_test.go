@@ -55,3 +55,31 @@ func TestX264CGOEncoderRejectsOddFrameDimensions(t *testing.T) {
 		t.Fatal("odd x264 height was accepted")
 	}
 }
+
+// TestX264CGOEncoderAcceptsRuntimeResizedFrames reproduces the live desktop
+// failure where an odd capture height (1600x905) made normalizeH264FrameSize
+// create a 1600x904 encoder while the pipeline resized frames proportionally
+// to 1598x904, so every frame was rejected as "frame size does not match
+// encoder".
+func TestX264CGOEncoderAcceptsRuntimeResizedFrames(t *testing.T) {
+	size := scaledDimension(1600, 905, 1600, 905)
+	size.X, size.Y = normalizeH264FrameSize(size.X, size.Y)
+	encoder, err := newX264CGOEncoder(size.X, size.Y, 50, 12)
+	if err != nil {
+		t.Fatalf("newX264CGOEncoder(%d, %d) error = %v", size.X, size.Y, err)
+	}
+	defer encoder.Close()
+
+	source := image.NewRGBA(image.Rect(0, 0, 1600, 905))
+	frame, err := resizeDesktopFrameToSize(nil, source, size.X, size.Y)
+	if err != nil {
+		t.Fatalf("resizeDesktopFrameToSize() error = %v", err)
+	}
+	var packet bytes.Buffer
+	if err := encoder.Encode(frame, &packet); err != nil {
+		t.Fatalf("Encode() error = %v", err)
+	}
+	if packet.Len() == 0 {
+		t.Fatal("Encode() produced no payload")
+	}
+}

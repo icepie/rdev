@@ -28,11 +28,11 @@ func TestResizeDesktopFrameMatchesSerialNearestNeighbor(t *testing.T) {
 			src.SetRGBA(x, y, color.RGBA{R: byte(x * 3), G: byte(y * 5), B: byte(x + y), A: 255})
 		}
 	}
-	got, err := resizeDesktopFrameInto(nil, src, 32, 32)
-	if err != nil {
-		t.Fatalf("resizeDesktopFrameInto error: %v", err)
-	}
 	wantSize := scaledDimension(src.Bounds().Dx(), src.Bounds().Dy(), 32, 32)
+	got, err := resizeDesktopFrameToSize(nil, src, wantSize.X, wantSize.Y)
+	if err != nil {
+		t.Fatalf("resizeDesktopFrameToSize error: %v", err)
+	}
 	if got.Bounds().Dx() != wantSize.X || got.Bounds().Dy() != wantSize.Y {
 		t.Fatalf("resized to %v, want %v", got.Bounds().Size(), wantSize)
 	}
@@ -56,7 +56,7 @@ func BenchmarkResizeDesktopFrame(b *testing.B) {
 	scratch := image.NewRGBA(image.Rect(0, 0, 1600, 1000))
 	b.ResetTimer()
 	for b.Loop() {
-		_, err := resizeDesktopFrameInto(scratch, src, 1600, 1000)
+		_, err := resizeDesktopFrameToSize(scratch, src, 1600, 1000)
 		if err != nil {
 			b.Fatal(err)
 		}

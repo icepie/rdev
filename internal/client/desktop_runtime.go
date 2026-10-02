@@ -229,7 +229,7 @@ func (c *Client) handleDesktopStart(msg *protocol.Message) {
 				c.send(&protocol.Message{Type: protocol.MsgDesktopClose, SessionID: msg.SessionID, Error: err.Error()})
 				return
 			}
-			frame, err := resizeDesktopFrameInto(frameScratch, img, size.X, size.Y)
+			frame, err := resizeDesktopFrameToSize(frameScratch, img, size.X, size.Y)
 			if err != nil && !errors.Is(err, errResizeNoPixels) {
 				log.Printf("desktop resize error for source %s: %v", sourceName, err)
 				continue
