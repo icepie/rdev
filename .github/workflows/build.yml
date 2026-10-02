@@ -119,30 +119,107 @@ jobs:
             rdev-client${{ matrix.ext }}
 
 
-  # ── Optional CGO/x264 client (GPL-2.0-only release artifact) ──────────
+  # ── Optional CGO/x264 clients (GPL-2.0-only release artifacts) ────────
   build-client-cgo:
-    name: Build rdev-client-cgo linux/amd64
+    name: Build rdev-client-cgo ${{ matrix.goos }}/${{ matrix.goarch }}
     needs: test
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            runner: ubuntu-latest
+            ext: ""
+          - goos: linux
+            goarch: arm64
+            runner: ubuntu-24.04-arm
+            ext: ""
+          - goos: darwin
+            goarch: arm64
+            runner: macos-14
+            ext: ""
+            cgo_cflags: "-DSYS_MACOSX=1 -DARCH_AARCH64=1 -DHAVE_POSIXTHREAD=1 -DSTACK_ALIGNMENT=16 -DHAVE_MALLOC_H=0 -DHAVE_CPU_COUNT=0 -DTHP=1"
+          - goos: windows
+            goarch: amd64
+            runner: ubuntu-latest
+            ext: .exe
+            cc: x86_64-w64-mingw32-clang
+          - goos: windows
+            goarch: "386"
+            runner: ubuntu-latest
+            ext: .exe
+            cc: i686-w64-mingw32-clang
+          - goos: windows
+            goarch: arm64
+            runner: ubuntu-latest
+            ext: .exe
+            cc: aarch64-w64-mingw32-clang
     steps:
       - uses: actions/checkout@v7
 
       - uses: actions/setup-go@v7
+        if: matrix.goos != 'windows' || matrix.goarch == 'arm64'
         with:
           go-version: '1.26'
 
-      - name: Build rdev-client-cgo
+      - name: Cache go-win7
+        if: matrix.goos == 'windows' && matrix.goarch != 'arm64'
+        id: cache-go-win7-cgo
+        uses: actions/cache@v6
+        with:
+          path: /home/runner/go-win7
+          key: go-win7-${{ env.GO_WIN7_VERSION }}-cgo-${{ matrix.goarch }}
+
+      - name: Download go-win7
+        if: matrix.goos == 'windows' && matrix.goarch != 'arm64' && steps.cache-go-win7-cgo.outputs.cache-hit != 'true'
+        run: |
+          curl -fSL --retry 5 --retry-delay 10 --connect-timeout 30 --max-time 300 \
+            -o go-win7.zip \
+            "https://github.com/XTLS/go-win7/releases/download/${GO_WIN7_VERSION}/go-for-win7-linux-amd64.zip"
+          mkdir -p /home/runner/go-win7
+          unzip -q go-win7.zip -d /home/runner/go-win7
+          test -x /home/runner/go-win7/bin/go
+          /home/runner/go-win7/bin/go version
+
+      - name: Install LLVM MinGW
+        if: matrix.goos == 'windows'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang lld llvm xz-utils
+          LLVM_MINGW_VERSION=20260602
+          curl -fSL --retry 5 --retry-delay 10 \
+            -o /tmp/llvm-mingw.tar.xz \
+            "https://github.com/mstorsjo/llvm-mingw/releases/download/${LLVM_MINGW_VERSION}/llvm-mingw-${LLVM_MINGW_VERSION}-msvcrt-ubuntu-22.04-x86_64.tar.xz"
+          mkdir -p /opt/llvm-mingw
+          tar -xf /tmp/llvm-mingw.tar.xz -C /opt/llvm-mingw --strip-components=1
+
+      - name: Build x264 client
         env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: 1
         run: |
-          go build -tags x264cgo -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" -o rdev-client ./cmd/rdev-client
-          file rdev-client
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            export PATH="/opt/llvm-mingw/bin:$PATH"
+            if [ "${{ matrix.goarch }}" != "arm64" ]; then
+              export GOROOT=/home/runner/go-win7
+              export PATH="$GOROOT/bin:$PATH"
+            fi
+            export CC='${{ matrix.cc }}'
+          fi
+          export CGO_CFLAGS='${{ matrix.cgo_cflags }}'
+          go build -tags x264cgo -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" \
+            -o "rdev-client${{ matrix.ext }}" ./cmd/rdev-client
+          file "rdev-client${{ matrix.ext }}"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
-          name: rdev-cgo-linux-amd64
-          path: rdev-client
+          name: rdev-cgo-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: rdev-client${{ matrix.ext }}
+          if-no-files-found: error
 
   # ── Android/Termux client builds (Bionic + libc DNS) ─────────
   build-android:
@@ -208,13 +285,16 @@ jobs:
           name: rdev-android-${{ matrix.name }}
           path: rdev-client
 
-  # ── Windows build using go-win7 (single job, both archs) ─────
+  # ── Windows build using go-win7 for amd64/386; standard Go for arm64 ─
   build-windows:
-    name: Build windows (go-win7)
+    name: Build windows (go-win7 amd64/386)
     needs: test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.26'
 
       - uses: oven-sh/setup-bun@v2
 
@@ -279,9 +359,7 @@ jobs:
           GOOS: windows
           GOARCH: arm64
           CGO_ENABLED: 0
-          GOROOT: /home/runner/go-win7
         run: |
-          export PATH="/home/runner/go-win7/bin:$PATH"
           mkdir -p dist/windows-arm64
           go build -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" -o rdev-server-raw ./cmd/rdev-server
           upx --best rdev-server-raw -o dist/windows-arm64/rdev-server.exe || cp rdev-server-raw dist/windows-arm64/rdev-server.exe
