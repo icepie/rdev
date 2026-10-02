@@ -2,6 +2,7 @@ package client
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"hash/crc32"
 	"image"
@@ -66,15 +67,84 @@ func (e *mjpegEncoder) Encode(frame *image.RGBA, out *bytes.Buffer) error {
 	return jpeg.Encode(out, frame, &jpeg.Options{Quality: e.quality})
 }
 
-// newDesktopEncoder picks the requested encoder, falling back to MJPEG when
-// the H.264 backend is unavailable on this machine.
-func newDesktopEncoder(requestedFormat string, width, height, quality, fps int) desktopEncoder {
-	if normalizeDesktopFormat(requestedFormat) == desktopFormatH264 {
-		if enc, err := newX264Encoder(width, height, quality, fps); err == nil {
-			return enc
+// annexBToAVCC converts Annex B NAL units to the AVCC payload format used by
+// WebCodecs. It recognizes an IDR slice as an H.264 keyframe.
+func annexBToAVCC(data []byte) (bool, []byte, error) {
+	var out bytes.Buffer
+	out.Grow(len(data))
+	keyframe, err := appendAnnexBToAVCC(&out, data)
+	if err != nil {
+		return false, nil, err
+	}
+	return keyframe, out.Bytes(), nil
+}
+
+func appendAnnexBToAVCC(out *bytes.Buffer, data []byte) (bool, error) {
+	nals, err := splitAnnexBNALs(data)
+	if err != nil {
+		return false, err
+	}
+	keyframe := false
+	for _, nal := range nals {
+		if nal[0]&0x1f == 5 {
+			keyframe = true
+		}
+		var length [4]byte
+		binary.BigEndian.PutUint32(length[:], uint32(len(nal)))
+		_, _ = out.Write(length[:])
+		_, _ = out.Write(nal)
+	}
+	return keyframe, nil
+}
+
+func splitAnnexBNALs(data []byte) ([][]byte, error) {
+	first, firstLen := annexBStartCode(data, 0)
+	if first < 0 {
+		return nil, errors.New("H.264 access unit has no Annex B start code")
+	}
+	var nals [][]byte
+	for start, prefixLen := first, firstLen; start >= 0; {
+		payloadStart := start + prefixLen
+		next, nextPrefixLen := annexBStartCode(data, payloadStart)
+		payloadEnd := len(data)
+		if next >= 0 {
+			payloadEnd = next
+		}
+		payloadEnd = trimAnnexBTrailingZeros(data, payloadStart, payloadEnd)
+		if payloadStart < payloadEnd {
+			nals = append(nals, data[payloadStart:payloadEnd])
+		}
+		if next < 0 {
+			break
+		}
+		start, prefixLen = next, nextPrefixLen
+	}
+	if len(nals) == 0 {
+		return nil, errors.New("H.264 access unit has no NAL payload")
+	}
+	return nals, nil
+}
+
+func trimAnnexBTrailingZeros(data []byte, start, end int) int {
+	for end > start && data[end-1] == 0 {
+		end--
+	}
+	return end
+}
+
+func annexBStartCode(data []byte, from int) (int, int) {
+	for i := from; i+3 <= len(data); i++ {
+		if data[i] != 0 || data[i+1] != 0 {
+			continue
+		}
+		if data[i+2] == 1 {
+			return i, 3
+		}
+		if i+4 <= len(data) && data[i+2] == 0 && data[i+3] == 1 {
+			return i, 4
 		}
 	}
-	return &mjpegEncoder{quality: quality}
+	return -1, 0
 }
 
 // desktopFrameSender encodes captured desktop frames and decides when a frame

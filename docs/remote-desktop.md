@@ -9,8 +9,8 @@ This document describes a cross-platform remote desktop feature for RDev. It is 
 - Capture source selection now supports Auto, all screens, individual monitors, and visible windows on Windows GDI and Linux X11; Linux framebuffer exposes framebuffer screen sources; Linux DRM/KMS exposes active scanout screen/connector sources when available. Legacy `primary`/`virtual` source IDs are accepted only for compatibility and are not shown in the UI.
 - Phase 3 input control is implemented for Windows Win32 mouse/keyboard, optional Windows Touch Injection when available, Linux X11/XTEST mouse/keyboard, optional Linux uinput mouse/keyboard/touch/pen, and macOS Quartz mouse/keyboard through no-cgo dynamic CoreGraphics calls. Wayland portal input and macOS touch/pen semantics remain planned and are not advertised as available in the default no-cgo build.
 - The default stream is JPEG frames over binary WebSocket frames, rendered on a browser Canvas; this is effectively an MJPEG-style transport over the existing relay.
-- Browsers with WebCodecs request an optional H.264/AVCC stream. When the client can runtime-load a user-installed `libx264` shared library, it encodes Baseline H.264 and the browser decodes it with `VideoDecoder`; unavailable libraries, unsupported decoders, and decoder failures fall back to MJPEG. H.264 output dimensions are rounded down to even values because its I420 input requires 4:2:0 chroma pairs.
-- `libx264` is GPL-2.0-only. RDev does not bundle, download, or require it; deployment operators must install it themselves and ensure their own distribution complies with its license. The base Go client remains `CGO_ENABLED=0`.
+- Browsers with WebCodecs request an optional H.264/AVCC stream from the separately built Linux/amd64 `rdev-client-cgo`. It embeds x264, encodes Baseline H.264, and the browser decodes it with `VideoDecoder`; unavailable clients, unsupported decoders, and decoder failures fall back to MJPEG. H.264 output dimensions are rounded down to even values because its I420 input requires 4:2:0 chroma pairs.
+- `rdev-client-cgo` statically embeds GPL-2.0-only x264 as a distinct release artifact; RDev does not use it in the default `CGO_ENABLED=0` client.
 - Browser auto mode requests an adaptive resolution based on viewport size and device pixel ratio; manual mode keeps explicit FPS/quality/max-size controls.
 - Capability discovery is intentionally non-invasive: clients enumerate metadata and sources with lightweight OS APIs/ioctls, but they do not start capture, export PRIME buffers, mmap framebuffer memory, or inject input during registration. Expensive or stateful operations happen only after an authenticated `desktop_start` selects a source.
 - Linux Wayland reports the native `wayland-portal` backend as planned and never shells out to `grim`/`slurp`; root/no-display sessions can fall back to `drm-kms` when active linear scanout metadata is visible, otherwise to `fbdev` when a readable, unblanked framebuffer is present.
@@ -67,7 +67,7 @@ Use binary frames for high-volume data. Keep JSON text frames for metadata and c
 Recommended phases:
 
 1. **MVP MJPEG/JPEG stream**: simple, debuggable, works with pure Go image encoders, acceptable for low-FPS support sessions. This remains the universal fallback.
-2. **Optional libx264 H.264 stream**: browser WebCodecs clients request `h264`; the device runtime-loads a locally installed `libx264` through purego, produces AVCC Baseline H.264, and falls back to MJPEG if either side cannot support the path. VNC always requests MJPEG because its bridge decodes JPEG frames.
+2. **Optional x264 H.264 stream**: WebCodecs clients request `h264`; the separately built Linux/amd64 `rdev-client-cgo` embeds x264, produces AVCC Baseline H.264, and falls back to MJPEG if either side cannot support the path. VNC always requests MJPEG because its bridge decodes JPEG frames.
 3. **Tile diffing / dirty regions**: keep JPEG/PNG compatibility while avoiding full-frame uploads when only small regions change.
 4. **WASM codec in browser**: decode optimized delta/tile stream in browser without server CPU cost.
 5. **WebRTC optional path**: use browser hardware decode where available and fall back to the MJPEG path.
@@ -103,7 +103,7 @@ The default desktop implementation should follow this priority order:
 1. **Pure Go protocol/syscall backend**: direct Win32 syscalls, X11 protocol, D-Bus/PipeWire protocol, or browser-side WASM/WebCodecs.
 2. **Pure Go software fallback**: JPEG/PNG/tile-diff encoding with `image/*` packages and no native dependency.
 3. **Optional external-process fallback**: allowed only when explicitly enabled or when the user accepts degraded portability.
-4. **Optional native/GPU backend**: allowed only behind build tags or runtime capability detection and must not be required by the default binary.
+4. **Optional native/GPU or CGO software backend**: allowed only behind build tags or runtime capability detection and must not be required by the default binary.
 
 The release target remains: `CGO_ENABLED=0`, no required external process, and graceful capability reporting when a desktop backend is unavailable.
 

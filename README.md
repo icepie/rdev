@@ -34,7 +34,7 @@
 | 指定 Shell | `--shell /bin/bash` 或 `$RDEV_SHELL` |
 | 跨平台 | Unix (creack/pty) / Windows (ConPty) / 其他 (pipe) |
 | Terminal Modes | SSH pty-req modes 完整转发 (ECHO, ONLCR, etc.) |
-| Remote Desktop | 已支持浏览器远程屏幕查看与输入控制 MVP（Linux X11/DRM/fbdev、Windows GDI/DXGI、macOS Quartz/CoreGraphics no-cgo 截屏；输入后端含 XTEST、可选 uinput、Win32、可选 Win8+ Touch Injection、macOS Quartz mouse/keyboard；默认 CGO_ENABLED=0），设计见 `docs/remote-desktop.md` |
+| Remote Desktop | 已支持浏览器远程屏幕查看与输入控制 MVP（Linux X11/DRM/fbdev、Windows GDI/DXGI、macOS Quartz/CoreGraphics no-cgo 截屏；输入后端含 XTEST、可选 uinput、Win32、可选 Win8+ Touch Injection、macOS Quartz mouse/keyboard；默认 CGO_ENABLED=0）。可选 `rdev-client-cgo` 在 Linux/amd64 上内置软件 H.264/x264 编码；设计见 `docs/remote-desktop.md` |
 | Rust GPU Client | 可选实验版 `clients/rdev-client-gpu`，优先补齐 SSH/session/内置 SFTP/Rsync/TCP/file 基础能力，并提供可选内置 RDev/Weylus 风格 GPU 桌面隧道；Win7 包使用普通 Windows GNU 构建加 PE import patch 和兼容 shim DLL |
 | Android / Termux | 支持 Termux 一键运行 Go 兼容版与 Rust no-desktop 版，Android/Bionic 包使用 Android libc DNS；详见 `docs/android-termux.md` |
 | Android APK | 独立安卓被控端设计采用 `MediaProjection + MediaCodec` 高性能屏幕流，输入走 Accessibility；详见 `docs/android-apk.md` |
@@ -227,3 +227,16 @@ CGO_ENABLED=0 go build -o rdev-server ./cmd/rdev-server
 CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -o rdev-client.exe ./cmd/rdev-client
 CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o rdev-client-arm64 ./cmd/rdev-client
 ```
+
+### 可选软件 H.264 客户端
+
+默认 `rdev-client` 保持 `CGO_ENABLED=0`，仅提供 MJPEG。Linux/amd64 可单独构建
+内置 x264 的 `rdev-client-cgo`；浏览器和客户端都支持时，桌面流自动协商 H.264，
+其他场景回退到 MJPEG。
+
+```bash
+make client-cgo
+./rdev-client-cgo -s tcp://your-server:8081 -i my-device
+```
+
+该二进制静态嵌入 x264，受 GPL-2.0-only 约束；不要将它替换为默认客户端或与不兼容许可证的发布物混合。

@@ -8,6 +8,7 @@ require (
 	github.com/aymanbagabas/go-pty v0.2.3
 	github.com/ebitengine/purego v0.11.1
 	github.com/gliderlabs/ssh v0.3.8
+	github.com/gen2brain/x264-go v0.4.0
 	github.com/go-git/go-git/v5 v5.19.2
 	github.com/iamacarpet/go-winpty v1.0.4
 	github.com/lxzan/gws v1.10.2

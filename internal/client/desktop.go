@@ -24,15 +24,6 @@ func desktopSourcesByBackendFrom(sources []protocol.DesktopSource, backend strin
 	return filtered
 }
 
-func desktopVideoCodecs() ([]string, []string) {
-	codecs := []string{"mjpeg"}
-	if _, ok := loadX264API(); ok {
-		codecs = append(codecs, desktopFormatH264)
-		return codecs, []string{"libx264"}
-	}
-	return codecs, nil
-}
-
 func desktopCapabilities() *protocol.DesktopCapabilities {
 	videoCodecs, encoderBackends := desktopVideoCodecs()
 	caps := &protocol.DesktopCapabilities{

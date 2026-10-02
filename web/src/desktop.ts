@@ -396,6 +396,11 @@ document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n
         const height = Math.max(240, Math.min(2160, Math.round((rect.height || window.innerHeight || 1000) * ratio)));
         return { width, height };
     }
+    function desktopSupportsH264() {
+        const device = deviceCache.find(d => d.id === deviceSelect.value) || {};
+        return Array.isArray(device.desktop?.videoCodecs) && device.desktop.videoCodecs.includes('h264');
+    }
+
     function desktopOptions() {
         const manual = modeSelect.value === 'manual';
         const adaptive = adaptiveSize();
@@ -408,7 +413,7 @@ document.getElementById('lang-slot').innerHTML = RDevUI.themeButton() + RDevI18n
             height: manual ? clampInt(maxHeightInput.value, 240, 2160, 1000) : adaptive.height,
             inputBackend: inputBackendSelect.value || 'auto',
             showCursor: showCursorInput.checked,
-            format: forcedFormat || (typeof VideoDecoder === 'function' ? 'h264' : 'mjpeg'),
+            format: forcedFormat || (desktopSupportsH264() && typeof VideoDecoder === 'function' ? 'h264' : 'mjpeg'),
         };
     }
     function desktopQuery() {

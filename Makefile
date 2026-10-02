@@ -1,6 +1,6 @@
-.PHONY: all build clean cross server client web web-install test vet fmt win7-go-client win7-service-wrapper rust-client-gpu rust-client-gpu-check rust-client-gpu-fmt rust-client-gpu-clippy rust-client-gpu-test rust-client-gpu-smoke rust-client-gpu-linux-desktop-package rust-client-gpu-windows-arm64-package rust-client-gpu-win7-package rust-client-gpu-win7-rdev-desktop-package rust-client-gpu-win7-stage rust-client-gpu-win7-smoke
+.PHONY: all build clean cross server client client-cgo web web-install test vet fmt win7-go-client win7-service-wrapper rust-client-gpu rust-client-gpu-check rust-client-gpu-fmt rust-client-gpu-clippy rust-client-gpu-test rust-client-gpu-smoke rust-client-gpu-linux-desktop-package rust-client-gpu-windows-arm64-package rust-client-gpu-win7-package rust-client-gpu-win7-rdev-desktop-package rust-client-gpu-win7-stage rust-client-gpu-win7-smoke
 
-BINS = rdev-server rdev-client
+BINS = rdev-server rdev-client rdev-client-cgo
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 LDFLAGS = -s -w -X main.version=$(VERSION)
 GO_WIN7 ?= go
@@ -26,6 +26,9 @@ server: web
 
 client:
 	go build -ldflags "$(LDFLAGS)" -o rdev-client ./cmd/rdev-client
+
+client-cgo:
+	CGO_ENABLED=1 go build -tags x264cgo -ldflags "$(LDFLAGS)" -o rdev-client-cgo ./cmd/rdev-client
 
 clean:
 	rm -f $(BINS) $(BINS)-*

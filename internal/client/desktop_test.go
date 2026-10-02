@@ -187,6 +187,35 @@ func TestNormalizeH264FrameSizeRoundsDownWithoutExceedingLimit(t *testing.T) {
 	}
 }
 
+func TestAnnexBToAVCCHandlesMixedStartCodesAndKeyframes(t *testing.T) {
+	annexB := []byte{
+		0, 0, 0, 1, 0x67, 0x42, 0xC0, 0x1F, 0,
+		0, 0, 1, 0x68, 0xCE, 0x06, 0xE2,
+		0, 0, 0, 1, 0x65, 0x88, 0x84, 0,
+	}
+	keyframe, avcc, err := annexBToAVCC(annexB)
+	if err != nil {
+		t.Fatalf("annexBToAVCC() error = %v", err)
+	}
+	if !keyframe {
+		t.Fatal("annexBToAVCC() did not identify the IDR NAL as a keyframe")
+	}
+	want := []byte{
+		0, 0, 0, 4, 0x67, 0x42, 0xC0, 0x1F,
+		0, 0, 0, 4, 0x68, 0xCE, 0x06, 0xE2,
+		0, 0, 0, 3, 0x65, 0x88, 0x84,
+	}
+	if !bytes.Equal(avcc, want) {
+		t.Fatalf("AVCC = %x, want %x", avcc, want)
+	}
+}
+
+func TestAnnexBToAVCCRejectsDataWithoutStartCode(t *testing.T) {
+	if _, _, err := annexBToAVCC([]byte{0x65, 0x88, 0x84}); err == nil {
+		t.Fatal("annexBToAVCC() accepted data without an Annex B start code")
+	}
+}
+
 func TestResizeDesktopFrameIntoReusesMatchingDestination(t *testing.T) {
 	source := image.NewRGBA(image.Rect(0, 0, 4, 4))
 	destination := image.NewRGBA(image.Rect(0, 0, 2, 2))

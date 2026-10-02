@@ -218,7 +218,7 @@ Environment variables:
 		fmt.Println()
 	}
 
-	updater.Start(context.Background(), updater.Config{App: "client", Version: version, Enabled: autoUpdate, Interval: updateInterval})
+	updater.Start(context.Background(), updater.Config{App: updaterAppName(), Version: version, Enabled: autoUpdate, Interval: updateInterval})
 
 	if err := c.Run(); err != nil {
 		log.Fatalf("client error: %v", err)
