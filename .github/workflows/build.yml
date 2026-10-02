@@ -415,7 +415,7 @@ jobs:
               done
             fi
           done
-          rm -rf rdev-*
+          find . -mindepth 1 -maxdepth 1 -type d -name 'rdev-*' -exec rm -rf -- {} +
           echo "=== Release files ==="
           ls -lh
 
