@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"regexp"
 	"runtime"
 	"sort"
 	"strconv"
@@ -26,6 +27,15 @@ import (
 
 //go:embed static
 var templateFS embed.FS
+
+// clientIDPattern whitelists device IDs: the ID is reused as SSH username, URL
+// query parameter, log identifier and map key across the server, so restrict it
+// to a safe printable set with a bounded length.
+var clientIDPattern = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
+
+func validClientID(id string) bool {
+	return clientIDPattern.MatchString(id)
+}
 
 const sessionHistoryLimit = 1024 * 1024
 
@@ -549,6 +559,7 @@ type Server struct {
 	vncStreams        map[string]*vncDesktopStream
 	gpuDesktopMu      sync.RWMutex
 	gpuDesktopTunnels map[string]*gpuDesktopTunnel
+	authLimiter       *authRateLimiter // per-device password brute-force throttle
 	releaseLatestMu   sync.Mutex
 	releaseLatestTag  string
 	releaseLatestAt   time.Time
@@ -586,6 +597,7 @@ func NewServer() *Server {
 		MaxForwards:       1024,
 		BatchConcurrency:  runtime.GOMAXPROCS(0) * 8,
 		ClientLogs:        NewClientLogManager("", 0, 0),
+		authLimiter:       newAuthRateLimiter(),
 	}
 	s.upgrader = gws.NewUpgrader(&wsHandler{srv: s}, &gws.ServerOption{
 		ReadMaxPayloadSize: 16 * 1024 * 1024,
