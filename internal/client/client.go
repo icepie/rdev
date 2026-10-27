@@ -221,6 +221,9 @@ type Client struct {
 	// Server info (received on register response)
 	sshPort  string
 	httpHost string
+	// activeWSBase is the ws(s)://host base of the current control connection,
+	// empty when connected via tcp/kcp. Used to build tunnel dial-back URLs.
+	activeWSBase string
 
 	// OnConnect is called after successfully connecting and registering.
 	OnConnect    func(c *Client)
@@ -740,6 +743,13 @@ func (c *Client) connectWebSocket(serverURL string) error {
 		return fmt.Errorf("dial: %w", err)
 	}
 
+	if u, uerr := url.Parse(wsURL); uerr == nil {
+		u.Path, u.RawQuery, u.Fragment = "", "", ""
+		c.mu.Lock()
+		c.activeWSBase = u.String()
+		c.mu.Unlock()
+	}
+
 	go socket.ReadLoop()
 	go c.pingLoop(socket)
 	return nil
@@ -774,6 +784,7 @@ func (c *Client) connectStream(kind, endpoint string) error {
 	c.mu.Lock()
 	c.transport = transport
 	c.conn = nil
+	c.activeWSBase = ""
 	c.mu.Unlock()
 	if err := c.send(&protocol.Message{
 		Type:                protocol.MsgRegister,
@@ -1654,6 +1665,17 @@ func (c *Client) handleTCPConnect(msg *protocol.Message) {
 	c.mu.Lock()
 	c.forwards[msg.ForwardID] = conn
 	c.mu.Unlock()
+
+	// Fast path: dedicated raw WebSocket for this stream. On any dial-back
+	// failure fall through to the framed control-channel path.
+	if msg.Tunnel != "" {
+		if err := c.runTCPTunnel(msg, conn); err != nil {
+			log.Printf("forward: tunnel dial-back failed (id=%s), using framed path: %v", msg.ForwardID, err)
+		} else {
+			log.Printf("forward: connected to %s via tunnel (id=%s)", addr, msg.ForwardID)
+			return
+		}
+	}
 
 	c.send(&protocol.Message{Type: protocol.MsgTCPOpen, ForwardID: msg.ForwardID})
 

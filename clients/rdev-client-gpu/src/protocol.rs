@@ -121,6 +121,10 @@ pub struct Message {
     pub forward_id: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub listen_id: String,
+    /// One-shot dial-back path (S->C in tcp_connect) for a dedicated
+    /// per-stream WebSocket; absent on old servers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tunnel: Option<String>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub host: String,
     #[serde(default, skip_serializing_if = "is_zero_i32")]

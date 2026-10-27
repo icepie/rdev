@@ -16,10 +16,24 @@ pub async fn connect_async_follow_redirects(
     WsStream,
     tokio_tungstenite::tungstenite::handshake::client::Response,
 )> {
+    let (_, ws, response) = connect_async_follow_redirects_resolved(url, max_redirects).await?;
+    Ok((ws, response))
+}
+
+/// Like [`connect_async_follow_redirects`] but also returns the final URL
+/// after any redirects, so callers can derive the resolved ws(s) base.
+pub async fn connect_async_follow_redirects_resolved(
+    url: &str,
+    max_redirects: usize,
+) -> Result<(
+    String,
+    WsStream,
+    tokio_tungstenite::tungstenite::handshake::client::Response,
+)> {
     let mut current = url.to_string();
     for _ in 0..=max_redirects {
         match connect_async(current.as_str()).await {
-            Ok(pair) => return Ok(pair),
+            Ok((ws, response)) => return Ok((current, ws, response)),
             Err(WsError::Http(resp)) if resp.status().is_redirection() => {
                 let location = resp
                     .headers()

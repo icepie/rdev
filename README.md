@@ -143,6 +143,33 @@ ssh -L 8080:localhost:80 my-device@your-server -p 2222
 ssh -R 3000:localhost:3000 my-device@your-server -p 2222
 ```
 
+### 代理端口（HTTP + SOCKS5）
+
+服务端可加 `--proxy`（或环境变量 `RDEV_PROXY_ADDR`）开一个统一代理入口，同一端口自动识别 HTTP 代理与 SOCKS5（按首字节嗅探），通过代理认证用户名选择出口设备：
+
+```bash
+./rdev-server --proxy 11080
+```
+
+认证复用设备注册密码，两种等价格式：
+
+- 组合式（推荐）：用户名 `设备ID@设备密码`，密码任意值（首个 `@` 分割，设备 ID 本身不含 `@`）
+- 标准式：用户名 `设备ID`，密码 `设备密码`
+- 无密码设备：用户名必须是设备 ID，密码任意
+
+```bash
+# HTTP 代理（CONNECT 与明文 HTTP 绝对 URI 都支持）
+curl -x http://my-device:devpass@your-server:11080 https://example.com
+
+# SOCKS5（仅 CONNECT；域名与 IPv4/IPv6 均可）
+curl -x socks5://my-device:devpass@your-server:11080 https://example.com
+
+# 组合式 设备ID@密码：URL 中用户名的 @ 需编码为 %40（curl/浏览器均如此）
+curl -x 'http://my-device%40devpass:x@your-server:11080' http://example.com
+```
+
+性能：每条代理连接由设备回拨一条专用 WebSocket 承载（原始字节透传，连接间完全并行）；旧版客户端自动回退到控制连接组帧路径，协议向后兼容。明文 HTTP 代理为每请求一连接（强制 `Connection: close`）；HTTPS 走 CONNECT 纯透传不受影响。
+
 ## Web 终端图片预览
 
 Web Terminal 和 Sessions 支持 Sixel、iTerm2 inline image 与 Kitty graphics inline image，可用于 `yazi`、`chafa`、`img2sixel` 等工具的图片预览。Web Terminal 会设置：

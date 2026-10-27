@@ -6,6 +6,7 @@ import java.nio.ByteBuffer;
 final class RDevProtocol {
     static final int BIN_DATA = 0x01;
     static final int BIN_STDERR = 0x02;
+    static final int BIN_TCP_DATA = 0x03;
     static final int BIN_FILE_UPLOAD_CHUNK = 0x20;
     static final int BIN_FILE_UPLOAD_ACK = 0x21;
     static final int BIN_FILE_DOWNLOAD_CHUNK = 0x22;

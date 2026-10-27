@@ -560,6 +560,8 @@ type Server struct {
 	gpuDesktopMu      sync.RWMutex
 	gpuDesktopTunnels map[string]*gpuDesktopTunnel
 	authLimiter       *authRateLimiter // per-device password brute-force throttle
+	proxyTunnelsMu    sync.Mutex
+	proxyTunnels      map[string]*proxyTunnelPending
 	releaseLatestMu   sync.Mutex
 	releaseLatestTag  string
 	releaseLatestAt   time.Time
@@ -572,6 +574,7 @@ type Server struct {
 	KCPPort          string
 	AdminToken       string // optional token for web APIs and browser WebSockets
 	VNCAddr          string // optional VNC/RFB listen address
+	ProxyAddr        string // optional HTTP/SOCKS5 proxy listen address
 	MaxSessions      int    // maximum concurrent sessions per device
 	MaxForwards      int    // maximum concurrent forwards per device
 	BatchConcurrency int    // maximum concurrent batch operations
@@ -598,6 +601,7 @@ func NewServer() *Server {
 		BatchConcurrency:  runtime.GOMAXPROCS(0) * 8,
 		ClientLogs:        NewClientLogManager("", 0, 0),
 		authLimiter:       newAuthRateLimiter(),
+		proxyTunnels:      make(map[string]*proxyTunnelPending),
 	}
 	s.upgrader = gws.NewUpgrader(&wsHandler{srv: s}, &gws.ServerOption{
 		ReadMaxPayloadSize: 16 * 1024 * 1024,

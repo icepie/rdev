@@ -24,7 +24,7 @@ use rdev_client_gpu::{
     rdev_desktop_service,
     session::{OutboundEvent, SessionManager},
     stream_frame, updater, version,
-    ws_redirect::connect_async_follow_redirects,
+    ws_redirect::connect_async_follow_redirects_resolved,
 };
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -45,6 +45,59 @@ struct ClientRuntime<'a> {
     desktop_enabled: bool,
     gpu_tunnel_device_tx: &'a watch::Sender<Option<String>>,
     connect_printed: Arc<AtomicBool>,
+    tunnel_base: &'a TunnelBase,
+}
+
+/// TunnelBase tracks how tcp tunnel dial-backs reach the server: the ws(s)
+/// scheme+host of the current control connection when it is a WebSocket
+/// (proven reachable, TLS state matches), otherwise the httpHost advertised
+/// in the register reply for tcp/kcp control links.
+#[derive(Default)]
+struct TunnelBase {
+    inner: std::sync::Mutex<TunnelBaseState>,
+}
+
+#[derive(Default)]
+struct TunnelBaseState {
+    ws_base: String,
+    http_host: String,
+}
+
+impl TunnelBase {
+    fn set_ws_base(&self, base: String) {
+        self.inner.lock().unwrap().ws_base = base;
+    }
+
+    fn set_http_host(&self, host: String) {
+        self.inner.lock().unwrap().http_host = host;
+    }
+
+    fn get(&self) -> Option<String> {
+        let state = self.inner.lock().unwrap();
+        if !state.ws_base.is_empty() {
+            return Some(state.ws_base.clone());
+        }
+        if state.http_host.is_empty() {
+            None
+        } else {
+            Some(format!("ws://{}", state.http_host))
+        }
+    }
+}
+
+/// Reduce a ws(s) URL to its scheme://host[:port] base (no path/query).
+fn ws_base_url(url: &str) -> Option<String> {
+    let parsed = Url::parse(url).ok()?;
+    let scheme = parsed.scheme();
+    if scheme != "ws" && scheme != "wss" {
+        return None;
+    }
+    let host = parsed.host_str()?;
+    let mut base = format!("{scheme}://{host}");
+    if let Some(port) = parsed.port() {
+        base.push_str(&format!(":{port}"));
+    }
+    Some(base)
 }
 
 #[derive(Clone)]
@@ -204,9 +257,13 @@ async fn run_once(
 ) -> Result<bool> {
     let ws_url = websocket_url(&args.server)?;
     info!("connecting to {ws_url} as {}", args.id);
-    let (ws, _) = connect_async_follow_redirects(&ws_url, 5)
+    let tunnel_base = TunnelBase::default();
+    let (resolved_url, ws, _) = connect_async_follow_redirects_resolved(&ws_url, 5)
         .await
         .context("connect websocket")?;
+    if let Some(base) = ws_base_url(&resolved_url) {
+        tunnel_base.set_ws_base(base);
+    }
     let (mut write, mut read) = ws.split();
     let (out_tx, mut out_rx) = mpsc::channel::<OutboundEvent>(4096);
     log_collector().attach_sender(out_tx.clone());
@@ -255,6 +312,7 @@ async fn run_once(
                             desktop_enabled,
                             gpu_tunnel_device_tx,
                             connect_printed: connect_printed.clone(),
+                            tunnel_base: &tunnel_base,
                         };
                         if handle_text(&text, runtime, modules, &sessions, &forwards, &files, &out_tx).await? {
                             registered = true;
@@ -393,6 +451,7 @@ async fn run_once_stream(
     let (mut read_half, mut write_half) = tokio::io::split(stream);
     let (out_tx, mut out_rx) = mpsc::channel::<OutboundEvent>(4096);
     log_collector().attach_sender(out_tx.clone());
+    let tunnel_base = TunnelBase::default();
     let sessions = SessionManager::new();
     let forwards = ForwardManager::new();
     let files = FileManager::new();
@@ -441,7 +500,7 @@ async fn run_once_stream(
                 match frame.kind {
                     stream_frame::KIND_JSON => {
                         let text = String::from_utf8(frame.payload)?;
-                        let runtime = ClientRuntime { args, server_host, desktop_enabled, gpu_tunnel_device_tx, connect_printed: connect_printed.clone() };
+                        let runtime = ClientRuntime { args, server_host, desktop_enabled, gpu_tunnel_device_tx, connect_printed: connect_printed.clone(), tunnel_base: &tunnel_base };
                         if handle_text(&text, runtime, modules, &sessions, &forwards, &files, &out_tx).await? {
                             registered = true;
                         }
@@ -477,6 +536,7 @@ async fn handle_text(
     let is_register = matches!(msg.ty, Some(MessageType::Register));
     match msg.ty {
         Some(MessageType::Register) => {
+            runtime.tunnel_base.set_http_host(msg.http_host.clone());
             let registered_id = if msg.client_id.is_empty() {
                 args.id.as_str()
             } else {
@@ -509,8 +569,9 @@ async fn handle_text(
         Some(MessageType::TcpConnect) => {
             let forwards = forwards.clone();
             let out_tx = out_tx.clone();
+            let tunnel_base = runtime.tunnel_base.get();
             modules.forwards.spawn(async move {
-                forwards.connect(msg, out_tx).await;
+                forwards.connect(msg, out_tx, tunnel_base).await;
             });
         }
         Some(MessageType::TcpListen) => {

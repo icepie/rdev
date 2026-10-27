@@ -22,7 +22,13 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.InetSocketAddress;
+import java.net.Socket;
 import java.security.SecureRandom;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.UUID;
 
 public class RDevAgentService extends Service {
@@ -49,6 +55,7 @@ public class RDevAgentService extends Service {
     private volatile boolean videoDemandActive;
     private int reconnectDelayMs = 1000;
     private volatile int reconnectGeneration;
+    private final Map<String, Socket> forwards = new HashMap<>();
     private int captureStopGeneration;
     private final SecureRandom reconnectRandom = new SecureRandom();
     private final RDevLogCollector logCollector = new RDevLogCollector();
@@ -94,6 +101,7 @@ public class RDevAgentService extends Service {
         }
         if (terminalManager != null) terminalManager.closeAll();
         if (fileManager != null) fileManager.closeAll();
+        closeAllForwards();
         unregisterNetworkCallback();
         releaseKeepAliveLocks();
         super.onDestroy();
@@ -196,6 +204,7 @@ public class RDevAgentService extends Service {
             tunnel.close();
             tunnel = null;
         }
+        closeAllForwards();
         startWebSocket();
     }
 
@@ -219,6 +228,7 @@ public class RDevAgentService extends Service {
             @Override public void onBinary(byte[] data) { handleBinary(data); }
             @Override public void onClosed(Exception error) {
                 Log.i(TAG, "connection closed error=" + error);
+                closeAllForwards();
                 if (!stopping && generation == reconnectGeneration) scheduleReconnect();
             }
         });
@@ -320,6 +330,10 @@ public class RDevAgentService extends Service {
                 if (terminalManager != null) terminalManager.close(sessionId);
                 String taskId = msg.optString("taskId", "");
                 if (fileManager != null && taskId.length() > 0) fileManager.cancel(taskId);
+            } else if ("tcp_connect".equals(type)) {
+                handleTcpConnect(msg);
+            } else if ("tcp_close".equals(type)) {
+                handleTcpClose(msg);
             } else if ("file_list".equals(type)) {
                 if (fileManager != null) new Thread(() -> fileManager.handleList(msg), "rdev-file-list").start();
             } else if ("file_upload_start".equals(type)) {
@@ -355,6 +369,8 @@ public class RDevAgentService extends Service {
             RDevProtocol frame = RDevProtocol.decode(data);
             if (frame.type == RDevProtocol.BIN_DATA) {
                 if (terminalManager != null) terminalManager.handleInput(frame.id, frame.payload);
+            } else if (frame.type == RDevProtocol.BIN_TCP_DATA) {
+                handleTcpData(frame.id, frame.payload);
             } else if (frame.type == RDevProtocol.BIN_FILE_UPLOAD_CHUNK) {
                 if (fileManager != null) fileManager.handleUploadChunk(frame.id, frame.offset, frame.offsetPayload);
             } else if (frame.type == RDevProtocol.BIN_FILE_TRANSFER_CANCEL) {
@@ -396,6 +412,117 @@ public class RDevAgentService extends Service {
         } catch (Exception e) {
             Log.w(TAG, "send binary offset failed type=" + type + " id=" + id, e);
             return false;
+        }
+    }
+
+    // --- TCP port forwarding (frame path; the optional "tunnel" dial-back field is ignored) ---
+
+    private void handleTcpConnect(JSONObject msg) {
+        final String forwardId = msg.optString("forwardId", "");
+        final String host = msg.optString("host", "");
+        final int port = msg.optInt("port", 0);
+        Log.i(TAG, "forward: connecting to " + host + ":" + port + " id=" + forwardId);
+        new Thread(() -> connectForward(forwardId, host, port), "rdev-forward-dial").start();
+    }
+
+    private void connectForward(String forwardId, String host, int port) {
+        Socket socket = new Socket();
+        try {
+            socket.connect(new InetSocketAddress(host, port), 10000);
+            socket.setTcpNoDelay(true);
+        } catch (Exception e) {
+            try { socket.close(); } catch (IOException ignored) {}
+            Log.w(TAG, "forward: connect to " + host + ":" + port + " failed id=" + forwardId, e);
+            try {
+                sendText(new JSONObject()
+                    .put("type", "tcp_fail")
+                    .put("forwardId", forwardId)
+                    .put("error", String.valueOf(e)));
+            } catch (Exception buildError) {
+                Log.w(TAG, "tcp_fail build failed", buildError);
+            }
+            return;
+        }
+        Socket replaced;
+        synchronized (forwards) {
+            replaced = forwards.put(forwardId, socket);
+        }
+        if (replaced != null && replaced != socket) {
+            try { replaced.close(); } catch (IOException ignored) {}
+        }
+        try {
+            sendText(new JSONObject().put("type", "tcp_open").put("forwardId", forwardId));
+        } catch (Exception e) {
+            Log.w(TAG, "tcp_open build failed", e);
+        }
+        Log.i(TAG, "forward: connected to " + host + ":" + port + " id=" + forwardId);
+        new Thread(() -> forwardReadLoop(forwardId, socket), "rdev-forward-read").start();
+    }
+
+    private void forwardReadLoop(String forwardId, Socket socket) {
+        byte[] buffer = new byte[64 * 1024];
+        try {
+            InputStream in = socket.getInputStream();
+            while (true) {
+                int n = in.read(buffer);
+                if (n < 0) break;
+                if (n > 0) sendBinary(RDevProtocol.BIN_TCP_DATA, forwardId, buffer, n);
+            }
+        } catch (Exception e) {
+            Log.d(TAG, "forward: read ended id=" + forwardId + " error=" + e);
+        }
+        boolean removed;
+        synchronized (forwards) {
+            removed = forwards.get(forwardId) == socket;
+            if (removed) forwards.remove(forwardId);
+        }
+        try { socket.close(); } catch (IOException ignored) {}
+        if (removed) {
+            try {
+                sendText(new JSONObject().put("type", "tcp_close").put("forwardId", forwardId));
+            } catch (Exception e) {
+                Log.w(TAG, "tcp_close build failed", e);
+            }
+        }
+    }
+
+    private void handleTcpData(String forwardId, byte[] payload) {
+        if (payload == null || payload.length == 0) return;
+        Socket socket;
+        synchronized (forwards) {
+            socket = forwards.get(forwardId);
+        }
+        if (socket == null) return;
+        try {
+            OutputStream out = socket.getOutputStream();
+            out.write(payload);
+            out.flush();
+        } catch (Exception e) {
+            Log.w(TAG, "forward: write failed id=" + forwardId, e);
+        }
+    }
+
+    private void handleTcpClose(JSONObject msg) {
+        String forwardId = msg.optString("forwardId", "");
+        Socket socket;
+        synchronized (forwards) {
+            socket = forwards.remove(forwardId);
+        }
+        if (socket != null) {
+            try { socket.close(); } catch (IOException ignored) {}
+            Log.i(TAG, "forward: closed id=" + forwardId);
+        }
+    }
+
+    private void closeAllForwards() {
+        Map<String, Socket> drained;
+        synchronized (forwards) {
+            if (forwards.isEmpty()) return;
+            drained = new HashMap<>(forwards);
+            forwards.clear();
+        }
+        for (Socket socket : drained.values()) {
+            try { socket.close(); } catch (IOException ignored) {}
         }
     }
 

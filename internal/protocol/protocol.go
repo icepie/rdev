@@ -132,6 +132,10 @@ type Message struct {
 	Port       int    `json:"port,omitempty"`
 	SourceAddr string `json:"sourceAddr,omitempty"`
 	Error      string `json:"error,omitempty"`
+	// Tunnel carries a one-shot dial-back path (S->C in tcp_connect). Clients
+	// that support it open a dedicated raw WebSocket for the stream instead of
+	// framed control-channel forwarding; older clients ignore it.
+	Tunnel string `json:"tunnel,omitempty"`
 
 	// File distribution
 	FilePath string `json:"filePath,omitempty"`
