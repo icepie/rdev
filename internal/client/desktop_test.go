@@ -3,6 +3,7 @@ package client
 import (
 	"bytes"
 	"encoding/base64"
+	"fmt"
 	"image"
 	"runtime"
 	"strings"
@@ -90,6 +91,48 @@ func TestChooseDesktopInputBackendUsesAdvertisedPreferenceOrder(t *testing.T) {
 		t.Fatalf("unavailable backend fallback = %q, want first advertised backend", got)
 	}
 }
+
+// TestOpenDesktopInputFallsBackAcrossBackends: a preferred backend that
+// fails to initialize (e.g. Windows touch injection on a non-interactive
+// session) must not kill control — the next advertised backend takes over.
+func TestOpenDesktopInputFallsBackAcrossBackends(t *testing.T) {
+	available := []string{"win32-touch", "win32"}
+	factory := func(backend string) (desktopInput, error) {
+		if backend == "win32-touch" {
+			return nil, fmt.Errorf("InitializeTouchInjection failed")
+		}
+		return fakeDesktopInput{backend: backend}, nil
+	}
+
+	input, active := openDesktopInput("win32-touch", available, factory)
+	if input == nil || active != "win32" {
+		t.Fatalf("fallback = (%v, %q), want win32 input", input, active)
+	}
+
+	// All backends failing yields no input instead of a half-dead one.
+	input, active = openDesktopInput("win32-touch", available, func(string) (desktopInput, error) {
+		return nil, fmt.Errorf("boom")
+	})
+	if input != nil || active != "" {
+		t.Fatalf("all-failed = (%v, %q), want nil input", input, active)
+	}
+
+	// Preferred backend succeeding is used directly, no fallback noise.
+	calls := 0
+	input, active = openDesktopInput("win32", available, func(backend string) (desktopInput, error) {
+		calls++
+		return fakeDesktopInput{backend: backend}, nil
+	})
+	if input == nil || active != "win32" || calls != 1 {
+		t.Fatalf("direct = (%v, %q, %d calls), want win32 once", input, active, calls)
+	}
+}
+
+type fakeDesktopInput struct{ backend string }
+
+func (f fakeDesktopInput) Backend() string               { return f.backend }
+func (f fakeDesktopInput) Apply(desktopInputEvent) error { return nil }
+func (f fakeDesktopInput) Close() error                  { return nil }
 
 func TestValidateDesktopClipboardItemsAcceptsSupportedFormats(t *testing.T) {
 	items := []protocol.ClipboardItem{

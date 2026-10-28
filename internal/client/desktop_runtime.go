@@ -111,12 +111,11 @@ func (c *Client) handleDesktopStart(msg *protocol.Message) {
 	availableInputs := desktopInputBackends()
 	inputBackend := chooseDesktopInputBackend(msg.InputBackend, availableInputs)
 	if inputBackend != "" {
-		if input, err := newDesktopInput(inputBackend); err == nil {
+		if input, active := openDesktopInput(inputBackend, availableInputs, newDesktopInput); input != nil {
 			session.input = input
-			inputBackend = input.Backend()
+			inputBackend = active
 			defer input.Close()
 		} else {
-			log.Printf("desktop input backend %s unavailable: %v", inputBackend, err)
 			inputBackend = ""
 		}
 	}
