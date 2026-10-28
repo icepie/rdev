@@ -1449,14 +1449,19 @@ export function AgentPage() {
   /* Sidebar device list: all_threads devices (online + offline, with OS)
    * when available, else the online-only REST list; the connected device
    * floats to the top, then id ascending. */
-  const sidebarDevices: { id: string; os?: string; online: boolean }[] =
-    useMemo(() => {
+  const sidebarDevices: {
+    id: string;
+    os?: string;
+    online: boolean;
+    count?: number;
+  }[] = useMemo(() => {
       const base =
         allThreads !== null
           ? allThreads.map((d) => ({
               id: d.device,
               os: d.os,
               online: d.online,
+              count: d.threads.length,
             }))
           : devices.map((d) => ({ id: d.id, os: d.os, online: true }));
       return [...base].sort(
@@ -1483,7 +1488,8 @@ export function AgentPage() {
     if (q) {
       rows = rows.filter((r) =>
         (r.title || r.id).toLowerCase().includes(q) ||
-        r.id.toLowerCase().includes(q),
+        r.id.toLowerCase().includes(q) ||
+        r.device.toLowerCase().includes(q),
       );
     }
     const mul = sidebarView.dir === "asc" ? 1 : -1;
@@ -1553,6 +1559,7 @@ export function AgentPage() {
       setDevice(row.device);
       return;
     }
+    /* bb mobile drawer: picking a thread dismisses the drawer. */
     if (!window.matchMedia("(min-width: 768px)").matches) {
       localStorage.setItem(SIDEBAR_KEY, "0");
       setSidebarOpen(false);
@@ -1813,6 +1820,37 @@ export function AgentPage() {
     </Fragment>
   );
 
+  /* bb mobile swipe: edge-drag right from the left 72px opens the drawer,
+   * drag left closes it; vertical-dominant moves are ignored (bb intent
+   * threshold 12px). The state flip animates via the CSS transition —
+   * no live drag-follow. */
+  const sidebarSwipeRef = useRef<{ x: number; y: number } | null>(null);
+  const onInsetTouchStart = (e: React.TouchEvent) => {
+    if (window.matchMedia("(min-width: 768px)").matches) return;
+    const t = e.touches[0];
+    sidebarSwipeRef.current = { x: t.clientX, y: t.clientY };
+  };
+  const onInsetTouchMove = (e: React.TouchEvent) => {
+    const s = sidebarSwipeRef.current;
+    if (!s) return;
+    const t = e.touches[0];
+    const dx = t.clientX - s.x;
+    const dy = t.clientY - s.y;
+    if (Math.abs(dx) < 12 && Math.abs(dy) < 12) return;
+    sidebarSwipeRef.current = null;
+    if (Math.abs(dy) > Math.abs(dx)) return;
+    if (!sidebarOpen && s.x <= 72 && dx > 48) {
+      localStorage.setItem(SIDEBAR_KEY, "1");
+      setSidebarOpen(true);
+    } else if (sidebarOpen && dx < -48) {
+      localStorage.setItem(SIDEBAR_KEY, "0");
+      setSidebarOpen(false);
+    }
+  };
+  const onInsetTouchEnd = () => {
+    sidebarSwipeRef.current = null;
+  };
+
   const closeSidebar = () => {
     localStorage.setItem(SIDEBAR_KEY, "0");
     setSidebarOpen(false);
@@ -1958,29 +1996,37 @@ export function AgentPage() {
     </div>
   );
 
+  /* Empty state: distinguish "nothing matched the search/filter" from
+   * "no threads at all" so an active query never reads as data loss. */
   const sidebarEmpty = (
     <div className="flex items-center gap-2">
       <Icon
-        name="MessageSquare"
+        name={threadQuery.trim() ? "Search" : "MessageSquare"}
         className="size-3.5 shrink-0 text-subtle-foreground/50"
       />
       <span className="text-xs leading-4 text-subtle-foreground/60">
-        {t("agent.noThreads")}
+        {threadQuery.trim() ? t("agent.noMatchingThreads") : t("agent.noThreads")}
       </span>
     </div>
   );
 
   return (
-    <div className="relative flex h-full">
-      {/* Thread sidebar (bb-style): overlay on narrow screens, push on md+.
-       * Aside + backdrop stay mounted so open/close animates (bb 200ms);
-       * transitions arm two frames after mount via transitionsReady. */}
+    <div className="relative flex h-full overflow-hidden">
+      {/* Thread sidebar (bb-style): on narrow screens an overlay drawer
+       * (min(86vw,360px)) slides in and the inset translates right with
+       * it (bb vaul reveal: chat keeps its width and stays visible beside
+       * the drawer); on md+ the aside is a static push column with the
+       * resizable --sidebar-w. Aside + backdrop stay mounted so
+       * open/close animates (bb 220ms); transitions arm two frames after
+       * mount via transitionsReady. */}
       <div
         className={cn(
           "absolute inset-0 z-10 bg-background/60 md:hidden",
           transitionsReady &&
-            "transition-opacity duration-200 motion-reduce:transition-none",
-          sidebarOpen ? "opacity-100" : "pointer-events-none opacity-0",
+            "transition-[opacity,transform] duration-200 ease-in-out motion-reduce:transition-none",
+          sidebarOpen
+            ? "translate-x-[min(86vw,360px)] opacity-100"
+            : "pointer-events-none opacity-0",
         )}
         onClick={closeSidebar}
       />
@@ -2006,6 +2052,16 @@ export function AgentPage() {
               onClick={() => {
                 if (wsRef.current?.readyState === WebSocket.OPEN) {
                   wsRef.current.send(JSON.stringify({ op: "new_thread" }));
+                  /* The fresh thread lands on the connected device: clear
+                   * any device filter / search query that would hide it. */
+                  if (sidebarView.deviceFilter) {
+                    updateSidebarView({ deviceFilter: "" });
+                  }
+                  setThreadQuery("");
+                }
+                if (!window.matchMedia("(min-width: 768px)").matches) {
+                  localStorage.setItem(SIDEBAR_KEY, "0");
+                  setSidebarOpen(false);
                 }
               }}
               className="flex h-7 w-full cursor-pointer items-center gap-2 rounded-md pr-0 pl-2 text-sm transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring disabled:cursor-default disabled:opacity-70"
@@ -2102,6 +2158,11 @@ export function AgentPage() {
                   className="size-3.5 shrink-0 text-muted-foreground"
                 />
                 <span className="min-w-0 flex-1 truncate text-left">{d.id}</span>
+                {d.count !== undefined && d.count > 0 && (
+                  <span className="shrink-0 pr-1 text-2xs text-muted-foreground tabular-nums">
+                    {d.count}
+                  </span>
+                )}
                 <span
                   className={cn(
                     "size-1.5 shrink-0 rounded-full",
@@ -2365,7 +2426,15 @@ export function AgentPage() {
 
       <div
         ref={panelSizingRef}
-        className="h-full min-w-0 flex-1"
+        className={cn(
+          "h-full min-w-0 flex-1",
+          /* bb mobile reveal: the inset slides right with the drawer,
+           * keeping its own width (chat visible beside the list). */
+          transitionsReady &&
+            !sidebarDragging &&
+            "transition-transform duration-200 ease-in-out motion-reduce:transition-none",
+          sidebarOpen && "max-md:translate-x-[min(86vw,360px)]",
+        )}
         style={
           {
             overflow: "clip",
@@ -2373,6 +2442,9 @@ export function AgentPage() {
               transitionsReady && !panelDragging ? "220ms" : "0ms",
           } as CSSProperties
         }
+        onTouchStart={onInsetTouchStart}
+        onTouchMove={onInsetTouchMove}
+        onTouchEnd={onInsetTouchEnd}
       >
       <PanelGroup
         direction={verticalDock ? "vertical" : "horizontal"}
