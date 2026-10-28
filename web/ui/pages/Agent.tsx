@@ -271,6 +271,14 @@ export function AgentPage() {
   const [panelOpen, setPanelOpen] = useState(
     () => localStorage.getItem(PANEL_OPEN_KEY) === "1",
   );
+  /* bb compact shelf lazy-mount: the panel content mounts on first open
+   * and stays mounted afterwards (terminal sessions survive a close). */
+  const [panelTouched, setPanelTouched] = useState(
+    () => localStorage.getItem(PANEL_OPEN_KEY) === "1",
+  );
+  useEffect(() => {
+    if (panelOpen) setPanelTouched(true);
+  }, [panelOpen]);
   const [initialPanelWidth] = useState(() => {
     const saved = parseFloat(localStorage.getItem(PANEL_WIDTH_KEY) ?? "");
     return Number.isFinite(saved) && saved >= 5 && saved <= 95 ? saved : 50;
@@ -457,6 +465,14 @@ export function AgentPage() {
     setPanelOpen((prev) => {
       const next = !prev;
       localStorage.setItem(PANEL_OPEN_KEY, next ? "1" : "0");
+      /* Compact: the full-width shelf would cover the drawer — opening
+       * one dismisses the other. */
+      if (next && window.innerWidth < 768) {
+        setSidebarOpen((wasOpen) => {
+          if (wasOpen) localStorage.setItem(SIDEBAR_KEY, "0");
+          return false;
+        });
+      }
       return next;
     });
   }, []);
@@ -1839,9 +1855,18 @@ export function AgentPage() {
     if (Math.abs(dx) < 12 && Math.abs(dy) < 12) return;
     sidebarSwipeRef.current = null;
     if (Math.abs(dy) > Math.abs(dx)) return;
-    if (!sidebarOpen && s.x <= 72 && dx > 48) {
+    if (!sidebarOpen && !panelOpen && s.x <= 72 && dx > 48) {
       localStorage.setItem(SIDEBAR_KEY, "1");
       setSidebarOpen(true);
+    } else if (
+      !sidebarOpen &&
+      !panelOpen &&
+      s.x >= window.innerWidth - 72 &&
+      dx < -48
+    ) {
+      /* bb CompactSecondaryPanelShelf: right-edge drag opens the shelf. */
+      localStorage.setItem(PANEL_OPEN_KEY, "1");
+      setPanelOpen(true);
     } else if (sidebarOpen && dx < -48) {
       localStorage.setItem(SIDEBAR_KEY, "0");
       setSidebarOpen(false);
@@ -1849,6 +1874,30 @@ export function AgentPage() {
   };
   const onInsetTouchEnd = () => {
     sidebarSwipeRef.current = null;
+  };
+
+  /* bb shelf dismiss: drag right on the open right panel closes it. */
+  const panelSwipeRef = useRef<{ x: number; y: number } | null>(null);
+  const onPanelTouchStart = (e: React.TouchEvent) => {
+    const t = e.touches[0];
+    panelSwipeRef.current = { x: t.clientX, y: t.clientY };
+  };
+  const onPanelTouchMove = (e: React.TouchEvent) => {
+    const s = panelSwipeRef.current;
+    if (!s) return;
+    const t = e.touches[0];
+    const dx = t.clientX - s.x;
+    const dy = t.clientY - s.y;
+    if (Math.abs(dx) < 12 && Math.abs(dy) < 12) return;
+    panelSwipeRef.current = null;
+    if (Math.abs(dy) > Math.abs(dx)) return;
+    if (dx > 48) {
+      localStorage.setItem(PANEL_OPEN_KEY, "0");
+      setPanelOpen(false);
+    }
+  };
+  const onPanelTouchEnd = () => {
+    panelSwipeRef.current = null;
   };
 
   const closeSidebar = () => {
@@ -2012,18 +2061,33 @@ export function AgentPage() {
 
   return (
     <div className="relative flex h-full overflow-hidden">
-      {/* Thread sidebar (bb-style): on narrow screens an overlay drawer
-       * (min(86vw,360px)) slides in and the inset translates right with
-       * it (bb vaul reveal: chat keeps its width and stays visible beside
-       * the drawer); on md+ the aside is a static push column with the
-       * resizable --sidebar-w. Aside + backdrop stay mounted so
-       * open/close animates (bb 220ms); transitions arm two frames after
-       * mount via transitionsReady. */}
+      {/* Thread sidebar (bb ui/sidebar.tsx structure): the panel is ALWAYS
+       * a fixed-width absolute column that slides horizontally — the
+       * content never squishes. Desktop: a gap spacer (bb
+       * data-sidebar="gap") in the flex row reserves layout space with a
+       * 200ms linear width transition while the panel slides
+       * (bb offcanvas: left 0→-w, 200ms linear). Compact (≤767px): bb
+       * reveal drawer — panel min(86vw,360px) slides in, the inset
+       * translates right with it keeping its own width, and a transparent
+       * backdrop rides the inset as a click-catcher (220ms
+       * cubic-bezier(0.32,0.72,0,1)). Transitions arm two frames after
+       * mount via transitionsReady; resize drags skip them. */}
+      <div
+        aria-hidden
+        style={{ "--sidebar-w": `${sidebarWidth}px` } as CSSProperties}
+        className={cn(
+          "hidden shrink-0 md:block",
+          transitionsReady && !sidebarDragging
+            ? "transition-[width] duration-200 ease-linear motion-reduce:transition-none"
+            : "transition-none",
+          sidebarOpen ? "md:w-[var(--sidebar-w)]" : "md:w-0",
+        )}
+      />
       <div
         className={cn(
-          "absolute inset-0 z-10 bg-background/60 md:hidden",
+          "absolute inset-0 z-10 bg-transparent md:hidden",
           transitionsReady &&
-            "transition-[opacity,transform] duration-200 ease-in-out motion-reduce:transition-none",
+            "[transition:opacity_220ms_cubic-bezier(0.32,0.72,0,1),translate_220ms_cubic-bezier(0.32,0.72,0,1)] motion-reduce:transition-none",
           sidebarOpen
             ? "translate-x-[min(86vw,360px)] opacity-100"
             : "pointer-events-none opacity-0",
@@ -2031,15 +2095,16 @@ export function AgentPage() {
         onClick={closeSidebar}
       />
       <aside
+        inert={!sidebarOpen}
         style={{ "--sidebar-w": `${sidebarWidth}px` } as CSSProperties}
         className={cn(
-          "absolute inset-y-0 left-0 z-20 flex w-[min(86vw,360px)] shrink-0 flex-col overflow-hidden border-r border-border-seam bg-sidebar text-sidebar-foreground select-none md:static md:z-auto",
+          "absolute inset-y-0 left-0 z-20 flex w-[min(86vw,360px)] shrink-0 flex-col overflow-hidden border-r border-border-seam bg-sidebar text-sidebar-foreground select-none md:w-[var(--sidebar-w)]",
           transitionsReady && !sidebarDragging
-            ? "transition-[width,opacity,transform,border-width] duration-200 ease-in-out motion-reduce:transition-none"
+            ? sidebarOpen
+              ? "max-md:[transition:transform_220ms_cubic-bezier(0.32,0.72,0,1),visibility_0s] md:[transition:transform_200ms_linear,visibility_0s] motion-reduce:transition-none"
+              : "max-md:[transition:transform_220ms_cubic-bezier(0.32,0.72,0,1),visibility_0s_220ms] md:[transition:transform_200ms_linear,visibility_0s_200ms] motion-reduce:transition-none"
             : "transition-none",
-          sidebarOpen
-            ? "translate-x-0 md:w-[var(--sidebar-w)] md:opacity-100"
-            : "-translate-x-full md:w-0 md:translate-x-0 md:border-r-0 md:opacity-0",
+          sidebarOpen ? "translate-x-0" : "invisible -translate-x-full",
         )}
       >
         <div className="flex h-full w-full shrink-0 flex-col md:w-[var(--sidebar-w)]">
@@ -2428,12 +2493,19 @@ export function AgentPage() {
         ref={panelSizingRef}
         className={cn(
           "h-full min-w-0 flex-1",
-          /* bb mobile reveal: the inset slides right with the drawer,
-           * keeping its own width (chat visible beside the list). */
+          /* bb inset (ui/sidebar.tsx data-sidebar="inset"): translate
+           * 220ms cubic-bezier(0.32,0.72,0,1) on compact — right by the
+           * drawer width when the sidebar is open (chat keeps its width,
+           * visible beside the list), fully left when the right-panel
+           * shelf is open (panel takes precedence, bb source order). */
           transitionsReady &&
             !sidebarDragging &&
-            "transition-transform duration-200 ease-in-out motion-reduce:transition-none",
-          sidebarOpen && "max-md:translate-x-[min(86vw,360px)]",
+            "max-md:[transition:transform_220ms_cubic-bezier(0.32,0.72,0,1)] motion-reduce:transition-none",
+          isNarrow && panelOpen
+            ? "max-md:-translate-x-full"
+            : sidebarOpen
+              ? "max-md:translate-x-[min(86vw,360px)]"
+              : "",
         )}
         style={
           {
@@ -2478,6 +2550,12 @@ export function AgentPage() {
                 const next = !sidebarOpen;
                 localStorage.setItem(SIDEBAR_KEY, next ? "1" : "0");
                 setSidebarOpen(next);
+                /* Compact: the full-width shelf would cover the drawer —
+                 * opening one dismisses the other. */
+                if (next && window.innerWidth < 768 && panelOpen) {
+                  localStorage.setItem(PANEL_OPEN_KEY, "0");
+                  setPanelOpen(false);
+                }
               }}
             >
               <Icon name="PanelLeft" />
@@ -2651,17 +2729,42 @@ export function AgentPage() {
       </PanelGroup>
       </div>
 
-      {/* Narrow screens: the panel takes over the full viewport width
-       * instead of the inline resizable split. */}
-      {isNarrow && panelOpen && (
-        <AgentRightPanel
-          {...rightPanelProps}
-          /* Docking/full-screen do not apply to the fixed drawer. */
-          panelFull={undefined}
-          onSetDock={undefined}
-          onToggleFull={undefined}
-          className="fixed inset-y-0 right-0 z-30 w-full"
-        />
+      {/* Narrow screens: bb CompactSecondaryPanelShelf — a full-width
+       * shelf slides in from the right (220ms cubic-bezier(0.32,0.72,0,1))
+       * while the inset slides fully left. The wrapper stays mounted so
+       * both directions animate (visibility flips at transition end when
+       * closing, bb's visibility_0s_linear_<dur> trick); the panel content
+       * lazy-mounts on first open and stays alive afterwards so terminal
+       * sessions survive a close. Drag right on the shelf dismisses it. */}
+      {isNarrow && (
+        <div
+          inert={!panelOpen}
+          className={cn(
+            "fixed inset-y-0 right-0 z-30 w-full bg-background",
+            transitionsReady
+              ? panelOpen
+                ? "[transition:transform_220ms_cubic-bezier(0.32,0.72,0,1),visibility_0s] motion-reduce:transition-none"
+                : "[transition:transform_220ms_cubic-bezier(0.32,0.72,0,1),visibility_0s_220ms] motion-reduce:transition-none"
+              : "transition-none",
+            panelOpen
+              ? "translate-x-0"
+              : "invisible translate-x-full pointer-events-none",
+          )}
+          onTouchStart={onPanelTouchStart}
+          onTouchMove={onPanelTouchMove}
+          onTouchEnd={onPanelTouchEnd}
+        >
+          {(panelTouched || panelOpen) && (
+            <AgentRightPanel
+              {...rightPanelProps}
+              /* Docking/full-screen do not apply to the compact shelf. */
+              panelFull={undefined}
+              onSetDock={undefined}
+              onToggleFull={undefined}
+              className="h-full w-full"
+            />
+          )}
+        </div>
       )}
 
       {/* Thread drag: bb DragGhost follows the pointer; the hovered pane
