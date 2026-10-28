@@ -1899,6 +1899,15 @@ func (s *Server) HandleReleaseDownloadProxy(w http.ResponseWriter, r *http.Reque
 	var tmp *os.File
 	if cachePath != "" {
 		if err := os.MkdirAll(filepath.Dir(cachePath), 0o755); err == nil {
+			/* A killed process can orphan temp files; sweep the stale ones. */
+			if orphans, _ := filepath.Glob(filepath.Join(filepath.Dir(cachePath), ".tmp-*")); len(orphans) > 0 {
+				cutoff := time.Now().Add(-time.Hour)
+				for _, p := range orphans {
+					if info, err := os.Stat(p); err == nil && info.ModTime().Before(cutoff) {
+						_ = os.Remove(p)
+					}
+				}
+			}
 			if f, err := os.CreateTemp(filepath.Dir(cachePath), ".tmp-*"); err == nil {
 				tmp = f
 				dst = io.MultiWriter(w, tmp)
