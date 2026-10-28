@@ -374,9 +374,24 @@ export function DashboardPage() {
     0,
   );
 
-  /* Device connection copy */
+  /* Device connection copy: admin login means we can resolve the real
+   * device password (?passwords=1) and substitute it for the <password>
+   * placeholders; a failed lookup keeps the placeholder. */
   const copyDeviceConnection = useCallback(
-    (d: DeviceInfo) => {
+    async (d: DeviceInfo) => {
+      let pw = "<password>";
+      if (d.hasPassword) {
+        try {
+          const r = await apiFetch("/api/clients?passwords=1");
+          if (r.ok) {
+            const list = (await r.json()) as DeviceInfo[];
+            const mine = list.find((c) => c.id === d.id);
+            if (mine?.password) pw = mine.password;
+          }
+        } catch {
+          /* keep placeholder */
+        }
+      }
       const sshHost = location.hostname || H.split(":")[0];
       const desktopURL = `${HTTP}${H}/remote-desktop?device=${encodeURIComponent(d.id)}`;
       const servers = serverList();
@@ -386,7 +401,7 @@ export function DashboardPage() {
         "",
         `Client endpoints: ${servers}`,
         `Client command: rdev-client -s ${servers} -i ${d.id}` +
-          (d.hasPassword ? ` -p <password>` : ""),
+          (d.hasPassword ? ` -p ${pw}` : ""),
         "",
         `SSH: ssh ${d.id}@${sshHost} -p ${SP}`,
         `SFTP: sftp -P ${SP} ${d.id}@${sshHost}`,
@@ -396,8 +411,8 @@ export function DashboardPage() {
       if (VP) lines.push(`VNC: vncviewer ${VP} (username=${d.id})`);
       if (PP)
         lines.push(
-          `Proxy: curl -x http://${d.id}:<password>@${PP} https://example.com`,
-          `Proxy (SOCKS5): curl -x socks5://${d.id}:<password>@${PP} https://example.com`,
+          `Proxy: curl -x http://${d.id}:${pw}@${PP} https://example.com`,
+          `Proxy (SOCKS5): curl -x socks5://${d.id}:${pw}@${PP} https://example.com`,
         );
       lines.push(
         "",

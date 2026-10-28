@@ -1517,10 +1517,16 @@ func (s *Server) HandleAPI(w http.ResponseWriter, r *http.Request) {
 		Sessions     int                           `json:"sessions"`
 		Forwards     int                           `json:"forwards"`
 		HasPassword  bool                          `json:"hasPassword"`
+		Password     string                        `json:"password,omitempty"`
 		Desktop      *protocol.DesktopCapabilities `json:"desktop,omitempty"`
 		GPUDesktop   bool                          `json:"gpuDesktop,omitempty"`
 		LogSupported bool                          `json:"logSupported,omitempty"`
 	}
+
+	/* ?passwords=1 includes each device's access password: the endpoint is
+	 * admin-token protected, and the dashboard's copy-connection action uses
+	 * it to substitute real credentials for the <password> placeholders. */
+	includePasswords := r.URL.Query().Get("passwords") == "1"
 
 	clients := make([]clientInfo, 0, len(s.clients))
 	for _, c := range s.clients {
@@ -1528,7 +1534,7 @@ func (s *Server) HandleAPI(w http.ResponseWriter, r *http.Request) {
 		n := len(c.Sessions)
 		f := len(c.Forwards)
 		c.mu.Unlock()
-		clients = append(clients, clientInfo{
+		info := clientInfo{
 			ID:           c.ID,
 			RequestedID:  c.RequestedID,
 			InstanceID:   c.InstanceID,
@@ -1541,7 +1547,11 @@ func (s *Server) HandleAPI(w http.ResponseWriter, r *http.Request) {
 			Desktop:      cloneDesktopCapabilities(c.Desktop),
 			GPUDesktop:   s.clientGPUDesktopAvailable(c),
 			LogSupported: c.LogSupported,
-		})
+		}
+		if includePasswords {
+			info.Password = c.Password
+		}
+		clients = append(clients, info)
 	}
 
 	sort.Slice(clients, func(i, j int) bool {

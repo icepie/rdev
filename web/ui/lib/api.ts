@@ -124,6 +124,8 @@ export interface DeviceInfo {
   arch?: string;
   version?: string;
   hasPassword: boolean;
+  /* Real access password, only present when fetched with ?passwords=1. */
+  password?: string;
   connectedAt: string;
   remoteAddr?: string;
   [k: string]: unknown;
