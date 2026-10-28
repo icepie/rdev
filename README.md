@@ -40,6 +40,7 @@
 | Android / Termux | 支持 Termux 一键运行 Go 兼容版与 Rust no-desktop 版，Android/Bionic 包使用 Android libc DNS；详见 `docs/android-termux.md` |
 | Android APK | 独立安卓被控端设计采用 `MediaProjection + MediaCodec` 高性能屏幕流，输入走 Accessibility；详见 `docs/android-apk.md` |
 | VNC/RFB Bridge | 服务端可选 `--vnc` 暴露现代 VNC 入口，使用 VeNCrypt Plain 用户名/密码认证，`username=deviceId` 选择设备 |
+| Web Agent | 浏览器内 LLM Agent（`/agent?device=<id>`），通过 OpenAI 兼容接口驱动，shell/list_dir/read_file/write_file 工具在选定设备上执行 |
 
 ## 快速开始
 
@@ -57,6 +58,39 @@
 
 # 可选 VNC/RFB 入口（只支持带 username/password 的现代 VNC Viewer）
 ./rdev-server --vnc 127.0.0.1:5900
+
+# 可选 Web Agent（OpenAI 兼容接口；配置后 Web UI 出现 Agent 入口）
+./rdev-server --agent-api-key sk-... --agent-base-url https://api.openai.com/v1 --agent-model gpt-4o-mini
+# 也可用环境变量：RDEV_AGENT_API_KEY / RDEV_AGENT_BASE_URL / RDEV_AGENT_MODEL / RDEV_AGENT_MAX_TURNS
+
+# 多提供商多模型（omp 格式配置文件；页面顶部出现模型切换下拉框，切换保留对话历史）
+./rdev-server --agent-config /etc/rdev/model-config.json   # 或 RDEV_AGENT_CONFIG
+
+# 会话历史持久化：每台设备一个 JSONL 文件 <data>/agent/sessions/<device>.jsonl，
+# 会话与正在执行的轮次都在服务端：关闭/刷新页面不中断执行，重新打开自动恢复并继续观看；
+# 默认 30 天未更新自动清理（启动时 + 每小时扫描）
+./rdev-server --agent-config ... --agent-session-ttl 720h   # 或 RDEV_AGENT_SESSION_TTL；0 = 关闭持久化
+```
+
+`model-config.json` 示例（容忍 `api`/`opencode_npm` 等多余字段，`api_key` 支持 `${ENV_VAR}`）：
+
+```json
+{
+  "version": 1,
+  "default_model": "deepseek/deepseek-chat",
+  "providers": [
+    {
+      "id": "deepseek",
+      "name": "DeepSeek",
+      "base_url": "https://api.deepseek.com/v1",
+      "api_key": "${DEEPSEEK_API_KEY}",
+      "models": [
+        {"id": "deepseek-chat", "name": "DeepSeek Chat"},
+        {"id": "deepseek-reasoner", "name": "DeepSeek Reasoner", "reasoning": true}
+      ]
+    }
+  ]
+}
 ```
 
 ### 启动客户端
@@ -88,6 +122,8 @@ curl -sL https://rdev.singzer.cn/run.sh | sh -s -- wss://rdev.singzer.cn -p secr
 ### 自动更新
 
 客户端和服务端默认启用自动更新：启动 1 分钟后开始检查 GitHub latest release，之后每 1 分钟轮询一次。Go 客户端/服务端发现新版本后会下载当前平台/架构对应资产，使用 `github.com/minio/selfupdate` 替换当前二进制并重启进程。Rust GPU 客户端同样支持 `--no-auto-update`、`--auto-update`、`--update-interval` 和 `RDEV_UPDATE_PROXY`，会下载对应 `rdev-client-gpu-*` 归档并替换当前可执行文件；归档内的 DLL/sidecar 仍由安装脚本或服务包装器负责部署。
+
+**更新包签名校验**：下载链路经过第三方 GitHub 代理，因此所有更新包都带有 ed25519 签名。发布 CI 使用 `scripts/sign` 为每个资产生成 `<资产名>.sig`，客户端内置公钥（Go 与 Rust updater 相同）在替换二进制前验签，签名缺失或不匹配会拒绝更新。维护者需要在仓库 Secrets 中配置 `RDEV_UPDATE_SIGNING_KEY`（base64 编码的 64 字节 ed25519 私钥，可用 `go run ./scripts/sign -generate` 生成密钥对）；未配置时 CI 会跳过签名并发出警告。**注意：未签名的旧 Release 资产将不再被新版客户端的自动更新接受**，启用验签后请确保后续发布均带签名。此外 `RDEV_UPDATE_PROXY` 仅接受 `https://` 前缀（仅本地测试允许 loopback 的 `http://`）。
 
 ```bash
 # 禁用自动更新
@@ -203,6 +239,15 @@ printf '\033_Ga=T,f=100,s=10,v=10;%s\033\\\n' \
 bun run test:web
 go test ./...
 ```
+
+## Web 前端
+
+Web UI 是 React 19 + Tailwind CSS v4 + Radix UI 单页应用，组件/设计令牌来自 [bb](https://github.com/get-bb/bb)（MIT）：
+
+- 源码 `web/ui/`（页面 `pages/`、bb 组件 `components/`、主题令牌 `styles/app.css`、i18n `lib/dictionaries.ts` 中英双语），入口 `web/app.html`。
+- 路由保持原有 URL：`/`、`/terminal`、`/remote-desktop`、`/batch`、`/sessions`、`/files`、`/agent`；`?token=` 管理令牌与 `rdev.devicePassword.<id>` 设备密码 localStorage 契约不变。
+- 明暗主题：右上角切换 自动/浅色/深色，持久化在 `rdevTheme`，自动模式跟随系统。
+- 构建顺序：`bun run build`（vite → `internal/server/static/`，go:embed）必须在 `go build` 之前。
 
 ## Windows 兼容性
 

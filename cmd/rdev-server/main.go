@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"fmt"
 	"log"
 	"net"
@@ -36,6 +37,12 @@ func main() {
 		clientLogMaxFileSize int64 = 32 * 1024 * 1024
 		autoUpdate                 = true
 		updateInterval             = time.Minute
+		agentBaseURL               = "https://api.openai.com/v1"
+		agentAPIKey                = ""
+		agentModel                 = "gpt-4o-mini"
+		agentMaxTurns              = 25
+		agentConfigPath            = ""
+		agentSessionTTL            = 720 * time.Hour
 	)
 
 	for i := 1; i < len(os.Args); i++ {
@@ -128,6 +135,38 @@ func main() {
 				}
 				i++
 			}
+		case "--agent-base-url":
+			if i+1 < len(os.Args) {
+				agentBaseURL = os.Args[i+1]
+				i++
+			}
+		case "--agent-api-key":
+			if i+1 < len(os.Args) {
+				agentAPIKey = os.Args[i+1]
+				i++
+			}
+		case "--agent-model":
+			if i+1 < len(os.Args) {
+				agentModel = os.Args[i+1]
+				i++
+			}
+		case "--agent-max-turns":
+			if i+1 < len(os.Args) {
+				fmt.Sscanf(os.Args[i+1], "%d", &agentMaxTurns)
+				i++
+			}
+		case "--agent-config":
+			if i+1 < len(os.Args) {
+				agentConfigPath = os.Args[i+1]
+				i++
+			}
+		case "--agent-session-ttl":
+			if i+1 < len(os.Args) {
+				if d, err := time.ParseDuration(os.Args[i+1]); err == nil && d >= 0 {
+					agentSessionTTL = d
+				}
+				i++
+			}
 		case "--version", "-v":
 			fmt.Println(version)
 			os.Exit(0)
@@ -140,7 +179,7 @@ Options:
   --kcp       KCP/UDP client listen address for control and GPU tunnel (default :8082)
   --ssh, -s   SSH listen address (default :2222)
   --data, -d  Data directory for host key & authorized_keys (default ~/.rdev)
-  --admin-token, -t  Token for Web UI APIs, terminal, batch, upload (optional)
+  --admin-token, -t  Token for Web UI APIs, terminal, batch, upload (default: random, printed at startup; env RDEV_ADMIN_TOKEN)
   --max-sessions     Max concurrent sessions per device (default 256)
   --max-forwards     Max concurrent TCP forwards per device (default 1024)
   --batch-concurrency Max concurrent batch operations (default GOMAXPROCS*8)
@@ -152,6 +191,12 @@ Options:
   --no-auto-update Disable built-in GitHub release auto-update
   --auto-update    Enable/disable auto-update explicitly (true/false)
   --update-interval Auto-update polling interval (default 1m)
+  --agent-base-url OpenAI-compatible LLM API base URL (default https://api.openai.com/v1; env RDEV_AGENT_BASE_URL)
+  --agent-api-key  LLM API key for the web agent; empty disables it (env RDEV_AGENT_API_KEY)
+  --agent-model    LLM model for the web agent (default gpt-4o-mini; env RDEV_AGENT_MODEL)
+  --agent-max-turns Max agent tool-call turns per chat (default 25; env RDEV_AGENT_MAX_TURNS)
+  --agent-config   Path to multi-provider model config JSON (env RDEV_AGENT_CONFIG; overrides --agent-base-url/--agent-api-key/--agent-model)
+  --agent-session-ttl Agent chat history retention (default 720h; env RDEV_AGENT_SESSION_TTL; 0 disables persistence)
   --version, -v    Print version and exit
 
 Features:
@@ -161,6 +206,7 @@ Features:
   - Web terminal, batch commands, file distribution
   - Optional VNC/RFB bridge with VeNCrypt username/password device selection
   - Optional HTTP/SOCKS5 proxy port routing traffic through selected devices
+  - Web LLM agent with shell/file tools running on devices (requires --agent-api-key)
 
 Examples:
   rdev-server
@@ -172,6 +218,13 @@ Examples:
 
 	if adminToken == "" {
 		adminToken = os.Getenv("RDEV_ADMIN_TOKEN")
+	}
+	if adminToken == "" {
+		// Security: never run with an empty admin token — Web APIs, terminal,
+		// batch, upload and browser WebSockets would be unauthenticated.
+		// Generate a random token for this run and print it prominently.
+		adminToken = randomAdminToken(24)
+		printGeneratedTokenBanner(adminToken)
 	}
 	if env := os.Getenv("RDEV_AUTO_UPDATE"); env != "" {
 		autoUpdate = parseBoolDefault(env, autoUpdate)
@@ -201,6 +254,26 @@ Examples:
 	if env := os.Getenv("RDEV_CLIENT_LOG_MAX_FILE_SIZE"); env != "" {
 		if n, err := strconv.ParseInt(env, 10, 64); err == nil && n > 0 {
 			clientLogMaxFileSize = n
+		}
+	}
+	if env := os.Getenv("RDEV_AGENT_BASE_URL"); env != "" {
+		agentBaseURL = env
+	}
+	if env := os.Getenv("RDEV_AGENT_API_KEY"); env != "" {
+		agentAPIKey = env
+	}
+	if env := os.Getenv("RDEV_AGENT_MODEL"); env != "" {
+		agentModel = env
+	}
+	if env := os.Getenv("RDEV_AGENT_MAX_TURNS"); env != "" {
+		fmt.Sscanf(env, "%d", &agentMaxTurns)
+	}
+	if env := os.Getenv("RDEV_AGENT_CONFIG"); env != "" {
+		agentConfigPath = env
+	}
+	if env := os.Getenv("RDEV_AGENT_SESSION_TTL"); env != "" {
+		if d, err := time.ParseDuration(env); err == nil && d >= 0 {
+			agentSessionTTL = d
 		}
 	}
 
@@ -237,6 +310,31 @@ Examples:
 	srv.TCPPort = tcpPort
 	srv.KCPPort = kcpPort
 	srv.AdminToken = adminToken
+	srv.AgentBaseURL = agentBaseURL
+	srv.AgentAPIKey = agentAPIKey
+	srv.AgentModel = agentModel
+	srv.AgentMaxTurns = agentMaxTurns
+	srv.DataDir = dataDir
+	srv.AgentSessionTTL = agentSessionTTL
+	// Multi-provider agent config: an explicit config file wins; otherwise
+	// synthesize a single "default" provider from the single-model flags.
+	if agentConfigPath != "" {
+		agentCfg, err := server.LoadAgentConfig(agentConfigPath)
+		if err != nil {
+			log.Fatalf("agent config error: %v", err)
+		}
+		srv.Agent = agentCfg
+	} else if agentAPIKey != "" {
+		srv.Agent = &server.AgentConfig{
+			Providers: []server.AgentProvider{{
+				ID:      "default",
+				Name:    "Default",
+				BaseURL: agentBaseURL,
+				APIKey:  agentAPIKey,
+				Models:  []server.AgentModelConfig{{ID: agentModel, Name: agentModel}},
+			}},
+		}
+	}
 	if maxSessions > 0 {
 		srv.MaxSessions = maxSessions
 	}
@@ -278,19 +376,22 @@ Examples:
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", srv.HandleWS)
 	mux.HandleFunc("/tcp-tunnel", srv.HandleTCPTunnel)
-	mux.HandleFunc("/terminal", splitPageAndWebSocket(srv.StaticPageHandler("terminal.html"), srv.HandleTerminalWS))
+	mux.HandleFunc("/terminal", splitPageAndWebSocket(srv.StaticPageHandler("app.html"), srv.HandleTerminalWS))
 	mux.HandleFunc("/desktop", srv.HandleDesktopWS)
 	mux.HandleFunc("/gpu-desktop-tunnel", srv.HandleGPUDesktopTunnel)
 	mux.HandleFunc("/gpu-desktop/", srv.HandleGPUDesktopProxy)
 	mux.HandleFunc("/session", srv.HandleSessionAttachWS)
-	mux.HandleFunc("/batch", splitPageAndWebSocket(srv.StaticPageHandler("batch.html"), srv.HandleBatchWS))
-	mux.HandleFunc("/files", splitPageAndWebSocket(srv.StaticPageHandler("files.html"), srv.HandleFilesWS))
-	mux.HandleFunc("/sessions", srv.StaticPageHandler("sessions.html"))
-	mux.HandleFunc("/remote-desktop", srv.StaticPageHandler("desktop.html"))
+	mux.HandleFunc("/batch", splitPageAndWebSocket(srv.StaticPageHandler("app.html"), srv.HandleBatchWS))
+	mux.HandleFunc("/files", splitPageAndWebSocket(srv.StaticPageHandler("app.html"), srv.HandleFilesWS))
+	mux.HandleFunc("/agent", splitPageAndWebSocket(srv.StaticPageHandler("app.html"), srv.HandleAgentWS))
+	mux.HandleFunc("/sessions", srv.StaticPageHandler("app.html"))
+	mux.HandleFunc("/remote-desktop", srv.StaticPageHandler("app.html"))
 	mux.HandleFunc("/api/clients", srv.HandleAPI)
 	mux.HandleFunc("/api/sessions", srv.HandleSessionsAPI)
 	mux.HandleFunc("/api/devices", srv.HandleTerminalAPI)
-	mux.HandleFunc("/api/batch/devices", srv.HandleBatchDevicesAPI)
+	// Security: batch device listing requires the admin token like every
+	// other API endpoint (batch actions additionally check device passwords).
+	mux.HandleFunc("/api/batch/devices", srv.RequireAuth(srv.HandleBatchDevicesAPI))
 	mux.HandleFunc("/api/config", srv.HandleConfigAPI)
 	mux.HandleFunc("/api/release/latest", srv.HandleReleaseLatestAPI)
 	mux.HandleFunc("/api/vnc/settings", srv.HandleVNCSettingsAPI)
@@ -299,6 +400,7 @@ Examples:
 	mux.HandleFunc("/api/upload", srv.HandleFileUpload)
 	mux.HandleFunc("/download-release", srv.HandleReleaseDownload)
 	mux.HandleFunc("/download-release-proxy", srv.HandleReleaseDownloadProxy)
+	mux.HandleFunc("/{$}", srv.StaticPageHandler("app.html"))
 	mux.Handle("/", srv.StaticHandler())
 
 	go func() {
@@ -388,6 +490,34 @@ func splitPageAndWebSocket(page http.HandlerFunc, websocket http.HandlerFunc) ht
 		}
 		page(w, r)
 	}
+}
+
+// randomAdminToken returns an n-character random token from a URL-safe alphabet.
+func randomAdminToken(n int) string {
+	const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+	raw := make([]byte, n)
+	if _, err := rand.Read(raw); err != nil {
+		log.Fatalf("failed to generate admin token: %v", err)
+	}
+	token := make([]byte, n)
+	for i, b := range raw {
+		token[i] = alphabet[int(b)%len(alphabet)]
+	}
+	return string(token)
+}
+
+// printGeneratedTokenBanner warns loudly on stderr that a random admin token
+// was generated and explains how to set a persistent one.
+func printGeneratedTokenBanner(token string) {
+	fmt.Fprintln(os.Stderr)
+	fmt.Fprintln(os.Stderr, "  ┌──────────────────────────────────────────────────────────────────────┐")
+	fmt.Fprintln(os.Stderr, "  │  WARNING: No admin token configured — a random one was generated.    │")
+	fmt.Fprintln(os.Stderr, "  │  It protects the Web UI, terminal, batch and upload APIs.            │")
+	fmt.Fprintln(os.Stderr, "  └──────────────────────────────────────────────────────────────────────┘")
+	fmt.Fprintf(os.Stderr, "    Admin token: %s\n", token)
+	fmt.Fprintln(os.Stderr, "    (regenerated on every restart; set a persistent token with")
+	fmt.Fprintln(os.Stderr, "     --admin-token <token> or the RDEV_ADMIN_TOKEN environment variable)")
+	fmt.Fprintln(os.Stderr)
 }
 
 func parseBoolDefault(value string, fallback bool) bool {

@@ -91,7 +91,8 @@ type sessionAttachMsg struct {
 
 type sessionAttachHandler struct {
 	gws.BuiltinEventHandler
-	srv *Server
+	srv         *Server
+	adminBypass bool // valid admin token: skip device password
 }
 
 type sessionAttachConn struct {
@@ -139,7 +140,7 @@ func (h *sessionAttachHandler) OnOpen(socket *gws.Conn) {
 		socket.WriteClose(1000, nil)
 		return
 	}
-	if client.Password != "" {
+	if client.Password != "" && !h.adminBypass {
 		h.sendJSON(socket, sessionAttachMsg{Op: "auth", Message: "Device '" + sess.ClientID + "' requires password"})
 		return
 	}
@@ -220,10 +221,17 @@ func (h *sessionAttachHandler) OnMessage(socket *gws.Conn, message *gws.Message)
 			h.sendError(socket, "device not connected")
 			return
 		}
+		// Brute-force throttle: reject during cooldown without comparing.
+		if h.srv.authLimiter.wait(ac.sess.ClientID) > 0 {
+			h.sendJSON(socket, sessionAttachMsg{Op: "auth_fail", Message: "Too many attempts, retry later"})
+			return
+		}
 		if client.Password == "" || constantTimeEqual(client.Password, msg.Password) {
+			h.srv.authLimiter.success(ac.sess.ClientID)
 			h.attach(ac)
 			return
 		}
+		h.srv.authLimiter.fail(ac.sess.ClientID)
 		h.sendJSON(socket, sessionAttachMsg{Op: "auth_fail", Message: "Wrong password"})
 	case "resize":
 		if !ac.authOK {
@@ -318,13 +326,16 @@ func (s *Server) HandleSessionAttachWS(w http.ResponseWriter, r *http.Request) {
 	if !s.requireAuth(w, r) {
 		return
 	}
+	if !requireOrigin(w, r) {
+		return
+	}
 	sessionID := r.URL.Query().Get("session")
 	if sessionID == "" {
 		http.Error(w, "missing session parameter", http.StatusBadRequest)
 		return
 	}
 
-	upgrader := gws.NewUpgrader(&sessionAttachHandler{srv: s}, &gws.ServerOption{
+	upgrader := gws.NewUpgrader(&sessionAttachHandler{srv: s, adminBypass: s.deviceAuthBypassed(r)}, &gws.ServerOption{
 		ReadMaxPayloadSize: 16 * 1024 * 1024,
 		ParallelGolimit:    runtime.GOMAXPROCS(0),
 		Authorize: func(r *http.Request, session gws.SessionStorage) bool {

@@ -5,7 +5,7 @@
     "experimentalDecorators": true,
     "module": "ESNext",
     "lib": [
-      "ES2022",
+      "ES2024",
       "DOM",
       "DOM.Iterable"
     ],
@@ -18,9 +18,11 @@
     "resolveJsonModule": true,
     "isolatedModules": true,
     "noEmit": true,
-    "strict": true
+    "strict": true,
+    "jsx": "react-jsx"
   },
   "include": [
-    "vite.config.ts"
+    "vite.config.ts",
+    "web/ui"
   ]
 }

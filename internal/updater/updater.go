@@ -3,12 +3,16 @@ package updater
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"runtime"
 	"strings"
@@ -18,6 +22,22 @@ import (
 )
 
 const repo = "icepie/rdev"
+
+// updatePublicKeyB64 is the embedded ed25519 public key (base64, 32 bytes)
+// used to verify release asset signatures. Assets are signed in CI by
+// scripts/sign with the private key stored in the RDEV_UPDATE_SIGNING_KEY
+// GitHub secret; unsigned or tampered downloads must never be applied.
+const updatePublicKeyB64 = "jtVaB2ppsCLhcYyYYQjRKiviDvyPZvr+AS8nqOQlkUk="
+
+var updatePublicKey = mustDecodePublicKey(updatePublicKeyB64)
+
+func mustDecodePublicKey(b64 string) ed25519.PublicKey {
+	key, err := base64.StdEncoding.DecodeString(b64)
+	if err != nil || len(key) != ed25519.PublicKeySize {
+		panic("invalid embedded update public key")
+	}
+	return ed25519.PublicKey(key)
+}
 
 var defaultProxyPrefixes = []string{
 	"",
@@ -159,6 +179,16 @@ func CheckAndApply(ctx context.Context, cfg Config) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	// Security: the release JSON and asset URL pass through third-party
+	// proxies, so the downloaded bytes cannot be trusted until the ed25519
+	// signature (fetched as <asset>.sig from the same release) verifies.
+	sigData, err := downloadSignatureWithProxies(ctx, assetURL+".sig")
+	if err != nil {
+		return false, fmt.Errorf("release %s asset %s rejected: %w", release.TagName, assetName, err)
+	}
+	if err := verifyAssetSignature(updatePublicKey, data, sigData); err != nil {
+		return false, fmt.Errorf("release %s asset %s rejected: %w", release.TagName, assetName, err)
+	}
 	if err := selfupdate.Apply(bytes.NewReader(data), selfupdate.Options{}); err != nil {
 		if rollbackErr := selfupdate.RollbackError(err); rollbackErr != nil {
 			return false, fmt.Errorf("apply update failed: %w; rollback failed: %v", err, rollbackErr)
@@ -203,6 +233,36 @@ func downloadAssetWithProxies(ctx context.Context, target string) ([]byte, error
 		}
 		return nil
 	})
+}
+
+// downloadSignatureWithProxies fetches a base64-encoded ed25519 signature and
+// validates its shape; the signature itself is checked separately.
+func downloadSignatureWithProxies(ctx context.Context, target string) ([]byte, error) {
+	var sig []byte
+	_, err := downloadWithProxies(ctx, target, func(url string, resp *http.Response, body []byte) error {
+		decoded, err := base64.StdEncoding.DecodeString(string(bytes.TrimSpace(body)))
+		if err != nil || len(decoded) != ed25519.SignatureSize {
+			return fmt.Errorf("%s returned invalid asset signature", url)
+		}
+		sig = decoded
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return sig, nil
+}
+
+// verifyAssetSignature rejects any asset whose bytes do not match the
+// detached ed25519 signature produced by scripts/sign in release CI.
+func verifyAssetSignature(pub ed25519.PublicKey, data, sig []byte) error {
+	if len(sig) != ed25519.SignatureSize {
+		return fmt.Errorf("invalid signature length %d", len(sig))
+	}
+	if !ed25519.Verify(pub, data, sig) {
+		return errors.New("ed25519 signature mismatch")
+	}
+	return nil
 }
 
 func downloadWithProxies(ctx context.Context, target string, validate func(string, *http.Response, []byte) error) ([]byte, error) {
@@ -275,9 +335,40 @@ func proxyPrefixes() []string {
 			continue
 		}
 		seen[prefix] = true
+		// Security: only https proxy prefixes are allowed (loopback http is
+		// kept for tests); a plaintext proxy could otherwise serve tampered
+		// assets/signatures and defeat the download path before verification.
+		if !validProxyPrefix(prefix) {
+			continue
+		}
 		out = append(out, prefix)
 	}
 	return out
+}
+
+// validProxyPrefix reports whether a proxy prefix uses an acceptable scheme:
+// https, or http only when targeting loopback (for local testing).
+func validProxyPrefix(prefix string) bool {
+	if prefix == "" {
+		return true
+	}
+	u, err := url.Parse(prefix)
+	if err != nil {
+		return false
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "https":
+		return true
+	case "http":
+		host := u.Hostname()
+		if host == "localhost" {
+			return true
+		}
+		ip := net.ParseIP(host)
+		return ip != nil && ip.IsLoopback()
+	default:
+		return false
+	}
 }
 
 func proxiedURL(prefix, target string) string {

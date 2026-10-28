@@ -100,6 +100,7 @@ type Message struct {
 	ClientID      string      `json:"clientId,omitempty"`
 	SessionID     string      `json:"sessionId,omitempty"`
 	ClientVersion string      `json:"clientVersion,omitempty"`
+	ClientOS      string      `json:"clientOS,omitempty"` // GOOS, sent at registration
 
 	// Client registration identity. InstanceID is a stable per-process token used
 	// to distinguish duplicate IDs from reconnects of the same running client.
@@ -108,6 +109,7 @@ type Message struct {
 	// Session creation
 	Subsystem string           `json:"subsystem,omitempty"` // "", "sftp"
 	Command   string           `json:"command,omitempty"`
+	Cwd       string           `json:"cwd,omitempty"` // working directory for exec sessions (optional; ignored by old clients)
 	Pty       bool             `json:"pty,omitempty"`
 	Env       []string         `json:"env,omitempty"`
 	Term      string           `json:"term,omitempty"`

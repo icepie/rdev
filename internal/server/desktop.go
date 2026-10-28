@@ -84,7 +84,8 @@ type desktopBrowserConn struct {
 
 type desktopWSHandler struct {
 	gws.BuiltinEventHandler
-	srv *Server
+	srv         *Server
+	adminBypass bool // valid admin token: skip device password
 }
 
 func (h *desktopWSHandler) OnOpen(socket *gws.Conn) {
@@ -105,7 +106,7 @@ func (h *desktopWSHandler) OnOpen(socket *gws.Conn) {
 
 	bc := &desktopBrowserConn{srv: h.srv, socket: socket, deviceID: client.ID, client: client, request: desktopRequestFromSession(socket), frameCh: make(chan []byte, 1), done: make(chan struct{})}
 	socket.Session().Store("desktopConn", bc)
-	if client.Password != "" {
+	if client.Password != "" && !h.adminBypass {
 		h.sendJSON(socket, desktopMsg{Op: "auth", Device: client.ID, Message: "device password required"})
 		return
 	}
@@ -143,7 +144,8 @@ func (h *desktopWSHandler) OnMessage(socket *gws.Conn, message *gws.Message) {
 			bc.writeJSON(desktopMsg{Op: "auth", Device: bc.deviceID, Message: "device password required"})
 			return
 		}
-		if bc.client.Password == "" || passwordFingerprint(msg.Pass) == passwordFingerprint(bc.client.Password) {
+		// Constant-time compare of password fingerprints against timing leaks.
+		if bc.client.Password == "" || constantTimeEqual(passwordFingerprint(msg.Pass), passwordFingerprint(bc.client.Password)) {
 			h.start(bc)
 			return
 		}
@@ -638,9 +640,12 @@ func (s *Server) HandleDesktopWS(w http.ResponseWriter, r *http.Request) {
 	if !s.requireAuth(w, r) {
 		return
 	}
+	if !requireOrigin(w, r) {
+		return
+	}
 	deviceID := r.URL.Query().Get("device")
 	request := desktopRequestFromQuery(r)
-	upgrader := gws.NewUpgrader(&desktopWSHandler{srv: s}, &gws.ServerOption{
+	upgrader := gws.NewUpgrader(&desktopWSHandler{srv: s, adminBypass: s.deviceAuthBypassed(r)}, &gws.ServerOption{
 		ReadMaxPayloadSize: 1024 * 1024,
 		ParallelGolimit:    runtime.GOMAXPROCS(0),
 		Authorize: func(r *http.Request, session gws.SessionStorage) bool {

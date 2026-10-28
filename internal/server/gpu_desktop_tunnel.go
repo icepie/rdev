@@ -78,7 +78,7 @@ func (s *Server) HandleGPUDesktopTunnel(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "device is not connected", http.StatusNotFound)
 		return
 	}
-	if client.Password != "" && passwordFingerprint(r.URL.Query().Get("password")) != passwordFingerprint(client.Password) {
+	if client.Password != "" && !s.deviceAuthBypassed(r) && passwordFingerprint(r.URL.Query().Get("password")) != passwordFingerprint(client.Password) {
 		http.Error(w, "wrong device password", http.StatusUnauthorized)
 		return
 	}
@@ -428,7 +428,7 @@ func (s *Server) HandleGPUDesktopProxy(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "device is not connected", http.StatusNotFound)
 		return
 	}
-	if client.Password != "" && passwordFingerprint(r.URL.Query().Get("password")) != passwordFingerprint(client.Password) {
+	if client.Password != "" && !s.deviceAuthBypassed(r) && passwordFingerprint(r.URL.Query().Get("password")) != passwordFingerprint(client.Password) {
 		http.Error(w, "wrong device password", http.StatusUnauthorized)
 		return
 	}

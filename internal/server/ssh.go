@@ -185,10 +185,18 @@ func (s *SSHServer) handlePassword(ctx ssh.Context, pass string) bool {
 		log.Printf("ssh auth: %s accepted (no auth required)", clientID)
 		return true
 	}
-	if client.Password == pass {
+	// Brute-force throttle: reject during cooldown without comparing.
+	if wait := s.srv.authLimiter.wait(clientID); wait > 0 {
+		log.Printf("ssh auth: %s throttled, %s cooldown remaining", clientID, wait.Round(time.Millisecond))
+		return false
+	}
+	// Constant-time compare: do not leak password prefix via timing.
+	if constantTimeEqual(client.Password, pass) {
+		s.srv.authLimiter.success(clientID)
 		log.Printf("ssh auth: %s authenticated via password", clientID)
 		return true
 	}
+	s.srv.authLimiter.fail(clientID)
 	return false
 }
 
@@ -203,15 +211,23 @@ func (s *SSHServer) handleKeyboardInteractive(ctx ssh.Context, challenger gossh.
 		log.Printf("ssh auth: %s accepted via keyboard-interactive (no auth required)", clientID)
 		return true
 	}
+	// Brute-force throttle: reject during cooldown without comparing.
+	if wait := s.srv.authLimiter.wait(clientID); wait > 0 {
+		log.Printf("ssh auth: %s throttled, %s cooldown remaining", clientID, wait.Round(time.Millisecond))
+		return false
+	}
 	// Password-protected: challenge the user
 	answers, err := challenger("RDev Authentication", "", []string{"Password: "}, []bool{false})
 	if err != nil || len(answers) == 0 {
 		return false
 	}
-	if answers[0] == client.Password {
+	// Constant-time compare: do not leak password prefix via timing.
+	if constantTimeEqual(client.Password, answers[0]) {
+		s.srv.authLimiter.success(clientID)
 		log.Printf("ssh auth: %s authenticated via keyboard-interactive", clientID)
 		return true
 	}
+	s.srv.authLimiter.fail(clientID)
 	return false
 }
 

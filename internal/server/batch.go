@@ -45,7 +45,8 @@ const batchBinOutput byte = 0x01
 
 type batchWSHandler struct {
 	gws.BuiltinEventHandler
-	srv *Server
+	srv         *Server
+	adminBypass bool // valid admin token: skip device password
 }
 
 type batchUploadMeta struct {
@@ -158,7 +159,7 @@ func (h *batchWSHandler) handleBatchAuth(socket *batchSocket, msg batchMsg) {
 		socket.WriteText(batchMsg{Op: "auth_fail", DeviceID: msg.DeviceID, Message: "device not connected"})
 		return
 	}
-	if client.Password == "" || constantTimeEqual(client.Password, msg.Password) {
+	if h.adminBypass || client.Password == "" || constantTimeEqual(client.Password, msg.Password) {
 		socket.authMu.Lock()
 		socket.authorized[msg.DeviceID] = passwordFingerprint(client.Password)
 		delete(socket.authFails, msg.DeviceID)
@@ -539,7 +540,7 @@ func (h *batchWSHandler) authorizedDevices(socket *batchSocket, devices []string
 }
 
 func (h *batchWSHandler) isDeviceAuthorized(socket *batchSocket, client *ClientConn) bool {
-	if client.Password == "" {
+	if h.adminBypass || client.Password == "" {
 		return true
 	}
 	socket.authMu.RLock()
@@ -584,8 +585,9 @@ func (s *Server) HandleFileUpload(w http.ResponseWriter, r *http.Request) {
 }
 
 // HandleBatchDevicesAPI returns device metadata for the Batch page.
-// This endpoint is intentionally not protected by the admin token; Batch actions
-// enforce each target device's own password before executing or writing files.
+// Security: protected by the admin token like every other API endpoint (see
+// main.go route setup); batch actions additionally enforce each target
+// device's own password before executing or writing files.
 func (s *Server) HandleBatchDevicesAPI(w http.ResponseWriter, r *http.Request) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -593,6 +595,7 @@ func (s *Server) HandleBatchDevicesAPI(w http.ResponseWriter, r *http.Request) {
 	type deviceInfo struct {
 		ID          string `json:"id"`
 		ConnectedAt string `json:"connectedAt"`
+		OS          string `json:"os,omitempty"`
 		HasPassword bool   `json:"hasPassword"`
 	}
 
@@ -601,6 +604,7 @@ func (s *Server) HandleBatchDevicesAPI(w http.ResponseWriter, r *http.Request) {
 		devices = append(devices, deviceInfo{
 			ID:          c.ID,
 			ConnectedAt: c.ConnectedAt.Format(time.RFC3339),
+			OS:          clientOS(c),
 			HasPassword: c.Password != "",
 		})
 	}
@@ -618,7 +622,15 @@ func (s *Server) HandleBatchDevicesAPI(w http.ResponseWriter, r *http.Request) {
 
 // HandleBatchWS handles browser batch WebSocket connections
 func (s *Server) HandleBatchWS(w http.ResponseWriter, r *http.Request) {
-	upgrader := gws.NewUpgrader(&batchWSHandler{srv: s}, &gws.ServerOption{
+	// Security: same admin-token requirement as the other browser endpoints,
+	// plus Origin check against cross-site WebSocket hijacking.
+	if !s.requireAuth(w, r) {
+		return
+	}
+	if !requireOrigin(w, r) {
+		return
+	}
+	upgrader := gws.NewUpgrader(&batchWSHandler{srv: s, adminBypass: s.deviceAuthBypassed(r)}, &gws.ServerOption{
 		ReadMaxPayloadSize: 100 * 1024 * 1024,
 		ParallelGolimit:    runtime.GOMAXPROCS(0),
 		PermessageDeflate: gws.PermessageDeflate{

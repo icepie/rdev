@@ -419,6 +419,24 @@ jobs:
           echo "=== Release files ==="
           ls -lh
 
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.26'
+
+      # Sign assets so auto-updaters can verify the ed25519 signature;
+      # unsigned releases are rejected by clients, so warn loudly instead of
+      # failing the whole release when the secret is not configured.
+      - name: Sign release assets
+        env:
+          RDEV_UPDATE_SIGNING_KEY: ${{ secrets.RDEV_UPDATE_SIGNING_KEY }}
+        run: |
+          if [ -z "$RDEV_UPDATE_SIGNING_KEY" ]; then
+            echo "::warning::RDEV_UPDATE_SIGNING_KEY secret is not configured; release assets will NOT be signed and auto-update clients will reject them"
+            exit 0
+          fi
+          go run ./scripts/sign -key "$RDEV_UPDATE_SIGNING_KEY" artifacts/*
+          ls -lh artifacts/*.sig
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
         with:

@@ -264,9 +264,18 @@ func (v *vncConn) authenticate(username, password string) (*ClientConn, string, 
 			return nil, "", false
 		}
 		if client.Password != "" {
-			return client, client.ID, constantTimeEqual(passwordFingerprint(password), passwordFingerprint(client.Password))
+			// Brute-force throttle: reject during cooldown without comparing.
+			if v.srv.authLimiter.wait(client.ID) > 0 {
+				return nil, "", false
+			}
+			if constantTimeEqual(passwordFingerprint(password), passwordFingerprint(client.Password)) {
+				v.srv.authLimiter.success(client.ID)
+				return client, client.ID, true
+			}
+			v.srv.authLimiter.fail(client.ID)
+			return nil, "", false
 		}
-		return client, client.ID, password == "" || password == client.ID
+		return client, client.ID, password == "" || constantTimeEqual(password, client.ID)
 	}
 	if password == "" {
 		return nil, "", false

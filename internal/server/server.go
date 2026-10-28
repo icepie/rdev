@@ -28,6 +28,8 @@ import (
 //go:embed static
 var templateFS embed.FS
 
+const sessionHistoryLimit = 1024 * 1024
+
 // clientIDPattern whitelists device IDs: the ID is reused as SSH username, URL
 // query parameter, log identifier and map key across the server, so restrict it
 // to a safe printable set with a bounded length.
@@ -36,8 +38,6 @@ var clientIDPattern = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
 func validClientID(id string) bool {
 	return clientIDPattern.MatchString(id)
 }
-
-const sessionHistoryLimit = 1024 * 1024
 
 const (
 	wsWriteWait      = 10 * time.Second
@@ -81,6 +81,7 @@ type ClientConn struct {
 	RequestedID  string
 	InstanceID   string
 	Version      string
+	OS           string
 	Conn         *gws.Conn
 	Transport    DeviceTransport
 	ConnectedAt  time.Time
@@ -91,6 +92,19 @@ type ClientConn struct {
 	LogSupported bool
 	writeMu      sync.Mutex
 	mu           sync.Mutex
+}
+
+// clientOS reports the device's operating system as sent at registration,
+// falling back to the desktop capability platform for clients that predate
+// the clientOS field (e.g. the Android APK).
+func clientOS(c *ClientConn) string {
+	if c.OS != "" {
+		return c.OS
+	}
+	if c.Desktop != nil {
+		return c.Desktop.Platform
+	}
+	return ""
 }
 
 type DeviceTransport interface {
@@ -552,6 +566,9 @@ type Server struct {
 	fileRequests      map[string]*fileSocket
 	fileTasks         map[string]*fileTaskRoute
 	fileMu            sync.RWMutex
+	agentFileReqs     map[string]chan *protocol.Message
+	agentFileTasks    map[string]*agentFileTask
+	agentFileMu       sync.Mutex
 	desktops          map[string]*desktopRoute
 	desktopMu         sync.RWMutex
 	vncMu             sync.RWMutex
@@ -559,13 +576,18 @@ type Server struct {
 	vncStreams        map[string]*vncDesktopStream
 	gpuDesktopMu      sync.RWMutex
 	gpuDesktopTunnels map[string]*gpuDesktopTunnel
-	authLimiter       *authRateLimiter // per-device password brute-force throttle
 	proxyTunnelsMu    sync.Mutex
 	proxyTunnels      map[string]*proxyTunnelPending
 	releaseLatestMu   sync.Mutex
 	releaseLatestTag  string
 	releaseLatestAt   time.Time
 	upgrader          *gws.Upgrader
+	authLimiter       *authRateLimiter // per-device password brute-force throttle
+	agentStoreOnce    sync.Once
+	agentStoreInst    *agentSessionStore
+	agentSessionsMu   sync.Mutex
+	agentSessions     map[string]*agentSessionEntry // per-device agent state, owned by the server
+	agentEvictOnce    sync.Once
 
 	// Public config (set by main) for API/UI
 	SSHPort          string // e.g. "2222"
@@ -580,6 +602,22 @@ type Server struct {
 	BatchConcurrency int    // maximum concurrent batch operations
 	ReleaseVersion   string // server release version, injected by main
 	ClientLogs       *ClientLogManager
+
+	// LLM agent (browser /agent endpoint). Agent is the multi-provider model
+	// configuration; nil or no provider with an API key disables the agent.
+	// The AgentBaseURL/AgentAPIKey/AgentModel fields are the single-model
+	// flag values main uses to synthesize Agent.
+	Agent         *AgentConfig
+	AgentBaseURL  string // OpenAI-compatible endpoint root
+	AgentAPIKey   string
+	AgentModel    string
+	AgentMaxTurns int
+
+	// Agent session persistence: JSONL history per device under
+	// DataDir/agent/sessions. AgentSessionTTL <= 0 disables persistence and
+	// the TTL cleanup entirely.
+	DataDir         string
+	AgentSessionTTL time.Duration
 }
 
 // NewServer creates a new Server
@@ -592,16 +630,18 @@ func NewServer() *Server {
 		fileResults:       make(map[string]chan *protocol.Message),
 		fileRequests:      make(map[string]*fileSocket),
 		fileTasks:         make(map[string]*fileTaskRoute),
+		agentFileReqs:     make(map[string]chan *protocol.Message),
+		agentFileTasks:    make(map[string]*agentFileTask),
 		desktops:          make(map[string]*desktopRoute),
 		vncSettings:       make(map[string]protocol.Message),
 		vncStreams:        make(map[string]*vncDesktopStream),
 		gpuDesktopTunnels: make(map[string]*gpuDesktopTunnel),
+		proxyTunnels:      make(map[string]*proxyTunnelPending),
 		MaxSessions:       256,
 		MaxForwards:       1024,
 		BatchConcurrency:  runtime.GOMAXPROCS(0) * 8,
 		ClientLogs:        NewClientLogManager("", 0, 0),
 		authLimiter:       newAuthRateLimiter(),
-		proxyTunnels:      make(map[string]*proxyTunnelPending),
 	}
 	s.upgrader = gws.NewUpgrader(&wsHandler{srv: s}, &gws.ServerOption{
 		ReadMaxPayloadSize: 16 * 1024 * 1024,
@@ -746,7 +786,10 @@ func (h *wsHandler) handleRegister(socket *gws.Conn, msg *protocol.Message) {
 	}
 
 	clientID := strings.TrimSpace(msg.ClientID)
-	if clientID == "" {
+	if !validClientID(clientID) {
+		// Security: reject unsafe/oversized IDs instead of letting them flow
+		// into SSH usernames, URLs and logs.
+		log.Printf("rejected registration with invalid client ID %q", clientID)
 		socket.WriteClose(1000, nil)
 		return
 	}
@@ -756,6 +799,7 @@ func (h *wsHandler) handleRegister(socket *gws.Conn, msg *protocol.Message) {
 		RequestedID:  clientID,
 		InstanceID:   instanceID,
 		Version:      msg.ClientVersion,
+		OS:           msg.ClientOS,
 		Conn:         socket,
 		Transport:    &wsDeviceTransport{conn: socket},
 		ConnectedAt:  time.Now(),
@@ -1058,8 +1102,10 @@ func (s *Server) handleStreamDeviceConn(conn net.Conn, label string) {
 
 func (s *Server) registerStreamClient(transport DeviceTransport, msg *protocol.Message, label string) (string, bool) {
 	clientID := strings.TrimSpace(msg.ClientID)
-	if clientID == "" {
-		_ = transport.Close("missing client id")
+	if !validClientID(clientID) {
+		// Security: same ID whitelist as the WS register path.
+		log.Printf("rejected registration with invalid client ID %q", clientID)
+		_ = transport.Close("invalid client id")
 		return "", false
 	}
 	instanceID := strings.TrimSpace(msg.InstanceID)
@@ -1068,6 +1114,7 @@ func (s *Server) registerStreamClient(transport DeviceTransport, msg *protocol.M
 		RequestedID:  clientID,
 		InstanceID:   instanceID,
 		Version:      msg.ClientVersion,
+		OS:           msg.ClientOS,
 		Transport:    transport,
 		ConnectedAt:  time.Now(),
 		Password:     msg.Password,
@@ -1415,7 +1462,8 @@ func (s *Server) authOK(r *http.Request) bool {
 		auth := r.Header.Get("Authorization")
 		token = strings.TrimPrefix(auth, "Bearer ")
 	}
-	return token == s.AdminToken
+	// Constant-time compare: do not leak token prefix via timing.
+	return constantTimeEqual(token, s.AdminToken)
 }
 
 func (s *Server) requireAuth(w http.ResponseWriter, r *http.Request) bool {
@@ -1424,6 +1472,23 @@ func (s *Server) requireAuth(w http.ResponseWriter, r *http.Request) bool {
 	}
 	http.Error(w, "unauthorized", http.StatusUnauthorized)
 	return false
+}
+
+// deviceAuthBypassed reports whether the request carries a valid admin token;
+// admins skip per-device password checks in the browser endpoints.
+func (s *Server) deviceAuthBypassed(r *http.Request) bool {
+	return s.AdminToken != "" && s.authOK(r)
+}
+
+// RequireAuth wraps h with admin-token authentication. Used by main to protect
+// routes whose handlers cannot call requireAuth themselves.
+func (s *Server) RequireAuth(h http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !s.requireAuth(w, r) {
+			return
+		}
+		h(w, r)
+	}
 }
 
 // HandleAPI returns the list of connected clients as JSON
@@ -1439,6 +1504,7 @@ func (s *Server) HandleAPI(w http.ResponseWriter, r *http.Request) {
 		RequestedID  string                        `json:"requestedId,omitempty"`
 		InstanceID   string                        `json:"instanceId,omitempty"`
 		Version      string                        `json:"version,omitempty"`
+		OS           string                        `json:"os,omitempty"`
 		ConnectedAt  string                        `json:"connectedAt"`
 		Sessions     int                           `json:"sessions"`
 		Forwards     int                           `json:"forwards"`
@@ -1459,6 +1525,7 @@ func (s *Server) HandleAPI(w http.ResponseWriter, r *http.Request) {
 			RequestedID:  c.RequestedID,
 			InstanceID:   c.InstanceID,
 			Version:      c.Version,
+			OS:           clientOS(c),
 			ConnectedAt:  c.ConnectedAt.Format(time.RFC3339),
 			Sessions:     n,
 			Forwards:     f,
@@ -1765,7 +1832,12 @@ func (s *Server) HandleConfigAPI(w http.ResponseWriter, r *http.Request) {
 		"tcpPort":      s.TCPPort,
 		"kcpPort":      s.KCPPort,
 		"vncAddr":      s.VNCAddr,
+		"proxyAddr":    s.ProxyAddr,
 		"authRequired": map[bool]string{true: "true", false: "false"}[s.AdminToken != ""],
+		// Never expose provider API keys here.
+		"agentEnabled":   map[bool]string{true: "true", false: "false"}[s.Agent != nil && s.Agent.Enabled()],
+		"agentModel":     agentDefaultModel(s.Agent),
+		"agentProviders": agentProviderIDs(s.Agent),
 	})
 }
 
@@ -1792,6 +1864,7 @@ func (s *Server) HandleTerminalAPI(w http.ResponseWriter, r *http.Request) {
 		RequestedID  string                        `json:"requestedId,omitempty"`
 		ConnectedAt  string                        `json:"connectedAt"`
 		Version      string                        `json:"version,omitempty"`
+		OS           string                        `json:"os,omitempty"`
 		HasPassword  bool                          `json:"hasPassword"`
 		Desktop      *protocol.DesktopCapabilities `json:"desktop,omitempty"`
 		GPUDesktop   bool                          `json:"gpuDesktop,omitempty"`
@@ -1805,6 +1878,7 @@ func (s *Server) HandleTerminalAPI(w http.ResponseWriter, r *http.Request) {
 			RequestedID:  c.RequestedID,
 			ConnectedAt:  c.ConnectedAt.Format(time.RFC3339),
 			Version:      c.Version,
+			OS:           clientOS(c),
 			HasPassword:  c.Password != "",
 			Desktop:      cloneDesktopCapabilities(c.Desktop),
 			GPUDesktop:   s.clientGPUDesktopAvailable(c),
@@ -1829,7 +1903,13 @@ func (s *Server) StaticHandler() http.Handler {
 	if err != nil {
 		return http.NotFoundHandler()
 	}
-	return http.FileServer(http.FS(sub))
+	// Embedded assets carry no etag/modtime, so heuristic browser caching
+	// would serve stale JS/HTML after upgrades with no way to revalidate.
+	// no-cache forces a (cheap) refetch on every navigation.
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-cache")
+		http.FileServer(http.FS(sub)).ServeHTTP(w, r)
+	})
 }
 
 // StaticPageHandler serves a named embedded UI page without exposing the .html suffix.
@@ -1839,6 +1919,7 @@ func (s *Server) StaticPageHandler(name string) http.HandlerFunc {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
+		w.Header().Set("Cache-Control", "no-cache")
 		http.ServeFileFS(w, r, templateFS, "static/"+name)
 	}
 }

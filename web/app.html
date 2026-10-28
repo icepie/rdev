@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>RDev</title>
+    <script>
+      // Pre-paint theme application: avoids a flash of the wrong scheme.
+      (function () {
+        var c = localStorage.getItem("rdevTheme") || "auto";
+        var light =
+          c === "light" ||
+          (c === "auto" && matchMedia("(prefers-color-scheme: light)").matches);
+        document.documentElement.classList.add(light ? "light" : "dark");
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/ui/main.tsx"></script>
+  </body>
+</html>

@@ -1,0 +1,449 @@
+/** Kitty graphics protocol writer for xterm.js — TS port of the legacy
+ * web/public/terminal-images.js (behavior preserved 1:1).
+ *
+ * Binary terminal frames containing image sequences (SIXEL / Kitty / iTerm2)
+ * are routed here instead of term.write(); Kitty sequences are rendered into
+ * an absolutely-positioned layer over the terminal, everything else passes
+ * through to term.write() where the ImageAddon handles SIXEL/IIP. */
+
+import type { Terminal } from "@xterm/xterm";
+
+const ESC = "\x1b";
+const START = ESC + "_G";
+const END = ESC + "\\";
+const PLACEHOLDER = 0x10eeee;
+const DEFAULT_MAX_SEQUENCE = 24 * 1024 * 1024;
+const DEFAULT_MAX_STORAGE = 64;
+
+type Params = Record<string, string>;
+
+interface PlaceholderBounds {
+  top: number;
+  left: number;
+  bottom: number;
+  right: number;
+}
+
+type KittyImage = HTMLImageElement & {
+  _rdevPlaceholderBounds?: PlaceholderBounds;
+};
+
+export interface KittyImageWriter {
+  write(data: string | ArrayBuffer | ArrayBufferView): void;
+  flush(): void;
+}
+
+export function parseParams(raw: string): Params {
+  const params: Params = {};
+  if (!raw) return params;
+  raw.split(",").forEach((part) => {
+    const idx = part.indexOf("=");
+    if (idx <= 0) return;
+    params[part.slice(0, idx)] = part.slice(idx + 1);
+  });
+  return params;
+}
+
+export function mimeFor(params: Params): string {
+  if (params.f === "100") return "image/png";
+  if (params.f === "101") return "image/jpeg";
+  if (params.f === "102") return "image/gif";
+  return "image/png";
+}
+
+function getCellSize(term: Terminal): { width: number; height: number } {
+  const dims = (term as unknown as Record<string, any>)?._core?._renderService
+    ?.dimensions?.css?.cell;
+  if (dims && dims.width && dims.height)
+    return { width: dims.width, height: dims.height };
+  const row = term.element?.querySelector(".xterm-rows > div");
+  if (row) {
+    const rect = row.getBoundingClientRect();
+    const cols = Math.max(1, term.cols || 80);
+    return { width: rect.width / cols, height: rect.height || 17 };
+  }
+  return { width: 8, height: 17 };
+}
+
+function ensureLayer(term: Terminal): HTMLElement | null {
+  if (!term.element) return null;
+  term.element.style.position = term.element.style.position || "relative";
+  let layer = term.element.querySelector<HTMLElement>(".rdev-kitty-image-layer");
+  if (layer) return layer;
+  layer = document.createElement("div");
+  layer.className = "rdev-kitty-image-layer";
+  layer.style.cssText =
+    "position:absolute;inset:0;pointer-events:none;overflow:hidden;z-index:4;";
+  term.element.appendChild(layer);
+  return layer;
+}
+
+function base64ToBytes(raw: string): Uint8Array {
+  const bin = atob(raw.replace(/\s+/g, ""));
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes;
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let out = "";
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    out += String.fromCharCode.apply(
+      null,
+      bytes.subarray(i, i + chunk) as unknown as number[],
+    );
+  }
+  return btoa(out);
+}
+
+async function inflateZlib(bytes: Uint8Array): Promise<Uint8Array> {
+  if (!("DecompressionStream" in window)) {
+    throw new Error("compressed Kitty images are not supported by this browser");
+  }
+  const stream = new Blob([bytes as BlobPart])
+    .stream()
+    .pipeThrough(new DecompressionStream("deflate"));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+
+function rawPixelSize(
+  params: Params,
+  bytes: Uint8Array,
+  channels: number,
+): { width: number; height: number } {
+  let width = parseInt(params.s || params.c || "", 10);
+  let height = parseInt(params.v || params.r || "", 10);
+  if (width > 0 && height > 0) return { width, height };
+  if (width > 0)
+    return {
+      width,
+      height: Math.max(1, Math.floor(bytes.length / channels / width)),
+    };
+  if (height > 0)
+    return {
+      width: Math.max(1, Math.floor(bytes.length / channels / height)),
+      height,
+    };
+  const pixels = Math.max(1, Math.floor(bytes.length / channels));
+  width = Math.max(1, Math.round(Math.sqrt(pixels)));
+  height = Math.max(1, Math.ceil(pixels / width));
+  return { width, height };
+}
+
+function rawPixelsToPNG(params: Params, bytes: Uint8Array): string | null {
+  const channels = params.f === "24" ? 3 : params.f === "32" ? 4 : 0;
+  if (!channels) return null;
+  const size = rawPixelSize(params, bytes, channels);
+  const canvas = document.createElement("canvas");
+  canvas.width = size.width;
+  canvas.height = size.height;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+  const image = ctx.createImageData(size.width, size.height);
+  const pixels = size.width * size.height;
+  for (let i = 0, j = 0; i < pixels; i++, j += channels) {
+    const out = i * 4;
+    image.data[out] = bytes[j] || 0;
+    image.data[out + 1] = bytes[j + 1] || 0;
+    image.data[out + 2] = bytes[j + 2] || 0;
+    image.data[out + 3] = channels === 4 ? (bytes[j + 3] ?? 255) : 255;
+  }
+  ctx.putImageData(image, 0, 0);
+  return canvas.toDataURL("image/png");
+}
+
+export async function payloadToDataURL(
+  params: Params,
+  payload: string,
+): Promise<string> {
+  let bytes = base64ToBytes(payload);
+  if (params.o === "z") bytes = await inflateZlib(bytes);
+  const rawPNG = rawPixelsToPNG(params, bytes);
+  if (rawPNG) return rawPNG;
+  return "data:" + mimeFor(params) + ";base64," + bytesToBase64(bytes);
+}
+
+export function createKittyImageWriter(
+  term: Terminal,
+  options: { maxSequence?: number; maxStorage?: number } = {},
+): KittyImageWriter {
+  const maxSequence = options.maxSequence || DEFAULT_MAX_SEQUENCE;
+  const maxStorage = options.maxStorage || DEFAULT_MAX_STORAGE;
+  const decoder = new TextDecoder();
+  let pending = "";
+  let chunks = new Map<string, { params: Params; payload: string }>();
+  let currentChunkKey = "_default";
+  let rendered: KittyImage[] = [];
+  let virtualCursor = { row: 0, col: 0 };
+  let activePlaceholderImage: KittyImage | null = null;
+
+  function fitImageToPlaceholder(img: KittyImage, bounds: PlaceholderBounds) {
+    const cell = getCellSize(term);
+    img.style.left = Math.max(0, bounds.left * cell.width) + "px";
+    img.style.top = Math.max(0, bounds.top * cell.height) + "px";
+    img.style.width =
+      Math.max(1, bounds.right - bounds.left + 1) * cell.width + "px";
+    img.style.height =
+      Math.max(1, bounds.bottom - bounds.top + 1) * cell.height + "px";
+  }
+
+  function notePlaceholder(row: number, col: number) {
+    const img = activePlaceholderImage || rendered[rendered.length - 1];
+    if (!img) return;
+    const bounds = img._rdevPlaceholderBounds || {
+      top: row,
+      left: col,
+      bottom: row,
+      right: col,
+    };
+    bounds.top = Math.min(bounds.top, row);
+    bounds.left = Math.min(bounds.left, col);
+    bounds.bottom = Math.max(bounds.bottom, row);
+    bounds.right = Math.max(bounds.right, col);
+    img._rdevPlaceholderBounds = bounds;
+    fitImageToPlaceholder(img, bounds);
+  }
+
+  function observeTerminalLayout(text: string) {
+    let idx = 0;
+    while (idx < text.length) {
+      if (text.charCodeAt(idx) === 0x1b && text[idx + 1] === "[") {
+        const match = /^\x1b\[([0-9;?]*)([@-~])/.exec(text.slice(idx));
+        if (match) {
+          const args = match[1]
+            .replace(/^\?/, "")
+            .split(";")
+            .filter(Boolean)
+            .map((value) => parseInt(value, 10));
+          const cmd = match[2];
+          if (cmd === "H" || cmd === "f") {
+            virtualCursor.row = Math.max(0, (args[0] || 1) - 1);
+            virtualCursor.col = Math.max(0, (args[1] || 1) - 1);
+          } else if (cmd === "A") {
+            virtualCursor.row = Math.max(0, virtualCursor.row - (args[0] || 1));
+          } else if (cmd === "B") {
+            virtualCursor.row += args[0] || 1;
+          } else if (cmd === "C") {
+            virtualCursor.col += args[0] || 1;
+          } else if (cmd === "D") {
+            virtualCursor.col = Math.max(0, virtualCursor.col - (args[0] || 1));
+          }
+          idx += match[0].length;
+          continue;
+        }
+      }
+      const code = text.codePointAt(idx)!;
+      const char = String.fromCodePoint(code);
+      const charLength = char.length;
+      if (code === PLACEHOLDER) {
+        notePlaceholder(virtualCursor.row, virtualCursor.col);
+        virtualCursor.col += 1;
+      } else if (char === "\r") {
+        virtualCursor.col = 0;
+      } else if (char === "\n") {
+        virtualCursor.row += 1;
+      } else if (!/\p{Mark}/u.test(char) && code >= 0x20) {
+        virtualCursor.col += 1;
+      }
+      idx += charLength;
+    }
+  }
+
+  function writePlain(text: string) {
+    if (text) {
+      observeTerminalLayout(text);
+      term.write(text);
+    }
+  }
+
+  function trimRendered() {
+    while (rendered.length > maxStorage) {
+      const node = rendered.shift();
+      if (node && node.parentNode) node.parentNode.removeChild(node);
+    }
+  }
+
+  function removeNode(node: KittyImage | null) {
+    if (node && node.parentNode) node.parentNode.removeChild(node);
+  }
+
+  function deleteImages(params: Params) {
+    if (params.d === "A" || (!params.i && !params.I)) {
+      rendered.forEach(removeNode);
+      rendered = [];
+      activePlaceholderImage = null;
+      chunks.clear();
+      currentChunkKey = "_default";
+      return;
+    }
+    const id = params.i || params.I;
+    rendered = rendered.filter((node) => {
+      if (node.dataset.rdevKittyId !== id) return true;
+      if (activePlaceholderImage === node) activePlaceholderImage = null;
+      removeNode(node);
+      return false;
+    });
+    chunks.delete(id);
+    if (currentChunkKey === id) currentChunkKey = "_default";
+  }
+
+  function render(params: Params, payload: string) {
+    if (!payload || params.t === "f" || params.t === "t") {
+      writePlain(
+        "\r\n\x1b[33m[RDev: kitty image path mode is not supported yet]\x1b[0m\r\n",
+      );
+      return;
+    }
+    const layer = ensureLayer(term);
+    if (!layer) return;
+    const cell = getCellSize(term);
+    const cursorX = term.buffer?.active?.cursorX ?? virtualCursor.col ?? 0;
+    const cursorY = term.buffer?.active?.cursorY ?? virtualCursor.row ?? 0;
+    const img = document.createElement("img") as KittyImage;
+    if (params.i || params.I) img.dataset.rdevKittyId = params.i || params.I;
+    img.decoding = "async";
+    img.loading = "eager";
+    img.style.cssText =
+      "position:absolute;object-fit:contain;image-rendering:auto;";
+    img.style.left = Math.max(0, cursorX * cell.width) + "px";
+    img.style.top = Math.max(0, cursorY * cell.height) + "px";
+    if (params.c)
+      img.style.width = Math.max(1, parseInt(params.c, 10)) * cell.width + "px";
+    else if (params.s)
+      img.style.width = Math.max(1, parseInt(params.s, 10)) + "px";
+    if (params.r)
+      img.style.height =
+        Math.max(1, parseInt(params.r, 10)) * cell.height + "px";
+    else if (params.v)
+      img.style.height = Math.max(1, parseInt(params.v, 10)) + "px";
+    payloadToDataURL(params, payload)
+      .then((src) => {
+        img.src = src;
+      })
+      .catch((err) => {
+        if (img.parentNode) img.parentNode.removeChild(img);
+        writePlain(
+          "\r\n\x1b[31m[RDev: kitty image decode failed: " +
+            err.message +
+            "]\x1b[0m\r\n",
+        );
+      });
+    layer.appendChild(img);
+    rendered.push(img);
+    if (params.U === "1") activePlaceholderImage = img;
+    trimRendered();
+    if (params.r) writePlain("\n".repeat(Math.max(1, parseInt(params.r, 10))));
+  }
+
+  function handleSequence(body: string) {
+    const sep = body.indexOf(";");
+    const params = parseParams(sep >= 0 ? body.slice(0, sep) : body);
+    const payload = sep >= 0 ? body.slice(sep + 1) : "";
+    const key = params.i || params.I || currentChunkKey || "_default";
+    if (params.a === "d") {
+      deleteImages(params);
+      return;
+    }
+    if (params.a && params.a !== "T" && params.a !== "t") return;
+    if (params.m === "1") {
+      const existing = chunks.get(key) || { params: {}, payload: "" };
+      chunks.set(key, {
+        params: { ...existing.params, ...params },
+        payload: existing.payload + payload,
+      });
+      currentChunkKey = key;
+      return;
+    }
+    const existing = chunks.get(key);
+    const fullPayload = (existing?.payload || "") + payload;
+    const fullParams = { ...(existing?.params || {}), ...params };
+    chunks.delete(key);
+    if (chunks.size === 0 || key === currentChunkKey)
+      currentChunkKey = "_default";
+    render(fullParams, fullPayload);
+  }
+
+  function processText(text: string) {
+    pending += text;
+    while (pending) {
+      const start = pending.indexOf(START);
+      if (start < 0) {
+        const keep =
+          pending.endsWith(ESC) || pending.endsWith(ESC + "_")
+            ? pending.length - (pending.endsWith(ESC) ? 1 : 2)
+            : pending.length;
+        writePlain(pending.slice(0, keep));
+        pending = pending.slice(keep);
+        return;
+      }
+      writePlain(pending.slice(0, start));
+      const sequence = pending.slice(start + START.length);
+      const end = sequence.indexOf(END);
+      if (end < 0) {
+        pending = pending.slice(start);
+        if (pending.length > maxSequence) {
+          writePlain(
+            "\r\n\x1b[31m[RDev: kitty image sequence too large]\x1b[0m\r\n",
+          );
+          pending = "";
+        }
+        return;
+      }
+      const body = sequence.slice(0, end);
+      pending = sequence.slice(end + END.length);
+      handleSequence(body);
+    }
+  }
+
+  return {
+    write(data) {
+      if (typeof data === "string") {
+        processText(data);
+      } else if (ArrayBuffer.isView(data)) {
+        processText(
+          decoder.decode(
+            new Uint8Array(data.buffer, data.byteOffset, data.byteLength),
+            { stream: true },
+          ),
+        );
+      } else if (
+        data instanceof ArrayBuffer ||
+        Object.prototype.toString.call(data) === "[object ArrayBuffer]"
+      ) {
+        processText(decoder.decode(new Uint8Array(data), { stream: true }));
+      } else {
+        processText(String(data || ""));
+      }
+    },
+    flush() {
+      writePlain(pending + decoder.decode());
+      pending = "";
+    },
+  };
+}
+
+/** Detect SIXEL / Kitty / iTerm2 image sequences in a binary frame (ported
+ * from the legacy terminal.html). */
+export function hasTerminalImageSequence(
+  data: Uint8Array | ArrayBuffer,
+): boolean {
+  const bytes = data instanceof Uint8Array ? data : new Uint8Array(data);
+  for (let i = 0; i + 2 < bytes.length; i++) {
+    if (bytes[i] !== 0x1b) continue;
+    if (bytes[i + 1] === 0x50 && bytes[i + 2] === 0x71) return true; // ESC P q (SIXEL)
+    if (bytes[i + 1] === 0x5f && bytes[i + 2] === 0x47) return true; // ESC _ G (Kitty)
+    if (i + 12 < bytes.length && bytes[i + 1] === 0x5d) {
+      const marker = [49, 51, 51, 55, 59, 70, 105, 108, 101, 61]; // 1337;File=
+      let ok = true;
+      for (let j = 0; j < marker.length; j++) {
+        if (bytes[i + 2 + j] !== marker[j]) {
+          ok = false;
+          break;
+        }
+      }
+      if (ok) return true;
+    }
+  }
+  return false;
+}

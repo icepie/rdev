@@ -55,7 +55,8 @@ type fileTaskRoute struct {
 
 type filesWSHandler struct {
 	gws.BuiltinEventHandler
-	srv *Server
+	srv         *Server
+	adminBypass bool // valid admin token: skip device password
 }
 
 func (s *fileSocket) writeText(msg fileMsg) {
@@ -159,7 +160,7 @@ func (h *filesWSHandler) handleAuth(socket *fileSocket, msg fileMsg) {
 		socket.writeText(fileMsg{Op: "auth_fail", DeviceID: msg.DeviceID, Message: "device not connected"})
 		return
 	}
-	if client.Password == "" || constantTimeEqual(client.Password, msg.Password) {
+	if h.adminBypass || client.Password == "" || constantTimeEqual(client.Password, msg.Password) {
 		socket.authMu.Lock()
 		socket.authorized[msg.DeviceID] = passwordFingerprint(client.Password)
 		delete(socket.authFails, msg.DeviceID)
@@ -178,7 +179,7 @@ func (h *filesWSHandler) handleAuth(socket *fileSocket, msg fileMsg) {
 }
 
 func (h *filesWSHandler) isAuthorized(socket *fileSocket, client *ClientConn) bool {
-	if client.Password == "" {
+	if h.adminBypass || client.Password == "" {
 		return true
 	}
 	socket.authMu.RLock()
@@ -354,6 +355,9 @@ func (s *Server) removeFileRequest(requestID string) {
 }
 
 func (s *Server) handleFileManagerMessage(msg *protocol.Message) {
+	if s.routeAgentFileMsg(msg) {
+		return
+	}
 	switch msg.Type {
 	case protocol.MsgFileListResult:
 		s.fileMu.Lock()
@@ -423,6 +427,9 @@ func (s *Server) forwardFileOpResult(msg *protocol.Message, op string) {
 }
 
 func (s *Server) handleFileManagerBinary(raw []byte) bool {
+	if s.routeAgentFileBinary(raw) {
+		return true
+	}
 	typ, taskID, _, _, err := protocol.DecodeBinFrameOffset(raw)
 	if err != nil {
 		return false
@@ -448,7 +455,10 @@ func (s *Server) HandleFilesWS(w http.ResponseWriter, r *http.Request) {
 	if !s.requireAuth(w, r) {
 		return
 	}
-	upgrader := gws.NewUpgrader(&filesWSHandler{srv: s}, &gws.ServerOption{
+	if !requireOrigin(w, r) {
+		return
+	}
+	upgrader := gws.NewUpgrader(&filesWSHandler{srv: s, adminBypass: s.deviceAuthBypassed(r)}, &gws.ServerOption{
 		ReadMaxPayloadSize: 16 * 1024 * 1024,
 		ParallelGolimit:    1,
 		PermessageDeflate:  gws.PermessageDeflate{Enabled: false},

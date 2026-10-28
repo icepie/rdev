@@ -1,0 +1,407 @@
+@import "@fontsource-variable/inter";
+@import "tailwindcss";
+@import "tw-animate-css";
+@source "..";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-subtle-foreground: var(--subtle-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-state-hover: var(--state-hover);
+  --color-state-active: var(--state-active);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-destructive-text: var(--destructive-text);
+  --color-attention: var(--attention);
+  --color-attention-foreground: var(--attention-foreground);
+  --color-warning: var(--warning);
+  --color-warning-text: var(--warning-text);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-diff-added: var(--diff-added);
+  --color-diff-removed: var(--diff-removed);
+  --color-timeline-accent: var(--timeline-accent);
+  --color-border: var(--border);
+  --color-border-hairline: var(--border-hairline);
+  --color-border-seam: var(--border-seam);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-surface-recessed: var(--surface-recessed);
+  --color-surface-recessed-solid: var(--surface-recessed-solid);
+  --color-surface-recessed-soft-solid: var(--surface-recessed-soft-solid);
+  --color-surface-raised: var(--surface-raised);
+  --color-surface-raised-solid: var(--surface-raised-solid);
+  --color-surface-scrim: var(--surface-scrim);
+  --color-surface-destructive: var(--surface-destructive);
+  --color-surface-destructive-border: var(--surface-destructive-border);
+  --color-surface-attention: var(--surface-attention);
+  --color-surface-selected: var(--surface-selected);
+  --color-surface-selected-border: var(--surface-selected-border);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-mono);
+  --font-serif: var(--font-serif);
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+
+  --shadow-2xs: var(--shadow-2xs);
+  --shadow-xs: var(--shadow-xs);
+  --shadow-sm: var(--shadow-sm);
+  --shadow: var(--shadow);
+  --shadow-md: var(--shadow-md);
+  --shadow-lg: var(--shadow-lg);
+  --shadow-xl: var(--shadow-xl);
+  --shadow-2xl: var(--shadow-2xl);
+  --shadow-lift: var(--shadow-lift);
+}
+
+/* Dense desktop copy scale, same as bb. */
+@theme {
+  --text-sm: 0.8125rem;
+  --text-base: 0.9375rem;
+  --text-base--line-height: 1.375rem;
+  --text-2xs: 0.625rem;
+  --text-2xs--line-height: 0.875rem;
+}
+
+@media (max-width: 767px) and (pointer: coarse) {
+  :root {
+    --text-2xs: 0.6875rem;
+    --text-2xs--line-height: 0.9375rem;
+    --text-xs: 0.875rem;
+    --text-xs--line-height: 1.25rem;
+    --text-sm: 0.9375rem;
+    --text-sm--line-height: 1.375rem;
+    --text-base: 1rem;
+    --text-base--line-height: 1.5rem;
+  }
+}
+
+/* Theme tokens below are ported from bb (apps/app/src/components/ui/theme.css),
+ * MIT license, (c) get-bb. Anchors: --canvas + --ink; everything derives. */
+:root,
+.light {
+  color-scheme: light;
+  --canvas: oklch(1 0 0);
+  --ink: oklch(0.3211 0 0);
+  --background: var(--canvas);
+  --foreground: var(--ink);
+  --card: var(--canvas);
+  --card-foreground: var(--ink);
+  --popover: var(--canvas);
+  --popover-foreground: var(--ink);
+  --primary: oklch(0.27 0 0);
+  --primary-foreground: oklch(1 0 0);
+  --secondary: color-mix(in oklch, var(--ink) 8%, var(--canvas));
+  --secondary-foreground: var(--ink);
+  --accent: color-mix(in oklch, var(--ink) 8%, var(--canvas));
+  --accent-foreground: var(--ink);
+  --muted: color-mix(in oklch, var(--ink) 11%, var(--canvas));
+  /* Darker than bb's 0.44/0.50: users found light-theme secondary text
+   * too faint, especially where components stack opacity modifiers. */
+  --muted-foreground: oklch(0.4 0 0);
+  --subtle-foreground: oklch(0.45 0 0);
+  --timeline-accent: oklch(0.55 0.1 250);
+  --state-hover: color-mix(in oklab, var(--ink) 5.9%, transparent);
+  --state-active: color-mix(in oklab, var(--ink) 11.8%, transparent);
+  --destructive: oklch(0.45 0.19 25.8625);
+  --destructive-foreground: oklch(1 0 0);
+  --destructive-text: oklch(0.45 0.19 25.8625);
+  --attention: oklch(0.74 0.15 80);
+  --attention-foreground: var(--ink);
+  --warning: oklch(0.7 0.16 50);
+  --warning-text: oklch(0.55 0.14 50);
+  --success: oklch(0.7 0.15 155);
+  --success-foreground: color-mix(in oklch, var(--success) 45%, var(--ink));
+  /* Diff +/- counts (bb theme.css): text-safe in each theme. */
+  --diff-added: oklch(0.4 0.13 163);
+  --diff-removed: oklch(0.4 0.17 28);
+  --border: color-mix(in oklch, var(--ink) 14%, var(--canvas));
+  --border-hairline: color-mix(in oklch, var(--ink) 14.7%, var(--canvas));
+  --border-seam: color-mix(in oklch, var(--ink) 9.5%, var(--canvas));
+  --input: color-mix(in oklch, var(--ink) 29.5%, var(--canvas));
+  --ring: var(--primary);
+  --surface-recessed: color-mix(in oklab, var(--ink) 6%, transparent);
+  --surface-recessed-solid: color-mix(in oklab, var(--ink) 6%, var(--canvas));
+  --surface-recessed-soft-solid: color-mix(
+    in oklch,
+    var(--ink) 4.2%,
+    var(--canvas)
+  );
+  --surface-raised: color-mix(in oklab, var(--ink) 2.5%, transparent);
+  --surface-raised-solid: color-mix(in oklab, var(--ink) 2.5%, var(--canvas));
+  --surface-scrim: color-mix(in oklab, var(--canvas) 92%, transparent);
+  --surface-destructive: color-mix(
+    in oklab,
+    var(--destructive) 6%,
+    transparent
+  );
+  --surface-destructive-border: color-mix(
+    in oklab,
+    var(--destructive) 25%,
+    transparent
+  );
+  --surface-attention: color-mix(in oklab, var(--attention) 14%, transparent);
+  --surface-selected: color-mix(in oklab, var(--primary) 16%, transparent);
+  --surface-selected-border: color-mix(
+    in oklab,
+    var(--primary) 35%,
+    transparent
+  );
+  --sidebar: color-mix(in oklch, var(--ink) 2.2%, var(--canvas));
+  --sidebar-foreground: var(--ink);
+  --sidebar-accent: color-mix(in oklch, var(--ink) 8%, var(--canvas));
+  --sidebar-accent-foreground: var(--ink);
+  --sidebar-border: color-mix(in oklch, var(--ink) 14%, var(--canvas));
+  --sidebar-ring: var(--primary);
+  --font-sans: "Inter Variable", Inter, sans-serif;
+  --font-serif: Georgia, serif;
+  --font-mono:
+    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+    "Courier New", monospace;
+  --radius: 0.5rem;
+  --icon-stroke-width: 1.75;
+  --shadow-2xs: 0px 2px 0px 0px hsl(0 0% 20% / 0.07);
+  --shadow-xs: 0px 2px 0px 0px hsl(0 0% 20% / 0.07);
+  --shadow-sm:
+    0px 2px 0px 0px hsl(0 0% 20% / 0.15), 0px 1px 2px -1px hsl(0 0% 20% / 0.15);
+  --shadow:
+    0px 2px 0px 0px hsl(0 0% 20% / 0.15), 0px 1px 2px -1px hsl(0 0% 20% / 0.15);
+  --shadow-md:
+    0px 2px 0px 0px hsl(0 0% 20% / 0.15), 0px 2px 4px -1px hsl(0 0% 20% / 0.15);
+  --shadow-lift: 0px -4px 12px -4px hsl(0 0% 20% / 0.07);
+  --shadow-lg:
+    0px 2px 0px 0px hsl(0 0% 20% / 0.15), 0px 4px 6px -1px hsl(0 0% 20% / 0.15);
+  --shadow-xl:
+    0px 2px 0px 0px hsl(0 0% 20% / 0.15), 0px 8px 10px -1px hsl(0 0% 20% / 0.15);
+  --shadow-2xl: 0px 2px 0px 0px hsl(0 0% 20% / 0.38);
+  /* ANSI 16-color palette (light) for terminal rendering. */
+  --ansi-0: #000000;
+  --ansi-1: #a11616;
+  --ansi-2: #13704a;
+  --ansi-3: #7f6a00;
+  --ansi-4: #1f5ca6;
+  --ansi-5: #8a2f8a;
+  --ansi-6: #0b6f88;
+  --ansi-7: #3d3d3d;
+  --ansi-8: #3a3a3a;
+  --ansi-9: #d32f2f;
+  --ansi-10: #197c52;
+  --ansi-11: #a35f00;
+  --ansi-12: #2666b0;
+  --ansi-13: #9b349b;
+  --ansi-14: #0f7798;
+  --ansi-15: #1f1f1f;
+}
+
+.dark {
+  color-scheme: dark;
+  --canvas: oklch(0.195 0 0);
+  --ink: oklch(0.81 0 0);
+  --background: var(--canvas);
+  --foreground: var(--ink);
+  --card: var(--canvas);
+  --card-foreground: var(--ink);
+  --popover: var(--canvas);
+  --popover-foreground: var(--ink);
+  --primary: oklch(0.82 0 0);
+  --primary-foreground: oklch(0.2178 0 0);
+  --secondary: color-mix(in oklch, var(--ink) 13%, var(--canvas));
+  --secondary-foreground: var(--ink);
+  --accent: color-mix(in oklch, var(--ink) 13%, var(--canvas));
+  --accent-foreground: var(--ink);
+  --muted: color-mix(in oklch, var(--ink) 16%, var(--canvas));
+  --muted-foreground: oklch(0.78 0 0);
+  --subtle-foreground: oklch(0.68 0 0);
+  --timeline-accent: oklch(0.72 0.09 250);
+  --state-hover: color-mix(in oklab, var(--ink) 13.8%, transparent);
+  --state-active: color-mix(in oklab, var(--ink) 22.5%, transparent);
+  --destructive: oklch(0.56 0.19 22.1703);
+  --destructive-foreground: oklch(1 0 0);
+  --destructive-text: oklch(0.65 0.16 22);
+  --attention: oklch(0.8 0.15 80);
+  --attention-foreground: var(--canvas);
+  --warning: oklch(0.75 0.16 50);
+  --warning-text: oklch(0.75 0.16 50);
+  --success: oklch(0.74 0.15 155);
+  /* Diff +/- counts (bb theme.css): text-safe in each theme. */
+  --diff-added: oklch(0.77 0.17 163);
+  --diff-removed: oklch(0.72 0.19 22);
+  --success-foreground: color-mix(in oklch, var(--success) 45%, var(--ink));
+  --border: color-mix(in oklch, var(--ink) 19.4%, var(--canvas));
+  --border-hairline: color-mix(in oklch, var(--ink) 21%, var(--canvas));
+  --border-seam: color-mix(in oklch, var(--ink) 11%, var(--canvas));
+  --input: color-mix(in oklch, var(--ink) 32.6%, var(--canvas));
+  --ring: var(--primary);
+  --surface-recessed: color-mix(in oklab, var(--ink) 6%, transparent);
+  --surface-recessed-solid: color-mix(in oklab, var(--ink) 6%, var(--canvas));
+  --surface-recessed-soft-solid: color-mix(
+    in oklch,
+    var(--ink) 4.2%,
+    var(--canvas)
+  );
+  --surface-raised: color-mix(in oklab, var(--ink) 2.5%, transparent);
+  --surface-raised-solid: color-mix(in oklab, var(--ink) 2.5%, var(--canvas));
+  --surface-scrim: color-mix(in oklab, var(--canvas) 92%, transparent);
+  --surface-destructive: color-mix(
+    in oklab,
+    var(--destructive) 8%,
+    transparent
+  );
+  --surface-destructive-border: color-mix(
+    in oklab,
+    var(--destructive) 30%,
+    transparent
+  );
+  --surface-attention: color-mix(in oklab, var(--attention) 12%, transparent);
+  --surface-selected: color-mix(in oklab, var(--primary) 12%, transparent);
+  --surface-selected-border: color-mix(
+    in oklab,
+    var(--primary) 35%,
+    transparent
+  );
+  --sidebar: color-mix(in oklch, var(--ink) 4.3%, var(--canvas));
+  --sidebar-foreground: var(--ink);
+  --sidebar-accent: color-mix(in oklch, var(--ink) 12%, var(--canvas));
+  --sidebar-accent-foreground: var(--ink);
+  --sidebar-border: color-mix(in oklch, var(--ink) 18.1%, var(--canvas));
+  --sidebar-ring: var(--primary);
+  --font-sans: "Inter Variable", Inter, sans-serif;
+  --font-serif: Georgia, serif;
+  --font-mono:
+    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+    "Courier New", monospace;
+  --radius: 0.5rem;
+  --icon-stroke-width: 1.75;
+  --shadow-2xs: 0px 2px 0px 0px hsl(0 0% 0% / 0.2);
+  --shadow-xs: 0px 2px 0px 0px hsl(0 0% 0% / 0.2);
+  --shadow-sm:
+    0px 2px 0px 0px hsl(0 0% 0% / 0.3), 0px 1px 2px -1px hsl(0 0% 0% / 0.4);
+  --shadow:
+    0px 2px 0px 0px hsl(0 0% 0% / 0.3), 0px 1px 2px -1px hsl(0 0% 0% / 0.4);
+  --shadow-md:
+    0px 2px 0px 0px hsl(0 0% 0% / 0.3), 0px 2px 4px -1px hsl(0 0% 0% / 0.5);
+  --shadow-lift: 0px -4px 12px -4px hsl(0 0% 0% / 0.26);
+  --shadow-lg:
+    0px 2px 0px 0px hsl(0 0% 0% / 0.3), 0px 4px 6px -1px hsl(0 0% 0% / 0.5);
+  --shadow-xl:
+    0px 2px 0px 0px hsl(0 0% 0% / 0.35), 0px 8px 10px -1px hsl(0 0% 0% / 0.55);
+  --shadow-2xl: 0px 2px 0px 0px hsl(0 0% 0% / 0.6);
+  /* ANSI 16-color palette (dark). */
+  --ansi-0: #858585;
+  --ansi-1: #d85e5e;
+  --ansi-2: #0dbc79;
+  --ansi-3: #e5e510;
+  --ansi-4: #3c88dc;
+  --ansi-5: #c85ac8;
+  --ansi-6: #11a8cd;
+  --ansi-7: #e5e5e5;
+  --ansi-8: #9a9a9a;
+  --ansi-9: #ff6f6f;
+  --ansi-10: #23d18b;
+  --ansi-11: #f5f543;
+  --ansi-12: #5aaaf2;
+  --ansi-13: #d670d6;
+  --ansi-14: #29b8db;
+  --ansi-15: #ffffff;
+}
+
+@layer base {
+  * {
+    border-color: var(--border);
+  }
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+  body {
+    background: var(--background);
+    color: var(--foreground);
+    font-family: var(--font-sans);
+    overscroll-behavior-y: none;
+  }
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 1px;
+  }
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(in oklab, var(--foreground) 20%, transparent)
+      transparent;
+  }
+  *::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  *::-webkit-scrollbar-track,
+  *::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+  *::-webkit-scrollbar-thumb {
+    background-color: color-mix(in oklab, var(--foreground) 20%, transparent);
+    border-radius: 9999px;
+  }
+  *::-webkit-scrollbar-thumb:hover {
+    background-color: color-mix(in oklab, var(--foreground) 40%, transparent);
+  }
+}
+
+@utility scrollbar-none {
+  scrollbar-width: none;
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+/* ── Code syntax highlight palette (sugar-high output, bb-aligned) ── */
+
+.code-highlight {
+  --sh-space: inherit;
+  --sh-identifier: var(--foreground);
+  --sh-sign: var(--muted-foreground);
+  --sh-comment: var(--subtle-foreground);
+  --sh-keyword: oklch(0.5 0.16 18);
+  --sh-string: oklch(0.46 0.1 150);
+  --sh-class: oklch(0.5 0.12 250);
+  --sh-property: oklch(0.46 0.1 264);
+  --sh-entity: oklch(0.47 0.13 292);
+  --sh-jsxliterals: oklch(0.47 0.13 292);
+
+  .sh__line {
+    display: inline-block;
+    min-width: 100%;
+  }
+}
+
+.dark .code-highlight {
+  --sh-keyword: oklch(0.74 0.14 18);
+  --sh-string: oklch(0.78 0.12 150);
+  --sh-class: oklch(0.76 0.11 250);
+  --sh-property: oklch(0.78 0.1 264);
+  --sh-entity: oklch(0.78 0.12 292);
+  --sh-jsxliterals: oklch(0.78 0.12 292);
+}

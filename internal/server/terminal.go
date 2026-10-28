@@ -43,9 +43,10 @@ type terminalConn struct {
 
 type terminalWSHandler struct {
 	gws.BuiltinEventHandler
-	srv    *Server
-	authed bool
-	passOK bool // true if device has no password (skip auth)
+	srv         *Server
+	authed      bool
+	passOK      bool // true if device has no password (skip auth)
+	adminBypass bool // valid admin token: skip device password
 }
 
 const terminalImageProtocols = "sixel,iterm2,kitty"
@@ -77,7 +78,7 @@ func (h *terminalWSHandler) OnOpen(socket *gws.Conn) {
 	}
 
 	// If device has a password, require auth before creating session
-	if client.Password != "" {
+	if client.Password != "" && !h.adminBypass {
 		h.authed = false
 		h.sendJSON(socket, terminalMsg{Op: "auth", Message: "Device '" + deviceID + "' requires password"})
 		return
@@ -203,11 +204,18 @@ func (h *terminalWSHandler) OnMessage(socket *gws.Conn, message *gws.Message) {
 				return
 			}
 
-			if client.Password != "" && client.Password == tmsg.Password {
+			// Brute-force throttle: reject during cooldown without comparing.
+			if h.srv.authLimiter.wait(deviceID) > 0 {
+				h.sendJSON(socket, terminalMsg{Op: "auth_fail", Message: "Too many attempts, retry later"})
+				return
+			}
+			if client.Password != "" && constantTimeEqual(client.Password, tmsg.Password) {
+				h.srv.authLimiter.success(deviceID)
 				h.authed = true
 				h.sendJSON(socket, terminalMsg{Op: "auth_ok"})
 				h.createSession(socket, deviceID)
 			} else {
+				h.srv.authLimiter.fail(deviceID)
 				h.sendJSON(socket, terminalMsg{Op: "auth_fail", Message: "Wrong password"})
 			}
 		}
@@ -320,13 +328,16 @@ func (s *Server) HandleTerminalWS(w http.ResponseWriter, r *http.Request) {
 	if !s.requireAuth(w, r) {
 		return
 	}
+	if !requireOrigin(w, r) {
+		return
+	}
 	deviceID := r.URL.Query().Get("device")
 	if deviceID == "" {
 		http.Error(w, "missing device parameter", http.StatusBadRequest)
 		return
 	}
 
-	upgrader := gws.NewUpgrader(&terminalWSHandler{srv: s}, &gws.ServerOption{
+	upgrader := gws.NewUpgrader(&terminalWSHandler{srv: s, adminBypass: s.deviceAuthBypassed(r)}, &gws.ServerOption{
 		ReadMaxPayloadSize: 16 * 1024 * 1024,
 		ParallelGolimit:    runtime.GOMAXPROCS(0),
 		Authorize: func(r *http.Request, session gws.SessionStorage) bool {

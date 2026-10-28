@@ -7,12 +7,20 @@ use std::{
 };
 
 use anyhow::{anyhow, Context, Result};
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use self_update::{backends::github, Download, Extract};
 use tempfile::TempDir;
 use tracing::{info, warn};
 
 const REPO_OWNER: &str = "icepie";
 const REPO_NAME: &str = "rdev";
+
+/// Embedded ed25519 public key (base64, 32 bytes) verifying release asset
+/// signatures. Assets are signed in CI by scripts/sign with the private key
+/// stored in the RDEV_UPDATE_SIGNING_KEY GitHub secret; unsigned or tampered
+/// downloads must never be applied.
+const UPDATE_PUBLIC_KEY_B64: &str = "jtVaB2ppsCLhcYyYYQjRKiviDvyPZvr+AS8nqOQlkUk=";
 
 const DEFAULT_PROXY_PREFIXES: &[&str] = &[
     "",
@@ -155,6 +163,19 @@ pub fn check_and_apply(cfg: &Config) -> Result<bool> {
     download_with_proxies(&download_url, &archive_path)
         .with_context(|| format!("download release asset {}", asset.name()))?;
 
+    // Security: downloads may pass through third-party proxies, so the
+    // archive cannot be trusted until its detached ed25519 signature
+    // (<asset>.sig from the same release) verifies against the embedded key.
+    let sig_url = format!("{download_url}.sig");
+    let sig_path = tmp.path().join(format!("{}.sig", asset.name()));
+    download_with_proxies(&sig_url, &sig_path)
+        .with_context(|| format!("download release signature {}.sig", asset.name()))?;
+    let sig_b64 = std::fs::read_to_string(&sig_path).context("read release asset signature")?;
+    let archive_bytes = std::fs::read(&archive_path)
+        .with_context(|| format!("read downloaded asset {}", asset.name()))?;
+    verify_asset_signature(&archive_bytes, &sig_b64)
+        .with_context(|| format!("reject release asset {}", asset.name()))?;
+
     let bin_path = PathBuf::from(package_dir_name(asset.name())).join(binary_name());
     Extract::from_source(&archive_path)
         .extract_file(tmp.path(), &bin_path)
@@ -187,6 +208,54 @@ fn download_with_proxies(target: &str, archive_path: &Path) -> Result<()> {
             .map(|err| err.to_string())
             .unwrap_or_else(|| "all update URLs failed".to_string())
     ))
+}
+
+/// verify_asset_signature rejects any asset whose bytes do not match the
+/// detached base64 ed25519 signature produced by scripts/sign in release CI.
+fn verify_asset_signature(data: &[u8], sig_b64: &str) -> Result<()> {
+    let sig_bytes = BASE64
+        .decode(sig_b64.trim())
+        .context("decode release asset signature")?;
+    let sig_bytes: [u8; 64] = sig_bytes
+        .try_into()
+        .map_err(|_| anyhow!("release asset signature must be 64 bytes"))?;
+    let signature = Signature::from_bytes(&sig_bytes);
+    let key_bytes = BASE64
+        .decode(UPDATE_PUBLIC_KEY_B64)
+        .context("decode embedded update public key")?;
+    let key_bytes: [u8; 32] = key_bytes
+        .try_into()
+        .map_err(|_| anyhow!("embedded update public key must be 32 bytes"))?;
+    let key = VerifyingKey::from_bytes(&key_bytes)
+        .map_err(|err| anyhow!("invalid update public key: {err}"))?;
+    key.verify(data, &signature)
+        .map_err(|err| anyhow!("ed25519 signature mismatch: {err}"))
+}
+
+/// valid_proxy_prefix reports whether a proxy prefix uses an acceptable
+/// scheme: https, or http only when targeting loopback (for local testing).
+fn valid_proxy_prefix(prefix: &str) -> bool {
+    if prefix.is_empty() {
+        return true;
+    }
+    let Ok(url) = url::Url::parse(prefix) else {
+        return false;
+    };
+    match url.scheme() {
+        "https" => true,
+        "http" => match url.host_str() {
+            Some("localhost") => true,
+            // url::Url keeps IPv6 brackets in host_str (e.g. "[::1]").
+            Some(host) => host
+                .trim_start_matches('[')
+                .trim_end_matches(']')
+                .parse::<std::net::IpAddr>()
+                .map(|ip| ip.is_loopback())
+                .unwrap_or(false),
+            None => false,
+        },
+        _ => false,
+    }
 }
 
 fn binary_name() -> &'static str {
@@ -283,6 +352,13 @@ fn proxy_prefixes() -> Vec<String> {
 
     let mut out = Vec::with_capacity(prefixes.len());
     for prefix in prefixes {
+        // Security: only https proxy prefixes are allowed (loopback http is
+        // kept for tests); a plaintext proxy could otherwise serve tampered
+        // assets/signatures and defeat the download path before verification.
+        if !valid_proxy_prefix(&prefix) {
+            warn!("ignoring insecure auto-update proxy prefix (https required): {prefix}");
+            continue;
+        }
         if !out.contains(&prefix) {
             out.push(prefix);
         }
@@ -411,5 +487,54 @@ mod tests {
             github_download_url("v0.2.98", "rdev-client-gpu-linux-amd64.tar.gz"),
             "https://github.com/icepie/rdev/releases/download/v0.2.98/rdev-client-gpu-linux-amd64.tar.gz"
         );
+    }
+
+    // Test-only key pair; the secret below is a fixed test vector, not the
+    // production signing key.
+    fn sign_test_payload(data: &[u8]) -> (VerifyingKey, String) {
+        use ed25519_dalek::{Signer, SigningKey};
+        let secret = [7u8; 32];
+        let signing = SigningKey::from_bytes(&secret);
+        let signature = signing.sign(data);
+        (signing.verifying_key(), BASE64.encode(signature.to_bytes()))
+    }
+
+    fn verify_with_key(key: &VerifyingKey, data: &[u8], sig_b64: &str) -> Result<()> {
+        let sig_bytes = BASE64.decode(sig_b64.trim()).context("decode sig")?;
+        let sig_bytes: [u8; 64] = sig_bytes.try_into().map_err(|_| anyhow!("bad sig len"))?;
+        key.verify(data, &Signature::from_bytes(&sig_bytes))
+            .map_err(|err| anyhow!("mismatch: {err}"))
+    }
+
+    #[test]
+    fn verifies_asset_signature() {
+        let payload = b"release archive bytes";
+        let (key, sig_b64) = sign_test_payload(payload);
+        assert!(verify_with_key(&key, payload, &sig_b64).is_ok());
+
+        let mut tampered = payload.to_vec();
+        tampered[0] ^= 0xff;
+        assert!(verify_with_key(&key, &tampered, &sig_b64).is_err());
+
+        let (_, wrong_sig) = sign_test_payload(b"different payload");
+        assert!(verify_with_key(&key, payload, &wrong_sig).is_err());
+
+        assert!(verify_asset_signature(payload, "not-base64!!").is_err());
+        assert!(verify_asset_signature(payload, &BASE64.encode([0u8; 10])).is_err());
+    }
+
+    #[test]
+    fn validates_proxy_prefixes() {
+        assert!(valid_proxy_prefix(""));
+        assert!(valid_proxy_prefix("https://gh-proxy.com/"));
+        assert!(valid_proxy_prefix("https://proxy.example/?url=${url}"));
+        assert!(valid_proxy_prefix("http://127.0.0.1:8080/"));
+        assert!(valid_proxy_prefix("http://localhost:8080/"));
+        assert!(valid_proxy_prefix("http://[::1]:8080/"));
+        assert!(!valid_proxy_prefix("http://evil.example/"));
+        assert!(!valid_proxy_prefix("http://proxy/?url=${url}"));
+        assert!(!valid_proxy_prefix("http://192.168.1.1/"));
+        assert!(!valid_proxy_prefix("ftp://proxy.example/"));
+        assert!(!valid_proxy_prefix("gh-proxy.com/"));
     }
 }

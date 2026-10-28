@@ -7,8 +7,8 @@ require (
 	github.com/anmitsu/go-shlex v0.0.0-20200514113438-38f4b401e2be
 	github.com/aymanbagabas/go-pty v0.2.3
 	github.com/ebitengine/purego v0.11.1
-	github.com/gliderlabs/ssh v0.3.8
 	github.com/gen2brain/x264-go v0.4.0
+	github.com/gliderlabs/ssh v0.3.8
 	github.com/go-git/go-git/v5 v5.19.2
 	github.com/iamacarpet/go-winpty v1.0.4
 	github.com/lxzan/gws v1.10.2
@@ -50,7 +50,7 @@ require (
 	golang.org/x/exp/shiny v0.0.0-20260908205506-85c1c2202aba // indirect
 	golang.org/x/image v0.46.0 // indirect
 	golang.org/x/mobile v0.0.0-20260908204917-8b95e45f8d3e // indirect
-	golang.org/x/net v0.59.0 // indirect
+	golang.org/x/net v0.60.0 // indirect
 	golang.org/x/time v0.16.0 // indirect
 	gopkg.in/warnings.v0 v0.1.2 // indirect
 )

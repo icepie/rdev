@@ -2,6 +2,8 @@ package updater
 
 import (
 	"bytes"
+	"crypto/ed25519"
+	"crypto/rand"
 	"errors"
 	"log"
 	"net/http"
@@ -113,5 +115,84 @@ func TestProxiedURL(t *testing.T) {
 	}
 	if got := proxiedURL("http://proxy/?url=${url}", target); got != "http://proxy/?url="+target {
 		t.Fatalf("proxy template URL = %q", got)
+	}
+}
+
+func TestVerifyAssetSignature(t *testing.T) {
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := []byte("release asset bytes")
+	sig := ed25519.Sign(priv, payload)
+
+	if err := verifyAssetSignature(pub, payload, sig); err != nil {
+		t.Fatalf("valid signature rejected: %v", err)
+	}
+
+	tampered := append([]byte(nil), payload...)
+	tampered[0] ^= 0xff
+	if err := verifyAssetSignature(pub, tampered, sig); err == nil {
+		t.Fatal("tampered asset accepted")
+	}
+
+	_, otherPriv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrongSig := ed25519.Sign(otherPriv, payload)
+	if err := verifyAssetSignature(pub, payload, wrongSig); err == nil {
+		t.Fatal("signature from wrong key accepted")
+	}
+
+	if err := verifyAssetSignature(pub, payload, sig[:32]); err == nil {
+		t.Fatal("truncated signature accepted")
+	}
+}
+
+func TestValidProxyPrefix(t *testing.T) {
+	allowed := []string{
+		"",
+		"https://gh-proxy.com/",
+		"https://proxy.example/?url=${url}",
+		"http://127.0.0.1:8080/",
+		"http://localhost:8080/",
+		"http://[::1]:8080/",
+	}
+	for _, prefix := range allowed {
+		if !validProxyPrefix(prefix) {
+			t.Errorf("validProxyPrefix(%q) = false, want true", prefix)
+		}
+	}
+	rejected := []string{
+		"http://evil.example/",
+		"http://proxy/?url=${url}",
+		"http://192.168.1.1/",
+		"ftp://proxy.example/",
+		"gh-proxy.com/",
+	}
+	for _, prefix := range rejected {
+		if validProxyPrefix(prefix) {
+			t.Errorf("validProxyPrefix(%q) = true, want false", prefix)
+		}
+	}
+}
+
+func TestProxyPrefixesFiltersInsecure(t *testing.T) {
+	t.Setenv("RDEV_UPDATE_PROXY", "http://evil.example/,https://good.example/,https://good.example/")
+	prefixes := proxyPrefixes()
+	for _, prefix := range prefixes {
+		if strings.HasPrefix(prefix, "http://") && !validProxyPrefix(prefix) {
+			t.Fatalf("insecure prefix kept: %q", prefix)
+		}
+	}
+	found := false
+	for _, prefix := range prefixes {
+		if prefix == "https://good.example/" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("https prefix dropped: %v", prefixes)
 	}
 }

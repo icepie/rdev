@@ -14,6 +14,10 @@
 
 # Web
 node_modules/
+/web/dist/
+
+# Built frontend embedded into the Go binary (vite outDir)
+/internal/server/static/
 
 # Rust
 /clients/rdev-client-gpu/target/

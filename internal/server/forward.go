@@ -4,6 +4,7 @@ import (
 	"log"
 	"net"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -14,9 +15,15 @@ import (
 
 // ForwardedTCPHandler handles device-side -R reverse port forwarding.
 type ForwardedTCPHandler struct {
-	forwards map[string]string // bind address -> listen ID
+	// Keys are clientID + "\x00" + bind address so one SSH session can never
+	// see or cancel another device's reverse forwards.
+	forwards map[string]string // clientID\x00bind address -> listen ID
 	mu       sync.Mutex
 	srv      *Server
+}
+
+func forwardKey(clientID, addr string) string {
+	return clientID + "\x00" + addr
 }
 
 type remoteForwardRequest struct {
@@ -110,8 +117,8 @@ func (h *ForwardedTCPHandler) HandleSSHRequest(ctx ssh.Context, srv *ssh.Server,
 		rev.BindPort = port
 		boundAddr := net.JoinHostPort(payload.BindAddr, strconv.Itoa(int(port)))
 		h.mu.Lock()
-		h.forwards[addr] = listenID
-		h.forwards[boundAddr] = listenID
+		h.forwards[forwardKey(clientID, addr)] = listenID
+		h.forwards[forwardKey(clientID, boundAddr)] = listenID
 		h.mu.Unlock()
 
 		go func() {
@@ -137,11 +144,15 @@ func (h *ForwardedTCPHandler) HandleSSHRequest(ctx ssh.Context, srv *ssh.Server,
 }
 
 func (h *ForwardedTCPHandler) cancel(addr string, client *ClientConn) {
+	// Only touch forwards owned by this client: keys are client-scoped.
+	prefix := client.ID + "\x00"
 	h.mu.Lock()
-	listenID := h.forwards[addr]
-	for key, id := range h.forwards {
-		if key == addr || id == listenID {
-			delete(h.forwards, key)
+	listenID := h.forwards[prefix+addr]
+	if listenID != "" {
+		for key, id := range h.forwards {
+			if id == listenID && strings.HasPrefix(key, prefix) {
+				delete(h.forwards, key)
+			}
 		}
 	}
 	h.mu.Unlock()

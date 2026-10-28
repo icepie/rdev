@@ -12,10 +12,10 @@ import (
 func TestCleanPageRoutes(t *testing.T) {
 	srv := server.NewServer()
 	mux := http.NewServeMux()
-	mux.HandleFunc("/terminal", splitPageAndWebSocket(srv.StaticPageHandler("terminal.html"), func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/terminal", splitPageAndWebSocket(srv.StaticPageHandler("app.html"), func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusSwitchingProtocols)
 	}))
-	mux.HandleFunc("/remote-desktop", srv.StaticPageHandler("desktop.html"))
+	mux.HandleFunc("/remote-desktop", srv.StaticPageHandler("app.html"))
 
 	t.Run("terminal page", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/terminal?device=test", nil)
@@ -24,8 +24,8 @@ func TestCleanPageRoutes(t *testing.T) {
 		if rec.Code != http.StatusOK {
 			t.Fatalf("status = %d, want 200", rec.Code)
 		}
-		if !strings.Contains(rec.Body.String(), "<title") || !strings.Contains(rec.Body.String(), "RDev Terminal") {
-			t.Fatalf("/terminal did not return terminal HTML")
+		if !strings.Contains(rec.Body.String(), "<title") || !strings.Contains(rec.Body.String(), "RDev") {
+			t.Fatalf("/terminal did not return the app HTML")
 		}
 	})
 
@@ -46,8 +46,8 @@ func TestCleanPageRoutes(t *testing.T) {
 		if rec.Code != http.StatusOK {
 			t.Fatalf("status = %d, want 200", rec.Code)
 		}
-		if !strings.Contains(rec.Body.String(), "<title") || !strings.Contains(rec.Body.String(), "RDev Desktop") {
-			t.Fatalf("/remote-desktop did not return desktop HTML")
+		if !strings.Contains(rec.Body.String(), "<title") || !strings.Contains(rec.Body.String(), "RDev") {
+			t.Fatalf("/remote-desktop did not return the app HTML")
 		}
 	})
 }

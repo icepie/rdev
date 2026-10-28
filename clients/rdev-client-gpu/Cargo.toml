@@ -17,6 +17,8 @@ embedded-rdev-desktop-hw = ["embedded-rdev-desktop-vaapi", "rdev-desktop/nvenc"]
 # Keep regular builds on current crates; the Win7 package applies PE import
 # patches and shim DLLs after the normal Windows GNU build.
 anyhow = "1.0.102"
+base64 = "0.22.1"
+ed25519-dalek = { version = "2.2.0", default-features = false, features = ["alloc"] }
 rdev-desktop = { path = "vendor/rdev-desktop", optional = true, default-features = false }
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 clap = { version = "4.6.1", features = ["derive", "env"] }
