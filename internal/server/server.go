@@ -10,6 +10,8 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"regexp"
 	"runtime"
 	"sort"
@@ -618,6 +620,12 @@ type Server struct {
 	// the TTL cleanup entirely.
 	DataDir         string
 	AgentSessionTTL time.Duration
+
+	// ReleaseDir, when set, makes release downloads fully local: assets are
+	// served from <ReleaseDir>/<tag>/<asset> and no GitHub/mirror URL is ever
+	// contacted or handed out. Empty keeps the GitHub proxy/redirect flow
+	// (with the DataDir disk cache in front of it).
+	ReleaseDir string
 }
 
 // NewServer creates a new Server
@@ -1682,6 +1690,9 @@ func (s *Server) HandleReleaseDownload(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad asset", http.StatusBadRequest)
 		return
 	}
+	if s.serveLocalReleaseAsset(w, r, asset, tag) {
+		return
+	}
 	key := releaseDownloadChoiceKey(asset, tag)
 	if candidate := cachedReleaseDownloadChoice(key, time.Now()); candidate != "" {
 		http.Redirect(w, r, candidate, http.StatusFound)
@@ -1695,12 +1706,139 @@ func (s *Server) HandleReleaseDownload(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, candidate, http.StatusFound)
 }
 
+// serveLocalReleaseAsset serves <ReleaseDir>/<tag>/<asset> directly. It
+// returns false when no ReleaseDir is configured; otherwise it always writes
+// a response (404 when the file is absent) and never touches GitHub.
+func (s *Server) serveLocalReleaseAsset(w http.ResponseWriter, r *http.Request, asset, tag string) bool {
+	if s.ReleaseDir == "" {
+		return false
+	}
+	if tag == "latest" {
+		resolved, _ := s.latestReleaseTag(r.Context())
+		tag = resolved
+	}
+	if tag == "" || tag == "latest" {
+		http.Error(w, "release not found", http.StatusNotFound)
+		return true
+	}
+	path := filepath.Join(s.ReleaseDir, tag, asset)
+	info, err := os.Stat(path)
+	if err != nil || !info.Mode().IsRegular() {
+		http.Error(w, "release not found", http.StatusNotFound)
+		return true
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		http.Error(w, "release not found", http.StatusNotFound)
+		return true
+	}
+	defer f.Close()
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Content-Disposition", "attachment; filename=\""+asset+"\"")
+	http.ServeContent(w, r, asset, info.ModTime(), f)
+	return true
+}
+
+// parseReleaseTag splits "v1.2.3" into its numeric components. Pre-release
+// suffixes ("-rc1") sort below the plain release of the same version.
+func parseReleaseTag(tag string) (nums [3]int, pre bool, ok bool) {
+	tag = strings.TrimPrefix(tag, "v")
+	if i := strings.IndexByte(tag, '-'); i >= 0 {
+		pre = true
+		tag = tag[:i]
+	}
+	parts := strings.Split(tag, ".")
+	if len(parts) < 1 || len(parts) > 3 {
+		return nums, false, false
+	}
+	for i, p := range parts {
+		n, err := strconv.Atoi(p)
+		if err != nil || n < 0 {
+			return nums, false, false
+		}
+		nums[i] = n
+	}
+	return nums, pre, true
+}
+
+// lessReleaseTag orders release tags by semantic version, pre-releases first.
+func lessReleaseTag(a, b string) bool {
+	an, apre, aok := parseReleaseTag(a)
+	bn, bpre, bok := parseReleaseTag(b)
+	if !aok || !bok {
+		return a < b
+	}
+	if an != bn {
+		for i := range an {
+			if an[i] != bn[i] {
+				return an[i] < bn[i]
+			}
+		}
+	}
+	return apre && !bpre
+}
+
+// localLatestReleaseTag picks the highest versioned tag directory in dir.
+func localLatestReleaseTag(dir string) string {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return ""
+	}
+	best := ""
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if _, _, ok := parseReleaseTag(name); !ok {
+			continue
+		}
+		if best == "" || lessReleaseTag(best, name) {
+			best = name
+		}
+	}
+	return best
+}
+
+// releaseCachePath locates the on-disk cache copy of a release asset.
+// "" disables caching (no data dir, or an unresolvable "latest" tag —
+// caching under the literal "latest" key would go stale on new releases).
+func (s *Server) releaseCachePath(tag, asset string) string {
+	if s.DataDir == "" || tag == "" || tag == "latest" || asset == "" {
+		return ""
+	}
+	return filepath.Join(s.DataDir, "release-cache", tag, asset)
+}
+
 // HandleReleaseDownloadProxy streams a release asset through the RDev server as a last-resort fallback.
+// Successful downloads are cached under DataDir/release-cache/<tag>/ so repeat
+// installs are served from local disk instead of re-fetching upstream.
 func (s *Server) HandleReleaseDownloadProxy(w http.ResponseWriter, r *http.Request) {
 	asset, tag, ok := releaseDownloadParams(r)
 	if !ok {
 		http.Error(w, "bad asset", http.StatusBadRequest)
 		return
+	}
+	if s.serveLocalReleaseAsset(w, r, asset, tag) {
+		return
+	}
+	cacheTag := tag
+	if cacheTag == "latest" {
+		if resolved, _ := s.latestReleaseTag(r.Context()); resolved != "" {
+			cacheTag = resolved
+		}
+	}
+	cachePath := s.releaseCachePath(cacheTag, asset)
+	if cachePath != "" {
+		if info, err := os.Stat(cachePath); err == nil && info.Mode().IsRegular() && info.Size() > 0 {
+			if f, err := os.Open(cachePath); err == nil {
+				defer f.Close()
+				w.Header().Set("Content-Type", "application/octet-stream")
+				w.Header().Set("Content-Disposition", "attachment; filename=\""+asset+"\"")
+				http.ServeContent(w, r, asset, info.ModTime(), f)
+				return
+			}
+		}
 	}
 	transport := &http.Transport{
 		Proxy:                 http.ProxyFromEnvironment,
@@ -1755,7 +1893,26 @@ func (s *Server) HandleReleaseDownloadProxy(w http.ResponseWriter, r *http.Reque
 	if length := resp.Header.Get("Content-Length"); length != "" {
 		w.Header().Set("Content-Length", length)
 	}
-	_, _ = io.Copy(w, resp.Body)
+	/* Stream to the client while teeing into a temp file; the atomic rename
+	 * publishes only complete downloads, so readers never see partials. */
+	var dst io.Writer = w
+	var tmp *os.File
+	if cachePath != "" {
+		if err := os.MkdirAll(filepath.Dir(cachePath), 0o755); err == nil {
+			if f, err := os.CreateTemp(filepath.Dir(cachePath), ".tmp-*"); err == nil {
+				tmp = f
+				dst = io.MultiWriter(w, tmp)
+			}
+		}
+	}
+	_, copyErr := io.Copy(dst, resp.Body)
+	if tmp != nil {
+		name := tmp.Name()
+		if copyErr != nil || tmp.Close() != nil || os.Rename(name, cachePath) != nil {
+			_ = tmp.Close()
+			_ = os.Remove(name)
+		}
+	}
 }
 
 func normalizeReleaseTag(tag string) string {
@@ -1806,6 +1963,22 @@ func (s *Server) latestReleaseTag(ctx context.Context) (string, bool) {
 		return tag, true
 	}
 	s.releaseLatestMu.Unlock()
+
+	if s.ReleaseDir != "" {
+		tag := localLatestReleaseTag(s.ReleaseDir)
+		if tag == "" {
+			fallback := normalizeReleaseTag(s.ReleaseVersion)
+			if fallback == "" {
+				fallback = "latest"
+			}
+			return fallback, false
+		}
+		s.releaseLatestMu.Lock()
+		s.releaseLatestTag = tag
+		s.releaseLatestAt = time.Now()
+		s.releaseLatestMu.Unlock()
+		return tag, true
+	}
 
 	tag, err := fetchLatestReleaseTag(ctx)
 	if err != nil {

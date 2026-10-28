@@ -5,6 +5,8 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -97,6 +99,122 @@ func TestHandleReleaseDownloadRedirectsCachedChoice(t *testing.T) {
 	}
 	if got := res.Header().Get("Location"); got != candidate {
 		t.Fatalf("Location = %q, want %q", got, candidate)
+	}
+}
+
+func TestHandleReleaseDownloadProxyServesCachedAsset(t *testing.T) {
+	asset, tag := "rdev-client-linux-amd64", "v9.9.9"
+	dir := t.TempDir()
+	srv := NewServer()
+	srv.DataDir = dir
+	cachePath := filepath.Join(dir, "release-cache", tag, asset)
+	if err := os.MkdirAll(filepath.Dir(cachePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := []byte("cached-binary-payload")
+	if err := os.WriteFile(cachePath, body, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	/* The cached copy must be served from disk; with no reachable upstream
+	 * (this asset/tag does not exist), any network access would fail the
+	 * request instead. */
+	req := httptest.NewRequest(http.MethodGet, "/download-release-proxy?asset="+asset+"&tag="+tag, nil)
+	res := httptest.NewRecorder()
+	srv.HandleReleaseDownloadProxy(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", res.Code, http.StatusOK)
+	}
+	if got := res.Body.Bytes(); !bytes.Equal(got, body) {
+		t.Fatalf("body = %q, want %q", got, body)
+	}
+	if got := res.Header().Get("Content-Disposition"); !strings.Contains(got, asset) {
+		t.Fatalf("Content-Disposition = %q, want attachment naming %q", got, asset)
+	}
+}
+
+func TestReleaseCachePathSkipsLatest(t *testing.T) {
+	srv := NewServer()
+	srv.DataDir = t.TempDir()
+	if got := srv.releaseCachePath("latest", "x"); got != "" {
+		t.Fatalf("latest tag must not be cached, got %q", got)
+	}
+	if got := srv.releaseCachePath("v1.0.0", "x"); got == "" {
+		t.Fatal("concrete tag should produce a cache path")
+	}
+	srv.DataDir = ""
+	if got := srv.releaseCachePath("v1.0.0", "x"); got != "" {
+		t.Fatalf("empty DataDir disables caching, got %q", got)
+	}
+}
+
+func TestReleaseDirServesLocalAssetsWithoutGitHub(t *testing.T) {
+	dir := t.TempDir()
+	assetDir := filepath.Join(dir, "v0.3.0")
+	if err := os.MkdirAll(assetDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := []byte("local-release-payload")
+	if err := os.WriteFile(filepath.Join(assetDir, "rdev-client-linux-amd64"), body, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	srv := NewServer()
+	srv.ReleaseDir = dir
+
+	/* Both the redirect and the streaming endpoint must serve the local
+	 * file; with ReleaseDir set, no external URL is ever produced. */
+	for _, path := range []string{
+		"/download-release?asset=rdev-client-linux-amd64&tag=v0.3.0",
+		"/download-release-proxy?asset=rdev-client-linux-amd64&tag=v0.3.0",
+		"/download-release-proxy?asset=rdev-client-linux-amd64&tag=latest",
+	} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		res := httptest.NewRecorder()
+		if strings.HasPrefix(path, "/download-release?") {
+			srv.HandleReleaseDownload(res, req)
+		} else {
+			srv.HandleReleaseDownloadProxy(res, req)
+		}
+		if res.Code != http.StatusOK {
+			t.Fatalf("%s: status = %d, want %d", path, res.Code, http.StatusOK)
+		}
+		if got := res.Body.Bytes(); !bytes.Equal(got, body) {
+			t.Fatalf("%s: body = %q, want %q", path, got, body)
+		}
+		if loc := res.Header().Get("Location"); loc != "" {
+			t.Fatalf("%s: unexpected redirect to %q", path, loc)
+		}
+	}
+
+	/* Missing assets must 404 locally, never fall back to GitHub. */
+	req := httptest.NewRequest(http.MethodGet, "/download-release-proxy?asset=nope&tag=v0.3.0", nil)
+	res := httptest.NewRecorder()
+	srv.HandleReleaseDownloadProxy(res, req)
+	if res.Code != http.StatusNotFound {
+		t.Fatalf("missing asset: status = %d, want %d", res.Code, http.StatusNotFound)
+	}
+}
+
+func TestLocalLatestReleaseTagPicksHighestSemver(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"v0.2.9", "v0.2.126", "v0.10.0", "v0.10.0-rc1", "junk", "v0.2"} {
+		if err := os.Mkdir(filepath.Join(dir, name), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	/* A regular file with a tag-like name must be ignored. */
+	if err := os.WriteFile(filepath.Join(dir, "v9.9.9"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := localLatestReleaseTag(dir); got != "v0.10.0" {
+		t.Fatalf("localLatestReleaseTag = %q, want v0.10.0", got)
+	}
+
+	srv := NewServer()
+	srv.ReleaseDir = dir
+	tag, fresh := srv.latestReleaseTag(context.Background())
+	if tag != "v0.10.0" || !fresh {
+		t.Fatalf("latestReleaseTag = %q fresh=%v, want v0.10.0 fresh=true", tag, fresh)
 	}
 }
 

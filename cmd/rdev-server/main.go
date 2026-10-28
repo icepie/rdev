@@ -26,6 +26,7 @@ func main() {
 		kcpAddr                    = ":8082"
 		sshAddr                    = ":2222"
 		dataDir                    = ""
+		releaseDir                 = ""
 		adminToken                 = ""
 		maxSessions                = 0
 		maxForwards                = 0
@@ -70,6 +71,11 @@ func main() {
 		case "--data", "-d":
 			if i+1 < len(os.Args) {
 				dataDir = os.Args[i+1]
+				i++
+			}
+		case "--release-dir":
+			if i+1 < len(os.Args) {
+				releaseDir = os.Args[i+1]
 				i++
 			}
 		case "--admin-token", "-t":
@@ -179,6 +185,8 @@ Options:
   --kcp       KCP/UDP client listen address for control and GPU tunnel (default :8082)
   --ssh, -s   SSH listen address (default :2222)
   --data, -d  Data directory for host key & authorized_keys (default ~/.rdev)
+  --release-dir  Serve client release assets from <dir>/<tag>/<asset> locally,
+             disabling all GitHub/mirror downloads (latest = highest tag dir)
   --admin-token, -t  Token for Web UI APIs, terminal, batch, upload (default: random, printed at startup; env RDEV_ADMIN_TOKEN)
   --max-sessions     Max concurrent sessions per device (default 256)
   --max-forwards     Max concurrent TCP forwards per device (default 1024)
@@ -316,6 +324,14 @@ Examples:
 	srv.AgentMaxTurns = agentMaxTurns
 	srv.DataDir = dataDir
 	srv.AgentSessionTTL = agentSessionTTL
+	if releaseDir != "" {
+		if info, err := os.Stat(releaseDir); err != nil || !info.IsDir() {
+			log.Printf("warning: --release-dir %s is not a directory; release downloads will 404", releaseDir)
+		} else {
+			log.Printf("serving release assets from %s (GitHub downloads disabled)", releaseDir)
+		}
+		srv.ReleaseDir = releaseDir
+	}
 	// Multi-provider agent config: an explicit config file wins; otherwise
 	// synthesize a single "default" provider from the single-model flags.
 	if agentConfigPath != "" {
