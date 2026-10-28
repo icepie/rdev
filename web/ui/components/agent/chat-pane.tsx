@@ -226,6 +226,9 @@ export function ChatPaneView({
   const sendChat = () => {
     const text = input.trim();
     if ((!text && pendingImages.length === 0) || !ready) return;
+    if (text.startsWith("/") && pendingImages.length === 0 && runSlashLine(text)) {
+      return;
+    }
     const payload: Record<string, unknown> = { op: "chat", text };
     if (threadId) payload.thread = threadId;
     if (model) payload.model = model;
@@ -257,6 +260,113 @@ export function ChatPaneView({
     if (threadId) payload.thread = threadId;
     sendRaw(payload);
   };
+
+  /* Slash commands: typing "/" in the composer opens a filtered menu;
+   * no-arg commands run on confirm, commands needing an argument expand
+   * into the input. Unknown slash text falls through as a normal chat. */
+  interface SlashCommand {
+    name: string;
+    label: string;
+    desc: string;
+    icon: string;
+    needsArg?: boolean;
+    runningOnly?: boolean;
+    run: (arg: string) => void;
+  }
+  const slashCommands: SlashCommand[] = useMemo(
+    () => [
+      {
+        name: "new",
+        label: t("agent.cmd.new"),
+        desc: t("agent.cmd.newDesc"),
+        icon: "Plus",
+        run: () => sendRaw({ op: "new_thread" }),
+      },
+      {
+        name: "reset",
+        label: t("agent.cmd.reset"),
+        desc: t("agent.cmd.resetDesc"),
+        icon: "RotateCcw",
+        run: () => {
+          const payload: Record<string, unknown> = { op: "reset" };
+          sendRaw(payload);
+        },
+      },
+      {
+        name: "stop",
+        label: t("agent.cmd.stop"),
+        desc: t("agent.cmd.stopDesc"),
+        icon: "Square",
+        runningOnly: true,
+        run: () => sendStop(),
+      },
+      {
+        name: "steer",
+        label: t("agent.cmd.steer"),
+        desc: t("agent.cmd.steerDesc"),
+        icon: "Zap",
+        needsArg: true,
+        runningOnly: true,
+        run: (arg) => {
+          if (!arg) return;
+          const payload: Record<string, unknown> = { op: "steer", text: arg };
+          if (threadId) payload.thread = threadId;
+          if (sendRaw(payload)) setInput("");
+        },
+      },
+    ],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [t, sendRaw, threadId],
+  );
+
+  const slashQuery = (() => {
+    const m = input.match(/^\/([a-z]*)$/i);
+    return m ? m[1].toLowerCase() : null;
+  })();
+  const slashFiltered = useMemo(
+    () =>
+      slashQuery === null
+        ? []
+        : slashCommands.filter(
+            (c) =>
+              c.name.startsWith(slashQuery) && (!c.runningOnly || running),
+          ),
+    [slashCommands, slashQuery, running],
+  );
+  const [slashIndex, setSlashIndex] = useState(0);
+  const [slashDismissed, setSlashDismissed] = useState(false);
+  const slashOpen =
+    slashQuery !== null && !slashDismissed && slashFiltered.length > 0;
+  useEffect(() => {
+    setSlashIndex(0);
+    setSlashDismissed(false);
+  }, [slashQuery]);
+
+  const acceptSlash = (cmd: SlashCommand) => {
+    if (cmd.needsArg) {
+      setInput("/" + cmd.name + " ");
+      setSlashDismissed(true);
+      return;
+    }
+    setInput("");
+    cmd.run("");
+  };
+
+  /* Executes a "/name arg" line; returns true when the input was consumed
+   * as a command (unknown commands fall back to a normal chat send). */
+  const runSlashLine = (text: string): boolean => {
+    const m = text.match(/^\/([a-z]+)(?:\s+([\s\S]*))?$/i);
+    if (!m) return false;
+    const cmd = slashCommands.find(
+      (c) =>
+        c.name === m[1].toLowerCase() && (!c.runningOnly || running),
+    );
+    if (!cmd) return false;
+    setInput("");
+    cmd.run((m[2] ?? "").trim());
+    return true;
+  };
+
 
   /* bb pastRowDimClassName: every turn but the transcript's last renders
    * its work rows dimmed (opacity-40). */
@@ -425,20 +535,59 @@ export function ChatPaneView({
         onClick={() => ops.scrollDown(true)}
       />
 
-      {/* Queue */}
+      {/* Queue: each row can be taken back into the composer (click) or
+       * dropped entirely (✕); both go through the dequeue op so every
+       * pane sees the rebroadcast list. */}
       {queue.length > 0 && (
         <div className="shrink-0 border-t border-border-seam px-3.5 py-1.5">
           <div className="mx-auto flex w-full max-w-[760px] flex-col gap-0.5">
             <div className="flex items-center gap-1.5 text-2xs tracking-wide text-muted-foreground uppercase">
               <Icon name="Rows2" className="size-3 shrink-0" />
               {t("agent.queue")}
+              <span className="normal-case tracking-normal">
+                ({queue.length})
+              </span>
             </div>
             {queue.map((q, i) => (
               <div
                 key={i}
-                className="flex items-center gap-1.5 pl-4 text-xs text-muted-foreground"
+                className="group/queue flex items-center gap-1 rounded-md py-0.5 pr-1 pl-4 text-xs text-muted-foreground transition-colors hover:bg-sidebar-accent"
               >
-                <span className="truncate">{q}</span>
+                <span className="w-4 shrink-0 text-right text-2xs text-subtle-foreground/75 tabular-nums">
+                  {i + 1}
+                </span>
+                <button
+                  type="button"
+                  title={t("agent.queueEditHint")}
+                  className="min-w-0 flex-1 cursor-pointer truncate text-left transition-colors hover:text-foreground"
+                  onClick={() => {
+                    addToChat(q);
+                    const payload: Record<string, unknown> = {
+                      op: "dequeue",
+                      index: i,
+                    };
+                    if (threadId) payload.thread = threadId;
+                    sendRaw(payload);
+                  }}
+                >
+                  {q}
+                </button>
+                <button
+                  type="button"
+                  aria-label={t("agent.queueRemove")}
+                  title={t("agent.queueRemove")}
+                  className="shrink-0 cursor-pointer rounded p-0.5 text-subtle-foreground/75 opacity-0 transition-opacity group-hover/queue:opacity-100 hover:text-destructive-text"
+                  onClick={() => {
+                    const payload: Record<string, unknown> = {
+                      op: "dequeue",
+                      index: i,
+                    };
+                    if (threadId) payload.thread = threadId;
+                    sendRaw(payload);
+                  }}
+                >
+                  <Icon name="X" className="size-3.5" />
+                </button>
               </div>
             ))}
           </div>
@@ -455,6 +604,35 @@ export function ChatPaneView({
           </div>
         )}
         <div className="relative w-full rounded-xl border border-border bg-background shadow-lift">
+          {slashOpen && (
+            <div className="absolute inset-x-2 bottom-full z-20 mb-1 overflow-hidden rounded-lg border border-border bg-surface-raised-solid shadow-lift">
+              <div className="px-2.5 pt-1.5 pb-1 text-2xs tracking-wide text-muted-foreground uppercase">
+                {t("agent.slashCommands")}
+              </div>
+              {slashFiltered.map((cmd, i) => (
+                <button
+                  key={cmd.name}
+                  type="button"
+                  className={cn(
+                    "flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-sm transition-colors",
+                    i === Math.min(slashIndex, slashFiltered.length - 1)
+                      ? "bg-state-active text-foreground"
+                      : "text-muted-foreground hover:bg-sidebar-accent",
+                  )}
+                  onMouseEnter={() => setSlashIndex(i)}
+                  onClick={() => acceptSlash(cmd)}
+                >
+                  <Icon name={cmd.icon} className="size-3.5 shrink-0" />
+                  <span className="shrink-0 font-medium text-foreground">
+                    /{cmd.name}
+                  </span>
+                  <span className="min-w-0 flex-1 truncate text-xs">
+                    {cmd.label} · {cmd.desc}
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
           {pendingImages.length > 0 && (
             <div className="flex flex-wrap gap-2 px-3 pt-2.5">
               {pendingImages.map((img, i) => (
@@ -500,6 +678,30 @@ export function ChatPaneView({
               }
             }}
             onKeyDown={(e) => {
+              if (slashOpen && !e.nativeEvent.isComposing) {
+                if (e.key === "ArrowDown") {
+                  e.preventDefault();
+                  setSlashIndex((i) => (i + 1) % slashFiltered.length);
+                  return;
+                }
+                if (e.key === "ArrowUp") {
+                  e.preventDefault();
+                  setSlashIndex(
+                    (i) => (i - 1 + slashFiltered.length) % slashFiltered.length,
+                  );
+                  return;
+                }
+                if (e.key === "Enter" || e.key === "Tab") {
+                  e.preventDefault();
+                  acceptSlash(slashFiltered[Math.min(slashIndex, slashFiltered.length - 1)]);
+                  return;
+                }
+                if (e.key === "Escape") {
+                  e.preventDefault();
+                  setSlashDismissed(true);
+                  return;
+                }
+              }
               if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
                 e.preventDefault();
                 sendChat();

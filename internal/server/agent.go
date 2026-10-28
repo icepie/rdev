@@ -23,7 +23,7 @@ import (
 // Browser <-> server agent protocol (text JSON frames on /agent?device=<id>).
 // In:  {op:"auth",password} | {op:"chat",text,model?,thread?,images?} | {op:"approve",id,allow,always?} |
 //
-//	{op:"steer",text} | {op:"new_thread"} | {op:"switch_thread",thread} |
+//	{op:"steer",text} | {op:"dequeue",thread?,index} | {op:"new_thread"} | {op:"switch_thread",thread} |
 //	{op:"delete_thread",thread} | {op:"rename_thread",thread,title} |
 //	{op:"set_cwd",path} | {op:"set_permission_mode",mode} |
 //	{op:"set_reasoning_level",level} | {op:"set_auto_approve",value} (legacy) |
@@ -96,6 +96,8 @@ type agentMsg struct {
 	// strings.
 	Images  json.RawMessage `json:"images,omitempty"`
 	Working *agentWorking   `json:"working,omitempty"`
+	// Index is the dequeue payload: position of the queued follow-up to drop.
+	Index int `json:"index,omitempty"`
 	// Cwd and Branch describe a thread's working directory and git branch:
 	// auth_ok (current thread) and thread_meta broadcasts. Path is the
 	// set_cwd input ("" = restore device default); Title is the
@@ -1123,6 +1125,8 @@ func (h *agentWSHandler) OnMessage(socket *gws.Conn, message *gws.Message) {
 		h.handleAskResponse(ac, msg.ID, msg.Answer)
 	case "steer":
 		h.handleSteer(ac, msg.Text, msg.Thread)
+	case "dequeue":
+		h.handleDequeue(ac, msg.Thread, msg.Index)
 	case "stop":
 		if ac.entry == nil {
 			return
@@ -1365,6 +1369,32 @@ func (h *agentWSHandler) handleSteer(ac *agentConn, text, threadRef string) {
 		cancel()
 	}
 	srv.broadcastQueue(entry, th)
+}
+
+// handleDequeue drops one queued follow-up by index and rebroadcasts the
+// queue so every pane reflects the removal.
+func (h *agentWSHandler) handleDequeue(ac *agentConn, threadRef string, index int) {
+	entry := ac.entry
+	if entry == nil {
+		return
+	}
+	srv := h.srv
+	srv.agentSessionsMu.Lock()
+	threadID := ac.current
+	if threadRef != "" {
+		threadID = threadRef
+	}
+	th := entry.threads[threadID]
+	removed := false
+	if th != nil && index >= 0 && index < len(th.queue) {
+		th.queue = append(th.queue[:index], th.queue[index+1:]...)
+		entry.lastActive = time.Now()
+		removed = true
+	}
+	srv.agentSessionsMu.Unlock()
+	if removed {
+		srv.broadcastQueue(entry, th)
+	}
 }
 
 // handleReset clears the current thread's history, todos and stored file.

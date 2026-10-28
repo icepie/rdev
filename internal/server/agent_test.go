@@ -93,6 +93,102 @@ func TestAgentQueueSteerOrdering(t *testing.T) {
 	}
 }
 
+// TestAgentDequeueDropsQueuedMessage: a queued follow-up removed via dequeue
+// must never reach the provider, and the remaining item still runs.
+func TestAgentDequeueDropsQueuedMessage(t *testing.T) {
+	var mu sync.Mutex
+	var seen []string
+	var hits atomic.Int32
+	prov := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var req struct {
+			Messages []struct {
+				Role    string `json:"role"`
+				Content string `json:"content"`
+			} `json:"messages"`
+		}
+		_ = json.Unmarshal(body, &req)
+		lastUser := ""
+		for i := len(req.Messages) - 1; i >= 0; i-- {
+			if req.Messages[i].Role == "user" {
+				lastUser = req.Messages[i].Content
+				break
+			}
+		}
+		mu.Lock()
+		seen = append(seen, lastUser)
+		mu.Unlock()
+
+		if hits.Add(1) == 1 {
+			<-r.Context().Done() // first turn blocks until stopped
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, `data: {"choices":[{"index":0,"delta":{"content":"ok"}}]}`+"\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer prov.Close()
+
+	srv := &Server{
+		Agent: &AgentConfig{Providers: []AgentProvider{{
+			ID:      "p",
+			BaseURL: prov.URL,
+			APIKey:  "k",
+			Models:  []AgentModelConfig{{ID: "m"}},
+		}}},
+		AgentMaxTurns: 4,
+	}
+	entry, err := srv.agentSessionFor("dev1", &ClientConn{ID: "dev1"})
+	if err != nil {
+		t.Fatalf("agentSessionFor: %v", err)
+	}
+	h := &agentWSHandler{srv: srv}
+	ac := &agentConn{deviceID: "dev1", entry: entry, current: entry.current}
+
+	h.handleChat(ac, "zero", "", "", nil)
+	waitFor(t, "first provider request", func() bool { return hits.Load() == 1 })
+
+	h.handleChat(ac, "drop-me", "", "", nil)
+	h.handleChat(ac, "keep-me", "", "", nil)
+	h.handleDequeue(ac, "", 0)
+
+	srv.agentSessionsMu.Lock()
+	th := entry.threads[entry.current]
+	got := queueTexts(th.queue)
+	srv.agentSessionsMu.Unlock()
+	if !slices.Equal(got, []string{"keep-me"}) {
+		t.Fatalf("queue after dequeue = %v, want [keep-me]", got)
+	}
+
+	// Out-of-range indexes must be ignored without corrupting the queue.
+	h.handleDequeue(ac, "", 5)
+	h.handleDequeue(ac, "", -1)
+	srv.agentSessionsMu.Lock()
+	got = queueTexts(entry.threads[entry.current].queue)
+	srv.agentSessionsMu.Unlock()
+	if !slices.Equal(got, []string{"keep-me"}) {
+		t.Fatalf("queue after bad indexes = %v, want [keep-me]", got)
+	}
+
+	// Stop the blocked turn; the surviving queued message must run next.
+	srv.agentSessionsMu.Lock()
+	cancel := entry.threads[entry.current].cancel
+	srv.agentSessionsMu.Unlock()
+	cancel()
+	waitFor(t, "turns to finish", func() bool {
+		srv.agentSessionsMu.Lock()
+		defer srv.agentSessionsMu.Unlock()
+		th := entry.threads[entry.current]
+		return !th.running && len(th.queue) == 0
+	})
+
+	mu.Lock()
+	defer mu.Unlock()
+	if !slices.Equal(seen, []string{"zero", "keep-me"}) {
+		t.Fatalf("provider saw %v, want [zero keep-me]", seen)
+	}
+}
+
 func waitFor(t *testing.T, what string, cond func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
