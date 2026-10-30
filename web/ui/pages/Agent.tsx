@@ -317,6 +317,15 @@ export function AgentPage() {
   const [isNarrow, setIsNarrow] = useState(
     () => window.matchMedia("(max-width: 767px)").matches,
   );
+  /* Coarse primary pointer ≈ real phone/tablet. Narrow width alone is NOT
+   * enough for the drawer mode: a narrow DESKTOP window gets the static
+   * two-column layout instead (user decision). */
+  const [isCoarse, setIsCoarse] = useState(
+    () => window.matchMedia("(pointer: coarse)").matches,
+  );
+  /* phoneDrawer: bb reveal drawer (absolute, slides over, backdrop).
+   * !phoneDrawer && isNarrow: static in-flow column, chat reflows beside. */
+  const phoneDrawer = isNarrow && isCoarse;
   const [transitionsReady, setTransitionsReady] = useState(false);
   /* bb: transition disabled while dragging the divider, else every
    * pointermove animates 220ms toward the target → rubber-band lag. */
@@ -417,6 +426,13 @@ export function AgentPage() {
   useEffect(() => {
     const mq = window.matchMedia("(max-width: 767px)");
     const onChange = () => setIsNarrow(mq.matches);
+    mq.addEventListener("change", onChange);
+    return () => mq.removeEventListener("change", onChange);
+  }, []);
+
+  useEffect(() => {
+    const mq = window.matchMedia("(pointer: coarse)");
+    const onChange = () => setIsCoarse(mq.matches);
     mq.addEventListener("change", onChange);
     return () => mq.removeEventListener("change", onChange);
   }, []);
@@ -2136,17 +2152,22 @@ export function AgentPage() {
 
   return (
     <div className="relative flex h-full overflow-hidden">
-      {/* Thread sidebar (bb ui/sidebar.tsx structure): the panel is ALWAYS
-       * a fixed-width absolute column that slides horizontally — the
-       * content never squishes. Desktop: a gap spacer (bb
-       * data-sidebar="gap") in the flex row reserves layout space with a
-       * 200ms linear width transition while the panel slides
-       * (bb offcanvas: left 0→-w, 200ms linear). Compact (≤767px): bb
-       * reveal drawer — panel min(86vw,360px) slides in, the inset
-       * translates right with it keeping its own width, and a transparent
-       * backdrop rides the inset as a click-catcher (220ms
-       * cubic-bezier(0.32,0.72,0,1)). Transitions arm two frames after
-       * mount via transitionsReady; resize drags skip them. */}
+      {/* Thread sidebar, three layout modes (bb ui/sidebar.tsx structure
+       * for desktop/phone; narrow-desktop static mode is a user-chosen
+       * deviation from bb):
+       * - Desktop (≥768px): bb offcanvas — the panel is an absolute
+       *   fixed-width column that slides horizontally (200ms linear)
+       *   while the gap spacer (bb data-sidebar="gap") reserves layout
+       *   space; content never squishes mid-animation.
+       * - Narrow desktop (≤767px, fine pointer): STATIC two-column — the
+       *   aside sits in flow, its width animates 200ms linear and the
+       *   chat reflows beside it; both columns stay fully usable.
+       * - Phone (≤767px, coarse pointer): bb reveal drawer — panel
+       *   min(86vw,360px) slides in, the inset translates right with it
+       *   keeping its own width, and a transparent backdrop rides the
+       *   inset as a click-catcher (220ms cubic-bezier(0.32,0.72,0,1)).
+       * Transitions arm two frames after mount via transitionsReady;
+       * resize drags skip them. */}
       <div
         aria-hidden
         style={{ "--sidebar-w": `${sidebarWidth}px` } as CSSProperties}
@@ -2158,28 +2179,64 @@ export function AgentPage() {
           sidebarOpen ? "md:w-[var(--sidebar-w)]" : "md:w-0",
         )}
       />
-      <div
-        className={cn(
-          "absolute inset-0 z-10 bg-transparent md:hidden",
-          transitionsReady &&
-            "[transition:opacity_220ms_cubic-bezier(0.32,0.72,0,1),translate_220ms_cubic-bezier(0.32,0.72,0,1)] motion-reduce:transition-none",
-          sidebarOpen
-            ? "translate-x-[min(86vw,360px)] opacity-100"
-            : "pointer-events-none opacity-0",
-        )}
-        onClick={closeSidebar}
-      />
+      {phoneDrawer && (
+        <div
+          className={cn(
+            "absolute inset-0 z-10 bg-transparent",
+            transitionsReady &&
+              "[transition:opacity_220ms_cubic-bezier(0.32,0.72,0,1),translate_220ms_cubic-bezier(0.32,0.72,0,1)] motion-reduce:transition-none",
+            sidebarOpen
+              ? "translate-x-[min(86vw,360px)] opacity-100"
+              : "pointer-events-none opacity-0",
+          )}
+          onClick={closeSidebar}
+        />
+      )}
       <aside
         inert={!sidebarOpen}
         style={{ "--sidebar-w": `${sidebarWidth}px` } as CSSProperties}
         className={cn(
-          "absolute inset-y-0 left-0 z-20 flex w-[min(86vw,360px)] shrink-0 flex-col overflow-hidden border-r border-border-seam bg-sidebar text-sidebar-foreground select-none md:w-[var(--sidebar-w)]",
+          "flex shrink-0 flex-col overflow-hidden border-r border-border-seam bg-sidebar text-sidebar-foreground select-none",
+          /* Three layout modes:
+           * - phone (narrow + coarse pointer): bb reveal drawer —
+           *   absolute min(86vw,360px), slides, transparent backdrop;
+           * - narrow desktop (narrow + fine pointer): STATIC two-column —
+           *   the aside sits in flow and its width animates 200ms linear
+           *   while the chat reflows beside it (both stay usable);
+           * - desktop: bb offcanvas — absolute fixed-width panel slides,
+           *   the gap spacer above reserves layout space. */
+          phoneDrawer
+            ? "absolute inset-y-0 left-0 z-20 w-[min(86vw,360px)]"
+            : isNarrow
+              ? cn(
+                  "relative z-20",
+                  sidebarOpen ? "w-[var(--sidebar-w)]" : "w-0 border-r-0",
+                )
+              : "absolute inset-y-0 left-0 z-20 w-[var(--sidebar-w)]",
           transitionsReady && !sidebarDragging
-            ? sidebarOpen
-              ? "max-md:[transition:transform_220ms_cubic-bezier(0.32,0.72,0,1),visibility_0s] md:[transition:transform_200ms_linear,visibility_0s] motion-reduce:transition-none"
-              : "max-md:[transition:transform_220ms_cubic-bezier(0.32,0.72,0,1),visibility_0s_220ms] md:[transition:transform_200ms_linear,visibility_0s_200ms] motion-reduce:transition-none"
+            ? phoneDrawer
+              ? sidebarOpen
+                ? "[transition:transform_220ms_cubic-bezier(0.32,0.72,0,1),visibility_0s] motion-reduce:transition-none"
+                : "[transition:transform_220ms_cubic-bezier(0.32,0.72,0,1),visibility_0s_220ms] motion-reduce:transition-none"
+              : isNarrow
+                ? sidebarOpen
+                  ? "[transition:width_200ms_linear,visibility_0s] motion-reduce:transition-none"
+                  : "[transition:width_200ms_linear,visibility_0s_200ms] motion-reduce:transition-none"
+                : sidebarOpen
+                  ? "[transition:transform_200ms_linear,visibility_0s] motion-reduce:transition-none"
+                  : "[transition:transform_200ms_linear,visibility_0s_200ms] motion-reduce:transition-none"
             : "transition-none",
-          sidebarOpen ? "translate-x-0" : "invisible -translate-x-full",
+          phoneDrawer
+            ? sidebarOpen
+              ? "translate-x-0"
+              : "invisible -translate-x-full"
+            : isNarrow
+              ? sidebarOpen
+                ? ""
+                : "invisible"
+              : sidebarOpen
+                ? "translate-x-0"
+                : "invisible -translate-x-full",
         )}
       >
         <div className="flex h-full w-full shrink-0 flex-col md:w-[var(--sidebar-w)]">
@@ -2521,9 +2578,11 @@ export function AgentPage() {
         </div>
       </aside>
       {/* Sidebar resize seam (bb three-column handle pattern): 0-wide hit
-       * container; visible 1px line brightens on hover/drag. */}
-      {!isNarrow && sidebarOpen && (
-        <div className="group relative z-20 hidden w-0 shrink-0 overflow-visible md:block">
+       * container, 1px line brightens on hover/drag. Fine pointers only
+       * (desktop + narrow-desktop static mode); phones have a fixed
+       * drawer width. */}
+      {!isCoarse && sidebarOpen && (
+        <div className="group relative z-20 w-0 shrink-0 overflow-visible">
           <span
             role="separator"
             aria-orientation="vertical"
@@ -2552,16 +2611,19 @@ export function AgentPage() {
           "h-full min-w-0 flex-1",
           /* bb inset (ui/sidebar.tsx data-sidebar="inset"): translate
            * 220ms cubic-bezier(0.32,0.72,0,1) on compact — right by the
-           * drawer width when the sidebar is open (chat keeps its width,
-           * visible beside the list), fully left when the right-panel
-           * shelf is open (panel takes precedence, bb source order). */
+           * drawer width when the PHONE drawer is open (chat keeps its
+           * width, visible beside the list), fully left when the
+           * right-panel shelf is open (panel takes precedence, bb source
+           * order). Narrow desktop static mode never translates: the
+           * in-flow sidebar width pushes the chat directly. */
           transitionsReady &&
             !sidebarDragging &&
-            "max-md:[transition:transform_220ms_cubic-bezier(0.32,0.72,0,1)] motion-reduce:transition-none",
+            isNarrow &&
+            "[transition:transform_220ms_cubic-bezier(0.32,0.72,0,1)] motion-reduce:transition-none",
           isNarrow && panelOpen
-            ? "max-md:-translate-x-full"
-            : sidebarOpen
-              ? "max-md:translate-x-[min(86vw,360px)]"
+            ? "-translate-x-full"
+            : phoneDrawer && sidebarOpen
+              ? "translate-x-[min(86vw,360px)]"
               : "",
         )}
         style={
