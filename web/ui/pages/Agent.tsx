@@ -55,6 +55,7 @@ import {
   DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuSub,
   DropdownMenuSubContent,
@@ -2046,6 +2047,79 @@ export function AgentPage() {
     </div>
   );
 
+  /* 对话操作 menu items, shared by the desktop submenu layout and the
+   * compact flat layout. Compact renders them inline because radix
+   * MenuSub requires a Menu root, which the responsive drawer shell
+   * does not provide (bb flattens the same way). */
+  const sidebarOrganizeItems = (
+    <>
+      <DropdownMenuItem
+        onSelect={() => updateSidebarView({ organize: "flat" })}
+      >
+        <span className="flex-1">{t("agent.organizeFlat")}</span>
+        {sidebarView.organize === "flat" && (
+          <Icon name="Check" className="size-4 shrink-0" />
+        )}
+      </DropdownMenuItem>
+      <DropdownMenuItem
+        onSelect={() => updateSidebarView({ organize: "device" })}
+      >
+        <span className="flex-1">{t("agent.organizeDevice")}</span>
+        {sidebarView.organize === "device" && (
+          <Icon name="Check" className="size-4 shrink-0" />
+        )}
+      </DropdownMenuItem>
+    </>
+  );
+  const sidebarSortItems = SIDEBAR_SORTS.map((o) => (
+    <DropdownMenuItem key={o.id} onSelect={() => selectSort(o.id)}>
+      <span className="flex-1">{t(o.label)}</span>
+      {sidebarView.sort === o.id && (
+        <span className="ml-auto flex items-center gap-0.5">
+          <Icon name="Check" className="size-4" />
+          <Icon
+            name={sidebarView.dir === "asc" ? "ArrowUp" : "ArrowDown"}
+            className="size-3.5"
+          />
+        </span>
+      )}
+    </DropdownMenuItem>
+  ));
+  const sidebarFilterItems = (
+    <>
+      {/* bb: at least one filter stays checked; the last checked item's
+       * uncheck is refused (hover title). */}
+      <DropdownMenuCheckboxItem
+        checked={sidebarView.showAll}
+        title={
+          sidebarView.showAll && !sidebarView.showRunning
+            ? t("agent.keepOneFilter")
+            : undefined
+        }
+        onCheckedChange={(v) => {
+          if (!v && !sidebarView.showRunning) return;
+          updateSidebarView({ showAll: !!v });
+        }}
+      >
+        {t("agent.filterAll")}
+      </DropdownMenuCheckboxItem>
+      <DropdownMenuCheckboxItem
+        checked={sidebarView.showRunning}
+        title={
+          sidebarView.showRunning && !sidebarView.showAll
+            ? t("agent.keepOneFilter")
+            : undefined
+        }
+        onCheckedChange={(v) => {
+          if (!v && !sidebarView.showAll) return;
+          updateSidebarView({ showRunning: !!v });
+        }}
+      >
+        {t("agent.filterRunning")}
+      </DropdownMenuCheckboxItem>
+    </>
+  );
+
   /* Empty state: distinguish "nothing matched the search/filter" from
    * "no threads at all" so an active query never reads as data loss. */
   const sidebarEmpty = (
@@ -2258,97 +2332,50 @@ export function AgentPage() {
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent side="right" align="start" sideOffset={8}>
-                  <DropdownMenuSub>
-                    <DropdownMenuSubTrigger>
-                      <Icon name="Layers" className="size-4 shrink-0" />
-                      {t("agent.organize")}
-                    </DropdownMenuSubTrigger>
-                    <DropdownMenuSubContent>
-                      <DropdownMenuItem
-                        onSelect={() => updateSidebarView({ organize: "flat" })}
-                      >
-                        <span className="flex-1">{t("agent.organizeFlat")}</span>
-                        {sidebarView.organize === "flat" && (
-                          <Icon name="Check" className="size-4 shrink-0" />
-                        )}
-                      </DropdownMenuItem>
-                      <DropdownMenuItem
-                        onSelect={() => updateSidebarView({ organize: "device" })}
-                      >
-                        <span className="flex-1">{t("agent.organizeDevice")}</span>
-                        {sidebarView.organize === "device" && (
-                          <Icon name="Check" className="size-4 shrink-0" />
-                        )}
-                      </DropdownMenuItem>
-                    </DropdownMenuSubContent>
-                  </DropdownMenuSub>
-                  <DropdownMenuSub>
-                    <DropdownMenuSubTrigger>
-                      <Icon name="ArrowUpDown" className="size-4 shrink-0" />
-                      {t("agent.sortBy")}
-                    </DropdownMenuSubTrigger>
-                    <DropdownMenuSubContent>
-                      {SIDEBAR_SORTS.map((o) => (
-                        <DropdownMenuItem
-                          key={o.id}
-                          onSelect={() => selectSort(o.id)}
-                        >
-                          <span className="flex-1">{t(o.label)}</span>
-                          {sidebarView.sort === o.id && (
-                            <span className="ml-auto flex items-center gap-0.5">
-                              <Icon name="Check" className="size-4" />
-                              <Icon
-                                name={
-                                  sidebarView.dir === "asc"
-                                    ? "ArrowUp"
-                                    : "ArrowDown"
-                                }
-                                className="size-3.5"
-                              />
-                            </span>
-                          )}
-                        </DropdownMenuItem>
-                      ))}
-                    </DropdownMenuSubContent>
-                  </DropdownMenuSub>
-                  <DropdownMenuSub>
-                    <DropdownMenuSubTrigger>
-                      <Icon name="SlidersHorizontal" className="size-4 shrink-0" />
-                      {t("agent.filter")}
-                    </DropdownMenuSubTrigger>
-                    <DropdownMenuSubContent>
-                      {/* bb: at least one filter stays checked; the last
-                       * checked item's uncheck is refused (hover title). */}
-                      <DropdownMenuCheckboxItem
-                        checked={sidebarView.showAll}
-                        title={
-                          sidebarView.showAll && !sidebarView.showRunning
-                            ? t("agent.keepOneFilter")
-                            : undefined
-                        }
-                        onCheckedChange={(v) => {
-                          if (!v && !sidebarView.showRunning) return;
-                          updateSidebarView({ showAll: !!v });
-                        }}
-                      >
-                        {t("agent.filterAll")}
-                      </DropdownMenuCheckboxItem>
-                      <DropdownMenuCheckboxItem
-                        checked={sidebarView.showRunning}
-                        title={
-                          sidebarView.showRunning && !sidebarView.showAll
-                            ? t("agent.keepOneFilter")
-                            : undefined
-                        }
-                        onCheckedChange={(v) => {
-                          if (!v && !sidebarView.showAll) return;
-                          updateSidebarView({ showRunning: !!v });
-                        }}
-                      >
-                        {t("agent.filterRunning")}
-                      </DropdownMenuCheckboxItem>
-                    </DropdownMenuSubContent>
-                  </DropdownMenuSub>
+                  {isNarrow ? (
+                    /* Compact drawer shell has no radix Menu root: flatten
+                     * the submenus into labeled sections (bb pattern). */
+                    <>
+                      <DropdownMenuLabel>{t("agent.organize")}</DropdownMenuLabel>
+                      {sidebarOrganizeItems}
+                      <DropdownMenuSeparator />
+                      <DropdownMenuLabel>{t("agent.sortBy")}</DropdownMenuLabel>
+                      {sidebarSortItems}
+                      <DropdownMenuSeparator />
+                      <DropdownMenuLabel>{t("agent.filter")}</DropdownMenuLabel>
+                      {sidebarFilterItems}
+                    </>
+                  ) : (
+                    <>
+                      <DropdownMenuSub>
+                        <DropdownMenuSubTrigger>
+                          <Icon name="Layers" className="size-4 shrink-0" />
+                          {t("agent.organize")}
+                        </DropdownMenuSubTrigger>
+                        <DropdownMenuSubContent>
+                          {sidebarOrganizeItems}
+                        </DropdownMenuSubContent>
+                      </DropdownMenuSub>
+                      <DropdownMenuSub>
+                        <DropdownMenuSubTrigger>
+                          <Icon name="ArrowUpDown" className="size-4 shrink-0" />
+                          {t("agent.sortBy")}
+                        </DropdownMenuSubTrigger>
+                        <DropdownMenuSubContent>
+                          {sidebarSortItems}
+                        </DropdownMenuSubContent>
+                      </DropdownMenuSub>
+                      <DropdownMenuSub>
+                        <DropdownMenuSubTrigger>
+                          <Icon name="SlidersHorizontal" className="size-4 shrink-0" />
+                          {t("agent.filter")}
+                        </DropdownMenuSubTrigger>
+                        <DropdownMenuSubContent>
+                          {sidebarFilterItems}
+                        </DropdownMenuSubContent>
+                      </DropdownMenuSub>
+                    </>
+                  )}
                 </DropdownMenuContent>
               </DropdownMenu>
             </span>
