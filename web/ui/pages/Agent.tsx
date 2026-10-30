@@ -1575,11 +1575,9 @@ export function AgentPage() {
       setDevice(row.device);
       return;
     }
-    /* bb mobile drawer: picking a thread dismisses the drawer. */
-    if (!window.matchMedia("(min-width: 768px)").matches) {
-      localStorage.setItem(SIDEBAR_KEY, "0");
-      setSidebarOpen(false);
-    }
+    /* Mobile keeps the left-right split: picking a thread does NOT
+     * dismiss the drawer — the chat stays visible beside it; the user
+     * closes via backdrop tap, edge swipe, or the header toggle. */
   };
 
   /* Sidebar click opens the thread in the FOCUSED pane: the pane following
@@ -1600,10 +1598,8 @@ export function AgentPage() {
     if (focused.threadId !== row.id) {
       setLayoutState(replacePaneThread(l, l.focusedPaneId, row.id));
     }
-    if (!window.matchMedia("(min-width: 768px)").matches) {
-      localStorage.setItem(SIDEBAR_KEY, "0");
-      setSidebarOpen(false);
-    }
+    /* Mobile keeps the left-right split: no auto-dismiss (see
+     * openSidebarThread). */
   };
 
   /* Threads currently shown in any pane (sidebar highlight). */
@@ -2124,10 +2120,7 @@ export function AgentPage() {
                   }
                   setThreadQuery("");
                 }
-                if (!window.matchMedia("(min-width: 768px)").matches) {
-                  localStorage.setItem(SIDEBAR_KEY, "0");
-                  setSidebarOpen(false);
-                }
+                /* Mobile keeps the left-right split: no auto-dismiss. */
               }}
               className="flex h-7 w-full cursor-pointer items-center gap-2 rounded-md pr-0 pl-2 text-sm transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring disabled:cursor-default disabled:opacity-70"
             >
@@ -2458,7 +2451,7 @@ export function AgentPage() {
               )}
             />
             <span className="min-w-0 truncate">
-              {device || t("agent.selectDevice")}
+              {device || t("agent.selectDeviceShort")}
             </span>
           </div>
         </div>

@@ -856,7 +856,9 @@ export function ChatPaneView({
           <span className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden text-xs text-muted-foreground">
             <OsIcon os={deviceOs} className="size-4 shrink-0" />
             <span className="min-w-0 truncate">
-              {device || t("agent.selectDevice")}
+              {/* Short placeholder: the empty body above already shows the
+               * full guidance; repeating it here duplicates the line. */}
+              {device || t("agent.selectDeviceShort")}
             </span>
             <span
               className={cn(
