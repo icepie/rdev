@@ -161,6 +161,9 @@ interface SidebarView {
   showRunning: boolean;
   showAll: boolean;
   hiddenGroups: string[];
+  /* bb TopLevelSidebarSection: device group headers collapse (chevron)
+   * independently of being hidden from the list. */
+  collapsedGroups: string[];
   /* "" = 所有对话 (threads from every device); else a device id filter. */
   deviceFilter: string;
 }
@@ -172,6 +175,7 @@ const DEFAULT_SIDEBAR_VIEW: SidebarView = {
   showRunning: true,
   showAll: true,
   hiddenGroups: [],
+  collapsedGroups: [],
   deviceFilter: "",
 };
 
@@ -187,6 +191,7 @@ function loadSidebarView(): SidebarView {
       showRunning: o.showRunning !== false,
       showAll: o.showAll !== false,
       hiddenGroups: parseStringArray(o.hiddenGroups),
+      collapsedGroups: parseStringArray(o.collapsedGroups),
       deviceFilter: typeof o.deviceFilter === "string" ? o.deviceFilter : "",
     };
   } catch {
@@ -1944,7 +1949,7 @@ export function AgentPage() {
       key={th.device + ":" + th.id}
       title={th.device + " · " + (th.title || th.id)}
       className={cn(
-        "group/thread relative flex h-7 w-full cursor-pointer items-center gap-2 rounded-md pr-0 pl-2 text-sm text-sidebar-foreground transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
+        "group/thread relative flex h-7 max-md:pointer-coarse:h-10 w-full cursor-pointer items-center gap-2 rounded-md pr-0 pl-2 text-sm text-sidebar-foreground transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
         th.device === device && openThreadIds.has(th.id) && "bg-state-active",
       )}
       onPointerDown={onRowPointerDown({
@@ -2016,7 +2021,7 @@ export function AgentPage() {
             <button
               type="button"
               aria-label={t("agent.threadActions")}
-              className="absolute right-0 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-md text-subtle-foreground opacity-0 transition-opacity group-hover/thread:opacity-100 hover:bg-state-hover hover:text-muted-foreground data-[state=open]:bg-state-active data-[state=open]:opacity-100"
+              className="absolute right-0 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-md text-subtle-foreground opacity-0 transition-opacity group-hover/thread:opacity-100 max-md:pointer-coarse:opacity-100 hover:bg-state-hover hover:text-muted-foreground data-[state=open]:bg-state-active data-[state=open]:opacity-100"
               onClick={(e) => e.stopPropagation()}
               onPointerDown={(e) => e.stopPropagation()}
             >
@@ -2106,7 +2111,7 @@ export function AgentPage() {
         <div className="flex h-full w-full shrink-0 flex-col md:w-[var(--sidebar-w)]">
           {/* bb sidebar navigation rows: primary actions + device panels as
            * full-width rows above the threads section. */}
-          <div className="flex shrink-0 flex-col gap-0.5 px-2 pt-2 pb-2">
+          <div className="flex shrink-0 flex-col gap-1 px-2 pt-2 pb-2">
             <button
               type="button"
               disabled={!ready}
@@ -2122,7 +2127,7 @@ export function AgentPage() {
                 }
                 /* Mobile keeps the left-right split: no auto-dismiss. */
               }}
-              className="flex h-7 w-full cursor-pointer items-center gap-2 rounded-md pr-0 pl-2 text-sm transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring disabled:cursor-default disabled:opacity-70"
+              className="flex h-7 max-md:pointer-coarse:h-10 w-full cursor-pointer items-center gap-2 rounded-md pr-0 pl-2 text-sm transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring disabled:cursor-default disabled:opacity-70"
             >
               <Icon
                 name="MessageSquarePlus"
@@ -2142,7 +2147,7 @@ export function AgentPage() {
                 });
               }}
               className={cn(
-                "flex h-7 w-full cursor-pointer items-center gap-2 rounded-md pr-0 pl-2 text-sm transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring",
+                "flex h-7 max-md:pointer-coarse:h-10 w-full cursor-pointer items-center gap-2 rounded-md pr-0 pl-2 text-sm transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring",
                 threadSearchOpen && "bg-state-active",
               )}
             >
@@ -2175,7 +2180,7 @@ export function AgentPage() {
           {/* Device list: picking one filters the thread list below and
            * (when online) switches the connected device; 所有对话 = every
            * device's threads. Replaces the old header device picker. */}
-          <div className="flex shrink-0 flex-col gap-0.5 px-2 pt-1.5">
+          <div className="flex shrink-0 flex-col gap-1 px-2 pt-1.5">
             <div className="px-2 pb-0.5 text-xs leading-5 font-normal text-subtle-foreground/75">
               {t("agent.devices")}
             </div>
@@ -2183,7 +2188,7 @@ export function AgentPage() {
               type="button"
               onClick={() => updateSidebarView({ deviceFilter: "" })}
               className={cn(
-                "flex h-7 w-full cursor-pointer items-center gap-2 rounded-md pr-0 pl-2 text-sm transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring",
+                "flex h-7 max-md:pointer-coarse:h-10 w-full cursor-pointer items-center gap-2 rounded-md pr-0 pl-2 text-sm transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring",
                 !sidebarView.deviceFilter && "bg-state-active",
               )}
             >
@@ -2207,7 +2212,7 @@ export function AgentPage() {
                   }
                 }}
                 className={cn(
-                  "flex h-7 w-full cursor-pointer items-center gap-2 rounded-md pr-0 pl-2 text-sm transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring",
+                  "flex h-7 max-md:pointer-coarse:h-10 w-full cursor-pointer items-center gap-2 rounded-md pr-0 pl-2 text-sm transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring",
                   sidebarView.deviceFilter === d.id && "bg-state-active",
                 )}
               >
@@ -2348,7 +2353,7 @@ export function AgentPage() {
               </DropdownMenu>
             </span>
           </div>
-          <div className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto px-2 pb-2">
+          <div className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto px-2 pb-2">
             {visibleGroups === null ? (
               filteredRows.length === 0 ? (
                 sidebarEmpty
@@ -2358,19 +2363,50 @@ export function AgentPage() {
             ) : visibleGroups.length === 0 ? (
               sidebarEmpty
             ) : (
-              visibleGroups.map((g) => (
-                <div key={g.device} className="flex flex-col gap-0.5">
-                  {/* bb device group header with hover ⋯ → Hide from list */}
-                  <div className="group/devhead flex h-7 items-center gap-2 rounded-md pl-2 pr-0 text-xs text-subtle-foreground/75 select-none">
-                    <span className="min-w-0 flex-1 truncate">
+              visibleGroups.map((g) => {
+                const collapsed = sidebarView.collapsedGroups.includes(g.device);
+                return (
+                <div key={g.device} className="flex flex-col gap-1">
+                  {/* bb TopLevelSidebarSection: sticky label tier with a
+                   * collapse chevron and a hover ⋯ → Hide from list. */}
+                  <div className="group/devhead sticky top-0 z-10 flex h-7 max-md:pointer-coarse:h-10 items-center gap-1 rounded-md bg-sidebar pl-2 pr-0 text-xs text-subtle-foreground/75 select-none">
+                    <span className="min-w-0 flex-1 truncate" title={g.device}>
                       {g.device}
                     </span>
+                    <button
+                      type="button"
+                      aria-expanded={!collapsed}
+                      aria-label={g.device}
+                      onClick={() =>
+                        updateSidebarView({
+                          collapsedGroups: collapsed
+                            ? sidebarView.collapsedGroups.filter(
+                                (x) => x !== g.device,
+                              )
+                            : [...sidebarView.collapsedGroups, g.device],
+                        })
+                      }
+                      className={cn(
+                        "inline-flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-subtle-foreground transition-opacity hover:bg-state-hover hover:text-muted-foreground max-md:pointer-coarse:opacity-100",
+                        collapsed
+                          ? "opacity-100"
+                          : "opacity-0 group-hover/devhead:opacity-100",
+                      )}
+                    >
+                      <Icon
+                        name="ChevronRight"
+                        className={cn(
+                          "size-3 transition-transform duration-150",
+                          !collapsed && "rotate-90",
+                        )}
+                      />
+                    </button>
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>
                         <button
                           type="button"
                           aria-label={t("agent.threadActions")}
-                          className="inline-flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-subtle-foreground opacity-0 transition-opacity group-hover/devhead:opacity-100 hover:bg-state-hover hover:text-muted-foreground data-[state=open]:bg-state-active data-[state=open]:opacity-100"
+                          className="inline-flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-subtle-foreground opacity-0 transition-opacity group-hover/devhead:opacity-100 max-md:pointer-coarse:opacity-100 hover:bg-state-hover hover:text-muted-foreground data-[state=open]:bg-state-active data-[state=open]:opacity-100"
                         >
                           <Icon name="MoreHorizontal" className="size-4" />
                         </button>
@@ -2389,9 +2425,10 @@ export function AgentPage() {
                       </DropdownMenuContent>
                     </DropdownMenu>
                   </div>
-                  {g.rows.map(renderSidebarRow)}
+                  {!collapsed && g.rows.map(renderSidebarRow)}
                 </div>
-              ))
+                );
+              })
             )}
           </div>
           {sidebarGroups !== null && hiddenExistingGroups.length > 0 && (
@@ -2401,7 +2438,7 @@ export function AgentPage() {
                 <DropdownMenuTrigger asChild>
                   <button
                     type="button"
-                    className="flex h-7 w-full cursor-pointer items-center gap-2 rounded-md pl-2 pr-0 text-sm transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring"
+                    className="flex h-7 max-md:pointer-coarse:h-10 w-full cursor-pointer items-center gap-2 rounded-md pl-2 pr-0 text-sm transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring"
                   >
                     <Icon name="MoreHorizontal" className="size-4 shrink-0 text-subtle-foreground" />
                     {t("agent.more")}
