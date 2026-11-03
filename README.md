@@ -117,6 +117,12 @@ export RDEV_SHELL=/bin/fish
 # Termux / Android 被控终端
 pkg install -y curl
 curl -sL https://rdev.singzer.cn/run.sh | sh -s -- wss://rdev.singzer.cn -p secret123
+
+# 一键启动并生成 21 位随机字母数字密码（-p 显式指定时优先生效）
+curl -sL https://rdev.singzer.cn/run.sh | sh -s -- wss://rdev.singzer.cn --random-password
+
+# Windows 等价用法
+powershell -Command "iwr -useb https://rdev.singzer.cn/run.ps1 | iex; RDev wss://rdev.singzer.cn -RandomPassword"
 ```
 
 ### 自动更新

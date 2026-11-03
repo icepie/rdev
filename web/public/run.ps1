@@ -4,6 +4,7 @@
 # One-liner:
 #   powershell -Command "iwr -useb http://SERVER/run.ps1 | iex; RDev ws://SERVER"
 #   powershell -Command "iwr -useb http://SERVER/run.ps1 | iex; RDev ws://SERVER -Id my-pc -Password secret"
+#   powershell -Command "iwr -useb http://SERVER/run.ps1 | iex; RDev ws://SERVER -RandomPassword"
 #
 # PS 2.0 (Win7/8):
 #   powershell -Command "$wc=New-Object Net.WebClient; $wc.DownloadString('http://SERVER/run.ps1') | iex; RDev ws://SERVER"
@@ -299,6 +300,9 @@ function global:RDev {
     .PARAMETER Password
     Password for SSH auth
 
+    .PARAMETER RandomPassword
+    Generate a 21-character alphanumeric password when Password is empty
+
     .PARAMETER Shell
     Shell path
 
@@ -321,6 +325,7 @@ function global:RDev {
 
         [string]$Id = '',
         [string]$Password = '',
+        [switch]$RandomPassword,
         [string]$Shell = '',
         [string]$SshPort = '',
         [string]$Version = '',
@@ -333,6 +338,20 @@ function global:RDev {
     $Server = [string]$Server
     $Server = $Server.Trim()
     if (-not $Server) { Write-Error "Server is required"; return }
+
+    # An explicit -Password always wins.
+    if ($RandomPassword -and -not $Password) {
+        $Alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'.ToCharArray()
+        $Bytes = New-Object 'System.Byte[]' 21
+        $Rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+        try { $Rng.GetBytes($Bytes) } finally { $Rng.Dispose() }
+        $Builder = New-Object System.Text.StringBuilder
+        for ($i = 0; $i -lt 21; $i++) {
+            [void]$Builder.Append($Alphabet[$Bytes[$i] % 62])
+        }
+        $Password = $Builder.ToString()
+        Write-Host "  Password: $Password" -ForegroundColor Yellow
+    }
 
     $Elevate = $false
     if (-not (Test-RDevAdministrator)) {
