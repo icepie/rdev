@@ -551,7 +551,13 @@ async fn handle_text(
                 info!("registered as {registered_id}");
             }
             if !runtime.connect_printed.swap(true, Ordering::SeqCst) {
-                print_connection_hints(args, runtime.server_host, registered_id, &msg.ssh_port);
+                print_connection_hints(
+                    args,
+                    runtime.server_host,
+                    registered_id,
+                    &msg.ssh_port,
+                    &msg.http_host,
+                );
             }
             if runtime.desktop_enabled {
                 let _ = runtime
@@ -716,7 +722,13 @@ fn print_startup_summary(args: &Args) {
     println!();
 }
 
-fn print_connection_hints(args: &Args, server_host: &str, registered_id: &str, ssh_port: &str) {
+fn print_connection_hints(
+    args: &Args,
+    server_host: &str,
+    registered_id: &str,
+    ssh_port: &str,
+    http_host: &str,
+) {
     let ssh_port = if ssh_port.is_empty() {
         "2222"
     } else {
@@ -736,9 +748,48 @@ fn print_connection_hints(args: &Args, server_host: &str, registered_id: &str, s
     }
     println!("  SFTP:     sftp -P {ssh_port} {registered_id}@{server_host}");
     println!("  SCP:      scp -P {ssh_port} file {registered_id}@{server_host}:~/");
-    println!("  Dashboard: http://{server_host}");
+    if let Some(base) = server_http_base(&args.server, http_host) {
+        println!("  AI agents must read: {base}/mustreademe.md");
+    }
     println!("  ────────────────────────────────────────────────");
     println!();
+}
+
+/// Returns the HTTP origin serving the embedded web assets. Prefer a public
+/// ws(s)/http(s) endpoint so reverse proxies keep their scheme and host; fall
+/// back to the server-advertised httpHost for tcp/kcp-only connections.
+fn server_http_base(server_url: &str, http_host: &str) -> Option<String> {
+    server_url
+        .split(',')
+        .filter_map(http_origin)
+        .next()
+        .or_else(|| http_origin(http_host))
+}
+
+fn http_origin(raw: &str) -> Option<String> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    let candidate = if let Some(rest) = raw.strip_prefix("wss://") {
+        format!("https://{rest}")
+    } else if let Some(rest) = raw.strip_prefix("ws://") {
+        format!("http://{rest}")
+    } else if raw.contains("://") {
+        raw.to_string()
+    } else {
+        format!("http://{raw}")
+    };
+    let parsed = Url::parse(&candidate).ok()?;
+    if parsed.scheme() != "http" && parsed.scheme() != "https" {
+        return None;
+    }
+    let origin = parsed.origin().ascii_serialization();
+    if origin == "null" {
+        None
+    } else {
+        Some(origin)
+    }
 }
 
 fn normalize_server_url(server: &str) -> String {
@@ -932,6 +983,26 @@ mod tests {
             parse_ws_host("ws://rdev.example.com:8080/path"),
             "rdev.example.com"
         );
+    }
+
+    #[test]
+    fn resolves_http_origin_for_agent_notice() {
+        assert_eq!(
+            server_http_base(
+                "tcp://1.2.3.4:8081,kcp://1.2.3.4:8082,wss://r.niceaigc.net/ws",
+                ""
+            ),
+            Some("https://r.niceaigc.net".to_string())
+        );
+        assert_eq!(
+            server_http_base("ws://192.0.2.10:8080/ws", ""),
+            Some("http://192.0.2.10:8080".to_string())
+        );
+        assert_eq!(
+            server_http_base("tcp://192.0.2.10:8081", "rdev.example.com:8080"),
+            Some("http://rdev.example.com:8080".to_string())
+        );
+        assert_eq!(server_http_base("tcp://192.0.2.10:8081", ""), None);
     }
 
     #[test]

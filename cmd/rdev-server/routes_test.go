@@ -9,6 +9,21 @@ import (
 	"rdev/internal/server"
 )
 
+func TestMustReadEmeRoute(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.Handle("/", server.NewServer().StaticHandler())
+
+	req := httptest.NewRequest(http.MethodGet, "/mustreademe.md", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "Read-Only by Default") {
+		t.Fatalf("/mustreademe.md did not return the AI agent safety notice")
+	}
+}
+
 func TestCleanPageRoutes(t *testing.T) {
 	srv := server.NewServer()
 	mux := http.NewServeMux()
