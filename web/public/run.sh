@@ -15,6 +15,7 @@ set -e
 RDEV_SERVER=""
 RDEV_ID=""
 RDEV_PASSWORD=""
+RDEV_RANDOM_PASSWORD=0
 RDEV_SHELL=""
 RDEV_SSH_PORT=""
 RDEV_VERSION=""
@@ -31,6 +32,7 @@ while [ $# -gt 0 ]; do
         -s|--server)   RDEV_SERVER="$2"; shift 2 ;;
         -i|--id)       RDEV_ID="$2"; shift 2 ;;
         -p|--password) RDEV_PASSWORD="$2"; shift 2 ;;
+        -P|--random-password) RDEV_RANDOM_PASSWORD=1; shift ;;
         -S|--shell)    RDEV_SHELL="$2"; shift 2 ;;
         --ssh-port)    RDEV_SSH_PORT="$2"; shift 2 ;;
         -v|--version)  RDEV_VERSION="$2"; shift 2 ;;
@@ -50,6 +52,7 @@ while [ $# -gt 0 ]; do
             echo "  -s, --server URL     Server URL or comma-separated URL group"
             echo "  -i, --id ID          Device ID (default: hostname)"
             echo "  -p, --password PW    Password for SSH auth"
+            echo "  -P, --random-password Generate a 21-character alphanumeric password (ignored with -p)"
             echo "  -S, --shell PATH     Shell path (e.g. /bin/bash)"
             echo "  --ssh-port PORT      Server SSH port hint (Go client only)"
             echo "  -v, --version VER    Client version (default: latest)"
@@ -60,6 +63,7 @@ while [ $# -gt 0 ]; do
             echo "Examples:"
             echo "  curl -sL http://SERVER/run.sh | sh -s -- ws://SERVER:8080"
             echo "  curl -sL http://SERVER/run.sh | sh -s -- ws://SERVER:8080 -i my-pc -p secret"
+            echo "  curl -sL http://SERVER/run.sh | sh -s -- ws://SERVER:8080 --random-password"
             echo "  curl -sL http://SERVER/run.sh | sh -s -- ws://SERVER:8080 --client rs"
             echo "  curl -sL http://SERVER/run.sh | sh -s -- ws://SERVER:8080 --client cgo"
             exit 0 ;;
@@ -80,6 +84,18 @@ if [ -z "$RDEV_SERVER" ]; then
     echo "Error: server URL required" >&2
     echo "Usage: curl -sL http://SERVER/run.sh | sh -s -- ws://SERVER:PORT" >&2
     exit 1
+fi
+
+# ── Random password ─────────────────────────────────────────
+# Generate a 21-character alphanumeric password from the system CSPRNG.
+# An explicit -p/--password always wins.
+if [ "$RDEV_RANDOM_PASSWORD" = "1" ] && [ -z "$RDEV_PASSWORD" ]; then
+    RDEV_PASSWORD="$(LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom 2>/dev/null | head -c 21 || true)"
+    if [ "${#RDEV_PASSWORD}" -ne 21 ]; then
+        echo "Error: failed to generate a random password" >&2
+        exit 1
+    fi
+    echo "  Password: $RDEV_PASSWORD" >&2
 fi
 
 ANDROID_ENV=0

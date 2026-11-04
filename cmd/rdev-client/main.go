@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -213,7 +214,9 @@ Environment variables:
 		}
 		fmt.Printf("  SFTP:     sftp -P %s %s@%s\n", sshPort, assignedID, serverHost)
 		fmt.Printf("  SCP:      scp -P %s file %s@%s:~/\n", sshPort, assignedID, serverHost)
-		fmt.Printf("  Dashboard: http://%s\n", serverHost)
+		if base := serverHTTPBase(serverURL, cli.HTTPHost()); base != "" {
+			fmt.Printf("  AI agents must read: %s/mustreademe.md\n", base)
+		}
 		fmt.Println("  ────────────────────────────────────────────────")
 		fmt.Println()
 	}
@@ -252,6 +255,36 @@ func normalizeServerListForDisplay(value string) string {
 		parts[i] = u
 	}
 	return strings.Join(parts, ",")
+}
+
+// serverHTTPBase returns the HTTP origin that serves the embedded web assets.
+// Prefer a WebSocket/HTTP endpoint from the configured server list so reverse
+// proxies keep their public scheme; fall back to the HTTP host advertised by
+// the server during registration.
+func serverHTTPBase(serverURL, httpHost string) string {
+	for _, endpoint := range strings.Split(serverURL, ",") {
+		if base := absoluteHTTPBase(endpoint); base != "" {
+			return base
+		}
+	}
+	return absoluteHTTPBase(httpHost)
+}
+
+func absoluteHTTPBase(raw string) string {
+	raw = strings.TrimSpace(raw)
+	switch {
+	case strings.HasPrefix(raw, "wss://"):
+		raw = "https://" + strings.TrimPrefix(raw, "wss://")
+	case strings.HasPrefix(raw, "ws://"):
+		raw = "http://" + strings.TrimPrefix(raw, "ws://")
+	case raw != "" && !strings.Contains(raw, "://"):
+		raw = "http://" + raw
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+		return ""
+	}
+	return u.Scheme + "://" + u.Host
 }
 
 // parseServerHost extracts the host portion from the first endpoint.
