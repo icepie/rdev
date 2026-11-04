@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bufio"
 	"context"
 	"embed"
 	"encoding/json"
@@ -1811,6 +1812,24 @@ func localLatestReleaseTag(dir string) string {
 	return best
 }
 
+// isHTMLContent reports whether data looks like an HTML error page. Mirrors
+// sometimes answer a missing release asset with a 200 HTML page, which must
+// never be cached or served as a binary.
+func isHTMLContent(data []byte) bool {
+	return len(data) > 0 && strings.HasPrefix(http.DetectContentType(data), "text/html")
+}
+
+func cachedFileIsHTML(path string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	buf := make([]byte, 512)
+	n, _ := f.Read(buf)
+	return isHTMLContent(buf[:n])
+}
+
 // releaseCachePath locates the on-disk cache copy of a release asset.
 // "" disables caching (no data dir, or an unresolvable "latest" tag —
 // caching under the literal "latest" key would go stale on new releases).
@@ -1842,7 +1861,11 @@ func (s *Server) HandleReleaseDownloadProxy(w http.ResponseWriter, r *http.Reque
 	cachePath := s.releaseCachePath(cacheTag, asset)
 	if cachePath != "" {
 		if info, err := os.Stat(cachePath); err == nil && info.Mode().IsRegular() && info.Size() > 0 {
-			if f, err := os.Open(cachePath); err == nil {
+			// A GitHub mirror can return a 200 HTML error page. Never serve
+			// (or keep) such a response as if it were a release asset.
+			if cachedFileIsHTML(cachePath) {
+				_ = os.Remove(cachePath)
+			} else if f, err := os.Open(cachePath); err == nil {
 				defer f.Close()
 				w.Header().Set("Content-Type", "application/octet-stream")
 				w.Header().Set("Content-Disposition", "attachment; filename=\""+asset+"\"")
@@ -1899,6 +1922,12 @@ func (s *Server) HandleReleaseDownloadProxy(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "download failed", http.StatusBadGateway)
 		return
 	}
+	body := bufio.NewReader(resp.Body)
+	peek, _ := body.Peek(512)
+	if isHTMLContent(peek) || strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/html") {
+		http.Error(w, "download failed: html response", http.StatusBadGateway)
+		return
+	}
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Disposition", "attachment; filename=\""+asset+"\"")
 	if length := resp.Header.Get("Content-Length"); length != "" {
@@ -1925,7 +1954,7 @@ func (s *Server) HandleReleaseDownloadProxy(w http.ResponseWriter, r *http.Reque
 			}
 		}
 	}
-	_, copyErr := io.Copy(dst, resp.Body)
+	_, copyErr := io.Copy(dst, body)
 	if tmp != nil {
 		name := tmp.Name()
 		if copyErr != nil || tmp.Close() != nil || os.Rename(name, cachePath) != nil {
