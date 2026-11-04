@@ -282,10 +282,22 @@ cache_lock_release() {
     CACHE_LOCK_DIR=""
 }
 
+is_html_file() {
+    [ -f "$1" ] && head -c 256 "$1" 2>/dev/null | grep -qiE '^[[:space:]]*<(!doctype|html|head|body)'
+}
+
+is_binary_file() {
+    [ -s "$1" ] && ! is_html_file "$1"
+}
+
+download_ok() {
+    dl "$1" "$2" && is_binary_file "$2"
+}
+
 cache_complete() {
     bin="$1"
     dir="$2"
-    [ -f "$dir/.complete" ] && [ -s "$bin" ] && [ -x "$bin" ]
+    [ -f "$dir/.complete" ] && [ -s "$bin" ] && [ -x "$bin" ] && is_binary_file "$bin"
 }
 
 # ── Determine version ──────────────────────────────────────
@@ -312,14 +324,14 @@ download_with_fallback() {
     proxy_url="$(release_proxy_url "$asset" 2>/dev/null || true)"
     if [ -n "$proxy_url" ]; then
         echo "  Trying RDev server proxy..." >&2
-        if dl "$proxy_url" "$out" && [ -s "$out" ]; then ok=1; echo "  ok via RDev server proxy" >&2; fi
+        if download_ok "$proxy_url" "$out"; then ok=1; echo "  ok via RDev server proxy" >&2; fi
         [ "$ok" = "1" ] || rm -f "$out" 2>/dev/null
     fi
     for m in $MIRRORS; do
         [ "$ok" = "1" ] && break
         [ -z "$m" ] && continue
         echo "  Trying ${m}..." >&2
-        if dl "$(mirror_url "$m" "$url")" "$out" 2>/dev/null && [ -s "$out" ]; then
+        if download_ok "$(mirror_url "$m" "$url")" "$out"; then
             ok=1
             echo "  ok via ${m}" >&2
             break
@@ -328,7 +340,7 @@ download_with_fallback() {
     done
     if [ "$ok" = "0" ]; then
         echo "  Trying github.com..." >&2
-        if dl "$url" "$out" && [ -s "$out" ]; then ok=1; echo "  ok via github.com" >&2; fi
+        if download_ok "$url" "$out"; then ok=1; echo "  ok via github.com" >&2; fi
     fi
     [ "$ok" = "1" ]
 }

@@ -133,6 +133,29 @@ func TestHandleReleaseDownloadProxyServesCachedAsset(t *testing.T) {
 	}
 }
 
+func TestReleaseDownloadRejectsHTML(t *testing.T) {
+	if !isHTMLContent([]byte("<!DOCTYPE html><html><body>not found</body></html>")) {
+		t.Fatal("HTML error page was not detected")
+	}
+	if isHTMLContent([]byte{0x7f, 'E', 'L', 'F', 2, 1, 1, 0}) {
+		t.Fatal("ELF header was misdetected as HTML")
+	}
+
+	path := filepath.Join(t.TempDir(), "asset")
+	if err := os.WriteFile(path, []byte("\n  <html>error</html>"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if !cachedFileIsHTML(path) {
+		t.Fatal("cached HTML file was not detected")
+	}
+	if err := os.WriteFile(path, []byte("binary payload"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if cachedFileIsHTML(path) {
+		t.Fatal("plain payload was misdetected as HTML")
+	}
+}
+
 func TestReleaseCachePathSkipsLatest(t *testing.T) {
 	srv := NewServer()
 	srv.DataDir = t.TempDir()
