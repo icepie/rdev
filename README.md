@@ -214,6 +214,14 @@ curl -x 'http://my-device%40devpass:x@your-server:11080' http://example.com
 
 当服务端 HTTP 端口在反向代理（如 Caddy/Nginx）之后、自动探测的内网地址设备不可达时，用 `--tunnel-base`（或 `RDEV_TUNNEL_BASE`）显式指定回拨入口，例如 `--tunnel-base wss://r.example.com`；经 WebSocket 主连接注册的设备不受影响（始终复用主连接入口）。
 
+## Web UI 响应式与连接状态
+
+- 页面按路由加载；Dashboard 不预加载 Agent、终端和桌面的重型模块。
+- 移动端沿用 BB 的响应式组件和触屏尺寸：导航抽屉支持 Escape 关闭与焦点恢复，窄屏触屏页头图标按钮为 36px、Agent 输入区操作为 40px；桌面保留紧凑密度。文件表格、批量输出和桌面设置在各自区域滚动，终端和 Agent 保留分屏。
+- Agent 侧栏以 768px 为断点（不依赖鼠标或触屏）：窄屏使用 `min(86vw, 360px)` 揭开式抽屉，对话区保持宽度整体平移；右侧面板使用全宽滑入布局。移动侧栏默认收起，展开状态不覆盖桌面偏好；横屏短高度时侧栏整体可滚动，导航和底部信息仍可到达。
+- Agent 停止请求等待回执期间不可重复提交；重置清空队列、待办和运行状态。明确的连接前配置错误停止自动重连，修正配置后可手动重连；普通网络中断仍自动重试。
+- 批量命令与文件分发同一时间只运行一个操作，连接中断会结束未完成的结果并恢复操作按钮；文件列表点击普通文件名可直接下载。
+
 ## Web 终端图片预览
 
 Web Terminal 和 Sessions 支持 Sixel、iTerm2 inline image 与 Kitty graphics inline image，可用于 `yazi`、`chafa`、`img2sixel` 等工具的图片预览。Web Terminal 会设置：

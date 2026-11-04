@@ -462,6 +462,8 @@ export function SessionsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
 
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
   const [search, setSearch] = useState("");
   const [activeId, setActiveIdState] = useState<string | null>(
     () => searchParams.get("session"),
@@ -504,11 +506,14 @@ export function SessionsPage() {
         const next = await apiJSON<SessionInfo[] | null>("/api/sessions");
         if (!alive) return;
         const list = next ?? [];
+        setLoadError("");
         setSessions((prev) =>
           JSON.stringify(prev) === JSON.stringify(list) ? prev : list,
         );
       } catch (e) {
-        console.error("loadSessions", e);
+        if (alive) setLoadError(e instanceof Error ? e.message : String(e));
+      } finally {
+        if (alive) setLoading(false);
       }
     };
     load();
@@ -949,14 +954,20 @@ export function SessionsPage() {
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder={t("sessions.searchPlaceholder")}
+            aria-label={t("sessions.searchPlaceholder")}
             className="h-8 text-xs"
           />
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto">
+          {loadError && (
+            <div role="alert" className="break-words px-4 py-3 text-sm text-destructive-text">
+              {t("sessions.error", { message: loadError })}
+            </div>
+          )}
           {!filtered.length ? (
-            <div className="px-4 py-12 text-center text-sm text-muted-foreground">
+            <div role="status" className="px-4 py-12 text-center text-sm text-muted-foreground">
               <Icon name="Inbox" className="mx-auto mb-3 size-10 opacity-30" />
-              {t("sessions.noActive")}
+              {loading ? t("common.loading") : !loadError && t("sessions.noActive")}
             </div>
           ) : (
             filtered.map((s) => {
@@ -968,15 +979,17 @@ export function SessionsPage() {
                     ? t("sessions.sftpSession")
                     : s.command || t("sessions.noCommand");
               return (
-                <div
+                <button
                   key={s.id}
+                  type="button"
+                  aria-pressed={isActive}
                   onClick={() => selectSession(s.id)}
                   className={cn(
-                    "cursor-pointer border-b border-border-seam px-3.5 py-2.5 transition-colors hover:bg-state-hover",
+                    "block w-full cursor-pointer border-b border-border-seam px-3.5 py-2.5 text-left transition-colors hover:bg-state-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
                     isActive && "border-l-[3px] border-l-primary bg-surface-selected",
                   )}
                 >
-                  <div className="mb-1 flex items-center gap-2">
+                  <span className="mb-1 flex items-center gap-2">
                     <span
                       className={cn(
                         "rounded px-1.5 py-px text-2xs font-medium",
@@ -991,9 +1004,9 @@ export function SessionsPage() {
                     <span className="shrink-0 font-mono text-2xs text-muted-foreground">
                       {s.id.slice(0, 8)}…
                     </span>
-                  </div>
-                  <div className="truncate text-2xs text-muted-foreground">{cmdText}</div>
-                  <div className="mt-1 flex flex-wrap gap-2.5 text-2xs text-muted-foreground">
+                  </span>
+                  <span className="block truncate text-2xs text-muted-foreground" title={cmdText}>{cmdText}</span>
+                  <span className="mt-1 flex flex-wrap gap-2.5 text-2xs text-muted-foreground">
                     <span>
                       {s.pty ? s.term || "xterm" : t("sessions.pipe")} {s.cols}×{s.rows}
                     </span>
@@ -1004,8 +1017,8 @@ export function SessionsPage() {
                         {s.observers}
                       </span>
                     )}
-                  </div>
-                </div>
+                  </span>
+                </button>
               );
             })
           )}
@@ -1014,9 +1027,9 @@ export function SessionsPage() {
 
       {/* ── Attach panel ── */}
       {activeId ? (
-        <div className="flex min-w-0 flex-1 flex-col">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
           <div className="flex shrink-0 flex-wrap items-center gap-2.5 border-b border-border-seam bg-card px-3 py-2">
-            <span className="text-xs whitespace-nowrap text-muted-foreground">
+            <span className="min-w-0 break-words text-xs text-muted-foreground">
               {attachedInfo && (
                 <>
                   <b className="font-medium text-foreground">{attachedInfo.clientId}</b>
@@ -1038,12 +1051,12 @@ export function SessionsPage() {
           </div>
           <div
             className="relative min-h-0 flex-1 touch-manipulation overflow-hidden p-1"
-            onPointerDown={() => termRef.current?.focus()}
+            onPointerDown={() => { if (!needAuth) termRef.current?.focus(); }}
           >
             <div ref={hostRef} className="absolute inset-1 [&_.xterm]:h-full" />
             {needAuth && (
-              <div className="absolute inset-0 z-10 flex items-center justify-center bg-background/90">
-                <div className="w-[min(92vw,340px)] rounded-2xl border border-border bg-card p-6 text-center">
+              <div className="absolute inset-0 z-10 flex overflow-y-auto bg-background/90 p-3">
+                <div className="m-auto w-full max-w-[340px] shrink-0 rounded-2xl border border-border bg-card p-5 text-center">
                   <h3 className="mb-2 inline-flex items-center gap-1.5 text-base font-medium text-primary">
                     <Icon name="Lock" className="size-4" />
                     {t("sessions.authTitle")}
@@ -1059,6 +1072,7 @@ export function SessionsPage() {
                   >
                     <Input
                       type="password"
+                      aria-label={t("common.password")}
                       autoFocus
                       value={password}
                       placeholder={t("terminal.passwordPlaceholder")}
@@ -1074,7 +1088,7 @@ export function SessionsPage() {
                       {authBusy ? t("common.connecting") : t("common.connect")}
                     </Button>
                   </form>
-                  <div className="mt-2 min-h-[1.2em] text-xs text-destructive-text">
+                  <div role="alert" className="mt-2 min-h-[1.2em] text-xs text-destructive-text">
                     {authError}
                   </div>
                 </div>

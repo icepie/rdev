@@ -140,16 +140,16 @@ function StatusBadge({ status, label }: { status: ResultStatus; label: string })
     return (
       <Badge
         variant="outline"
-        className="border-transparent bg-success/15 text-success-foreground"
+        className="whitespace-normal break-words border-transparent bg-success/15 text-success-foreground"
       >
         {label}
       </Badge>
     );
   }
   if (status === "fail") {
-    return <Badge variant="destructive">{label}</Badge>;
+    return <Badge variant="destructive" className="whitespace-normal break-words">{label}</Badge>;
   }
-  return <Badge variant="secondary">{label}</Badge>;
+  return <Badge variant="secondary" className="whitespace-normal break-words">{label}</Badge>;
 }
 
 function ResultCard({
@@ -164,12 +164,12 @@ function ResultCard({
   children: ReactNode;
 }) {
   return (
-    <div className="overflow-hidden rounded-lg border border-border bg-surface-recessed-solid">
-      <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-2 text-xs">
+    <div className="min-w-0 overflow-hidden rounded-lg border border-border bg-surface-recessed-solid">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-3 py-2 text-xs">
         <span className="truncate font-semibold">{id}</span>
-        <StatusBadge status={status} label={label} />
+        <span role="status" className="min-w-0"><StatusBadge status={status} label={label} /></span>
       </div>
-      <div className="max-h-[200px] overflow-y-auto px-3 py-2 font-mono text-xs leading-relaxed whitespace-pre-wrap break-words text-muted-foreground">
+      <div className="max-h-[200px] overflow-auto px-3 py-2 font-mono text-xs leading-relaxed whitespace-pre-wrap break-words text-muted-foreground">
         {children}
       </div>
     </div>
@@ -185,6 +185,10 @@ export function BatchPage() {
   tRef.current = t;
 
   const [devices, setDevices] = useState<BatchDevice[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const busyRef = useRef(false);
   const devicesRef = useRef<BatchDevice[]>([]);
   devicesRef.current = devices;
 
@@ -235,15 +239,24 @@ export function BatchPage() {
     setAlertBox(null);
   };
 
-  /* ── Device polling: /api/batch/devices every 5s, errors ignored ── */
+  /* ── Device polling: /api/batch/devices every 5s ── */
   useEffect(() => {
     let dead = false;
     const load = async () => {
       try {
         const list = await apiJSON<BatchDevice[]>("/api/batch/devices");
-        if (!dead) setDevices(list);
-      } catch {
-        /* old page ignored fetch errors */
+        if (!dead) {
+          setDevices(list);
+          setLoadError("");
+          setSelected((prev) => {
+            const next = new Set([...prev].filter((id) => list.some((d) => d.id === id)));
+            return next.size === prev.size ? prev : next;
+          });
+        }
+      } catch (error) {
+        if (!dead) setLoadError(error instanceof Error ? error.message : String(error));
+      } finally {
+        if (!dead) setLoading(false);
       }
     };
     load();
@@ -333,7 +346,9 @@ export function BatchPage() {
 
   const runBatchExec = () => {
     const command = cmd.trim();
-    if (!command || selected.size === 0) return;
+    if (!command || selected.size === 0 || busyRef.current) return;
+    busyRef.current = true;
+    setBusy(true);
     const deviceList = [...selected];
     setExecErrors([]);
     setExecResults(
@@ -348,11 +363,18 @@ export function BatchPage() {
     const ws = openBatchWS();
 
     ws.onopen = async () => {
-      if (!(await authorizeSelectedDevices(ws, deviceList))) {
+      try {
+        if (!(await authorizeSelectedDevices(ws, deviceList))) {
+          closeWS(ws);
+          return;
+        }
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ op: "exec", devices: deviceList, command }));
+        }
+      } catch (error) {
+        setExecErrors((prev) => [...prev, error instanceof Error ? error.message : String(error)]);
         closeWS(ws);
-        return;
       }
-      ws.send(JSON.stringify({ op: "exec", devices: deviceList, command }));
     };
 
     ws.onmessage = (evt: MessageEvent) => {
@@ -392,8 +414,8 @@ export function BatchPage() {
       } else if (msg.op === "error" || msg.op === "auth_required") {
         if (msg.deviceId) {
           const line = "\n[" + tRef.current("common.error") + ": " + msg.message + "]";
-          setExecResults((prev) =>
-            prev.map((r) =>
+          setExecResults((prev) => {
+            const next = prev.map((r) =>
               r.id === msg.deviceId
                 ? {
                     ...r,
@@ -409,13 +431,16 @@ export function BatchPage() {
                       : {}),
                   }
                 : r,
-            ),
-          );
+            );
+            if (next.every((r) => r.status !== "running")) closeWS(ws);
+            return next;
+          });
         } else {
           setExecErrors((prev) => [
             ...prev,
             tRef.current("common.error") + ": " + msg.message,
           ]);
+          closeWS(ws);
         }
       }
     };
@@ -423,6 +448,11 @@ export function BatchPage() {
     ws.onerror = () => {};
     ws.onclose = () => {
       sockets.current.delete(ws);
+      busyRef.current = false;
+      setBusy(false);
+      setExecResults((prev) => prev.map((r) => r.status === "running"
+        ? { ...r, status: "fail", label: tRef.current("common.failed") }
+        : r));
     };
   };
 
@@ -434,9 +464,11 @@ export function BatchPage() {
   };
 
   const runBatchUpload = () => {
-    if (!file || selected.size === 0) return;
+    if (!file || selected.size === 0 || busyRef.current) return;
     const dest = destPath.trim();
     if (!dest) return;
+    busyRef.current = true;
+    setBusy(true);
     const deviceList = [...selected];
     setUploadResults(
       deviceList.map((id) => ({
@@ -452,19 +484,28 @@ export function BatchPage() {
     const blob = file;
 
     ws.onopen = async () => {
-      if (!(await authorizeSelectedDevices(ws, deviceList))) {
+      try {
+        if (!(await authorizeSelectedDevices(ws, deviceList))) {
+          closeWS(ws);
+          return;
+        }
+        if (ws.readyState !== WebSocket.OPEN) return;
+        ws.send(encodeFileStart(uploadId, { devices: deviceList, path: dest, mode: 420 }, 420));
+        for (let offset = 0; offset < blob.size; offset += 512 * 1024) {
+          const chunk = await blob.slice(offset, offset + 512 * 1024).arrayBuffer();
+          if (ws.readyState !== WebSocket.OPEN) return;
+          ws.send(encodeChunk(uploadId, chunk));
+          const ack = Promise.withResolvers<void>();
+          uploadAcks.current.set(uploadId, ack.resolve);
+          await ack.promise;
+        }
+        if (ws.readyState === WebSocket.OPEN) ws.send(encodeEnd(uploadId));
+      } catch (error) {
+        setUploadResults((prev) => prev.map((r) => r.status === "running"
+          ? { ...r, status: "fail", label: error instanceof Error ? error.message : String(error) }
+          : r));
         closeWS(ws);
-        return;
       }
-      ws.send(encodeFileStart(uploadId, { devices: deviceList, path: dest, mode: 420 }, 420));
-      for (let offset = 0; offset < blob.size; offset += 512 * 1024) {
-        const chunk = await blob.slice(offset, offset + 512 * 1024).arrayBuffer();
-        ws.send(encodeChunk(uploadId, chunk));
-        const ack = Promise.withResolvers<void>();
-        uploadAcks.current.set(uploadId, ack.resolve);
-        await ack.promise;
-      }
-      ws.send(encodeEnd(uploadId));
     };
 
     ws.onmessage = (evt: MessageEvent) => {
@@ -500,10 +541,10 @@ export function BatchPage() {
           }
           return next;
         });
-      } else if ((msg.op === "error" || msg.op === "auth_required") && msg.deviceId) {
+      } else if (msg.op === "error" || msg.op === "auth_required") {
         setUploadResults((prev) => {
           const next = prev.map((r): UploadResult =>
-            r.id === msg.deviceId
+            (!msg.deviceId && r.status === "running") || r.id === msg.deviceId
               ? {
                   ...r,
                   status: "fail",
@@ -526,6 +567,13 @@ export function BatchPage() {
     ws.onerror = () => {};
     ws.onclose = () => {
       sockets.current.delete(ws);
+      uploadAcks.current.get(uploadId)?.();
+      uploadAcks.current.delete(uploadId);
+      busyRef.current = false;
+      setBusy(false);
+      setUploadResults((prev) => prev.map((r) => r.status === "running"
+        ? { ...r, status: "fail", label: tRef.current("common.failed") }
+        : r));
     };
   };
 
@@ -556,15 +604,18 @@ export function BatchPage() {
               size="sm"
               className="mb-1 h-7 px-2 text-xs text-muted-foreground"
               onClick={toggleAll}
+              disabled={!devices.length}
+              aria-pressed={devices.length > 0 && selected.size === devices.length}
             >
               {t("batch.selectAll")}
             </Button>
+            {loadError && <div role="alert" className="mb-2 break-words text-sm text-destructive-text">{t("common.error")}: {loadError}</div>}
             {devices.length === 0 ? (
-              <div className="text-sm text-muted-foreground">
-                {t("common.noDevices")}
+              <div role="status" className="text-sm text-muted-foreground">
+                {loading ? t("common.loading") : !loadError && t("common.noDevices")}
               </div>
             ) : (
-              <div className="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-1.5">
+              <div className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,220px),1fr))] gap-1.5">
                 {devices.map((d) => {
                   const sel = selected.has(d.id);
                   return (
@@ -626,16 +677,17 @@ export function BatchPage() {
                       if (e.key === "Enter") runBatchExec();
                     }}
                     placeholder={t("batch.commandPlaceholder")}
+                    aria-label={t("batch.commandPlaceholder")}
                     spellCheck={false}
                     autoComplete="off"
                     className="flex-1 font-mono"
                   />
-                  <Button onClick={runBatchExec} disabled={!hasSelection}>
+                  <Button onClick={runBatchExec} disabled={!hasSelection || !cmd.trim() || busy}>
                     {t("batch.run")}
                   </Button>
                 </div>
                 {execResults.length > 0 && (
-                  <div className="grid grid-cols-[repeat(auto-fit,minmax(320px,1fr))] gap-2">
+                  <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,320px),1fr))] gap-2">
                     {execResults.map((r) => (
                       <ResultCard key={r.id} id={r.id} status={r.status} label={r.label}>
                         {r.output}
@@ -644,7 +696,7 @@ export function BatchPage() {
                   </div>
                 )}
                 {execErrors.map((err, i) => (
-                  <div key={i} className="px-2 py-1 text-sm text-destructive-text">
+                  <div key={i} role="alert" className="px-2 py-1 text-sm text-destructive-text">
                     {err}
                   </div>
                 ))}
@@ -655,7 +707,8 @@ export function BatchPage() {
           <TabsContent value="upload">
             <Card>
               <CardContent className="flex flex-col gap-3 p-4">
-                <div
+                <button
+                  type="button"
                   onClick={() => fileInputRef.current?.click()}
                   onDragOver={(e) => {
                     e.preventDefault();
@@ -669,7 +722,7 @@ export function BatchPage() {
                     if (f) handleFile(f);
                   }}
                   className={cn(
-                    "cursor-pointer rounded-lg border-2 border-dashed border-border p-8 text-center transition-colors",
+                    "cursor-pointer rounded-lg border-2 border-dashed border-border p-6 text-center transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:p-8",
                     dragOver && "border-primary bg-surface-selected",
                   )}
                 >
@@ -677,15 +730,15 @@ export function BatchPage() {
                     name="Upload"
                     className="mx-auto mb-2 size-8 text-muted-foreground opacity-40"
                   />
-                  <div className="text-sm text-muted-foreground">
+                  <span className="block text-sm text-muted-foreground">
                     {t("batch.dropHint")}
-                  </div>
+                  </span>
                   {file && (
-                    <div className="mt-1 text-sm font-semibold text-primary">
+                    <span className="mt-1 block break-all text-sm font-semibold text-primary">
                       {file.name} ({(file.size / 1024).toFixed(1)} KB)
-                    </div>
+                    </span>
                   )}
-                </div>
+                </button>
                 <input
                   ref={fileInputRef}
                   type="file"
@@ -704,19 +757,20 @@ export function BatchPage() {
                     value={destPath}
                     onChange={(e) => setDestPath(e.target.value)}
                     placeholder={t("batch.destPlaceholder")}
+                    aria-label={t("batch.destPlaceholder")}
                     spellCheck={false}
                     autoComplete="off"
                     className="flex-1 font-mono"
                   />
                   <Button
                     onClick={runBatchUpload}
-                    disabled={!hasSelection || !file}
+                    disabled={!hasSelection || !file || !destPath.trim() || busy}
                   >
                     {t("batch.distribute")}
                   </Button>
                 </div>
                 {uploadResults.length > 0 && (
-                  <div className="grid grid-cols-[repeat(auto-fit,minmax(320px,1fr))] gap-2">
+                  <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,320px),1fr))] gap-2">
                     {uploadResults.map((r) => (
                       <ResultCard key={r.id} id={r.id} status={r.status} label={r.label}>
                         {r.path}
@@ -748,6 +802,7 @@ export function BatchPage() {
           >
             <Input
               type="password"
+              aria-label={t("common.password")}
               autoFocus
               autoComplete="off"
               value={pwValue}

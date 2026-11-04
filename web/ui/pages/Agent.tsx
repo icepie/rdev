@@ -26,6 +26,9 @@ import {
 } from "../lib/api";
 import { cn } from "../lib/utils";
 import { Button } from "../components/button";
+import { COARSE_POINTER_HEADER_ICON_BUTTON_CLASS } from "../components/coarse-pointer-sizing";
+import { useIsCompactViewport } from "../components/hooks/use-compact-viewport";
+import { usePointerCoarse } from "../components/hooks/use-pointer-coarse";
 import { Input } from "../components/input";
 import {
   AlertDialog,
@@ -260,12 +263,21 @@ export function AgentPage() {
   );
   const [sidebarView, setSidebarView] = useState<SidebarView>(loadSidebarView);
   const [reconnecting, setReconnecting] = useState(false);
-  const [sidebarOpen, setSidebarOpen] = useState(() => {
-    const saved = localStorage.getItem(SIDEBAR_KEY);
-    if (saved === "0") return false;
-    if (saved === "1") return true;
-    return window.matchMedia("(min-width: 768px)").matches;
-  });
+  const isNarrow = useIsCompactViewport();
+  const isCoarse = usePointerCoarse();
+  const [desktopSidebarOpen, setDesktopSidebarOpen] = useState(
+    () => localStorage.getItem(SIDEBAR_KEY) !== "0",
+  );
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+  const sidebarOpen = isNarrow ? mobileSidebarOpen : desktopSidebarOpen;
+  const setSidebarOpen = useCallback((open: boolean) => {
+    if (isNarrow) {
+      setMobileSidebarOpen(open);
+    } else {
+      localStorage.setItem(SIDEBAR_KEY, open ? "1" : "0");
+      setDesktopSidebarOpen(open);
+    }
+  }, [isNarrow]);
   /* Resizable sidebar width (md+), persisted in px. */
   const [sidebarWidth, setSidebarWidth] = useState(() => {
     const saved = parseFloat(localStorage.getItem(SIDEBAR_WIDTH_KEY) ?? "");
@@ -316,18 +328,9 @@ export function AgentPage() {
   /* get_diff replies keyed by path (the changes deck fetches lazily per
    * expanded card); cleared with the change set. */
   const [diffs, setDiffs] = useState<Record<string, DiffState>>({});
-  const [isNarrow, setIsNarrow] = useState(
-    () => window.matchMedia("(max-width: 767px)").matches,
-  );
-  /* Coarse primary pointer ≈ real phone/tablet. Narrow width alone is NOT
-   * enough for the drawer mode: a narrow DESKTOP window gets the static
-   * two-column layout instead (user decision). */
-  const [isCoarse, setIsCoarse] = useState(
-    () => window.matchMedia("(pointer: coarse)").matches,
-  );
-  /* phoneDrawer: bb reveal drawer (absolute, slides over, backdrop).
-   * !phoneDrawer && isNarrow: static in-flow column, chat reflows beside. */
-  const phoneDrawer = isNarrow && isCoarse;
+  useEffect(() => {
+    if (isNarrow && panelOpen) setMobileSidebarOpen(false);
+  }, [isNarrow, panelOpen]);
   const [transitionsReady, setTransitionsReady] = useState(false);
   /* bb: transition disabled while dragging the divider, else every
    * pointermove animates 220ms toward the target → rubber-band lag. */
@@ -424,20 +427,6 @@ export function AgentPage() {
 
   /* ── Right panel (bb three-column layout) ── */
 
-  /* Below 768px the inline resizable panel degrades to a fixed drawer. */
-  useEffect(() => {
-    const mq = window.matchMedia("(max-width: 767px)");
-    const onChange = () => setIsNarrow(mq.matches);
-    mq.addEventListener("change", onChange);
-    return () => mq.removeEventListener("change", onChange);
-  }, []);
-
-  useEffect(() => {
-    const mq = window.matchMedia("(pointer: coarse)");
-    const onChange = () => setIsCoarse(mq.matches);
-    mq.addEventListener("change", onChange);
-    return () => mq.removeEventListener("change", onChange);
-  }, []);
 
   /* Enable the 220ms open/close transition two frames after mount. rAF
    * never fires while the tab is hidden, so a timer fallback arms the
@@ -492,10 +481,7 @@ export function AgentPage() {
       /* Compact: the full-width shelf would cover the drawer — opening
        * one dismisses the other. */
       if (next && window.innerWidth < 768) {
-        setSidebarOpen((wasOpen) => {
-          if (wasOpen) localStorage.setItem(SIDEBAR_KEY, "0");
-          return false;
-        });
+        setMobileSidebarOpen(false);
       }
       return next;
     });
@@ -659,7 +645,7 @@ export function AgentPage() {
   /* Raw WS send used by the panes (chat/stop/steer/approve/ask/peek). */
   const sendRaw = useCallback((payload: Record<string, unknown>): boolean => {
     const ws = wsRef.current;
-    if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+    if (!ws || ws.readyState !== WebSocket.OPEN || statusRef.current !== "connected") return false;
     ws.send(JSON.stringify(payload));
     return true;
   }, []);
@@ -715,6 +701,11 @@ export function AgentPage() {
       case "auth_ok": {
         setAuthed(true);
         setStatus("connected");
+        primaryOps.resetTransient();
+        setAuthError("");
+        setFileStates({});
+        setChanges(null);
+        setDiffs({});
         primaryOps.setRunning(!!msg.running);
         const list = (Array.isArray(msg.models) ? msg.models : []).flatMap(
           (x): ModelInfo[] => {
@@ -794,12 +785,7 @@ export function AgentPage() {
         /* Reconnect: secondary panes hold stale transcripts; they re-seed
          * via peek_thread when ready flips back to true. */
         for (const ops of secondarySinksRef.current.values()) {
-          ops.resetTransient();
-          ops.setItems([]);
-          ops.setTodos([]);
-          ops.setQueue([]);
-          ops.setRunning(false);
-          ops.setTurnUsage(null);
+          ops.reset();
         }
         threadsLoadedRef.current = true;
         const history = Array.isArray(msg.history) ? msg.history : [];
@@ -973,8 +959,7 @@ export function AgentPage() {
         break;
       }
       case "thread_switched": {
-        primaryOps.turnOpen.current = false;
-        primaryOps.openToolIds.current.clear();
+        primaryOps.resetTransient();
         const switchThread = asString(msg.thread);
         setThread(switchThread);
         threadRef.current = switchThread;
@@ -1051,6 +1036,7 @@ export function AgentPage() {
     }
     setAuthed(false);
     setStatus("connecting");
+    setAuthError("");
     // Per-device state (transcript, threads, models, cwd…) is NOT cleared
     // here: a reconnect must keep the partial transcript visible until the
     // next auth_ok replaces it with the server-side truth. Device switches
@@ -1058,11 +1044,28 @@ export function AgentPage() {
 
     const ws = new WebSocket(wsURL("/agent?device=" + encodeURIComponent(deviceId)));
     wsRef.current = ws;
+    // These belong to this socket, not the previous connection's React state.
+    let authenticated = false;
+    let rejected = false;
     ws.onmessage = (evt) => {
+      if (wsRef.current !== ws) return;
       let msg: Record<string, unknown>;
       try {
         msg = JSON.parse(String(evt.data));
       } catch {
+        return;
+      }
+      if (msg.op === "auth_ok") authenticated = true;
+      if (msg.op === "error" && !authenticated && !asString(msg.thread)) {
+        // Setup failures arrive as an error followed by an empty close reason;
+        // misconfiguration may leave the socket open. Neither is a network retry.
+        rejected = true;
+        setAuthed(false);
+        setStatus("disconnected");
+        setReconnecting(false);
+        setAuthError(asString(msg.message) || t("common.error"));
+        clearPing();
+        ws.close();
         return;
       }
       handleMessage(msg);
@@ -1071,15 +1074,22 @@ export function AgentPage() {
       if (wsRef.current !== ws) return;
       clearPing();
       setAuthed(false);
+      if (primaryOps.turnOpen.current) primaryOps.finishTurn();
       primaryOps.resetTransient();
       primaryOps.setRunning(false);
-      primaryOps.finishTurn();
+      for (const ops of secondarySinksRef.current.values()) {
+        if (ops.turnOpen.current) ops.finishTurn();
+        ops.resetTransient();
+        ops.setRunning(false);
+      }
       setStatus("disconnected");
+      if (rejected) return;
       // A clean 1000 close with a reason is the server rejecting the
       // session at open time (unknown/offline device, agent not
       // configured): reconnecting would loop forever, so surface the
       // reason and stop.
       if (event.code === 1000 && event.reason) {
+        setReconnecting(false);
         setAuthError(event.reason);
         return;
       }
@@ -1091,7 +1101,7 @@ export function AgentPage() {
         setStatus("disconnected");
       }
     };
-  }, [clearPing, clearReconnectTimer, handleMessage, primaryOps, scheduleReconnect]);
+  }, [clearPing, clearReconnectTimer, handleMessage, primaryOps, scheduleReconnect, t]);
   connectRef.current = connect;
 
   const setDevice = useCallback((id: string) => {
@@ -1105,17 +1115,14 @@ export function AgentPage() {
       },
       { replace: true },
     );
-    primaryOps.turnOpen.current = false;
-    primaryOps.setItems([]);
-    primaryOps.setTodos([]);
-    primaryOps.setQueue([]);
-    primaryOps.setRunning(false);
-    primaryOps.setTurnUsage(null);
-    primaryOps.resetTransient();
+    primaryOps.reset();
+    for (const ops of secondarySinksRef.current.values()) ops.reset();
     setModels([]);
     setModel("");
     setThreads([]);
     setThread("");
+    threadRef.current = "";
+    setAuthError("");
     setPermMode("write");
     setReasoning(parseReasoningLevel(localStorage.getItem(REASONING_KEY)) ?? "medium");
     threadsLoadedRef.current = false;
@@ -1159,6 +1166,7 @@ export function AgentPage() {
       if (wsRef.current) {
         wsRef.current.onclose = null;
         wsRef.current.close();
+        wsRef.current = null;
       }
     },
     [clearPing, clearReconnectTimer],
@@ -1216,7 +1224,7 @@ export function AgentPage() {
 
   const renameThread = (id: string, title: string) => {
     if (!title || !id) return;
-    sendRaw({ op: "rename_thread", thread: id, title });
+    if (!sendRaw({ op: "rename_thread", thread: id, title })) return;
     setThreads((prev) => prev.map((th) => (th.id === id ? { ...th, title } : th)));
     setAllThreads((prev) =>
       prev?.map((d) =>
@@ -1688,6 +1696,9 @@ export function AgentPage() {
             setLayoutState((l) => setFocus(l, pane.paneId));
           }
         }}
+        onFocus={() => {
+          if (!focusedPane) setLayoutState((l) => setFocus(l, pane.paneId));
+        }}
       >
         {multi && (
           <div
@@ -1723,6 +1734,7 @@ export function AgentPage() {
         )}
         {isCurrent ? (
           <ChatPaneView
+            key={device}
             sink={primary}
             threadId={thread}
             {...shared}
@@ -1735,6 +1747,7 @@ export function AgentPage() {
           />
         ) : (
           <SecondaryChatPane
+            key={device + ":" + resolvedTid}
             threadId={resolvedTid}
             register={registerSecondary}
             onRegisterAddToChat={registerAddToChat}
@@ -1885,7 +1898,6 @@ export function AgentPage() {
     sidebarSwipeRef.current = null;
     if (Math.abs(dy) > Math.abs(dx)) return;
     if (!sidebarOpen && !panelOpen && s.x <= 72 && dx > 48) {
-      localStorage.setItem(SIDEBAR_KEY, "1");
       setSidebarOpen(true);
     } else if (
       !sidebarOpen &&
@@ -1897,7 +1909,6 @@ export function AgentPage() {
       localStorage.setItem(PANEL_OPEN_KEY, "1");
       setPanelOpen(true);
     } else if (sidebarOpen && dx < -48) {
-      localStorage.setItem(SIDEBAR_KEY, "0");
       setSidebarOpen(false);
     }
   };
@@ -1930,7 +1941,6 @@ export function AgentPage() {
   };
 
   const closeSidebar = () => {
-    localStorage.setItem(SIDEBAR_KEY, "0");
     setSidebarOpen(false);
   };
 
@@ -2006,33 +2016,40 @@ export function AgentPage() {
         <input
           autoFocus
           defaultValue={th.title || th.id}
+          aria-label={t("agent.renamePrompt")}
           className="h-5 min-w-0 flex-1 rounded-sm border border-timeline-accent bg-background px-1 text-sm outline-none"
           onClick={(e) => e.stopPropagation()}
           onPointerDown={(e) => e.stopPropagation()}
           onKeyDown={(e) => {
+            e.stopPropagation();
             if (e.key === "Enter") {
+              e.currentTarget.dataset.settled = "true";
               renameThread(th.id, e.currentTarget.value.trim());
               setRenamingId(null);
             } else if (e.key === "Escape") {
+              e.currentTarget.dataset.settled = "true";
               setRenamingId(null);
             }
           }}
           onBlur={(e) => {
+            if (e.currentTarget.dataset.settled) return;
             renameThread(th.id, e.currentTarget.value.trim());
             setRenamingId(null);
           }}
         />
       ) : (
-        <span
+        <button
+          type="button"
+          aria-pressed={th.device === device && openThreadIds.has(th.id)}
           className={cn(
-            "min-w-0 flex-1 truncate",
+            "min-w-0 flex-1 truncate text-left focus-visible:outline focus-visible:outline-ring",
             th.device === device &&
               renamingId !== th.id &&
               "group-hover/thread:pr-7",
           )}
         >
           {th.title || th.id}
-        </span>
+        </button>
       )}
       <span className="flex h-4 w-4 shrink-0 items-center justify-center">
         {th.running && (
@@ -2049,7 +2066,7 @@ export function AgentPage() {
             <button
               type="button"
               aria-label={t("agent.threadActions")}
-              className="absolute right-0 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-md text-subtle-foreground opacity-0 transition-opacity group-hover/thread:opacity-100 max-md:pointer-coarse:opacity-100 hover:bg-state-hover hover:text-muted-foreground data-[state=open]:bg-state-active data-[state=open]:opacity-100"
+              className="absolute right-0 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-md text-subtle-foreground opacity-0 transition-opacity group-hover/thread:opacity-100 group-focus-within/thread:opacity-100 max-md:pointer-coarse:opacity-100 hover:bg-state-hover hover:text-muted-foreground data-[state=open]:bg-state-active data-[state=open]:opacity-100"
               onClick={(e) => e.stopPropagation()}
               onPointerDown={(e) => e.stopPropagation()}
             >
@@ -2163,22 +2180,8 @@ export function AgentPage() {
 
   return (
     <div className="relative flex h-full overflow-hidden">
-      {/* Thread sidebar, three layout modes (bb ui/sidebar.tsx structure
-       * for desktop/phone; narrow-desktop static mode is a user-chosen
-       * deviation from bb):
-       * - Desktop (≥768px): bb offcanvas — the panel is an absolute
-       *   fixed-width column that slides horizontally (200ms linear)
-       *   while the gap spacer (bb data-sidebar="gap") reserves layout
-       *   space; content never squishes mid-animation.
-       * - Narrow desktop (≤767px, fine pointer): STATIC two-column — the
-       *   aside sits in flow, its width animates 200ms linear and the
-       *   chat reflows beside it; both columns stay fully usable.
-       * - Phone (≤767px, coarse pointer): bb reveal drawer — panel
-       *   min(86vw,360px) slides in, the inset translates right with it
-       *   keeping its own width, and a transparent backdrop rides the
-       *   inset as a click-catcher (220ms cubic-bezier(0.32,0.72,0,1)).
-       * Transitions arm two frames after mount via transitionsReady;
-       * resize drags skip them. */}
+      {/* BB offcanvas on desktop; below 768px reveal the fixed-width drawer
+       * and translate the full-width conversation without squeezing it. */}
       <div
         aria-hidden
         style={{ "--sidebar-w": `${sidebarWidth}px` } as CSSProperties}
@@ -2190,7 +2193,7 @@ export function AgentPage() {
           sidebarOpen ? "md:w-[var(--sidebar-w)]" : "md:w-0",
         )}
       />
-      {phoneDrawer && (
+      {isNarrow && (
         <div
           className={cn(
             "absolute inset-0 z-10 bg-transparent",
@@ -2208,49 +2211,22 @@ export function AgentPage() {
         style={{ "--sidebar-w": `${sidebarWidth}px` } as CSSProperties}
         className={cn(
           "flex shrink-0 flex-col overflow-hidden border-r border-border-seam bg-sidebar text-sidebar-foreground select-none",
-          /* Three layout modes:
-           * - phone (narrow + coarse pointer): bb reveal drawer —
-           *   absolute min(86vw,360px), slides, transparent backdrop;
-           * - narrow desktop (narrow + fine pointer): STATIC two-column —
-           *   the aside sits in flow and its width animates 200ms linear
-           *   while the chat reflows beside it (both stay usable);
-           * - desktop: bb offcanvas — absolute fixed-width panel slides,
-           *   the gap spacer above reserves layout space. */
-          phoneDrawer
+          isNarrow
             ? "absolute inset-y-0 left-0 z-20 w-[min(86vw,360px)]"
-            : isNarrow
-              ? cn(
-                  "relative z-20",
-                  sidebarOpen ? "w-[var(--sidebar-w)]" : "w-0 border-r-0",
-                )
-              : "absolute inset-y-0 left-0 z-20 w-[var(--sidebar-w)]",
+            : "absolute inset-y-0 left-0 z-20 w-[var(--sidebar-w)]",
           transitionsReady && !sidebarDragging
-            ? phoneDrawer
+            ? isNarrow
               ? sidebarOpen
-                ? "[transition:transform_220ms_cubic-bezier(0.32,0.72,0,1),visibility_0s] motion-reduce:transition-none"
-                : "[transition:transform_220ms_cubic-bezier(0.32,0.72,0,1),visibility_0s_220ms] motion-reduce:transition-none"
-              : isNarrow
-                ? sidebarOpen
-                  ? "[transition:width_200ms_linear,visibility_0s] motion-reduce:transition-none"
-                  : "[transition:width_200ms_linear,visibility_0s_200ms] motion-reduce:transition-none"
-                : sidebarOpen
-                  ? "[transition:transform_200ms_linear,visibility_0s] motion-reduce:transition-none"
-                  : "[transition:transform_200ms_linear,visibility_0s_200ms] motion-reduce:transition-none"
-            : "transition-none",
-          phoneDrawer
-            ? sidebarOpen
-              ? "translate-x-0"
-              : "invisible -translate-x-full"
-            : isNarrow
-              ? sidebarOpen
-                ? ""
-                : "invisible"
+                ? "[transition:translate_220ms_cubic-bezier(0.32,0.72,0,1),visibility_0s] motion-reduce:transition-none"
+                : "[transition:translate_220ms_cubic-bezier(0.32,0.72,0,1),visibility_0s_220ms] motion-reduce:transition-none"
               : sidebarOpen
-                ? "translate-x-0"
-                : "invisible -translate-x-full",
+                ? "[transition:translate_200ms_linear,visibility_0s] motion-reduce:transition-none"
+                : "[transition:translate_200ms_linear,visibility_0s_200ms] motion-reduce:transition-none"
+            : "transition-none",
+          sidebarOpen ? "translate-x-0" : "invisible -translate-x-full",
         )}
       >
-        <div className="flex h-full w-full shrink-0 flex-col md:w-[var(--sidebar-w)]">
+        <div className="flex h-full w-full shrink-0 flex-col max-md:overflow-y-auto md:w-[var(--sidebar-w)]">
           {/* bb sidebar navigation rows: primary actions + device panels as
            * full-width rows above the threads section. */}
           <div className="flex shrink-0 flex-col gap-1 px-2 pt-2 pb-2">
@@ -2387,14 +2363,14 @@ export function AgentPage() {
             >
               {t("agent.threads")}
             </span>
-            <span className="inline-flex h-7 shrink-0 items-center gap-0.5">
+            <span className="inline-flex h-7 shrink-0 items-center gap-0.5 max-md:pointer-coarse:h-9">
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button
                     variant="ghost"
                     size="icon"
                     aria-label={t("agent.threadsActions")}
-                    className="h-7 w-7 text-subtle-foreground hover:text-muted-foreground data-[state=open]:text-muted-foreground"
+                    className={cn(COARSE_POINTER_HEADER_ICON_BUTTON_CLASS, "text-subtle-foreground hover:text-muted-foreground data-[state=open]:text-muted-foreground")}
                   >
                     <Icon name="MoreHorizontal" className="size-4" />
                   </Button>
@@ -2448,7 +2424,7 @@ export function AgentPage() {
               </DropdownMenu>
             </span>
           </div>
-          <div className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto px-2 pb-2">
+          <div className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto px-2 pb-2 max-md:flex-auto max-md:overflow-visible">
             {visibleGroups === null ? (
               filteredRows.length === 0 ? (
                 sidebarEmpty
@@ -2588,16 +2564,27 @@ export function AgentPage() {
           </div>
         </div>
       </aside>
-      {/* Sidebar resize seam (bb three-column handle pattern): 0-wide hit
-       * container, 1px line brightens on hover/drag. Fine pointers only
-       * (desktop + narrow-desktop static mode); phones have a fixed
-       * drawer width. */}
-      {!isCoarse && sidebarOpen && (
+      {/* Desktop resize seam; compact drawers have a viewport-derived width. */}
+      {!isNarrow && !isCoarse && sidebarOpen && (
         <div className="group relative z-20 w-0 shrink-0 overflow-visible">
           <span
             role="separator"
             aria-orientation="vertical"
             aria-label={t("agent.resizeSidebar")}
+            tabIndex={0}
+            aria-valuemin={SIDEBAR_MIN_WIDTH}
+            aria-valuemax={SIDEBAR_MAX_WIDTH}
+            aria-valuenow={Math.round(sidebarWidth)}
+            onKeyDown={(e) => {
+              if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key)) return;
+              e.preventDefault();
+              const width = e.key === "Home" ? SIDEBAR_MIN_WIDTH
+                : e.key === "End" ? SIDEBAR_MAX_WIDTH
+                : Math.max(SIDEBAR_MIN_WIDTH, Math.min(SIDEBAR_MAX_WIDTH,
+                    sidebarWidth + (e.key === "ArrowRight" ? 16 : -16)));
+              setSidebarWidth(width);
+              localStorage.setItem(SIDEBAR_WIDTH_KEY, String(width));
+            }}
             className="absolute inset-y-0 left-0 w-3 -translate-x-1/2 cursor-col-resize touch-none"
             onPointerDown={onSidebarHandleDown}
             onPointerMove={onSidebarHandleMove}
@@ -2620,20 +2607,14 @@ export function AgentPage() {
         ref={panelSizingRef}
         className={cn(
           "h-full min-w-0 flex-1",
-          /* bb inset (ui/sidebar.tsx data-sidebar="inset"): translate
-           * 220ms cubic-bezier(0.32,0.72,0,1) on compact — right by the
-           * drawer width when the PHONE drawer is open (chat keeps its
-           * width, visible beside the list), fully left when the
-           * right-panel shelf is open (panel takes precedence, bb source
-           * order). Narrow desktop static mode never translates: the
-           * in-flow sidebar width pushes the chat directly. */
+          /* Compact shelves translate the conversation, never resize it. */
           transitionsReady &&
             !sidebarDragging &&
             isNarrow &&
-            "[transition:transform_220ms_cubic-bezier(0.32,0.72,0,1)] motion-reduce:transition-none",
+            "[transition:translate_220ms_cubic-bezier(0.32,0.72,0,1)] motion-reduce:transition-none",
           isNarrow && panelOpen
             ? "-translate-x-full"
-            : phoneDrawer && sidebarOpen
+            : isNarrow && sidebarOpen
               ? "translate-x-[min(86vw,360px)]"
               : "",
         )}
@@ -2675,10 +2656,10 @@ export function AgentPage() {
               size="icon"
               aria-label={t("agent.toggleSidebar")}
               aria-pressed={sidebarOpen}
-              className="size-7"
+              aria-expanded={sidebarOpen}
+              className={COARSE_POINTER_HEADER_ICON_BUTTON_CLASS}
               onClick={() => {
                 const next = !sidebarOpen;
-                localStorage.setItem(SIDEBAR_KEY, next ? "1" : "0");
                 setSidebarOpen(next);
                 /* Compact: the full-width shelf would cover the drawer —
                  * opening one dismisses the other. */
@@ -2716,7 +2697,7 @@ export function AgentPage() {
                 variant="ghost"
                 size="icon"
                 aria-label={t("agent.threadActions")}
-                className="size-7 shrink-0"
+                className={cn(COARSE_POINTER_HEADER_ICON_BUTTON_CLASS, "shrink-0")}
               >
                 <Icon name="MoreHorizontal" />
               </Button>
@@ -2750,7 +2731,7 @@ export function AgentPage() {
                 size="icon"
                 aria-label={t("agent.togglePanel")}
                 aria-pressed={panelOpen}
-                className="size-7 shrink-0"
+                className={cn(COARSE_POINTER_HEADER_ICON_BUTTON_CLASS, "shrink-0")}
                 onClick={togglePanel}
               >
                 <Icon name="PanelRight" />
@@ -2760,6 +2741,11 @@ export function AgentPage() {
           </Tooltip>
         </div>
       </div>
+      {status === "disconnected" && authError && (
+        <div role="alert" className="shrink-0 break-words border-b border-border-seam px-4 py-2 text-xs text-destructive-text">
+          {authError}
+        </div>
+      )}
 
       <SplitContainer
         root={layout.root}
@@ -2873,8 +2859,8 @@ export function AgentPage() {
             "fixed inset-y-0 right-0 z-30 w-full bg-background",
             transitionsReady
               ? panelOpen
-                ? "[transition:transform_220ms_cubic-bezier(0.32,0.72,0,1),visibility_0s] motion-reduce:transition-none"
-                : "[transition:transform_220ms_cubic-bezier(0.32,0.72,0,1),visibility_0s_220ms] motion-reduce:transition-none"
+                ? "[transition:translate_220ms_cubic-bezier(0.32,0.72,0,1),visibility_0s] motion-reduce:transition-none"
+                : "[transition:translate_220ms_cubic-bezier(0.32,0.72,0,1),visibility_0s_220ms] motion-reduce:transition-none"
               : "transition-none",
             panelOpen
               ? "translate-x-0"

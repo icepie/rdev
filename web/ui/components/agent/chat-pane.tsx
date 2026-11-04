@@ -8,12 +8,17 @@ import {
   Fragment,
   useCallback,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
 } from "react";
 import { cn } from "../../lib/utils";
 import type { LocalFileLink } from "../markdown-local-file-link";
+import {
+  COARSE_POINTER_PROMPT_ACTION_BUTTON_CLASS,
+  COARSE_POINTER_PROMPT_ICON_ACTION_BUTTON_CLASS,
+} from "../coarse-pointer-sizing";
 import { Button } from "../button";
 import { ScrollToBottomButton } from "../scroll-to-bottom-button";
 import { Textarea } from "../textarea";
@@ -137,6 +142,7 @@ export function ChatPaneView({
   const [pendingImages, setPendingImages] = useState<PendingImage[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [nowTick, setNowTick] = useState(0);
+  const slashListId = useId();
 
   /* Elapsed-seconds ticker for the working indicator. Tick immediately on
    * (re)start: nowTick freezes while idle, so the first render after
@@ -252,20 +258,20 @@ export function ChatPaneView({
 
   const sendSteer = () => {
     const text = input.trim();
-    if (!text || !running) return;
+    if (!text || !running || !ready) return;
     const payload: Record<string, unknown> = { op: "steer", text };
     if (threadId) payload.thread = threadId;
     if (!sendRaw(payload)) return;
     setInput("");
   };
 
-  const sendStop = () => {
+  const sendStop = useCallback(() => {
+    if (!ready || !running || stopping) return;
     const payload: Record<string, unknown> = { op: "stop" };
     if (threadId) payload.thread = threadId;
-    /* Disable the button until the server acks (stopped frame clears
-     * stopping); a dead socket leaves the button clickable for a retry. */
+    /* Lock until acknowledgement; reconnect/snapshot clears stale locks. */
     if (sendRaw(payload)) ops.setStopping(true);
-  };
+  }, [ready, running, stopping, threadId, sendRaw, ops]);
 
   /* Slash commands: typing "/" in the composer opens a filtered menu;
    * no-arg commands run on confirm, commands needing an argument expand
@@ -322,8 +328,7 @@ export function ChatPaneView({
         },
       },
     ],
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [t, sendRaw, threadId],
+    [t, sendRaw, threadId, sendStop],
   );
 
   const slashQuery = (() => {
@@ -343,13 +348,14 @@ export function ChatPaneView({
   const [slashIndex, setSlashIndex] = useState(0);
   const [slashDismissed, setSlashDismissed] = useState(false);
   const slashOpen =
-    slashQuery !== null && !slashDismissed && slashFiltered.length > 0;
+    ready && slashQuery !== null && !slashDismissed && slashFiltered.length > 0;
   useEffect(() => {
     setSlashIndex(0);
     setSlashDismissed(false);
   }, [slashQuery]);
 
   const acceptSlash = (cmd: SlashCommand) => {
+    if (!ready) return;
     if (cmd.needsArg) {
       setInput("/" + cmd.name + " ");
       setSlashDismissed(true);
@@ -566,15 +572,15 @@ export function ChatPaneView({
                 <button
                   type="button"
                   title={t("agent.queueEditHint")}
+                  disabled={!ready}
                   className="min-w-0 flex-1 cursor-pointer truncate text-left transition-colors hover:text-foreground"
                   onClick={() => {
-                    addToChat(q);
                     const payload: Record<string, unknown> = {
                       op: "dequeue",
                       index: i,
                     };
                     if (threadId) payload.thread = threadId;
-                    sendRaw(payload);
+                    if (sendRaw(payload)) addToChat(q);
                   }}
                 >
                   {q}
@@ -583,7 +589,8 @@ export function ChatPaneView({
                   type="button"
                   aria-label={t("agent.queueRemove")}
                   title={t("agent.queueRemove")}
-                  className="shrink-0 cursor-pointer rounded p-0.5 text-subtle-foreground/75 opacity-0 transition-opacity group-hover/queue:opacity-100 hover:text-destructive-text"
+                  disabled={!ready}
+                  className="shrink-0 cursor-pointer rounded p-0.5 text-subtle-foreground/75 opacity-0 transition-opacity group-hover/queue:opacity-100 group-focus-within/queue:opacity-100 pointer-coarse:opacity-100 hover:text-destructive-text disabled:pointer-events-none"
                   onClick={() => {
                     const payload: Record<string, unknown> = {
                       op: "dequeue",
@@ -612,7 +619,7 @@ export function ChatPaneView({
         )}
         <div className="relative w-full rounded-xl border border-border bg-background shadow-lift">
           {slashOpen && (
-            <div className="absolute inset-x-2 bottom-full z-20 mb-1 overflow-hidden rounded-lg border border-border bg-surface-raised-solid shadow-lift">
+            <div id={slashListId} role="listbox" aria-label={t("agent.slashCommands")} className="absolute inset-x-2 bottom-full z-20 mb-1 overflow-hidden rounded-lg border border-border bg-surface-raised-solid shadow-lift">
               <div className="px-2.5 pt-1.5 pb-1 text-2xs tracking-wide text-muted-foreground uppercase">
                 {t("agent.slashCommands")}
               </div>
@@ -620,6 +627,11 @@ export function ChatPaneView({
                 <button
                   key={cmd.name}
                   type="button"
+                  id={`${slashListId}-${cmd.name}`}
+                  role="option"
+                  aria-selected={i === Math.min(slashIndex, slashFiltered.length - 1)}
+                  tabIndex={-1}
+                  onMouseDown={(e) => e.preventDefault()}
                   className={cn(
                     "flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-sm transition-colors",
                     i === Math.min(slashIndex, slashFiltered.length - 1)
@@ -671,6 +683,12 @@ export function ChatPaneView({
             rows={1}
             value={input}
             disabled={!ready}
+            role="combobox"
+            aria-label={t("agent.composerPlaceholder")}
+            aria-autocomplete="list"
+            aria-expanded={slashOpen}
+            aria-controls={slashOpen ? slashListId : undefined}
+            aria-activedescendant={slashOpen ? `${slashListId}-${slashFiltered[Math.min(slashIndex, slashFiltered.length - 1)].name}` : undefined}
             placeholder={t("agent.composerPlaceholder")}
             className="max-h-36 min-h-[68px] w-full resize-none border-0 bg-transparent px-4 pt-3 pb-1 pr-14 text-sm leading-relaxed shadow-none placeholder:font-light placeholder:text-subtle-foreground/70 focus-visible:ring-0"
             onChange={(e) => setInput(e.target.value)}
@@ -723,11 +741,12 @@ export function ChatPaneView({
               {models.length > 0 && (
                 <Select
                   value={model}
+                  disabled={!ready}
                   onValueChange={(id) => {
                     if (id && id !== model) onModelChange(id);
                   }}
                 >
-                  <SelectTrigger className="h-8 w-fit max-w-full min-w-0 items-center justify-start gap-1 border-none bg-transparent px-1 text-xs leading-tight text-muted-foreground shadow-none">
+                  <SelectTrigger className="h-8 w-fit max-w-full min-w-0 items-center justify-start gap-1 border-none bg-transparent px-1 text-xs leading-tight text-muted-foreground shadow-none max-md:pointer-coarse:h-10">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -745,7 +764,7 @@ export function ChatPaneView({
                     type="button"
                     aria-label={t("agent.reasoning")}
                     disabled={!ready}
-                    className="flex h-8 shrink-0 cursor-pointer items-center gap-1 rounded-md px-1 text-xs font-normal text-muted-foreground transition-colors hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
+                    className="flex h-8 shrink-0 cursor-pointer items-center gap-1 rounded-md px-1 text-xs font-normal text-muted-foreground transition-colors hover:text-foreground disabled:pointer-events-none disabled:opacity-50 max-md:pointer-coarse:h-10"
                   >
                     <Icon name="AiBrain01" className="size-3.5" />
                     {t(REASONING_LEVELS.find((r) => r.level === reasoning)?.label ?? "agent.reasoningMedium")}
@@ -770,7 +789,7 @@ export function ChatPaneView({
                     size="icon"
                     aria-label={t("agent.attachImages")}
                     disabled={!ready}
-                    className="h-8 w-auto shrink-0 px-2 text-subtle-foreground/75 hover:text-muted-foreground"
+                    className={cn(COARSE_POINTER_PROMPT_ICON_ACTION_BUTTON_CLASS, "shrink-0 text-subtle-foreground/75 hover:text-muted-foreground")}
                     onClick={() => fileInputRef.current?.click()}
                   >
                     <Icon name="Paperclip" />
@@ -799,7 +818,7 @@ export function ChatPaneView({
                       size="icon"
                       aria-label={t("agent.steer")}
                       disabled={!ready || !input.trim()}
-                      className="h-8 w-auto px-2"
+                      className={COARSE_POINTER_PROMPT_ICON_ACTION_BUTTON_CLASS}
                       onClick={sendSteer}
                     >
                       <Icon name="Zap" />
@@ -815,8 +834,9 @@ export function ChatPaneView({
                       variant="secondary"
                       size="icon"
                       aria-label={t("agent.stop")}
-                      disabled={!running}
-                      className="h-8 w-auto px-2 transition-all [&_[data-icon-root]]:size-3.5"
+                      disabled={!ready || !running || stopping}
+                      aria-busy={stopping}
+                      className={cn(COARSE_POINTER_PROMPT_ICON_ACTION_BUTTON_CLASS, "[&_[data-icon-root]]:size-3.5")}
                       onClick={sendStop}
                     >
                       <Icon name="Square" className="fill-current [&_*]:stroke-0" />
@@ -832,7 +852,7 @@ export function ChatPaneView({
                       size="sm"
                       aria-label={t("agent.queued")}
                       disabled={!ready || (!input.trim() && pendingImages.length === 0)}
-                      className="h-8 gap-1.5 px-2.5"
+                      className={cn(COARSE_POINTER_PROMPT_ACTION_BUTTON_CLASS, "gap-1.5 px-2.5")}
                       onClick={sendChat}
                     >
                       <Icon name="CornerDownLeft" />
@@ -847,7 +867,7 @@ export function ChatPaneView({
                     <Button
                       aria-label={t("agent.send")}
                       disabled={!ready || (!input.trim() && pendingImages.length === 0)}
-                      className="ml-1 h-8 px-2 transition-all"
+                      className={cn(COARSE_POINTER_PROMPT_ACTION_BUTTON_CLASS, "ml-1")}
                       onClick={sendChat}
                     >
                       <Icon name="CornerDownLeft" />

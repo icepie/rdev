@@ -10,6 +10,7 @@ import { useI18n } from "../lib/i18n";
 import { DeviceRail } from "./device-rail";
 import { MobileNavContext } from "../shell/AppShell";
 import { setRailControl } from "../lib/rail-control";
+import { COARSE_POINTER_HEADER_ICON_BUTTON_CLASS } from "./coarse-pointer-sizing";
 
 const HANDLE_BASE =
   "group relative z-10 shrink-0 bg-transparent transition-colors";
@@ -66,7 +67,7 @@ export function SplitPageShell({
         <div className="relative flex h-full min-h-0 flex-col">
           {/* Narrow screens: ONE in-flow trigger (bb style) opening the
            * global drawer with this page's device rail as its section. */}
-          <div className="flex h-9 shrink-0 items-center gap-1 border-b border-border-seam bg-card px-1.5 md:hidden">
+          <div className="flex h-9 shrink-0 items-center gap-1 border-b border-border-seam bg-card px-1.5 max-md:pointer-coarse:h-11 md:hidden">
             <button
               type="button"
               aria-label={t("nav.label")}
@@ -81,7 +82,7 @@ export function SplitPageShell({
                   />,
                 )
               }
-              className="flex size-7 cursor-pointer items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-state-hover hover:text-foreground"
+              className={`flex shrink-0 cursor-pointer items-center justify-center text-muted-foreground transition-colors hover:bg-state-hover hover:text-foreground ${COARSE_POINTER_HEADER_ICON_BUTTON_CLASS}`}
             >
               <Icon name="AlignLeft" className="size-4" />
             </button>

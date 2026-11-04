@@ -64,10 +64,12 @@ import { Icon } from "../components/icon";
 import { OsIcon } from "../components/os-icon";
 import { CodeBlock } from "../components/markdown";
 import { useCopy } from "../lib/clipboard";
+import { COARSE_POINTER_HEADER_ICON_BUTTON_CLASS } from "../components/coarse-pointer-sizing";
 
 /* ── Server endpoint helpers (ported from web/index.html) ── */
 
 const H = location.host;
+const SSH_HOST = location.hostname;
 const isHTTPS = location.protocol === "https:";
 const WS = isHTTPS ? "wss://" : "ws://";
 const HTTP = isHTTPS ? "https://" : "http://";
@@ -100,6 +102,10 @@ interface LogDeviceState {
 type ClientFlavor = "go" | "cgo" | "rs";
 
 const LOG_LEVELS = ["error", "warn", "info", "debug", "trace"] as const;
+
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
 
 function vncDisplayAddr(addr: string): string {
   if (!addr) return "";
@@ -154,6 +160,7 @@ function CopyButton({
       variant="outline"
       size="sm"
       className={cn("shrink-0", ok && "border-success text-success")}
+      aria-label={label}
       onClick={() => onCopy(id, text)}
     >
       {ok ? <Icon name="Check" /> : label}
@@ -187,8 +194,8 @@ function CmdGroup({
         <span>{label}</span>
       </div>
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-        <CodeBlock className="flex-1">{cmd}</CodeBlock>
-        <div className="flex shrink-0 gap-2">
+        <CodeBlock className="min-w-0 flex-1">{cmd}</CodeBlock>
+        <div className="flex shrink-0 flex-wrap gap-2">
           <CopyButton
             id={cmdId}
             text={cmd}
@@ -263,7 +270,7 @@ function DesktopBadge({
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <span className="inline-flex">{badge}</span>
+        <span className="inline-flex" tabIndex={0}>{badge}</span>
       </TooltipTrigger>
       <TooltipContent>{title}</TooltipContent>
     </Tooltip>
@@ -275,7 +282,7 @@ function DesktopBadge({
 export function DashboardPage() {
   const { t } = useI18n();
   const { open: openMobileNav } = useContext(MobileNavContext);
-  const { devices, refresh: refreshDevices } = useDevices();
+  const { devices, error: devicesError, refresh: refreshDevices } = useDevices();
 
   const [cfg, setCfg] = useState<Required<ServerConfig>>({
     sshPort: "2222",
@@ -296,6 +303,14 @@ export function DashboardPage() {
   );
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [androidTrying, setAndroidTrying] = useState(false);
+  const [configError, setConfigError] = useState("");
+  const [logError, setLogError] = useState("");
+  const [logStatesError, setLogStatesError] = useState("");
+  const [logLoading, setLogLoading] = useState(false);
+  const [logBusy, setLogBusy] = useState(false);
+  const activeLogDevice = useRef("");
+  const logRequest = useRef(0);
+  const logMutation = useRef(false);
   const [copiedId, copy] = useCopy();
 
   /* Server config (ports / VNC address) */
@@ -303,14 +318,14 @@ export function DashboardPage() {
     apiJSON<ServerConfig>("/api/config")
       .then((c) => {
         setCfg((prev) => ({
-          sshPort: c.sshPort || prev.sshPort,
-          tcpPort: c.tcpPort || prev.tcpPort,
-          kcpPort: c.kcpPort || prev.kcpPort,
-          vncAddr: c.vncAddr ? vncDisplayAddr(c.vncAddr) : prev.vncAddr,
-          proxyAddr: c.proxyAddr ? vncDisplayAddr(c.proxyAddr) : prev.proxyAddr,
+          sshPort: c.sshPort ?? prev.sshPort,
+          tcpPort: c.tcpPort ?? prev.tcpPort,
+          kcpPort: c.kcpPort ?? prev.kcpPort,
+          vncAddr: c.vncAddr === undefined ? prev.vncAddr : vncDisplayAddr(c.vncAddr),
+          proxyAddr: c.proxyAddr === undefined ? prev.proxyAddr : vncDisplayAddr(c.proxyAddr),
         }));
       })
-      .catch(() => {});
+      .catch((error: unknown) => setConfigError(String(error)));
   }, []);
 
   const SP = cfg.sshPort;
@@ -333,13 +348,13 @@ export function DashboardPage() {
   const cmds = useMemo(() => {
     const servers = serverList();
     return {
-      curl: `curl -sL ${HTTP}${H}/run.sh | sh -s -- ${servers} -p ${pwPlaceholder}${clientArg}`,
-      wget: `wget -qO- ${HTTP}${H}/run.sh | sh -s -- ${servers} -p ${pwPlaceholder}${clientArg}`,
-      openSh: `curl -sL ${HTTP}${H}/run.sh | sh -s -- ${servers}${clientArg}`,
-      ps: `powershell -Command "iwr -useb ${HTTP}${H}/run.ps1 | iex; RDev '${servers}' -Password ${pwPlaceholder}${clientPSArg}"`,
-      psOpen: `powershell -Command "iwr -useb ${HTTP}${H}/run.ps1 | iex; RDev '${servers}'${clientPSArg}"`,
+      curl: `curl -sL '${HTTP}${H}/run.sh' | sh -s -- '${servers}' -p '${pwPlaceholder}'${clientArg}`,
+      wget: `wget -qO- '${HTTP}${H}/run.sh' | sh -s -- '${servers}' -p '${pwPlaceholder}'${clientArg}`,
+      openSh: `curl -sL '${HTTP}${H}/run.sh' | sh -s -- '${servers}'${clientArg}`,
+      ps: `powershell -Command "iwr -useb '${HTTP}${H}/run.ps1' | iex; RDev '${servers}' -Password '${pwPlaceholder}'${clientPSArg}"`,
+      psOpen: `powershell -Command "iwr -useb '${HTTP}${H}/run.ps1' | iex; RDev '${servers}'${clientPSArg}"`,
       w7Path: `%SystemRoot%\\system32\\WindowsPowerShell\\v1.0\\powershell.exe`,
-      w7Pw: `[Net.ServicePointManager]::SecurityProtocol=[Enum]::ToObject([Net.SecurityProtocolType],3072); $wc=New-Object Net.WebClient; $wc.DownloadString('${HTTP}${H}/run.ps1') | iex; RDev '${servers}' -Password ${pwPlaceholder}${clientPSArg}`,
+      w7Pw: `[Net.ServicePointManager]::SecurityProtocol=[Enum]::ToObject([Net.SecurityProtocolType],3072); $wc=New-Object Net.WebClient; $wc.DownloadString('${HTTP}${H}/run.ps1') | iex; RDev '${servers}' -Password '${pwPlaceholder}'${clientPSArg}`,
       w7Open: `[Net.ServicePointManager]::SecurityProtocol=[Enum]::ToObject([Net.SecurityProtocolType],3072); $wc=New-Object Net.WebClient; $wc.DownloadString('${HTTP}${H}/run.ps1') | iex; RDev '${servers}'${clientPSArg}`,
     };
   }, [serverList, pwPlaceholder, clientArg, clientPSArg]);
@@ -360,14 +375,16 @@ export function DashboardPage() {
       const map: Record<string, LogDeviceState> = {};
       for (const x of Array.isArray(list) ? list : []) map[x.id] = x;
       setLogStates(map);
+      setLogStatesError("");
       return map;
-    } catch {
+    } catch (error) {
+      setLogStatesError(String(error));
       return {};
     }
   }, []);
 
   useEffect(() => {
-    loadLogStates();
+    if (devices.some((device) => device.logSupported)) void loadLogStates();
   }, [loadLogStates, devices]);
 
   /* Stats */
@@ -390,9 +407,9 @@ export function DashboardPage() {
     full: string;
   };
   const deviceConnStrings = useCallback(
-    async (d: DeviceInfo): Promise<ConnStrings> => {
+    async (d: DeviceInfo, includePassword: boolean): Promise<ConnStrings> => {
       let pw = "<password>";
-      if (d.hasPassword) {
+      if (d.hasPassword && includePassword) {
         try {
           const r = await apiFetch("/api/clients?passwords=1");
           if (r.ok) {
@@ -407,10 +424,10 @@ export function DashboardPage() {
       const sshHost = location.hostname || H.split(":")[0];
       const desktopURL = `${HTTP}${H}/remote-desktop?device=${encodeURIComponent(d.id)}`;
       const servers = serverList();
-      const ssh = `ssh ${d.id}@${sshHost} -p ${SP}`;
+      const ssh = `ssh -p ${SP} ${shellQuote(`${d.id}@${sshHost}`)}`;
       const client =
-        `rdev-client -s ${servers} -i ${d.id}` +
-        (d.hasPassword ? ` -p ${pw}` : "");
+        `rdev-client -s ${shellQuote(servers)} -i ${shellQuote(d.id)}` +
+        (d.hasPassword ? ` -p ${shellQuote(pw)}` : "");
       const lines = [
         `RDev device: ${d.id}`,
         `Auth: ${d.hasPassword ? t("common.password") : t("common.open")}`,
@@ -419,21 +436,21 @@ export function DashboardPage() {
         `Client command: ${client}`,
         "",
         `SSH: ${ssh}`,
-        `SFTP: sftp -P ${SP} ${d.id}@${sshHost}`,
-        `SCP: scp -P ${SP} file ${d.id}@${sshHost}:~/`,
+        `SFTP: sftp -P ${SP} ${shellQuote(`${d.id}@${sshHost}`)}`,
+        `SCP: scp -P ${SP} file ${shellQuote(`${d.id}@${sshHost}:~/`)}`,
         `Desktop: ${desktopURL}`,
       ];
       if (VP) lines.push(`VNC: vncviewer ${VP} (username=${d.id})`);
       if (PP)
         lines.push(
-          `Proxy: curl -x http://${d.id}:${pw}@${PP} https://example.com`,
-          `Proxy (SOCKS5): curl -x socks5://${d.id}:${pw}@${PP} https://example.com`,
+          `Proxy: curl -x ${shellQuote(`http://${encodeURIComponent(d.id)}:${encodeURIComponent(d.hasPassword ? pw : "")}@${PP}`)} https://example.com`,
+          `Proxy (SOCKS5): curl -x ${shellQuote(`socks5://${encodeURIComponent(d.id)}:${encodeURIComponent(d.hasPassword ? pw : "")}@${PP}`)} https://example.com`,
         );
       lines.push(
         "",
-        `Local forward: ssh -L 8080:localhost:80 ${d.id}@${sshHost} -p ${SP}`,
-        `Remote forward: ssh -R 3000:localhost:3000 ${d.id}@${sshHost} -p ${SP}`,
-        `Git clone: git clone ssh://${d.id}@${sshHost}:${SP}/home/user/repo.git`,
+        `Local forward: ssh -L 8080:localhost:80 -p ${SP} ${shellQuote(`${d.id}@${sshHost}`)}`,
+        `Remote forward: ssh -R 3000:localhost:3000 -p ${SP} ${shellQuote(`${d.id}@${sshHost}`)}`,
+        `Git clone: git clone ${shellQuote(`ssh://${encodeURIComponent(d.id)}@${sshHost}:${SP}/home/user/repo.git`)}`,
       );
       return { ssh, client, desktop: desktopURL, full: lines.join("\n") };
     },
@@ -442,7 +459,7 @@ export function DashboardPage() {
 
   const copyDeviceConnection = useCallback(
     async (d: DeviceInfo, kind: keyof ConnStrings) => {
-      const s = await deviceConnStrings(d);
+      const s = await deviceConnStrings(d, kind === "client" || kind === "full");
       copy(`conn:${kind}:${d.id}`, s[kind]);
     },
     [copy, deviceConnStrings],
@@ -451,21 +468,24 @@ export function DashboardPage() {
   /* Client log modal */
   const refreshLogTail = useCallback(
     async (device: string) => {
-      setLogTail(t("index.logLoading"));
+      if (activeLogDevice.current !== device) return;
+      const request = ++logRequest.current;
+      setLogLoading(true);
+      setLogError("");
       try {
         const r = await apiFetch(
           "/api/client-logs/devices/" +
             encodeURIComponent(device) +
             "/tail?lines=300",
         );
-        if (!r.ok) {
-          setLogTail(t("index.logTailError", { status: r.status }));
-          return;
-        }
+        if (!r.ok) throw new Error(t("index.logTailError", { status: r.status }));
         const data = (await r.json()) as { lines?: string[] };
+        if (request !== logRequest.current) return;
         setLogTail((data.lines || []).join("\n") || t("index.logNoLines"));
-      } catch {
-        setLogTail(t("index.logNoLines"));
+      } catch (error) {
+        if (request === logRequest.current) setLogError(String(error));
+      } finally {
+        if (request === logRequest.current) setLogLoading(false);
       }
     },
     [t],
@@ -473,39 +493,55 @@ export function DashboardPage() {
 
   const openLogModal = useCallback(
     async (device: string) => {
+      activeLogDevice.current = device;
+      const request = ++logRequest.current;
       setLogDevice(device);
-      setLogTail(t("index.logLoading"));
+      setLogTail("");
+      setLogError("");
+      setLogLoading(true);
       const states = await loadLogStates();
-      const st = states[device];
-      setLogLevel(st?.level || "info");
+      if (request !== logRequest.current) return;
+      setLogLevel(states[device]?.level || "info");
       await refreshLogTail(device);
     },
-    [loadLogStates, refreshLogTail, t],
+    [loadLogStates, refreshLogTail],
   );
 
-  const setLogEnabled = useCallback(
-    async (enabled: boolean) => {
-      if (!logDevice) return;
-      const r = await apiFetch(
-        "/api/client-logs/devices/" +
-          encodeURIComponent(logDevice) +
-          "/config",
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ enabled, level: logLevel || "info" }),
-        },
-      );
-      if (!r.ok) return;
-      await loadLogStates();
-      await refreshLogTail(logDevice);
-      refreshDevices();
+  const updateLogs = useCallback(
+    async (action: boolean | "delete") => {
+      if (!logDevice || logMutation.current) return;
+      const device = logDevice;
+      logMutation.current = true;
+      setLogBusy(true);
+      setLogError("");
+      try {
+        const r = await apiFetch(
+          "/api/client-logs/devices/" + encodeURIComponent(device) +
+            (action === "delete" ? "" : "/config"),
+          action === "delete"
+            ? { method: "DELETE" }
+            : {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ enabled: action, level: logLevel }),
+              },
+        );
+        if (!r.ok) throw new Error(`${t("common.error")}: HTTP ${r.status}`);
+        await loadLogStates();
+        await refreshLogTail(device);
+        refreshDevices();
+      } catch (error) {
+        if (activeLogDevice.current === device) setLogError(String(error));
+      } finally {
+        logMutation.current = false;
+        setLogBusy(false);
+      }
     },
-    [logDevice, logLevel, loadLogStates, refreshLogTail, refreshDevices],
+    [logDevice, logLevel, loadLogStates, refreshLogTail, refreshDevices, t],
   );
 
   const downloadLog = useCallback(() => {
-    if (!logDevice) return;
+    if (!logDevice || !logDate) return;
     location.href = authURL(
       "/api/client-logs/devices/" +
         encodeURIComponent(logDevice) +
@@ -514,18 +550,6 @@ export function DashboardPage() {
     );
   }, [logDevice, logDate]);
 
-  const deleteLogs = useCallback(async () => {
-    if (!logDevice) return;
-    const r = await apiFetch(
-      "/api/client-logs/devices/" + encodeURIComponent(logDevice),
-      { method: "DELETE" },
-    );
-    if (r.ok) {
-      await loadLogStates();
-      await refreshLogTail(logDevice);
-      refreshDevices();
-    }
-  }, [logDevice, loadLogStates, refreshLogTail, refreshDevices]);
 
   const logState = logDevice ? logStates[logDevice] : undefined;
 
@@ -563,7 +587,7 @@ export function DashboardPage() {
   });
 
   return (
-    <div className="mx-auto flex w-full max-w-6xl flex-col gap-4 px-4 py-6">
+    <div className="mx-auto flex w-full min-w-0 max-w-7xl flex-col gap-4 px-3 py-4 sm:px-5 sm:py-6">
       {/* Heading */}
       <div>
         <h1 className="flex items-center gap-2 text-2xl font-bold tracking-tight">
@@ -571,7 +595,7 @@ export function DashboardPage() {
             type="button"
             aria-label={t("nav.label")}
             onClick={() => openMobileNav()}
-            className="flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-state-hover hover:text-foreground md:hidden"
+            className={cn(COARSE_POINTER_HEADER_ICON_BUTTON_CLASS, "flex shrink-0 cursor-pointer items-center justify-center text-muted-foreground transition-colors hover:bg-state-hover hover:text-foreground md:hidden")}
           >
             <Icon name="AlignLeft" className="size-5" />
           </button>
@@ -586,10 +610,10 @@ export function DashboardPage() {
       </div>
 
       {/* Stats */}
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         {stats.map((s) => (
           <Card key={s.label}>
-            <CardContent className="p-4">
+            <CardContent className="p-3 sm:p-4">
               <div className="text-xs tracking-wide text-muted-foreground uppercase">
                 {s.label}
               </div>
@@ -601,10 +625,22 @@ export function DashboardPage() {
         ))}
       </div>
 
+      {devicesError && (
+        <div role="alert" className="flex flex-wrap items-center gap-2 rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive-text">
+          <span className="min-w-0 flex-1 break-words">{t("common.error")}: {devicesError}</span>
+          <Button variant="outline" size="sm" onClick={refreshDevices}>
+            <Icon name="Refresh" />{t("files.refresh")}
+          </Button>
+        </div>
+      )}
+      {configError && (
+        <p role="alert" className="break-words text-sm text-destructive-text">{t("index.installTitle")} · {t("common.error")}: {configError}</p>
+      )}
+
       {/* Devices */}
-      <Card>
-        <Table>
-          <TableHeader>
+      <Card className="min-w-0 overflow-hidden">
+        <Table aria-label={t("index.onlineDevices")} className="block md:table">
+          <TableHeader className="hidden md:table-header-group">
             <TableRow>
               <TableHead>{t("index.status")}</TableHead>
               <TableHead>{t("index.deviceId")}</TableHead>
@@ -619,14 +655,14 @@ export function DashboardPage() {
               </TableHead>
             </TableRow>
           </TableHeader>
-          <TableBody>
+          <TableBody className="block md:table-row-group">
             {devices.length === 0 && (
-              <TableRow>
-                <TableCell colSpan={9} className="h-32 text-center">
+              <TableRow className="block md:table-row">
+                <TableCell colSpan={9} className="flex h-32 items-center justify-center text-center md:table-cell">
                   <div className="flex flex-col items-center gap-2 text-muted-foreground">
                     <Icon name="Radio" className="size-8 opacity-30" />
                     <span className="text-sm">
-                      {t("index.waitingDevices")}
+                      {devicesError ? t("common.error") : t("index.waitingDevices")}
                     </span>
                   </div>
                 </TableCell>
@@ -636,17 +672,17 @@ export function DashboardPage() {
               const st = logStates[d.id];
               const logSupported = Boolean(d.logSupported);
               return (
-                <TableRow key={d.id}>
-                  <TableCell>
-                    <span className="inline-flex items-center gap-1.5">
+                <TableRow key={d.id} className="grid grid-cols-2 p-2 md:table-row md:p-0">
+                  <TableCell className="col-start-2 row-start-1 block text-right md:table-cell md:text-left" aria-label={t("index.status")}>
+                    <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
                       <span className="size-2 rounded-full bg-success shadow-[0_0_6px_var(--success)]" />
                       {t("common.online")}
                     </span>
                   </TableCell>
-                  <TableCell className="font-semibold">
-                    <span className="inline-flex items-center gap-1.5">
-                      <OsIcon os={d.os} className="size-4 text-muted-foreground" />
-                      {d.id}
+                  <TableCell className="col-start-1 row-start-1 block min-w-0 font-semibold md:table-cell" aria-label={t("index.deviceId")}>
+                    <span className="inline-flex max-w-full items-center gap-1.5 md:max-w-48" title={d.id}>
+                      <OsIcon os={d.os} className="size-4 shrink-0 text-muted-foreground" />
+                      <span className="truncate">{d.id}</span>
                     </span>
                   </TableCell>
                   <TableCell className="hidden text-muted-foreground md:table-cell">
@@ -657,7 +693,7 @@ export function DashboardPage() {
                   </TableCell>
                   <TableCell className="hidden md:table-cell">{Number(d.sessions ?? 0)}</TableCell>
                   <TableCell className="hidden md:table-cell">{Number(d.forwards ?? 0)}</TableCell>
-                  <TableCell>
+                  <TableCell className="block md:table-cell" aria-label={t("index.auth")}>
                     <Badge
                       variant="outline"
                       className={cn(
@@ -672,11 +708,11 @@ export function DashboardPage() {
                         : t("common.open")}
                     </Badge>
                   </TableCell>
-                  <TableCell>
+                  <TableCell className="block text-right md:table-cell md:text-left" aria-label={t("index.desktop")}>
                     <DesktopBadge d={d} t={t} />
                   </TableCell>
-                  <TableCell>
-                    <div className="flex flex-wrap items-center justify-end gap-1.5">
+                  <TableCell className="col-span-2 block md:table-cell">
+                    <div className="flex flex-wrap items-center gap-1.5 md:min-w-60 md:justify-end">
                       <Button variant="outline" size="sm" asChild>
                         <Link
                           to={`/terminal?device=${encodeURIComponent(d.id)}`}
@@ -794,20 +830,21 @@ export function DashboardPage() {
       </Card>
 
       {/* One-click install */}
-      <Card>
+      <Card className="min-w-0">
         <CardHeader className="flex-row flex-wrap items-center justify-between gap-3 space-y-0">
           <CardTitle className="flex items-center gap-2 text-base">
             <Icon name="Rocket" className="size-4 text-timeline-accent" />
             {t("index.installTitle")}
           </CardTitle>
-          <div className="flex gap-1.5" aria-label="Client flavor">
+          <div className="flex flex-wrap gap-1.5" role="group" aria-label={t("index.installTitle")}>
             {flavorTags.map((f) => (
               <button
                 key={f.value}
                 type="button"
                 onClick={() => setFlavor(f.value)}
+                aria-pressed={flavor === f.value}
                 className={cn(
-                  "cursor-pointer rounded-full border px-3 py-1 text-xs transition-colors",
+                  "cursor-pointer rounded-full border px-3 py-1 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                   flavor === f.value
                     ? "border-timeline-accent/50 bg-timeline-accent/10 text-timeline-accent"
                     : "border-border text-muted-foreground hover:text-foreground",
@@ -820,7 +857,7 @@ export function DashboardPage() {
         </CardHeader>
         <CardContent>
           <Tabs defaultValue="linux">
-            <TabsList className="scrollbar-none max-w-full justify-start overflow-x-auto">
+            <TabsList className="max-w-full justify-start overflow-x-auto [&>button]:shrink-0">
               <TabsTrigger value="linux" className="gap-1.5">
                 <OsIcon os="linux" />
                 <OsIcon os="macos" />
@@ -842,7 +879,7 @@ export function DashboardPage() {
 
             <TabsContent value="linux" className="pt-2">
               <CmdGroup
-                label={t("index.curlLabel")}
+                label={t("index.curlLabel", { password: pwPlaceholder })}
                 icon="Package"
                 cmd={cmds.curl}
                 cmdId="curl"
@@ -867,7 +904,7 @@ export function DashboardPage() {
 
             <TabsContent value="win" className="pt-2">
               <CmdGroup
-                label={t("index.psLabel")}
+                label={t("index.psLabel", { password: pwPlaceholder })}
                 icon="Package"
                 cmd={cmds.ps}
                 cmdId="ps"
@@ -894,7 +931,7 @@ export function DashboardPage() {
                 t={t}
               />
               <CmdGroup
-                label={t("index.win7Step2")}
+                label={t("index.win7Step2", { password: pwPlaceholder })}
                 cmd={cmds.w7Pw}
                 cmdId="w7Pw"
                 {...cmdProps}
@@ -942,26 +979,26 @@ export function DashboardPage() {
       </Card>
 
       {/* Connection hints */}
-      <Card>
-        <CardContent className="flex flex-col gap-4 p-5">
+      <Card className="min-w-0">
+        <CardContent className="grid min-w-0 gap-5 p-4 lg:grid-cols-2 lg:p-5">
           <HintSection
             icon="Terminal"
             title={t("index.sshTitle")}
             copy={hintCopy([
-              { label: "ssh", cmd: `ssh <deviceID>@${H} -p ${SP}` },
-              { label: "scp", cmd: `scp file <deviceID>@${H}:/tmp/ -P ${SP}` },
-              { label: "sftp", cmd: `sftp -P ${SP} <deviceID>@${H}` },
+              { label: "ssh", cmd: `ssh -p ${SP} '<deviceID>@${SSH_HOST}'` },
+              { label: "scp", cmd: `scp -P ${SP} file '<deviceID>@${SSH_HOST}:/tmp/'` },
+              { label: "sftp", cmd: `sftp -P ${SP} '<deviceID>@${SSH_HOST}'` },
               {
                 label: "rsync",
-                cmd: `rsync -az --delete -e "ssh -p ${SP}" ./local-dir/ <deviceID>@${H}:/tmp/remote-dir/`,
+                cmd: `rsync -az --delete -e "ssh -p ${SP}" ./local-dir/ '<deviceID>@${SSH_HOST}:/tmp/remote-dir/'`,
               },
             ])}
           >
-            <HintCode cmd={`ssh <deviceID>@${H} -p ${SP}`} />
-            <HintCode cmd={`scp file <deviceID>@${H}:/tmp/ -P ${SP}`} />
-            <HintCode cmd={`sftp -P ${SP} <deviceID>@${H}`} />
+            <HintCode cmd={`ssh -p ${SP} '<deviceID>@${SSH_HOST}'`} />
+            <HintCode cmd={`scp -P ${SP} file '<deviceID>@${SSH_HOST}:/tmp/'`} />
+            <HintCode cmd={`sftp -P ${SP} '<deviceID>@${SSH_HOST}'`} />
             <HintCode
-              cmd={`rsync -az --delete -e "ssh -p ${SP}" ./local-dir/ <deviceID>@${H}:/tmp/remote-dir/`}
+              cmd={`rsync -az --delete -e "ssh -p ${SP}" ./local-dir/ '<deviceID>@${SSH_HOST}:/tmp/remote-dir/'`}
             />
           </HintSection>
 
@@ -972,14 +1009,14 @@ export function DashboardPage() {
               [
                 {
                   label: "URL",
-                  cmd: `open ${HTTP}${H}/remote-desktop?device=<deviceID>`,
+                  cmd: `open '${HTTP}${H}/remote-desktop?device=<deviceID>'`,
                 },
                 VP ? { label: "VNC", cmd: `vncviewer ${VP}` } : null,
               ].filter((x): x is { label: string; cmd: string } => x !== null),
             )}
           >
             <HintCode
-              cmd={`open ${HTTP}${H}/remote-desktop?device=<deviceID>`}
+              cmd={`open '${HTTP}${H}/remote-desktop?device=<deviceID>'`}
             />
             {VP && (
               <>
@@ -996,19 +1033,19 @@ export function DashboardPage() {
               copy={hintCopy([
                 {
                   label: "HTTP",
-                  cmd: `curl -x http://<deviceID>:<password>@${PP} https://example.com`,
+                  cmd: `curl -x 'http://<deviceID>:<password>@${PP}' https://example.com`,
                 },
                 {
                   label: "SOCKS5",
-                  cmd: `curl -x socks5://<deviceID>:<password>@${PP} https://example.com`,
+                  cmd: `curl -x 'socks5://<deviceID>:<password>@${PP}' https://example.com`,
                 },
               ])}
             >
               <HintCode
-                cmd={`curl -x http://<deviceID>:<password>@${PP} https://example.com`}
+                cmd={`curl -x 'http://<deviceID>:<password>@${PP}' https://example.com`}
               />
               <HintCode
-                cmd={`curl -x socks5://<deviceID>:<password>@${PP} https://example.com`}
+                cmd={`curl -x 'socks5://<deviceID>:<password>@${PP}' https://example.com`}
               />
               <HintComment text={t("index.proxyAuthComment")} />
             </HintSection>
@@ -1020,19 +1057,19 @@ export function DashboardPage() {
             copy={hintCopy([
               {
                 label: "-L",
-                cmd: `ssh -L 8080:localhost:80 <deviceID>@${H} -p ${SP}`,
+                cmd: `ssh -L 8080:localhost:80 -p ${SP} '<deviceID>@${SSH_HOST}'`,
               },
               {
                 label: "-R",
-                cmd: `ssh -R 3000:localhost:3000 <deviceID>@${H} -p ${SP}`,
+                cmd: `ssh -R 3000:localhost:3000 -p ${SP} '<deviceID>@${SSH_HOST}'`,
               },
             ])}
           >
             <HintComment text={t("index.localForwardComment")} />
-            <HintCode cmd={`ssh -L 8080:localhost:80 <deviceID>@${H} -p ${SP}`} />
+            <HintCode cmd={`ssh -L 8080:localhost:80 -p ${SP} '<deviceID>@${SSH_HOST}'`} />
             <HintComment text={t("index.remoteForwardComment")} />
             <HintCode
-              cmd={`ssh -R 3000:localhost:3000 <deviceID>@${H} -p ${SP}`}
+              cmd={`ssh -R 3000:localhost:3000 -p ${SP} '<deviceID>@${SSH_HOST}'`}
             />
           </HintSection>
 
@@ -1042,21 +1079,21 @@ export function DashboardPage() {
             copy={hintCopy([
               {
                 label: "clone",
-                cmd: `git clone ssh://<deviceID>@${H}:${SP}/home/user/repo.git`,
+                cmd: `git clone 'ssh://<deviceID>@${SSH_HOST}:${SP}/home/user/repo.git'`,
               },
               {
                 label: "push",
-                cmd: `git remote add device ssh://<deviceID>@${H}:${SP}/home/user/repo.git`,
+                cmd: `git remote add device 'ssh://<deviceID>@${SSH_HOST}:${SP}/home/user/repo.git'`,
               },
             ])}
           >
             <HintComment text={t("index.gitCloneComment")} />
             <HintCode
-              cmd={`git clone ssh://<deviceID>@${H}:${SP}/home/user/repo.git`}
+              cmd={`git clone 'ssh://<deviceID>@${SSH_HOST}:${SP}/home/user/repo.git'`}
             />
             <HintComment text={t("index.gitPushComment")} />
             <HintCode
-              cmd={`git remote add device ssh://<deviceID>@${H}:${SP}/home/user/repo.git`}
+              cmd={`git remote add device 'ssh://<deviceID>@${SSH_HOST}:${SP}/home/user/repo.git'`}
             />
           </HintSection>
 
@@ -1068,13 +1105,13 @@ export function DashboardPage() {
                 label: "pubkey",
                 cmd: "cat ~/.ssh/id_ed25519.pub >> ~/.rdev/authorized_keys",
               },
-              { label: "ssh", cmd: `ssh <deviceID>@${H} -p ${SP}` },
+              { label: "ssh", cmd: `ssh -p ${SP} '<deviceID>@${SSH_HOST}'` },
             ])}
           >
             <HintComment text={t("index.keyAuthComment")} />
             <HintCode cmd="cat ~/.ssh/id_ed25519.pub >> ~/.rdev/authorized_keys" />
             <HintCode
-              cmd={`ssh <deviceID>@${H} -p ${SP}`}
+              cmd={`ssh -p ${SP} '<deviceID>@${SSH_HOST}'`}
               suffix={t("index.noPasswordComment")}
             />
           </HintSection>
@@ -1085,18 +1122,23 @@ export function DashboardPage() {
       <Dialog
         open={!!logDevice}
         onOpenChange={(o) => {
-          if (!o) setLogDevice("");
+          if (!o) {
+            activeLogDevice.current = "";
+            logRequest.current++;
+            setLogDevice("");
+            setDeleteOpen(false);
+          }
         }}
       >
-        <DialogContent className="flex max-h-[86vh] flex-col overflow-hidden sm:max-w-4xl">
+        <DialogContent aria-describedby={undefined} className="flex max-h-[86dvh] flex-col overflow-y-auto sm:max-w-4xl">
           <DialogHeader>
-            <DialogTitle className="text-timeline-accent">
+            <DialogTitle className="break-all text-timeline-accent">
               {t("index.logTitle")} · {logDevice}
             </DialogTitle>
           </DialogHeader>
           <div className="flex flex-wrap items-center gap-2">
-            <Select value={logLevel} onValueChange={setLogLevel}>
-              <SelectTrigger className="h-8 w-28 text-xs">
+            <Select value={logLevel} onValueChange={setLogLevel} disabled={logBusy || logLoading}>
+              <SelectTrigger aria-label={t("index.logLevel")} className="h-8 w-28 text-xs">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -1110,7 +1152,8 @@ export function DashboardPage() {
             <Button
               variant="outline"
               size="sm"
-              onClick={() => setLogEnabled(true)}
+              disabled={logBusy || logLoading}
+              onClick={() => updateLogs(true)}
             >
               {t("index.logEnable")}
             </Button>
@@ -1118,13 +1161,15 @@ export function DashboardPage() {
               variant="outline"
               size="sm"
               className="border-attention/50 text-attention"
-              onClick={() => setLogEnabled(false)}
+              disabled={logBusy || logLoading}
+              onClick={() => updateLogs(false)}
             >
               {t("index.logDisable")}
             </Button>
             <Button
               variant="outline"
               size="sm"
+              disabled={logBusy || logLoading}
               onClick={() => refreshLogTail(logDevice)}
             >
               <Icon name="Refresh" />
@@ -1132,11 +1177,12 @@ export function DashboardPage() {
             </Button>
             <Input
               type="date"
+              aria-label={t("index.logDate")}
               value={logDate}
               onChange={(e) => setLogDate(e.target.value)}
               className="h-8 w-36 text-xs"
             />
-            <Button variant="outline" size="sm" onClick={downloadLog}>
+            <Button variant="outline" size="sm" onClick={downloadLog} disabled={!logDate}>
               <Icon name="Download" />
               {t("index.logDownload")}
             </Button>
@@ -1144,13 +1190,14 @@ export function DashboardPage() {
               variant="outline"
               size="sm"
               className="border-destructive/50 text-destructive-text"
+              disabled={logBusy || logLoading}
               onClick={() => setDeleteOpen(true)}
             >
               <Icon name="Trash2" />
               {t("index.logDelete")}
             </Button>
           </div>
-          <div className="text-xs text-muted-foreground">
+          <div className="break-words text-xs text-muted-foreground">
             {logState
               ? t("index.logMeta", {
                   status: logState.enabled
@@ -1165,9 +1212,14 @@ export function DashboardPage() {
                 })
               : "—"}
           </div>
-          <CodeBlock className="max-h-[58vh] min-h-[360px] overflow-auto p-3 whitespace-pre-wrap break-words select-text">
-            {logTail || t("index.logEmpty")}
-          </CodeBlock>
+          {logStatesError && <p role="alert" className="break-words text-sm text-destructive-text">{logStatesError}</p>}
+          {logError && <p role="alert" className="break-words text-sm text-destructive-text">{logError}</p>}
+          {(logLoading || logBusy) && <p role="status" className="text-xs text-muted-foreground">{t("common.loading")}</p>}
+          <div className="min-h-0 overflow-auto" aria-busy={logLoading || logBusy}>
+            <CodeBlock className="min-h-32 p-3 whitespace-pre-wrap break-all select-text sm:min-h-60">
+              {logTail || (!logLoading && !logError ? t("index.logEmpty") : "")}
+            </CodeBlock>
+          </div>
         </DialogContent>
       </Dialog>
 
@@ -1183,8 +1235,9 @@ export function DashboardPage() {
           <AlertDialogFooter>
             <AlertDialogCancel>{t("common.cancel")}</AlertDialogCancel>
             <AlertDialogAction
+              disabled={logBusy}
               onClick={() => {
-                void deleteLogs();
+                void updateLogs("delete");
               }}
             >
               {t("common.ok")}
@@ -1223,9 +1276,10 @@ function HintCopyMenu({
             <Button
               variant="ghost"
               size="icon"
-              aria-label={t("common.copy")}
+              aria-label={`${t("common.copy")}: ${section}`}
               className={cn(
-                "size-6 text-muted-foreground hover:text-foreground",
+                COARSE_POINTER_HEADER_ICON_BUTTON_CLASS,
+                "shrink-0 text-muted-foreground hover:text-foreground",
                 anyCopied && "text-success hover:text-success",
               )}
             >
@@ -1243,7 +1297,7 @@ function HintCopyMenu({
             className="gap-2"
           >
             <span className="shrink-0 font-medium">{it.label}</span>
-            <span className="flex-1 truncate font-mono text-xs text-muted-foreground">
+            <span className="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground">
               {it.cmd}
             </span>
             {copiedId === itemId(i) && (
@@ -1273,7 +1327,7 @@ function HintSection({
   };
 }) {
   return (
-    <section>
+    <section className="min-w-0">
       <h3 className="mb-2 flex items-center gap-1.5 text-sm font-semibold text-timeline-accent">
         <Icon name={icon} className="size-4" />
         {title}

@@ -2237,7 +2237,7 @@ function DesktopSession({
   /* ── Render ── */
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex h-full min-h-0 min-w-0 flex-col overflow-y-auto">
       {/* Controls bar */}
       <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border-seam px-3 py-2">
         {/* Device comes from the left rail; the bar only shows it. */}
@@ -2252,6 +2252,8 @@ function DesktopSession({
         </div>
         <Input
           type="password"
+          aria-label={t("common.password")}
+          autoComplete="current-password"
           value={password}
           onChange={(e) => {
             passwordRef.current = e.target.value;
@@ -2263,15 +2265,16 @@ function DesktopSession({
           placeholder={t("terminal.passwordPlaceholder")}
           className="h-8 w-44 text-xs"
         />
-        <Button size="sm" onClick={() => connect()}>
+        <Button size="sm" disabled={!device} onClick={() => connect()}>
           {t("common.connect")}
         </Button>
         <Button size="sm" variant="outline" onClick={() => disconnect()}>
           {t("desktop.disconnect")}
         </Button>
         <span
+          role="status"
           className={cn(
-            "text-xs",
+            "break-words text-xs",
             status.cls === "ok" && "text-success",
             status.cls === "warn" && "text-attention",
             status.cls === "err" && "text-destructive",
@@ -2283,7 +2286,7 @@ function DesktopSession({
       </div>
 
       {/* Settings bar */}
-      <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2 border-b border-border-seam px-3 py-2 text-xs text-muted-foreground">
+      <div className="flex max-h-[40dvh] shrink-0 flex-wrap items-center gap-x-3 gap-y-2 overflow-auto border-b border-border-seam px-3 py-2 text-xs text-muted-foreground">
         {!isGpuDevice && (
           <>
             <label className="inline-flex items-center gap-1.5 whitespace-nowrap">
@@ -2296,7 +2299,7 @@ function DesktopSession({
                   scheduleReconnectIfActive();
                 }}
               >
-                <SelectTrigger className="h-7 w-auto text-xs">
+                <SelectTrigger aria-label={t("desktop.mode")} className="h-7 w-auto text-xs">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -2315,7 +2318,7 @@ function DesktopSession({
                   scheduleReconnectIfActive();
                 }}
               >
-                <SelectTrigger className="h-7 w-auto max-w-64 text-xs">
+                <SelectTrigger aria-label={t("desktop.source")} className="h-7 w-auto max-w-48 text-xs">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -2327,10 +2330,12 @@ function DesktopSession({
                 </SelectContent>
               </Select>
             </label>
-            <span
+            <fieldset
+              disabled={settings.mode !== "manual"}
+              aria-label={t("desktop.modeManual")}
               className={cn(
-                "flex flex-wrap items-center gap-x-3 gap-y-2",
-                settings.mode !== "manual" && "pointer-events-none opacity-45",
+                "flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2",
+                settings.mode !== "manual" && "opacity-45",
               )}
             >
               <label className="inline-flex items-center gap-1 whitespace-nowrap">
@@ -2393,7 +2398,7 @@ function DesktopSession({
                   className="h-7 w-20 px-2 text-xs"
                 />
               </label>
-            </span>
+            </fieldset>
           </>
         )}
 
@@ -2408,7 +2413,7 @@ function DesktopSession({
                   gpuSendConfig();
                 }}
               >
-                <SelectTrigger className="h-7 w-auto max-w-64 text-xs">
+                <SelectTrigger aria-label={t("desktop.source")} className="h-7 w-auto max-w-48 text-xs">
                   <SelectValue placeholder={t("desktop.gpu.loadingSources")} />
                 </SelectTrigger>
                 <SelectContent>
@@ -2439,7 +2444,7 @@ function DesktopSession({
                   gpuSendConfig();
                 }}
               >
-                <SelectTrigger className="h-7 w-auto text-xs">
+                <SelectTrigger aria-label={t("desktop.gpu.video")} className="h-7 w-auto text-xs">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -2463,6 +2468,7 @@ function DesktopSession({
               size="sm"
               variant="outline"
               className="h-7 text-xs"
+              aria-expanded={settings.gpuAdvancedOpen}
               onClick={() => {
                 updateSettings({ gpuAdvancedOpen: !settingsRef.current.gpuAdvancedOpen });
                 saveGpuDesktopSettings();
@@ -2498,7 +2504,7 @@ function DesktopSession({
                 scheduleReconnectIfActive();
               }}
             >
-              <SelectTrigger className="h-7 w-auto max-w-64 text-xs">
+              <SelectTrigger aria-label={t("desktop.inputBackend")} className="h-7 w-auto max-w-48 text-xs">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -2521,7 +2527,7 @@ function DesktopSession({
               saveDesktopSettings();
             }}
           >
-            <SelectTrigger className="h-7 w-auto text-xs">
+            <SelectTrigger aria-label={t("desktop.view")} className="h-7 w-auto text-xs">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -2552,7 +2558,7 @@ function DesktopSession({
               startClipboardSync();
             }}
           >
-            <SelectTrigger className="h-7 w-auto text-xs">
+            <SelectTrigger aria-label={t("desktop.clipboardSync")} className="h-7 w-auto max-w-48 text-xs">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -2691,7 +2697,7 @@ function DesktopSession({
                   gpuSendConfig();
                 }}
               >
-                <SelectTrigger className="h-7 w-auto text-xs">
+                <SelectTrigger aria-label={t("desktop.gpu.pointerInput")} className="h-7 w-auto max-w-48 text-xs">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -2713,7 +2719,7 @@ function DesktopSession({
                   gpuSendConfig();
                 }}
               >
-                <SelectTrigger className="h-7 w-auto text-xs">
+                <SelectTrigger aria-label={t("desktop.gpu.keyboardInput")} className="h-7 w-auto max-w-48 text-xs">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -2750,7 +2756,7 @@ function DesktopSession({
       <div
         ref={stageRef}
         className={cn(
-          "flex min-h-0 flex-1 p-3 overscroll-contain",
+          "flex min-h-40 min-w-0 flex-1 p-3 overscroll-contain",
           connMode === "gpu"
             ? "flex-col items-stretch justify-start gap-2 overflow-hidden"
             : cn(
@@ -2765,7 +2771,8 @@ function DesktopSession({
           <canvas
             ref={canvasRef}
             tabIndex={0}
-            className="rounded-lg border border-border-seam bg-black outline-none"
+            aria-label={t("title.desktop")}
+            className="rounded-lg border border-border-seam bg-black outline-none focus-visible:ring-2 focus-visible:ring-ring"
             style={{
               display: canvasShown ? "block" : "none",
               cursor: canvasCursor,
@@ -2797,8 +2804,8 @@ function DesktopSession({
             <div
               ref={overlayRef}
               tabIndex={0}
-              aria-label="remote desktop input area"
-              className="absolute inset-0 touch-none outline-none"
+              aria-label={t("title.desktop")}
+              className="absolute inset-0 touch-none outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
               style={{ cursor: controlActive ? "crosshair" : undefined }}
             />
             {gpuEmpty && (

@@ -77,6 +77,8 @@ export interface ThreadSinkOps {
   scrollDown: (force?: boolean) => void;
   /* Mid-turn markers cleared on reconnect / device switch; history stays. */
   resetTransient: () => void;
+  /* Clear a reset/device-switch snapshot, including non-transcript state. */
+  reset: () => void;
 }
 
 export interface ThreadSink {
@@ -229,6 +231,15 @@ export function useThreadSink(): ThreadSink {
     setStopping(false);
   }, []);
 
+  const reset = useCallback(() => {
+    resetTransient();
+    setItems([]);
+    setTodos([]);
+    setQueue([]);
+    setRunning(false);
+    setTurnUsage(null);
+  }, [resetTransient]);
+
   const ops = useMemo<ThreadSinkOps>(
     () => ({
       setItems,
@@ -249,6 +260,7 @@ export function useThreadSink(): ThreadSink {
       registerScrollEl,
       scrollDown,
       resetTransient,
+      reset,
     }),
     [
       pushBubble,
@@ -259,6 +271,7 @@ export function useThreadSink(): ThreadSink {
       registerScrollEl,
       scrollDown,
       resetTransient,
+      reset,
     ],
   );
 
@@ -279,7 +292,7 @@ export function decideApprovalIn(
   allow: boolean,
   always: boolean,
 ): void {
-  sendRaw({ op: "approve", id, allow, always });
+  if (!sendRaw({ op: "approve", id, allow, always })) return;
   ops.setItems((prev) =>
     prev.map((x) =>
       x.kind === "approval" && x.id === id
@@ -310,8 +323,7 @@ export function applyScopedMessage(
     case "thread_peeked": {
       /* Read-only snapshot for a secondary pane: history + live frames,
        * without switching the connection's current thread. */
-      ops.turnOpen.current = false;
-      ops.openToolIds.current.clear();
+      ops.resetTransient();
       ops.setTodos(parseTodos(msg.todos));
       ops.setQueue(parseStringArray(msg.queue));
       const running = !!msg.running;
@@ -495,26 +507,28 @@ export function applyScopedMessage(
         asString(msg.text) || undefined,
       );
       ops.setRunning(false);
-      ops.setStopping(false);
-      ops.setCurrentTool("");
-      ops.openToolIds.current.clear();
+      ops.resetTransient();
       return;
     }
     case "error": {
       const message = asString(msg.message) || t("common.error");
       if (message === "agent is busy" || message === "agent is busy; stop first") {
-        ops.pushBubble("error", t("agent.toolError") + ": " + message);
+        // A rejected command does not end the already-running turn.
+        ops.setItems((prev) => [
+          ...prev,
+          { kind: "error", key: nextKey(), text: t("agent.toolError") + ": " + message },
+        ]);
+        ops.scrollDown(true);
+        return;
       } else {
-        ops.finishTurn();
+        if (ops.turnOpen.current) ops.finishTurn();
         ops.pushBubble("error", t("agent.toolError") + ": " + message);
         if (/api[-_ ]?key/i.test(message)) {
           ops.pushBubble("setup", t("agent.notConfiguredHint"));
         }
       }
       ops.setRunning(false);
-      ops.setStopping(false);
-      ops.setCurrentTool("");
-      ops.openToolIds.current.clear();
+      ops.resetTransient();
       return;
     }
     case "stopped": {
@@ -527,18 +541,11 @@ export function applyScopedMessage(
         ops.pushBubble("system", t("agent.stopped"));
       }
       ops.setRunning(false);
-      ops.setStopping(false);
-      ops.setCurrentTool("");
-      ops.openToolIds.current.clear();
+      ops.resetTransient();
       return;
     }
     case "reset_ok":
-      ops.turnOpen.current = false;
-      ops.setItems([]);
-      ops.setRunning(false);
-      ops.setStopping(false);
-      ops.setWorkingSince(null);
-      ops.setCurrentTool("");
+      ops.reset();
       ops.pushBubble("system", t("agent.resetDone"));
       return;
   }

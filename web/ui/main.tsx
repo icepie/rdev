@@ -1,6 +1,6 @@
-import { StrictMode } from "react";
+import { StrictMode, lazy, useEffect } from "react";
 import { createRoot } from "react-dom/client";
-import { BrowserRouter, Route, Routes, Navigate } from "react-router-dom";
+import { BrowserRouter, Route, Routes, Navigate, useLocation } from "react-router-dom";
 import "./styles/app.css";
 import { ThemeProvider } from "./lib/theme";
 import { I18nProvider, useI18n } from "./lib/i18n";
@@ -8,17 +8,24 @@ import { TooltipProvider } from "./components/tooltip";
 import { AppShell } from "./shell/AppShell";
 import { DevicesProvider } from "./lib/devices";
 import { UnauthorizedHandler } from "./shell/UnauthorizedHandler";
-import { DashboardPage } from "./pages/Dashboard";
-import { AgentPage } from "./pages/Agent";
-import { TerminalPage } from "./pages/Terminal";
-import { SessionsPage } from "./pages/Sessions";
-import { FilesPage } from "./pages/Files";
-import { BatchPage } from "./pages/Batch";
-import { DesktopPage } from "./pages/Desktop";
+const DashboardPage = lazy(() => import("./pages/Dashboard").then((m) => ({ default: m.DashboardPage })));
+const AgentPage = lazy(() => import("./pages/Agent").then((m) => ({ default: m.AgentPage })));
+const TerminalPage = lazy(() => import("./pages/Terminal").then((m) => ({ default: m.TerminalPage })));
+const SessionsPage = lazy(() => import("./pages/Sessions").then((m) => ({ default: m.SessionsPage })));
+const FilesPage = lazy(() => import("./pages/Files").then((m) => ({ default: m.FilesPage })));
+const BatchPage = lazy(() => import("./pages/Batch").then((m) => ({ default: m.BatchPage })));
+const DesktopPage = lazy(() => import("./pages/Desktop").then((m) => ({ default: m.DesktopPage })));
 
 function TitleSync() {
   const { t } = useI18n();
-  document.title = t("title.index");
+  const { pathname } = useLocation();
+  useEffect(() => {
+    const titles: Record<string, string> = {
+      "/terminal": "title.terminal", "/remote-desktop": "title.desktop",
+      "/batch": "title.batch", "/sessions": "title.sessions", "/files": "title.files",
+    };
+    document.title = pathname === "/agent" ? `RDev - ${t("nav.agent")}` : t(titles[pathname] ?? "title.index");
+  }, [pathname, t]);
   return null;
 }
 

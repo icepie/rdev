@@ -25,23 +25,30 @@ export function DevicesProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let cancelled = false;
-    const load = () => {
-      fetchDevices()
-        .then((list) => {
-          if (cancelled) return;
-          setDevices(Array.isArray(list) ? list : []);
-          setError("");
-        })
-        .catch((e) => {
-          if (cancelled || e instanceof UnauthorizedError) return;
-          setError(String(e && (e as Error).message ? (e as Error).message : e));
-        });
+    let inFlight = false;
+    const load = async () => {
+      if (cancelled || inFlight || document.hidden) return;
+      inFlight = true;
+      try {
+        const list = await fetchDevices();
+        if (cancelled) return;
+        setDevices(Array.isArray(list) ? list : []);
+        setError("");
+      } catch (e) {
+        if (!cancelled && !(e instanceof UnauthorizedError)) {
+          setError(e instanceof Error ? e.message : String(e));
+        }
+      } finally {
+        inFlight = false;
+      }
     };
-    load();
+    void load();
     const timer = setInterval(load, 5000);
+    document.addEventListener("visibilitychange", load);
     return () => {
       cancelled = true;
       clearInterval(timer);
+      document.removeEventListener("visibilitychange", load);
     };
   }, [tick]);
 

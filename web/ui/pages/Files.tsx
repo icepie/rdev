@@ -1054,7 +1054,7 @@ function FilesBrowser({
     !listView.notice && (listView.truncated || listView.total > entries.length);
 
   return (
-    <div className="flex h-full flex-col gap-3 overflow-y-auto p-4">
+    <div className="flex h-full min-w-0 flex-col gap-3 overflow-y-auto p-3 sm:p-4">
       {/* Toolbar */}
       <Card className="flex shrink-0 flex-wrap items-center gap-2 p-3">
         {/* Device is picked from the left rail; the toolbar only shows it. */}
@@ -1071,6 +1071,8 @@ function FilesBrowser({
           spellCheck={false}
           autoComplete="off"
           value={pathInput}
+          aria-label={t("files.path")}
+          disabled={!device}
           placeholder={t("files.path")}
           className="h-9 min-w-40 flex-1"
           onChange={(e) => setPathInput(e.target.value)}
@@ -1080,16 +1082,17 @@ function FilesBrowser({
         />
         <Button
           variant="outline"
+          disabled={!device}
           onClick={() => void list(parentPathRef.current || currentPathRef.current)}
         >
           <Icon name="Folder" />
           {t("files.up")}
         </Button>
-        <Button variant="outline" onClick={() => void list(currentPathRef.current)}>
+        <Button variant="outline" disabled={!device} onClick={() => void list(currentPathRef.current)}>
           <Icon name="Refresh" />
           {t("files.refresh")}
         </Button>
-        <Button onClick={() => fileInputRef.current?.click()}>
+        <Button disabled={!device} onClick={() => fileInputRef.current?.click()}>
           <Icon name="Upload" />
           {t("files.upload")}
         </Button>
@@ -1116,7 +1119,7 @@ function FilesBrowser({
       <div className="grid items-start gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(320px,400px)]">
         {/* Browser (also a cross-pane transfer drop target) */}
         <Card
-          className="min-h-[40vh] overflow-hidden"
+          className="min-h-[40vh] min-w-0 overflow-hidden"
           onDragOver={onPaneDragOver}
           onDrop={onDrop}
         >
@@ -1132,7 +1135,7 @@ function FilesBrowser({
             <TableBody>
               {listView.notice ? (
                 <TableRow>
-                  <TableCell colSpan={4} className="py-12 text-center text-muted-foreground">
+                  <TableCell colSpan={4} className="py-12 text-center text-muted-foreground" role="status">
                     {listView.notice}
                   </TableCell>
                 </TableRow>
@@ -1191,10 +1194,12 @@ function FilesBrowser({
                           <button
                             type="button"
                             className={cn(
-                              "inline-flex max-w-full cursor-pointer items-center gap-1.5 text-sm text-foreground hover:text-timeline-accent",
+                              "inline-flex max-w-64 cursor-pointer items-center gap-1.5 rounded-sm text-sm text-foreground hover:text-timeline-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                             )}
+                            title={entry.name}
                             onClick={() => {
                               if (entry.isDir) void list(entry.path);
+                              else startDownload(entry.path, entry.name, entry.size);
                             }}
                           >
                             <Icon
@@ -1278,7 +1283,7 @@ function FilesBrowser({
         </Card>
 
         {/* Tasks */}
-        <Card className="p-3">
+        <Card className="min-w-0 p-3">
           <h2 className="mb-3 flex items-center gap-1.5 text-base font-semibold">
             <Icon name="Files" className="size-4" />
             {t("files.tasks")}
@@ -1315,13 +1320,20 @@ function FilesBrowser({
                     <div className="mt-1 truncate text-xs text-muted-foreground">
                       {task.device} · {task.path || task.parentPath || ""}
                     </div>
-                    <div className="mt-2 h-1.5 overflow-hidden rounded-full border border-border bg-muted">
+                    <div
+                      role="progressbar"
+                      aria-label={task.name}
+                      aria-valuemin={0}
+                      aria-valuemax={100}
+                      aria-valuenow={pct}
+                      className="mt-2 h-1.5 overflow-hidden rounded-full border border-border bg-muted"
+                    >
                       <div
                         className="h-full bg-timeline-accent transition-[width] duration-200"
                         style={{ width: pct + "%" }}
                       />
                     </div>
-                    <div className="mt-1.5 text-xs text-muted-foreground">
+                    <div className="mt-1.5 break-words text-xs text-muted-foreground">
                       {stat}
                       {task.message ? " · " + task.message : ""}
                     </div>
@@ -1331,6 +1343,7 @@ function FilesBrowser({
                       variant="outline"
                       size="icon"
                       className="size-8"
+                      aria-label={t("files.pause")}
                       disabled={task.status !== "running"}
                       onClick={() => taskAction(task, "pause")}
                     >
@@ -1340,6 +1353,7 @@ function FilesBrowser({
                       variant="outline"
                       size="icon"
                       className="size-8"
+                      aria-label={t("files.resume")}
                       disabled={
                         task.status === "running" ||
                         task.status === "completed" ||
@@ -1353,6 +1367,7 @@ function FilesBrowser({
                       variant="outline"
                       size="icon"
                       className="size-8"
+                      aria-label={t("files.cancel")}
                       disabled={task.status === "completed" || task.status === "canceled"}
                       onClick={() => taskAction(task, "cancel")}
                     >
@@ -1390,6 +1405,8 @@ function FilesBrowser({
           >
             <Input
               type="password"
+              aria-label={t("common.password")}
+              autoComplete="current-password"
               autoFocus
               value={pwValue}
               placeholder={t("terminal.passwordPlaceholder")}

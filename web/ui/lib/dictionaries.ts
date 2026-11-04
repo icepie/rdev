@@ -24,6 +24,9 @@ export const dictionaries = {
     "title.sessions": "RDev - Session Manager",
     "title.files": "RDev Files",
     "common.copy": "Copy",
+    "common.loading": "Loading…",
+    "index.logLevel": "Log level",
+    "index.logDate": "Log date",
     "common.copied": "Copied",
     "common.connect": "Connect",
     "common.connecting": "Verifying...",
@@ -517,6 +520,9 @@ export const dictionaries = {
     "files.transferNoTarget": "Target pane has no device selected"
   },
   "zh": {
+    "common.loading": "正在加载…",
+    "index.logLevel": "日志级别",
+    "index.logDate": "日志日期",
     "theme.toggle": "主题",
     "split.right": "向右拆分",
     "split.down": "向下拆分",

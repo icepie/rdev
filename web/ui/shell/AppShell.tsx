@@ -1,5 +1,6 @@
-import { createContext, useEffect, useState, type ReactNode } from "react";
+import { Suspense, createContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { NavLink, Outlet, useLocation, useMatch } from "react-router-dom";
+import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { useI18n } from "../lib/i18n";
 import { useTheme, type ThemeChoice } from "../lib/theme";
 import { Icon } from "../components/icon";
@@ -17,6 +18,7 @@ import {
 import { Button } from "../components/button";
 import { cn } from "../lib/utils";
 import { useRailControl } from "../lib/rail-control";
+import { COARSE_POINTER_HEADER_ICON_BUTTON_CLASS } from "../components/coarse-pointer-sizing";
 
 /* Vertical icon rail instead of a horizontal top bar: icon-only nav items
  * down the left edge, settings controls pinned to the bottom. */
@@ -206,6 +208,7 @@ function RailFooterButtons({ className }: { className?: string }) {
 
 /* Drawer rail icon (bb: the drawer keeps the desktop rail column). */
 function DrawerRailLink({ item }: { item: (typeof NAV_ITEMS)[number] }) {
+  const { t } = useI18n();
   const active = useMatch({
     path: item.to,
     end: "end" in item && item.end,
@@ -214,8 +217,9 @@ function DrawerRailLink({ item }: { item: (typeof NAV_ITEMS)[number] }) {
     <NavLink
       to={item.to}
       end={"end" in item && item.end}
+      aria-label={t(item.key)}
       className={cn(
-        "flex size-8 items-center justify-center rounded-md transition-colors",
+        "flex size-8 shrink-0 items-center justify-center rounded-md transition-colors max-md:pointer-coarse:size-9",
         active
           ? "bg-state-active text-foreground"
           : "text-muted-foreground hover:bg-state-hover hover:text-foreground",
@@ -233,6 +237,7 @@ export function AppShell() {
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [drawerSection, setDrawerSection] = useState<ReactNode>(null);
   const railControl = useRailControl();
+  const navTrigger = useRef<HTMLElement | null>(null);
 
   /* Close the mobile drawer on navigation (bb: drawer dismisses on pick);
    * the injected page section goes with it. */
@@ -241,12 +246,21 @@ export function AppShell() {
     setDrawerSection(null);
   }, [location.pathname]);
 
+  useEffect(() => {
+    const desktop = window.matchMedia("(min-width: 768px)");
+    const dismiss = () => {
+      if (desktop.matches) setMobileNavOpen(false);
+    };
+    desktop.addEventListener("change", dismiss);
+    return () => desktop.removeEventListener("change", dismiss);
+  }, []);
+
   return (
     <div className="flex h-full flex-row">
       {/* Desktop: 60px icon rail (md+ only). */}
       <nav
         aria-label={t("nav.label")}
-        className="flex w-[60px] shrink-0 flex-col items-center gap-1 border-r border-border-seam bg-sidebar py-3 select-none max-md:hidden"
+        className="flex w-[60px] shrink-0 flex-col items-center gap-1 overflow-y-auto border-r border-border-seam bg-sidebar py-3 select-none max-md:hidden"
       >
         {railControl ? (
           <Tooltip>
@@ -283,20 +297,18 @@ export function AppShell() {
       {/* Mobile (<md): rail hidden; pages open this left drawer from their
        * own in-flow header trigger (bb mobile sidebar: min(86vw,360px),
        * backdrop, closes on pick). */}
-      <div
-        className={cn(
-          "fixed inset-0 z-40 bg-background/60 transition-opacity duration-200 motion-reduce:transition-none md:hidden",
-          mobileNavOpen ? "opacity-100" : "pointer-events-none opacity-0",
-        )}
-        onClick={() => setMobileNavOpen(false)}
-      />
-      <aside
-        aria-label={t("nav.label")}
-        className={cn(
-          "fixed inset-y-0 left-0 z-50 flex w-[min(86vw,360px)] border-r border-border-seam bg-sidebar transition-transform duration-200 ease-in-out motion-reduce:transition-none md:hidden",
-          mobileNavOpen ? "translate-x-0" : "-translate-x-full",
-        )}
-      >
+      <DialogPrimitive.Root open={mobileNavOpen} onOpenChange={setMobileNavOpen}>
+        <DialogPrimitive.Portal>
+          <DialogPrimitive.Overlay className="fixed inset-0 z-40 bg-background/60 data-[state=open]:animate-in data-[state=closed]:animate-out fade-in-0 fade-out-0 duration-200 motion-reduce:animate-none md:hidden" />
+          <DialogPrimitive.Content
+            aria-describedby={undefined}
+            onCloseAutoFocus={(event) => {
+              event.preventDefault();
+              if (navTrigger.current?.isConnected) navTrigger.current.focus();
+            }}
+            className="fixed inset-y-0 left-0 z-50 flex w-[min(86vw,360px)] overflow-y-auto border-r border-border-seam bg-sidebar pb-[env(safe-area-inset-bottom)] pt-[env(safe-area-inset-top)] outline-none data-[state=open]:animate-in data-[state=open]:slide-in-from-left data-[state=closed]:animate-out data-[state=closed]:slide-out-to-left duration-[220ms] ease-[cubic-bezier(0.32,0.72,0,1)] motion-reduce:animate-none md:hidden"
+          >
+            <DialogPrimitive.Title className="sr-only">{t("nav.label")}</DialogPrimitive.Title>
         {drawerSection ? (
           /* bb mobile: the drawer IS the whole sidebar — the nav rail
            * column on the left, the page's own sidebar filling the rest. */
@@ -323,7 +335,7 @@ export function AppShell() {
                 type="button"
                 aria-label={t("common.close")}
                 onClick={() => setMobileNavOpen(false)}
-                className="flex size-7 cursor-pointer items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-state-hover hover:text-foreground"
+                className={cn("flex cursor-pointer items-center justify-center text-muted-foreground transition-colors hover:bg-state-hover hover:text-foreground", COARSE_POINTER_HEADER_ICON_BUTTON_CLASS)}
               >
                 <Icon name="X" className="size-4" />
               </button>
@@ -348,6 +360,7 @@ export function AppShell() {
                   key={c.value}
                   type="button"
                   aria-label={t(c.key)}
+                  aria-pressed={choice === c.value}
                   title={t(c.key)}
                   onClick={() => setChoice(c.value)}
                   className={cn(
@@ -375,6 +388,7 @@ export function AppShell() {
                 <button
                   key={l}
                   type="button"
+                  aria-pressed={lang === l}
                   onClick={() => setLang(l)}
                   className={cn(
                     "flex h-7 cursor-pointer items-center rounded-md px-2 text-xs text-muted-foreground transition-colors",
@@ -391,19 +405,24 @@ export function AppShell() {
         </div>
           </div>
         )}
-      </aside>
+          </DialogPrimitive.Content>
+        </DialogPrimitive.Portal>
+      </DialogPrimitive.Root>
 
       <main className="min-w-0 flex-1 overflow-auto">
         <MobileNavContext.Provider
           value={{
             open: (section) => {
+              navTrigger.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
               setDrawerSection(section ?? null);
               setMobileNavOpen(true);
             },
             close: () => setMobileNavOpen(false),
           }}
         >
-          <Outlet />
+          <Suspense fallback={<div role="status" className="flex h-full min-h-48 items-center justify-center gap-2 text-sm text-muted-foreground"><Icon name="Loader2" className="size-4 animate-spin motion-reduce:animate-none" />{t("common.loading")}</div>}>
+            <Outlet />
+          </Suspense>
         </MobileNavContext.Provider>
       </main>
     </div>

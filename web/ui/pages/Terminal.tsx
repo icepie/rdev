@@ -55,6 +55,7 @@ import {
 } from "../lib/split-layout";
 import { SplitContainer } from "../components/agent/split-panes";
 import { DeviceDropTarget } from "../components/device-rail";
+import { COARSE_POINTER_HEADER_ICON_BUTTON_CLASS } from "../components/coarse-pointer-sizing";
 
 /* ── Tab model ── */
 
@@ -823,7 +824,7 @@ export function TerminalPage() {
                 {/* Pane tab strip */}
                 <div
                   className={cn(
-                    "flex h-8 shrink-0 items-center gap-1 border-b bg-sidebar pl-1.5 pr-1 text-xs select-none",
+                    "flex h-8 shrink-0 items-center gap-1 border-b bg-sidebar pl-1.5 pr-1 text-xs select-none max-md:pointer-coarse:h-10",
                     paneId === focusedPane
                       ? "border-b-timeline-accent"
                       : "border-b-border-seam",
@@ -833,14 +834,20 @@ export function TerminalPage() {
                     {paneMetas.map((m) => (
                       <div
                         key={m.id}
-                        onClick={() => activateTab(paneId, m.id)}
                         className={cn(
-                          "flex h-7 cursor-pointer items-center gap-1.5 rounded-md pr-2 pl-1.5",
+                          "flex h-7 shrink-0 items-center gap-1 rounded-md pr-1 max-md:pointer-coarse:h-9",
                           m.id === pane?.active
                             ? "bg-state-active text-foreground"
                             : "text-muted-foreground hover:bg-state-hover",
                         )}
                       >
+                        <button
+                          type="button"
+                          aria-pressed={m.id === pane?.active}
+                          title={m.deviceId}
+                          onClick={() => activateTab(paneId, m.id)}
+                          className="flex h-full min-w-0 cursor-pointer items-center gap-1.5 rounded-sm px-1.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                        >
                         <span
                           className={cn(
                             "size-1.5 shrink-0 rounded-full",
@@ -852,14 +859,15 @@ export function TerminalPage() {
                           )}
                         />
                         <span className="max-w-[160px] truncate">{m.deviceId}</span>
+                        </button>
                         <button
                           type="button"
-                          aria-label={t("common.close")}
+                          aria-label={`${t("common.close")}: ${m.deviceId}`}
                           onClick={(e) => {
                             e.stopPropagation();
                             closeTab(m.id);
                           }}
-                          className="cursor-pointer rounded-sm p-0.5 leading-none text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                          className="cursor-pointer rounded-sm p-1 leading-none text-muted-foreground hover:bg-destructive/10 hover:text-destructive focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring max-md:pointer-coarse:flex max-md:pointer-coarse:size-9 max-md:pointer-coarse:shrink-0 max-md:pointer-coarse:items-center max-md:pointer-coarse:justify-center"
                         >
                           <Icon name="X" className="size-3" />
                         </button>
@@ -877,7 +885,7 @@ export function TerminalPage() {
                         createTab(deviceId, paneId);
                         setSplitLayout((l) => setFocus(l, paneId));
                       }}
-                      className="flex cursor-pointer items-center rounded-md p-1 text-muted-foreground transition-colors hover:bg-foreground/2 hover:text-foreground disabled:opacity-40"
+                      className={cn(COARSE_POINTER_HEADER_ICON_BUTTON_CLASS, "flex shrink-0 cursor-pointer items-center justify-center text-muted-foreground transition-colors hover:bg-state-hover hover:text-foreground disabled:opacity-40")}
                     >
                       <Icon name="Plus" className="size-3.5" />
                     </button>
@@ -890,7 +898,7 @@ export function TerminalPage() {
                       title={t("split.right")}
                       disabled={paneCount >= MAX_TERMINAL_PANES}
                       onClick={() => splitCurrentPane(paneId, "right")}
-                      className="flex cursor-pointer items-center rounded-md p-1 text-muted-foreground transition-colors hover:bg-foreground/2 hover:text-foreground disabled:opacity-40"
+                      className={cn(COARSE_POINTER_HEADER_ICON_BUTTON_CLASS, "flex cursor-pointer items-center justify-center text-muted-foreground transition-colors hover:bg-state-hover hover:text-foreground disabled:opacity-40")}
                     >
                       <Icon name="PanelRight" className="size-3.5" />
                     </button>
@@ -900,7 +908,7 @@ export function TerminalPage() {
                       title={t("split.down")}
                       disabled={paneCount >= MAX_TERMINAL_PANES}
                       onClick={() => splitCurrentPane(paneId, "bottom")}
-                      className="flex cursor-pointer items-center rounded-md p-1 text-muted-foreground transition-colors hover:bg-foreground/2 hover:text-foreground disabled:opacity-40"
+                      className={cn(COARSE_POINTER_HEADER_ICON_BUTTON_CLASS, "flex cursor-pointer items-center justify-center text-muted-foreground transition-colors hover:bg-state-hover hover:text-foreground disabled:opacity-40")}
                     >
                       <Icon name="PanelBottom" className="size-3.5" />
                     </button>
@@ -910,7 +918,7 @@ export function TerminalPage() {
                         aria-label={t("split.close")}
                         title={t("split.close")}
                         onClick={() => closePane(paneId)}
-                        className="flex cursor-pointer items-center rounded-md p-1 text-muted-foreground transition-colors hover:bg-foreground/2 hover:text-foreground"
+                        className={cn(COARSE_POINTER_HEADER_ICON_BUTTON_CLASS, "flex cursor-pointer items-center justify-center text-muted-foreground transition-colors hover:bg-state-hover hover:text-foreground")}
                       >
                         <Icon name="X" className="size-3.5" />
                       </button>
@@ -965,7 +973,7 @@ export function TerminalPage() {
                 setTimeout(() => doResize(tab), 50);
               }
             }}
-            className="min-h-[34px] min-w-11 shrink-0 cursor-pointer rounded-lg border border-border bg-background px-2.5 py-1.5 text-[0.8rem] text-foreground"
+            className="min-h-[34px] min-w-11 shrink-0 cursor-pointer rounded-lg border border-border bg-background px-2.5 py-1.5 text-[0.8rem] text-foreground max-md:pointer-coarse:min-h-10"
           >
             {k.label}
           </button>
@@ -1047,13 +1055,13 @@ export function TabAuthOverlay({
   }, [error]);
 
   return (
-    <div className="absolute inset-0 z-10 flex items-center justify-center bg-background/90">
-      <div className="w-[340px] max-w-[92vw] rounded-2xl border border-border bg-card p-6 text-center max-[720px]:p-5">
+    <div className="absolute inset-0 z-10 flex overflow-y-auto bg-background/90 p-3">
+      <div className="m-auto w-full max-w-[340px] shrink-0 rounded-2xl border border-border bg-card p-5 text-center">
         <h3 className="mb-1.5 flex items-center justify-center gap-1.5 text-base text-timeline-accent">
           <Icon name="Lock" className="size-4" />
           {t("terminal.authTitle")}
         </h3>
-        <p className="mb-4 text-[0.85rem] text-muted-foreground">
+        <p className="mb-4 break-words text-[0.85rem] text-muted-foreground">
           {t("terminal.authDesc", { id: deviceId })}
         </p>
         <form
@@ -1065,6 +1073,7 @@ export function TabAuthOverlay({
           <Input
             ref={inputRef}
             type="password"
+            aria-label={t("common.password")}
             autoFocus
             value={value}
             placeholder={t("terminal.passwordPlaceholder")}
@@ -1075,7 +1084,7 @@ export function TabAuthOverlay({
           <Button type="submit" className="w-full" disabled={busy || !value}>
             {busy ? t("common.connecting") : t("common.connect")}
           </Button>
-          <div className="mt-2 min-h-[1.2em] text-xs text-destructive-text">
+          <div role="alert" className="mt-2 min-h-[1.2em] text-xs text-destructive-text">
             {error}
           </div>
         </form>
