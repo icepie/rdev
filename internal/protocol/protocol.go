@@ -123,6 +123,10 @@ type Message struct {
 	// Server info (S->C in MsgRegister response)
 	SSHPort  string `json:"sshPort,omitempty"`  // e.g. "8422"
 	HTTPHost string `json:"httpHost,omitempty"` // e.g. "1.2.3.4:8080"
+	// TunnelBase is the preferred ws(s):// base for tcp-tunnel dial-backs
+	// (e.g. "wss://r.example.com"); use when the server's HTTP endpoint is
+	// behind a reverse proxy and HTTPHost is not publicly reachable.
+	TunnelBase string `json:"tunnelBase,omitempty"`
 
 	// Exit
 	ExitCode int `json:"exitCode,omitempty"`

@@ -33,6 +33,7 @@ func main() {
 		batchConcurrency           = 0
 		vncAddr                    = ""
 		proxyAddr                  = ""
+		tunnelBase                 = ""
 		clientLogDir               = ""
 		clientLogRetention         = 7 * 24 * time.Hour
 		clientLogMaxFileSize int64 = 32 * 1024 * 1024
@@ -127,6 +128,11 @@ func main() {
 				proxyAddr = os.Args[i+1]
 				i++
 			}
+		case "--tunnel-base":
+			if i+1 < len(os.Args) {
+				tunnelBase = os.Args[i+1]
+				i++
+			}
 		case "--no-auto-update":
 			autoUpdate = false
 		case "--auto-update":
@@ -193,6 +199,7 @@ Options:
   --batch-concurrency Max concurrent batch operations (default GOMAXPROCS*8)
   --vnc             VNC/RFB listen address with username=deviceId auth (optional)
   --proxy           HTTP/SOCKS5 proxy listen address; username=deviceId[@password] selects the exit device (optional; env RDEV_PROXY_ADDR)
+  --tunnel-base     Public ws(s):// base URL advertised to devices for tcp-tunnel dial-backs when the HTTP endpoint is behind a reverse proxy, e.g. wss://r.example.com (optional; env RDEV_TUNNEL_BASE)
   --client-log-dir  Client log storage directory (default ./data/client-logs)
   --client-log-retention Client log retention duration (default 168h)
   --client-log-max-file-size Client log max file size before rotation (default 33554432)
@@ -245,6 +252,9 @@ Examples:
 	}
 	if env := os.Getenv("RDEV_PROXY_ADDR"); env != "" {
 		proxyAddr = env
+	}
+	if env := os.Getenv("RDEV_TUNNEL_BASE"); env != "" {
+		tunnelBase = env
 	}
 	if env := os.Getenv("RDEV_UPDATE_INTERVAL"); env != "" {
 		if d, err := time.ParseDuration(env); err == nil && d > 0 {
@@ -315,6 +325,7 @@ Examples:
 	srv.ClientLogs.StartCleanup()
 	srv.SSHPort = sshPort
 	srv.HTTPHost = outboundIP + ":" + httpPort
+	srv.TunnelBase = tunnelBase
 	srv.TCPPort = tcpPort
 	srv.KCPPort = kcpPort
 	srv.AdminToken = adminToken

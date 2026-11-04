@@ -49,7 +49,7 @@ func (s *Session) RunTurn(ctx context.Context, userText string, images []Message
 	s.appendHistory(Message{Role: "user", Content: userText, Images: images})
 
 	var total Usage
-	for range cfg.MaxTurns {
+	for round := range cfg.MaxTurns {
 		s.compactToolOutputs()
 		assistant, usage, err := streamChat(ctx, cfg, s.History(),
 			func(delta string) {
@@ -59,6 +59,21 @@ func (s *Session) RunTurn(ctx context.Context, userText string, images []Message
 				emit(Event{Type: EventReasoning, Text: delta})
 			})
 		if err != nil {
+			switch {
+			case ctx.Err() != nil && (assistant.Content != "" || assistant.Reasoning != ""):
+				// Stopped mid-stream: keep what was generated so the
+				// persisted transcript shows the partial answer.
+				s.appendHistory(assistant)
+			case round == 0 && assistant.Content == "" && assistant.Reasoning == "" && len(assistant.ToolCalls) == 0:
+				// The first round failed with no output at all (both
+				// attempts): roll back the user message so the next request
+				// does not carry two consecutive user messages.
+				s.mu.Lock()
+				if n := len(s.history); n > 0 && s.history[n-1].Role == "user" {
+					s.history = s.history[:n-1]
+				}
+				s.mu.Unlock()
+			}
 			return "", err
 		}
 		total.InputTokens += usage.InputTokens

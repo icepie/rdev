@@ -161,6 +161,7 @@ export const THREAD_SCOPED_OPS: Record<string, true> = {
   ask_request: true,
   ask_resolved: true,
   queue: true,
+  reset_ok: true,
   changes: true,
   diff: true,
   thread_meta: true,
@@ -264,6 +265,28 @@ export function parseUsage(v: unknown): TurnUsage | null {
     inputTokens: typeof o.inputTokens === "number" ? o.inputTokens : 0,
     outputTokens: typeof o.outputTokens === "number" ? o.outputTokens : 0,
   };
+}
+
+/* auth_ok / thread_switched / thread_peeked working payload: the in-flight
+ * turn's start (server clock) and current tool, restoring the elapsed
+ * timer after a reattach or thread switch. since accepts the RFC3339
+ * string the server sends (or a legacy ms number); null when idle. */
+export function parseWorking(
+  v: unknown,
+  running: boolean,
+): { since: number | null; tool: string } {
+  if (running && v && typeof v === "object") {
+    const o = v as { since?: unknown; tool?: unknown };
+    const parsed =
+      typeof o.since === "number"
+        ? o.since
+        : Date.parse(typeof o.since === "string" ? o.since : "");
+    return {
+      since: Number.isFinite(parsed) ? parsed : Date.now(),
+      tool: typeof o.tool === "string" ? o.tool : "",
+    };
+  }
+  return { since: running ? Date.now() : null, tool: "" };
 }
 
 /* Thread ids minted by the server start with the creation timestamp

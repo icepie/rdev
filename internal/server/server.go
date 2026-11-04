@@ -594,6 +594,7 @@ type Server struct {
 	// Public config (set by main) for API/UI
 	SSHPort          string // e.g. "2222"
 	HTTPHost         string // e.g. "192.168.1.100:8080"
+	TunnelBase       string // optional ws(s):// base advertised for tcp-tunnel dial-backs
 	TCPPort          string
 	KCPPort          string
 	AdminToken       string // optional token for web APIs and browser WebSockets
@@ -1143,7 +1144,7 @@ func (s *Server) registerStreamClient(transport DeviceTransport, msg *protocol.M
 	} else {
 		log.Printf("client registered via %s: %s", label, assignedID)
 	}
-	_ = client.Send(&protocol.Message{Type: protocol.MsgRegister, ClientID: assignedID, InstanceID: instanceID, SSHPort: s.SSHPort, HTTPHost: s.HTTPHost})
+	_ = client.Send(&protocol.Message{Type: protocol.MsgRegister, ClientID: assignedID, InstanceID: instanceID, SSHPort: s.SSHPort, HTTPHost: s.HTTPHost, TunnelBase: s.TunnelBase})
 	s.sendClientLogConfig(client)
 	go s.clientPingLoop(client)
 	return assignedID, true

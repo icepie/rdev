@@ -221,6 +221,9 @@ type Client struct {
 	// Server info (received on register response)
 	sshPort  string
 	httpHost string
+	// tunnelBase is the server-advertised ws(s):// base for tcp-tunnel
+	// dial-backs (register response), preferred over deriving from httpHost.
+	tunnelBase string
 	// activeWSBase is the ws(s)://host base of the current control connection,
 	// empty when connected via tcp/kcp. Used to build tunnel dial-back URLs.
 	activeWSBase string
@@ -890,6 +893,7 @@ func (c *Client) handleMessage(msg *protocol.Message) {
 		}
 		c.sshPort = msg.SSHPort
 		c.httpHost = msg.HTTPHost
+		c.tunnelBase = msg.TunnelBase
 		c.reconnectBackoffReset()
 		if c.OnConnect != nil {
 			c.OnConnect(c)

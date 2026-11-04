@@ -78,6 +78,7 @@ import {
 } from "../components/agent/split-panes";
 import {
   applyScopedMessage,
+  setLiveReplay,
   useThreadSink,
   type ThreadSinkOps,
 } from "../components/agent/thread-sink";
@@ -91,6 +92,7 @@ import {
   parseThreads,
   parseTodos,
   parseUsage,
+  parseWorking,
   replayHistory,
   threadCreatedMs,
   THREAD_SCOPED_OPS,
@@ -786,23 +788,9 @@ export function AgentPage() {
         primaryOps.setQueue(parseStringArray(msg.queue));
         primaryOps.setTodos(parseTodos(msg.todos));
         primaryOps.openToolIds.current.clear();
-        const working = msg.working;
-        if (msg.running && working && typeof working === "object") {
-          const rawSince = "since" in working ? working.since : undefined;
-          const since =
-            typeof rawSince === "number"
-              ? rawSince
-              : Date.parse(typeof rawSince === "string" ? rawSince : "");
-          primaryOps.setWorkingSince(Number.isFinite(since) ? since : Date.now());
-          primaryOps.setCurrentTool(
-            "tool" in working && typeof working.tool === "string"
-              ? working.tool
-              : "",
-          );
-        } else {
-          primaryOps.setWorkingSince(msg.running ? Date.now() : null);
-          primaryOps.setCurrentTool("");
-        }
+        const working = parseWorking(msg.working, !!msg.running);
+        primaryOps.setWorkingSince(working.since);
+        primaryOps.setCurrentTool(working.tool);
         /* Reconnect: secondary panes hold stale transcripts; they re-seed
          * via peek_thread when ready flips back to true. */
         for (const ops of secondarySinksRef.current.values()) {
@@ -822,10 +810,15 @@ export function AgentPage() {
          * deltas, tool calls, pending approval) so the live transcript
          * looks exactly as if the tab had never gone away. */
         if (Array.isArray(msg.live)) {
-          for (const raw of msg.live) {
-            if (raw && typeof raw === "object") {
-              handleMessage(raw as Record<string, unknown>);
+          setLiveReplay(true);
+          try {
+            for (const raw of msg.live) {
+              if (raw && typeof raw === "object") {
+                handleMessage(raw as Record<string, unknown>);
+              }
             }
+          } finally {
+            setLiveReplay(false);
           }
         }
         reconnectAttempt.current = 0;
@@ -987,9 +980,10 @@ export function AgentPage() {
         threadRef.current = switchThread;
         primaryOps.setTodos(parseTodos(msg.todos));
         primaryOps.setQueue(parseStringArray(msg.queue));
-        primaryOps.setCurrentTool("");
         primaryOps.setRunning(!!msg.running);
-        primaryOps.setWorkingSince(msg.running ? Date.now() : null);
+        const switchWorking = parseWorking(msg.working, !!msg.running);
+        primaryOps.setWorkingSince(switchWorking.since);
+        primaryOps.setCurrentTool(switchWorking.tool);
         primaryOps.setTurnUsage(parseUsage(msg.usage));
         /* File previews are thread-scoped (relative paths resolve against
          * the new thread's cwd): drop them; open tabs re-fetch lazily. */
@@ -1000,13 +994,26 @@ export function AgentPage() {
         const history = Array.isArray(msg.history) ? msg.history : [];
         primaryOps.setItems(replayHistory(history));
         primaryOps.scrollDown(true);
+        /* The new thread's own model (threads may differ; the frame
+         * carries the entry-level model only for legacy servers). */
+        const switchModel = asString(msg.model);
+        if (switchModel) {
+          setModel(switchModel);
+          localStorage.setItem(MODEL_KEY, switchModel);
+        }
         /* Replay the in-flight turn frames when switching into a running
-         * thread (isolated while viewing another thread). */
+         * thread (isolated while viewing another thread). Replayed
+         * turn_start must not restart the elapsed timer. */
         if (Array.isArray(msg.live)) {
-          for (const raw of msg.live) {
-            if (raw && typeof raw === "object") {
-              handleMessage(raw as Record<string, unknown>);
+          setLiveReplay(true);
+          try {
+            for (const raw of msg.live) {
+              if (raw && typeof raw === "object") {
+                handleMessage(raw as Record<string, unknown>);
+              }
             }
+          } finally {
+            setLiveReplay(false);
           }
         }
         break;
@@ -1043,26 +1050,11 @@ export function AgentPage() {
       wsRef.current = null;
     }
     setAuthed(false);
-    setModels([]);
-    setModel("");
-    setThreads([]);
-    setThread("");
-    setPermMode("write");
-    setReasoning(parseReasoningLevel(localStorage.getItem(REASONING_KEY)) ?? "medium");
-    setCwd("");
-    setBranch("");
-    setKnownCwds([]);
-    setFileStates({});
-    setChanges(null);
-    setDiffs({});
-    primaryOps.resetTransient();
-    primaryOps.setItems([]);
-    primaryOps.setTodos([]);
-    primaryOps.setQueue([]);
-    primaryOps.setRunning(false);
-    primaryOps.setTurnUsage(null);
-    threadsLoadedRef.current = false;
     setStatus("connecting");
+    // Per-device state (transcript, threads, models, cwd…) is NOT cleared
+    // here: a reconnect must keep the partial transcript visible until the
+    // next auth_ok replaces it with the server-side truth. Device switches
+    // clear it in setDevice before calling connect.
 
     const ws = new WebSocket(wsURL("/agent?device=" + encodeURIComponent(deviceId)));
     wsRef.current = ws;
@@ -1075,7 +1067,7 @@ export function AgentPage() {
       }
       handleMessage(msg);
     };
-    ws.onclose = () => {
+    ws.onclose = (event) => {
       if (wsRef.current !== ws) return;
       clearPing();
       setAuthed(false);
@@ -1083,6 +1075,14 @@ export function AgentPage() {
       primaryOps.setRunning(false);
       primaryOps.finishTurn();
       setStatus("disconnected");
+      // A clean 1000 close with a reason is the server rejecting the
+      // session at open time (unknown/offline device, agent not
+      // configured): reconnecting would loop forever, so surface the
+      // reason and stop.
+      if (event.code === 1000 && event.reason) {
+        setAuthError(event.reason);
+        return;
+      }
       scheduleReconnect(deviceId);
     };
     ws.onerror = () => {
@@ -1107,6 +1107,18 @@ export function AgentPage() {
     );
     primaryOps.turnOpen.current = false;
     primaryOps.setItems([]);
+    primaryOps.setTodos([]);
+    primaryOps.setQueue([]);
+    primaryOps.setRunning(false);
+    primaryOps.setTurnUsage(null);
+    primaryOps.resetTransient();
+    setModels([]);
+    setModel("");
+    setThreads([]);
+    setThread("");
+    setPermMode("write");
+    setReasoning(parseReasoningLevel(localStorage.getItem(REASONING_KEY)) ?? "medium");
+    threadsLoadedRef.current = false;
     clearReconnectTimer();
     reconnectAttempt.current = 0;
     setReconnecting(false);
@@ -1120,7 +1132,6 @@ export function AgentPage() {
     setCwd("");
     setBranch("");
     setKnownCwds([]);
-    primaryOps.setTurnUsage(null);
     setFileStates({});
     setChanges(null);
     setDiffs({});

@@ -212,6 +212,8 @@ curl -x 'http://my-device%40devpass:x@your-server:11080' http://example.com
 
 性能：每条代理连接由设备回拨一条专用 WebSocket 承载（原始字节透传，连接间完全并行）；旧版客户端自动回退到控制连接组帧路径，协议向后兼容。明文 HTTP 代理为每请求一连接（强制 `Connection: close`）；HTTPS 走 CONNECT 纯透传不受影响。
 
+当服务端 HTTP 端口在反向代理（如 Caddy/Nginx）之后、自动探测的内网地址设备不可达时，用 `--tunnel-base`（或 `RDEV_TUNNEL_BASE`）显式指定回拨入口，例如 `--tunnel-base wss://r.example.com`；经 WebSocket 主连接注册的设备不受影响（始终复用主连接入口）。
+
 ## Web 终端图片预览
 
 Web Terminal 和 Sessions 支持 Sixel、iTerm2 inline image 与 Kitty graphics inline image，可用于 `yazi`、`chafa`、`img2sixel` 等工具的图片预览。Web Terminal 会设置：

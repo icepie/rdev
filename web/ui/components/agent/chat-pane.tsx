@@ -131,16 +131,20 @@ export function ChatPaneView({
   onOpenDiff,
 }: ChatPaneViewProps) {
   const { state, ops } = sink;
-  const { items, todos, queue, running, turnUsage, currentTool, workingSince } = state;
+  const { items, todos, queue, running, stopping, turnUsage, currentTool, workingSince } = state;
 
   const [input, setInput] = useState("");
   const [pendingImages, setPendingImages] = useState<PendingImage[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [nowTick, setNowTick] = useState(0);
 
-  /* Elapsed-seconds ticker for the working indicator. */
+  /* Elapsed-seconds ticker for the working indicator. Tick immediately on
+   * (re)start: nowTick freezes while idle, so the first render after
+   * switching into a running thread would otherwise subtract a stale tick
+   * and under-report the elapsed time for up to a second. */
   useEffect(() => {
     if (!running) return;
+    setNowTick(Date.now());
     const iv = window.setInterval(() => setNowTick(Date.now()), 1000);
     return () => window.clearInterval(iv);
   }, [running]);
@@ -258,7 +262,9 @@ export function ChatPaneView({
   const sendStop = () => {
     const payload: Record<string, unknown> = { op: "stop" };
     if (threadId) payload.thread = threadId;
-    sendRaw(payload);
+    /* Disable the button until the server acks (stopped frame clears
+     * stopping); a dead socket leaves the button clickable for a retry. */
+    if (sendRaw(payload)) ops.setStopping(true);
   };
 
   /* Slash commands: typing "/" in the composer opens a filtered menu;
@@ -289,6 +295,7 @@ export function ChatPaneView({
         icon: "RotateCcw",
         run: () => {
           const payload: Record<string, unknown> = { op: "reset" };
+          if (threadId) payload.thread = threadId;
           sendRaw(payload);
         },
       },
@@ -801,13 +808,14 @@ export function ChatPaneView({
                   <TooltipContent>{t("agent.steer")}</TooltipContent>
                 </Tooltip>
               )}
-              {running && (
+              {(running || stopping) && (
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <Button
                       variant="secondary"
                       size="icon"
                       aria-label={t("agent.stop")}
+                      disabled={!running}
                       className="h-8 w-auto px-2 transition-all [&_[data-icon-root]]:size-3.5"
                       onClick={sendStop}
                     >

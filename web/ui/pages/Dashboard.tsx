@@ -50,6 +50,12 @@ import {
   SelectValue,
 } from "../components/select";
 import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "../components/dropdown-menu";
+import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
@@ -374,11 +380,17 @@ export function DashboardPage() {
     0,
   );
 
-  /* Device connection copy: admin login means we can resolve the real
+  /* Device connection strings: admin login means we can resolve the real
    * device password (?passwords=1) and substitute it for the <password>
    * placeholders; a failed lookup keeps the placeholder. */
-  const copyDeviceConnection = useCallback(
-    async (d: DeviceInfo) => {
+  type ConnStrings = {
+    ssh: string;
+    client: string;
+    desktop: string;
+    full: string;
+  };
+  const deviceConnStrings = useCallback(
+    async (d: DeviceInfo): Promise<ConnStrings> => {
       let pw = "<password>";
       if (d.hasPassword) {
         try {
@@ -395,15 +407,18 @@ export function DashboardPage() {
       const sshHost = location.hostname || H.split(":")[0];
       const desktopURL = `${HTTP}${H}/remote-desktop?device=${encodeURIComponent(d.id)}`;
       const servers = serverList();
+      const ssh = `ssh ${d.id}@${sshHost} -p ${SP}`;
+      const client =
+        `rdev-client -s ${servers} -i ${d.id}` +
+        (d.hasPassword ? ` -p ${pw}` : "");
       const lines = [
         `RDev device: ${d.id}`,
         `Auth: ${d.hasPassword ? t("common.password") : t("common.open")}`,
         "",
         `Client endpoints: ${servers}`,
-        `Client command: rdev-client -s ${servers} -i ${d.id}` +
-          (d.hasPassword ? ` -p ${pw}` : ""),
+        `Client command: ${client}`,
         "",
-        `SSH: ssh ${d.id}@${sshHost} -p ${SP}`,
+        `SSH: ${ssh}`,
         `SFTP: sftp -P ${SP} ${d.id}@${sshHost}`,
         `SCP: scp -P ${SP} file ${d.id}@${sshHost}:~/`,
         `Desktop: ${desktopURL}`,
@@ -420,9 +435,17 @@ export function DashboardPage() {
         `Remote forward: ssh -R 3000:localhost:3000 ${d.id}@${sshHost} -p ${SP}`,
         `Git clone: git clone ssh://${d.id}@${sshHost}:${SP}/home/user/repo.git`,
       );
-      copy("conn:" + d.id, lines.join("\n"));
+      return { ssh, client, desktop: desktopURL, full: lines.join("\n") };
     },
-    [copy, serverList, SP, VP, PP, t],
+    [serverList, SP, VP, PP, t],
+  );
+
+  const copyDeviceConnection = useCallback(
+    async (d: DeviceInfo, kind: keyof ConnStrings) => {
+      const s = await deviceConnStrings(d);
+      copy(`conn:${kind}:${d.id}`, s[kind]);
+    },
+    [copy, deviceConnStrings],
   );
 
   /* Client log modal */
@@ -532,6 +555,12 @@ export function DashboardPage() {
   ];
 
   const cmdProps = { copiedId, onCopy: copy, onCopyRandom: copyRandom, t };
+  const hintCopy = (items: { label: string; cmd: string }[]) => ({
+    items,
+    copiedId,
+    onCopy: copy,
+    t,
+  });
 
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-4 px-4 py-6">
@@ -676,24 +705,58 @@ export function DashboardPage() {
                           {t("index.agent")}
                         </Link>
                       </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className={cn(
-                          copiedId === "conn:" + d.id &&
-                            "border-success text-success",
-                        )}
-                        onClick={() => copyDeviceConnection(d)}
-                      >
-                        {copiedId === "conn:" + d.id ? (
-                          <>
-                            <Icon name="Check" />
-                            {t("common.copied")}
-                          </>
-                        ) : (
-                          t("index.copyConnection")
-                        )}
-                      </Button>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className={cn(
+                              copiedId?.startsWith("conn:") &&
+                                copiedId.endsWith(":" + d.id) &&
+                                "border-success text-success",
+                            )}
+                          >
+                            {copiedId?.startsWith("conn:") &&
+                            copiedId.endsWith(":" + d.id) ? (
+                              <>
+                                <Icon name="Check" />
+                                {t("common.copied")}
+                              </>
+                            ) : (
+                              <>
+                                {t("index.copyConnection")}
+                                <Icon name="ChevronDown" />
+                              </>
+                            )}
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                          <DropdownMenuItem
+                            onSelect={() => copyDeviceConnection(d, "ssh")}
+                          >
+                            <Icon name="Terminal" />
+                            {t("index.copyConnSsh")}
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            onSelect={() => copyDeviceConnection(d, "client")}
+                          >
+                            <Icon name="Rocket" />
+                            {t("index.copyConnClient")}
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            onSelect={() => copyDeviceConnection(d, "desktop")}
+                          >
+                            <Icon name="Monitor" />
+                            {t("index.copyConnDesktop")}
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            onSelect={() => copyDeviceConnection(d, "full")}
+                          >
+                            <Icon name="AlignLeft" />
+                            {t("index.copyConnFull")}
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
                       {logSupported ? (
                         <Button
                           variant="outline"
@@ -881,7 +944,19 @@ export function DashboardPage() {
       {/* Connection hints */}
       <Card>
         <CardContent className="flex flex-col gap-4 p-5">
-          <HintSection icon="Terminal" title={t("index.sshTitle")}>
+          <HintSection
+            icon="Terminal"
+            title={t("index.sshTitle")}
+            copy={hintCopy([
+              { label: "ssh", cmd: `ssh <deviceID>@${H} -p ${SP}` },
+              { label: "scp", cmd: `scp file <deviceID>@${H}:/tmp/ -P ${SP}` },
+              { label: "sftp", cmd: `sftp -P ${SP} <deviceID>@${H}` },
+              {
+                label: "rsync",
+                cmd: `rsync -az --delete -e "ssh -p ${SP}" ./local-dir/ <deviceID>@${H}:/tmp/remote-dir/`,
+              },
+            ])}
+          >
             <HintCode cmd={`ssh <deviceID>@${H} -p ${SP}`} />
             <HintCode cmd={`scp file <deviceID>@${H}:/tmp/ -P ${SP}`} />
             <HintCode cmd={`sftp -P ${SP} <deviceID>@${H}`} />
@@ -890,7 +965,19 @@ export function DashboardPage() {
             />
           </HintSection>
 
-          <HintSection icon="Monitor" title={t("index.remoteDesktopTitle")}>
+          <HintSection
+            icon="Monitor"
+            title={t("index.remoteDesktopTitle")}
+            copy={hintCopy(
+              [
+                {
+                  label: "URL",
+                  cmd: `open ${HTTP}${H}/remote-desktop?device=<deviceID>`,
+                },
+                VP ? { label: "VNC", cmd: `vncviewer ${VP}` } : null,
+              ].filter((x): x is { label: string; cmd: string } => x !== null),
+            )}
+          >
             <HintCode
               cmd={`open ${HTTP}${H}/remote-desktop?device=<deviceID>`}
             />
@@ -903,7 +990,20 @@ export function DashboardPage() {
           </HintSection>
 
           {PP && (
-            <HintSection icon="Globe" title={t("index.proxyTitle")}>
+            <HintSection
+              icon="Globe"
+              title={t("index.proxyTitle")}
+              copy={hintCopy([
+                {
+                  label: "HTTP",
+                  cmd: `curl -x http://<deviceID>:<password>@${PP} https://example.com`,
+                },
+                {
+                  label: "SOCKS5",
+                  cmd: `curl -x socks5://<deviceID>:<password>@${PP} https://example.com`,
+                },
+              ])}
+            >
               <HintCode
                 cmd={`curl -x http://<deviceID>:<password>@${PP} https://example.com`}
               />
@@ -914,7 +1014,20 @@ export function DashboardPage() {
             </HintSection>
           )}
 
-          <HintSection icon="Monitor" title={t("index.forwardTitle")}>
+          <HintSection
+            icon="Monitor"
+            title={t("index.forwardTitle")}
+            copy={hintCopy([
+              {
+                label: "-L",
+                cmd: `ssh -L 8080:localhost:80 <deviceID>@${H} -p ${SP}`,
+              },
+              {
+                label: "-R",
+                cmd: `ssh -R 3000:localhost:3000 <deviceID>@${H} -p ${SP}`,
+              },
+            ])}
+          >
             <HintComment text={t("index.localForwardComment")} />
             <HintCode cmd={`ssh -L 8080:localhost:80 <deviceID>@${H} -p ${SP}`} />
             <HintComment text={t("index.remoteForwardComment")} />
@@ -923,7 +1036,20 @@ export function DashboardPage() {
             />
           </HintSection>
 
-          <HintSection icon="Github" title={t("index.gitTitle")}>
+          <HintSection
+            icon="Github"
+            title={t("index.gitTitle")}
+            copy={hintCopy([
+              {
+                label: "clone",
+                cmd: `git clone ssh://<deviceID>@${H}:${SP}/home/user/repo.git`,
+              },
+              {
+                label: "push",
+                cmd: `git remote add device ssh://<deviceID>@${H}:${SP}/home/user/repo.git`,
+              },
+            ])}
+          >
             <HintComment text={t("index.gitCloneComment")} />
             <HintCode
               cmd={`git clone ssh://<deviceID>@${H}:${SP}/home/user/repo.git`}
@@ -934,7 +1060,17 @@ export function DashboardPage() {
             />
           </HintSection>
 
-          <HintSection icon="Key" title={t("index.keyAuthTitle")}>
+          <HintSection
+            icon="Key"
+            title={t("index.keyAuthTitle")}
+            copy={hintCopy([
+              {
+                label: "pubkey",
+                cmd: "cat ~/.ssh/id_ed25519.pub >> ~/.rdev/authorized_keys",
+              },
+              { label: "ssh", cmd: `ssh <deviceID>@${H} -p ${SP}` },
+            ])}
+          >
             <HintComment text={t("index.keyAuthComment")} />
             <HintCode cmd="cat ~/.ssh/id_ed25519.pub >> ~/.rdev/authorized_keys" />
             <HintCode
@@ -1062,20 +1198,96 @@ export function DashboardPage() {
 
 /* ── Hint building blocks ── */
 
+/* ── Per-section copy menu: icon button + dropdown of individual commands ── */
+
+function HintCopyMenu({
+  section,
+  items,
+  copiedId,
+  onCopy,
+  t,
+}: {
+  section: string;
+  items: { label: string; cmd: string }[];
+  copiedId: string | null;
+  onCopy: (id: string, text: string) => void;
+  t: (k: string) => string;
+}) {
+  const itemId = (i: number) => `hint:${section}:${i}`;
+  const anyCopied = items.some((_, i) => copiedId === itemId(i));
+  return (
+    <DropdownMenu>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label={t("common.copy")}
+              className={cn(
+                "size-6 text-muted-foreground hover:text-foreground",
+                anyCopied && "text-success hover:text-success",
+              )}
+            >
+              <Icon name={anyCopied ? "Check" : "Copy"} className="size-3.5" />
+            </Button>
+          </DropdownMenuTrigger>
+        </TooltipTrigger>
+        <TooltipContent side="top">{t("common.copy")}</TooltipContent>
+      </Tooltip>
+      <DropdownMenuContent align="end" className="max-w-[min(28rem,90vw)]">
+        {items.map((it, i) => (
+          <DropdownMenuItem
+            key={i}
+            onSelect={() => onCopy(itemId(i), it.cmd)}
+            className="gap-2"
+          >
+            <span className="shrink-0 font-medium">{it.label}</span>
+            <span className="flex-1 truncate font-mono text-xs text-muted-foreground">
+              {it.cmd}
+            </span>
+            {copiedId === itemId(i) && (
+              <Icon name="Check" className="size-4 text-success" />
+            )}
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
 function HintSection({
   icon,
   title,
   children,
+  copy,
 }: {
   icon: string;
   title: string;
   children: ReactNode;
+  copy?: {
+    items: { label: string; cmd: string }[];
+    copiedId: string | null;
+    onCopy: (id: string, text: string) => void;
+    t: (k: string) => string;
+  };
 }) {
   return (
     <section>
       <h3 className="mb-2 flex items-center gap-1.5 text-sm font-semibold text-timeline-accent">
         <Icon name={icon} className="size-4" />
         {title}
+        {copy && copy.items.length > 0 && (
+          <span className="ml-auto">
+            <HintCopyMenu
+              section={title}
+              items={copy.items}
+              copiedId={copy.copiedId}
+              onCopy={copy.onCopy}
+              t={copy.t}
+            />
+          </span>
+        )}
       </h3>
       <div className="flex flex-col gap-1">{children}</div>
     </section>

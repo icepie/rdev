@@ -20,7 +20,7 @@ const (
 	// proxyHandshakeTimeout covers protocol sniffing, auth and target
 	// negotiation; it is cleared once the tunnel is established.
 	proxyHandshakeTimeout = 15 * time.Second
-	proxyDialTimeout      = 10 * time.Second
+	proxyDialTimeout      = 20 * time.Second
 )
 
 type proxyServer struct {

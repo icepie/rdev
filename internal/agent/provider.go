@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -203,6 +204,8 @@ func readStream(body io.Reader, onDelta, onReasoning func(string), poke func()) 
 		calls     = make(map[int]*pendingToolCall)
 		callOrder []int // delta indices in first-seen order
 		usage     Usage
+		sawDone   bool   // the stream ended with `data: [DONE]`
+		finish    string // last observed finish_reason
 	)
 	assemble := func() Message {
 		assistant := Message{Role: "assistant", Content: content.String(), Reasoning: reasoning.String()}
@@ -220,11 +223,15 @@ func readStream(body io.Reader, onDelta, onReasoning func(string), poke func()) 
 	reader := bufio.NewReader(body)
 	for {
 		line, err := reader.ReadBytes('\n')
+		// Any non-empty line (including SSE comment keepalives like
+		// ": ping") proves the stream is alive; poke before the data: check
+		// or comment-only gateways would starve the watchdog.
+		if poke != nil && len(bytes.TrimSpace(line)) > 0 {
+			poke()
+		}
 		if payload, ok := ssePayload(line); ok {
-			if poke != nil {
-				poke()
-			}
 			if bytes.Equal(payload, []byte("[DONE]")) {
+				sawDone = true
 				break
 			}
 			var chunk streamChunk
@@ -246,6 +253,9 @@ func readStream(body io.Reader, onDelta, onReasoning func(string), poke func()) 
 				usage.OutputTokens = chunk.Usage.CompletionTokens
 			}
 			for _, choice := range chunk.Choices {
+				if choice.FinishReason != "" {
+					finish = choice.FinishReason
+				}
 				if choice.Delta.ReasoningContent != "" {
 					reasoning.WriteString(choice.Delta.ReasoningContent)
 					if onReasoning != nil {
@@ -283,7 +293,22 @@ func readStream(body io.Reader, onDelta, onReasoning func(string), poke func()) 
 		}
 	}
 
-	return assemble(), usage, nil
+	assistant := assemble()
+	switch {
+	case finish == "length":
+		// The model hit its output cap: the answer is incomplete and the
+		// agent must not treat it as final.
+		return assistant, usage, errors.New("agent: response truncated (length limit)")
+	case !sawDone && finish == "":
+		// Connection dropped mid-stream with no terminal signal at all.
+		return assistant, usage, errors.New("agent: stream truncated (EOF without [DONE])")
+	case sawDone && assistant.Content == "" && assistant.Reasoning == "" && len(assistant.ToolCalls) == 0 &&
+		usage.InputTokens == 0 && usage.OutputTokens == 0:
+		// A well-formed but empty stream: nothing was emitted downstream,
+		// so the caller's no-progress retry applies.
+		return assistant, usage, errors.New("agent: empty response stream")
+	}
+	return assistant, usage, nil
 }
 
 // ssePayload extracts the payload of one SSE `data:` line, tolerating `\r\n`

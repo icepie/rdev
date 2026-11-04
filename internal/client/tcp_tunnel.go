@@ -39,7 +39,7 @@ func (c *Client) runTCPTunnel(msg *protocol.Message, target net.Conn) error {
 	handler := &tcpTunnelWSHandler{target: target}
 	socket, _, err := gws.NewClient(handler, &gws.ClientOption{
 		Addr:               wsURL,
-		HandshakeTimeout:   10 * time.Second,
+		HandshakeTimeout:   5 * time.Second,
 		ReadMaxPayloadSize: 16 * 1024 * 1024,
 		NewDialer:          websocketDialerFor(wsURL),
 	})
@@ -83,9 +83,13 @@ func (c *Client) runTCPTunnel(msg *protocol.Message, target net.Conn) error {
 func (c *Client) tunnelBaseURL() string {
 	c.mu.Lock()
 	base := c.activeWSBase
+	tunnelBase := c.tunnelBase
 	c.mu.Unlock()
 	if base != "" {
 		return base
+	}
+	if tunnelBase != "" {
+		return tunnelBase
 	}
 	if c.httpHost != "" {
 		return "ws://" + c.httpHost

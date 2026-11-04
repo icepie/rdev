@@ -98,6 +98,9 @@ type agentMsg struct {
 	Working *agentWorking   `json:"working,omitempty"`
 	// Index is the dequeue payload: position of the queued follow-up to drop.
 	Index int `json:"index,omitempty"`
+	// Canceled marks stopped frames: true when a running turn was canceled,
+	// false for the idle-stop ack.
+	Canceled bool `json:"canceled,omitempty"`
 	// Cwd and Branch describe a thread's working directory and git branch:
 	// auth_ok (current thread) and thread_meta broadcasts. Path is the
 	// set_cwd input ("" = restore device default); Title is the
@@ -234,6 +237,8 @@ type agentThreadInfo struct {
 	Title     string `json:"title"`
 	UpdatedAt string `json:"updatedAt"`
 	Running   bool   `json:"running"`
+	// Model is the thread's canonical "provider/model".
+	Model string `json:"model,omitempty"`
 	// Tool is the currently executing tool name; only set while running.
 	Tool string `json:"tool,omitempty"`
 }
@@ -252,6 +257,7 @@ const agentApprovalTimeout = 5 * time.Minute
 type agentQueuedChat struct {
 	text   string
 	images []agent.MessageImage
+	model  string // requested model ("" = keep the thread's)
 }
 
 // queueTexts reduces a pending queue to its texts for the queue broadcast.
@@ -270,20 +276,29 @@ type agentThread struct {
 	id            string
 	session       *agent.Session
 	sessionClient *ClientConn // device connection session's tools are bound to
+	model         string      // this thread's canonical "provider/model"
 	running       bool        // a chat turn is in flight
 	cancel        context.CancelFunc
 	turnCtx       context.Context
-	queue         []agentQueuedChat // chat messages received while running
-	todos         []todoItem        // latest todo_write list
-	alwaysAllow   map[string]bool   // tool names approved "always" in this thread
-	aprSeq        int               // approval/question id counter
-	approvals     map[string]chan approvalDecision
-	questions     map[string]chan string // pending ask tool questions (id -> answer)
-	toolPaths     map[string]string      // in-flight tool call id -> path arg (edit/write_file)
-	turnFiles     []string               // files changed by edit/write_file this turn
-	workingSince  time.Time              // current turn start
-	workingTool   string                 // currently executing tool name
-	updatedAt     time.Time
+	// turnHistIdx is the history length at the current turn's start: while
+	// running, attachers replay history[:turnHistIdx] + live so no frame is
+	// seen twice (history/live disjoint invariant).
+	turnHistIdx int
+	// epoch is bumped by reset; a turn that started before the bump skips
+	// its save and terminal broadcast (its history belongs to the pre-reset
+	// conversation).
+	epoch        int
+	queue        []agentQueuedChat // chat messages received while running
+	todos        []todoItem        // latest todo_write list
+	alwaysAllow  map[string]bool   // tool names approved "always" in this thread
+	aprSeq       int               // approval/question id counter
+	approvals    map[string]chan approvalDecision
+	questions    map[string]chan string // pending ask tool questions (id -> answer)
+	toolPaths    map[string]string      // in-flight tool call id -> path arg (edit/write_file)
+	turnFiles    []string               // files changed by edit/write_file this turn
+	workingSince time.Time              // current turn start
+	workingTool  string                 // currently executing tool name
+	updatedAt    time.Time
 	// lastUsage is the token accounting of the most recent completed turn,
 	// replayed in auth_ok/thread_switched for the context-usage indicator.
 	lastUsage *agentUsage
@@ -291,8 +306,9 @@ type agentThread struct {
 	branch    string // last probed git branch of cwd ("" = unknown/not a repo)
 	title     string // explicit thread title ("" = derive from first user message)
 	// live holds the marshaled frames of the in-flight turn (turn_start …
-	// approval_request) so a browser switching in mid-turn can replay the
-	// exact UI state; cleared when the turn ends (history is persisted then).
+	// terminal frame) so a browser switching in mid-turn can replay the
+	// exact UI state; cleared at the next turn start, read only while
+	// running (idle attach replays full history instead).
 	live []json.RawMessage
 }
 
@@ -389,8 +405,16 @@ func (ac *agentConn) writeJSON(msg agentMsg) {
 	ac.writeData(data)
 }
 
+// sendError reports an unattributable failure (auth, device misconfig):
+// the frame carries no thread tag and only lands on the page status.
 func (ac *agentConn) sendError(message string) {
 	ac.writeJSON(agentMsg{Op: "error", Message: message})
+}
+
+// sendErrorThread reports a failure attributable to one thread: the tagged
+// frame routes to that thread's transcript sink.
+func (ac *agentConn) sendErrorThread(thread, message string) {
+	ac.writeJSON(agentMsg{Op: "error", Thread: thread, Message: message})
 }
 
 // writeChanges sends a get_changes reply to this socket.
@@ -485,12 +509,13 @@ func (s *Server) buildAgentSession(entry *agentSessionEntry, th *agentThread, cl
 // the given history, working directory and explicit title. Caller must hold
 // agentSessionsMu.
 func (s *Server) newAgentThreadLocked(entry *agentSessionEntry, threadID string, history []agent.Message, cwd, title string) *agentThread {
-	provider, model, _, err := s.Agent.Resolve(entry.model)
+	provider, model, canonical, err := s.Agent.Resolve(entry.model)
 	if err != nil {
-		provider, model, _, _ = s.Agent.Resolve("")
+		provider, model, canonical, _ = s.Agent.Resolve("")
 	}
 	th := &agentThread{
 		id:            threadID,
+		model:         canonical,
 		sessionClient: entry.client,
 		alwaysAllow:   make(map[string]bool),
 		approvals:     make(map[string]chan approvalDecision),
@@ -556,6 +581,16 @@ func (s *Server) agentSessionFor(deviceID string, client *ClientConn) (*agentSes
 			msgs, savedModel, cwd, title := store.load(deviceID, meta.ID)
 			th := s.newAgentThreadLocked(entry, meta.ID, msgs, cwd, title)
 			th.updatedAt = meta.UpdatedAt
+			// Per-thread model: a thread restored with a different model
+			// keeps it instead of being retargeted to the entry default.
+			if savedModel != "" && savedModel != th.model {
+				if provider, model, canonical, rerr := s.Agent.Resolve(savedModel); rerr == nil && canonical != th.model {
+					newSession := s.buildAgentSession(entry, th, entry.client, provider, model)
+					newSession.SetHistory(th.session.History())
+					th.session = newSession
+					th.model = canonical
+				}
+			}
 			entry.threads[meta.ID] = th
 			// The most recently updated thread is listed first.
 			if recentThread == "" {
@@ -612,10 +647,7 @@ func (s *Server) rebindAgentSessionLocked(entry *agentSessionEntry) {
 		if th.sessionClient == entry.client || th.running {
 			continue
 		}
-		provider, model, _, err := s.Agent.Resolve(entry.model)
-		if err != nil {
-			provider, model, _, err = s.Agent.Resolve("")
-		}
+		provider, model, err := s.resolveAgentModel(th.model)
 		if err != nil {
 			return
 		}
@@ -624,6 +656,16 @@ func (s *Server) rebindAgentSessionLocked(entry *agentSessionEntry) {
 		th.session = newSession
 		th.sessionClient = entry.client
 	}
+}
+
+// resolveAgentModel resolves a "provider/model" reference, falling back to
+// the configured default when the reference is empty or unknown.
+func (s *Server) resolveAgentModel(modelRef string) (*AgentProvider, *AgentModelConfig, error) {
+	provider, model, _, err := s.Agent.Resolve(modelRef)
+	if err != nil && modelRef != "" {
+		provider, model, _, err = s.Agent.Resolve("")
+	}
+	return provider, model, err
 }
 
 // agentBroadcast sends msg to every socket attached to entry, pruning
@@ -692,16 +734,19 @@ func (s *Server) agentEvictionLoop() {
 	for range ticker.C {
 		s.agentSessionsMu.Lock()
 		for id, entry := range s.agentSessions {
-			running := false
+			busy := false
 			for _, th := range entry.threads {
-				if th.running {
-					running = true
+				if th.running || th.turnCtx != nil || len(th.queue) > 0 {
+					busy = true
 					break
 				}
 			}
-			if !running && len(entry.subs) == 0 {
-				delete(s.agentSessions, id)
+			// Recently active entries stay: a browser may reconnect and
+			// expect the warm session (30 min grace).
+			if busy || len(entry.subs) > 0 || time.Since(entry.lastActive) < 30*time.Minute {
+				continue
 			}
+			delete(s.agentSessions, id)
 		}
 		s.agentSessionsMu.Unlock()
 	}
@@ -721,6 +766,7 @@ func agentThreadListLocked(entry *agentSessionEntry) []agentThreadInfo {
 			Title:     title,
 			UpdatedAt: th.updatedAt.UTC().Format(time.RFC3339),
 			Running:   th.running,
+			Model:     th.model,
 		}
 		if th.running {
 			info.Tool = th.workingTool
@@ -934,6 +980,51 @@ func (s *Server) requestApproval(entry *agentSessionEntry, th *agentThread, tc a
 	}
 }
 
+// agentThreadSnapshot is the replay state of one thread for auth_ok,
+// thread_switched, thread_peeked and delete-thread remaps.
+type agentThreadSnapshot struct {
+	history []agentHistoryEntry
+	todos   []todoItem
+	queue   []string
+	running bool
+	working *agentWorking
+	usage   *agentUsage
+	live    []json.RawMessage
+}
+
+// threadSnapshotLocked snapshots a thread for an attacher. History and live
+// are disjoint: while a turn runs, history holds only the pre-turn messages
+// (history[:turnHistIdx]) and live carries the turn frames; when idle,
+// history is complete and live is dropped. Caller must hold
+// agentSessionsMu.
+func (s *Server) threadSnapshotLocked(entry *agentSessionEntry, th *agentThread) agentThreadSnapshot {
+	msgs := th.session.History()
+	snap := agentThreadSnapshot{
+		todos:   th.todos,
+		queue:   queueTexts(th.queue),
+		running: th.running,
+		usage:   th.lastUsage,
+	}
+	if snap.todos == nil {
+		snap.todos = []todoItem{}
+	}
+	if snap.queue == nil {
+		snap.queue = []string{}
+	}
+	if th.running {
+		if th.turnHistIdx < len(msgs) {
+			msgs = msgs[:th.turnHistIdx]
+		}
+		snap.working = &agentWorking{Since: th.workingSince.UTC().Format(time.RFC3339Nano), Tool: th.workingTool}
+		snap.live = append([]json.RawMessage(nil), th.live...)
+	}
+	snap.history = renderAgentHistory(msgs)
+	if snap.history == nil {
+		snap.history = []agentHistoryEntry{}
+	}
+	return snap
+}
+
 // establish finishes the auth handshake: attach this socket to the
 // server-owned per-device agent entry and tell the browser it can chat.
 func (h *agentWSHandler) establish(ac *agentConn, client *ClientConn) {
@@ -959,42 +1050,25 @@ func (h *agentWSHandler) establish(ac *agentConn, client *ClientConn) {
 	h.srv.rebindAgentSessionLocked(entry)
 	entry.subs[ac.socket] = true
 	entry.lastActive = time.Now()
-	model := entry.model
 	// Seed this connection's current thread from the entry's remembered
 	// default; afterwards the two diverge freely.
 	current := entry.current
 	th := entry.threads[current]
-	running := th != nil && th.running
-	var history []agentHistoryEntry
-	todos := []todoItem{}
-	queue := []string{}
-	var working *agentWorking
+	// auth_ok reports the current thread's model (threads may differ).
+	model := entry.model
+	threadCwd, threadBranch := "", ""
+	var snap agentThreadSnapshot
 	if th != nil {
-		history = renderAgentHistory(th.session.History())
-		if len(th.todos) > 0 {
-			todos = th.todos
+		if th.model != "" {
+			model = th.model
 		}
-		if len(th.queue) > 0 {
-			queue = queueTexts(th.queue)
-		}
-		if th.running {
-			working = &agentWorking{Since: th.workingSince.UTC().Format(time.RFC3339), Tool: th.workingTool}
-		}
+		threadCwd = agentEffectiveCwdLocked(entry, th)
+		threadBranch = th.branch
+		snap = h.srv.threadSnapshotLocked(entry, th)
 	}
 	threads := agentThreadListLocked(entry)
 	permMode := entry.permMode
 	reasoningLevel := entry.reasoningLevel
-	threadCwd, threadBranch := "", ""
-	var live []json.RawMessage
-	var usage *agentUsage
-	if th != nil {
-		threadCwd = agentEffectiveCwdLocked(entry, th)
-		threadBranch = th.branch
-		usage = th.lastUsage
-		if th.running {
-			live = append([]json.RawMessage(nil), th.live...)
-		}
-	}
 	h.srv.agentSessionsMu.Unlock()
 	ac.entry = entry
 	ac.current = current
@@ -1011,29 +1085,26 @@ func (h *agentWSHandler) establish(ac *agentConn, client *ClientConn) {
 			modelName = mc.ID
 		}
 	}
-	if history == nil {
-		history = []agentHistoryEntry{}
-	}
 	ac.writeJSON(agentMsg{
 		Op:             "auth_ok",
 		Device:         ac.deviceID,
 		Model:          model,
 		ModelName:      modelName,
 		Models:         h.srv.Agent.Models(),
-		History:        history,
-		Running:        running,
+		History:        snap.history,
+		Running:        snap.running,
 		Thread:         current,
 		Threads:        threads,
-		Todos:          todos,
-		Queue:          queue,
+		Todos:          snap.todos,
+		Queue:          snap.queue,
 		AutoApprove:    permMode == agentPermFull, // legacy field
 		PermissionMode: permMode,
 		ReasoningLevel: reasoningLevel,
-		Working:        working,
+		Working:        snap.working,
 		Cwd:            threadCwd,
 		Branch:         threadBranch,
-		Live:           live,
-		Usage:          usage,
+		Live:           snap.live,
+		Usage:          snap.usage,
 	})
 	// The sidebar shows threads of every device (not partitioned per
 	// device), so a freshly attached browser gets the global list too.
@@ -1131,21 +1202,32 @@ func (h *agentWSHandler) OnMessage(socket *gws.Conn, message *gws.Message) {
 		if ac.entry == nil {
 			return
 		}
-		h.srv.agentSessionsMu.Lock()
-		var cancel context.CancelFunc
 		threadID := ac.current
 		if msg.Thread != "" {
 			threadID = msg.Thread
 		}
-		if th := ac.entry.threads[threadID]; th != nil && th.running {
+		var cancel context.CancelFunc
+		var th *agentThread
+		h.srv.agentSessionsMu.Lock()
+		th = ac.entry.threads[threadID]
+		if th != nil && th.running {
 			cancel = th.cancel
+			// Stop kills the pending queue too: a stopped turn must not
+			// start follow-ups the user just aborted.
+			th.queue = nil
+			denyApprovalsLocked(th)
 		}
 		h.srv.agentSessionsMu.Unlock()
 		if cancel != nil {
+			// The turn unwind emits the single stopped{canceled:true}.
 			cancel()
+			h.srv.broadcastQueue(ac.entry, th)
+		} else {
+			// Idle stop: plain ack, no transcript effect.
+			ac.writeJSON(agentMsg{Op: "stopped", Thread: threadID, Canceled: false})
 		}
 	case "reset":
-		h.handleReset(ac)
+		h.handleReset(ac, msg.Thread)
 	case "set_auto_approve":
 		// Legacy binary toggle: true → full, false → write.
 		if ac.entry == nil {
@@ -1256,20 +1338,19 @@ func (h *agentWSHandler) handleSetReasoningLevel(ac *agentConn, level string) {
 	srv := h.srv
 	srv.agentSessionsMu.Lock()
 	entry.reasoningLevel = level
-	provider, model, _, err := srv.Agent.Resolve(entry.model)
-	if err != nil {
-		provider, model, _, err = srv.Agent.Resolve("")
-	}
-	if err == nil {
-		for _, th := range entry.threads {
-			if th.running {
-				continue
-			}
-			newSession := srv.buildAgentSession(entry, th, entry.client, provider, model)
-			newSession.SetHistory(th.session.History())
-			th.session = newSession
-			th.sessionClient = entry.client
+	for _, th := range entry.threads {
+		if th.running {
+			continue
 		}
+		// Each thread keeps its own model across the rebuild.
+		provider, model, err := srv.resolveAgentModel(th.model)
+		if err != nil {
+			continue
+		}
+		newSession := srv.buildAgentSession(entry, th, entry.client, provider, model)
+		newSession.SetHistory(th.session.History())
+		th.session = newSession
+		th.sessionClient = entry.client
 	}
 	srv.agentSessionsMu.Unlock()
 	srv.writeAgentPrefs(entry)
@@ -1288,17 +1369,21 @@ func (h *agentWSHandler) handleChat(ac *agentConn, text, modelRef, threadRef str
 		return
 	}
 	srv := h.srv
+	// One lock hold covers the queue check and the turn start: two chats
+	// arriving together can never both start a turn (one queues).
 	srv.agentSessionsMu.Lock()
 	th := entry.threads[ac.current]
+	threadID := ac.current
 	if threadRef != "" && threadRef != ac.current {
 		// Split-screen panes chat into threads they do not drive; the turn
 		// frames are tagged with the thread id, so every pane stays in sync.
 		th = entry.threads[threadRef]
+		threadID = threadRef
 	}
 	if th == nil {
 		srv.agentSessionsMu.Unlock()
 		if threadRef != "" && threadRef != ac.current {
-			ac.sendError("unknown thread " + threadRef)
+			ac.sendErrorThread(threadRef, "unknown thread "+threadRef)
 		} else {
 			ac.sendError("agent session not ready")
 		}
@@ -1306,8 +1391,8 @@ func (h *agentWSHandler) handleChat(ac *agentConn, text, modelRef, threadRef str
 	}
 	if th.running {
 		// Queue the message; it becomes a follow-up turn when the current
-		// one finishes.
-		th.queue = append(th.queue, agentQueuedChat{text: text, images: images})
+		// one finishes. Queued chats remember their requested model.
+		th.queue = append(th.queue, agentQueuedChat{text: text, images: images, model: modelRef})
 		entry.lastActive = time.Now()
 		srv.agentSessionsMu.Unlock()
 		srv.broadcastQueue(entry, th)
@@ -1318,11 +1403,11 @@ func (h *agentWSHandler) handleChat(ac *agentConn, text, modelRef, threadRef str
 	// Optional model switch: resolve before touching state so an unknown
 	// model aborts without running.
 	modelChanged := false
-	if modelRef != "" && modelRef != entry.model {
+	if modelRef != "" && modelRef != th.model {
 		provider, model, canonical, err := srv.Agent.Resolve(modelRef)
 		if err != nil {
 			srv.agentSessionsMu.Unlock()
-			ac.sendError("unknown model " + modelRef)
+			ac.sendErrorThread(threadID, "unknown model "+modelRef)
 			return
 		}
 		// Rebuild the session for the new provider/model, preserving history.
@@ -1330,16 +1415,20 @@ func (h *agentWSHandler) handleChat(ac *agentConn, text, modelRef, threadRef str
 		newSession.SetHistory(th.session.History())
 		th.session = newSession
 		th.sessionClient = entry.client
-		entry.model = canonical
+		th.model = canonical
+		entry.model = canonical // last-used default for new threads
 		modelChanged = true
 	}
 	th.updatedAt = time.Now()
+	startFrame := srv.startAgentTurnLocked(entry, th, text, images)
+	ctx := th.turnCtx
 	srv.agentSessionsMu.Unlock()
 
 	if modelChanged {
 		srv.writeAgentPrefs(entry)
 	}
-	srv.startAgentTurn(entry, th, text, images)
+	srv.agentBroadcastTurn(entry, th, startFrame)
+	go srv.runAgentTurn(entry, th, ctx, text, images)
 }
 
 // handleSteer cancels the running turn and puts the text at the front of
@@ -1397,38 +1486,56 @@ func (h *agentWSHandler) handleDequeue(ac *agentConn, threadRef string, index in
 	}
 }
 
-// handleReset clears the current thread's history, todos and stored file.
-func (h *agentWSHandler) handleReset(ac *agentConn) {
+// handleReset clears a thread's history, todos and stored file. A running
+// turn is canceled via the epoch mechanism: its unwind skips the save and
+// the terminal broadcast, so the cleared state is never resurrected.
+func (h *agentWSHandler) handleReset(ac *agentConn, threadRef string) {
 	entry := ac.entry
 	if entry == nil {
 		ac.sendError("agent session not ready")
 		return
 	}
+	threadID := ac.current
+	if threadRef != "" {
+		threadID = threadRef
+	}
 	srv := h.srv
 	srv.agentSessionsMu.Lock()
-	th := entry.threads[ac.current]
+	th := entry.threads[threadID]
 	if th == nil {
 		srv.agentSessionsMu.Unlock()
-		ac.sendError("agent session not ready")
+		ac.sendErrorThread(threadID, "unknown thread "+threadID)
 		return
 	}
+	var cancel context.CancelFunc
 	if th.running {
-		srv.agentSessionsMu.Unlock()
-		ac.sendError("agent is busy; stop first")
-		return
+		th.epoch++
+		cancel = th.cancel
 	}
-	th.session.Reset()
+	// Fresh session with the thread's own model and an empty history.
+	provider, model, _, err := srv.Agent.Resolve(th.model)
+	if err != nil {
+		provider, model, _, _ = srv.Agent.Resolve("")
+	}
+	th.session = srv.buildAgentSession(entry, th, entry.client, provider, model)
+	th.sessionClient = entry.client
 	th.todos = nil
 	th.turnFiles = nil
 	th.queue = nil
+	th.lastUsage = nil
+	th.alwaysAllow = make(map[string]bool)
+	th.branch = ""
+	th.live = nil
 	th.updatedAt = time.Now()
 	denyApprovalsLocked(th)
-	threadID := th.id
 	srv.agentSessionsMu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
 	if store := srv.agentStore(); store != nil {
 		store.clear(ac.deviceID, threadID)
 	}
-	srv.agentBroadcast(entry, agentMsg{Op: "reset_ok"})
+	srv.agentBroadcast(entry, agentMsg{Op: "reset_ok", Thread: threadID})
 	srv.broadcastThreadList(entry)
 }
 
@@ -1473,35 +1580,34 @@ func (h *agentWSHandler) handleSwitchThread(ac *agentConn, threadID string) {
 	th, ok := entry.threads[threadID]
 	if !ok {
 		srv.agentSessionsMu.Unlock()
-		ac.sendError("unknown thread " + threadID)
+		ac.sendErrorThread(threadID, "unknown thread "+threadID)
+		return
+	}
+	if threadID == ac.current {
+		// Already viewing this thread (double-click, retry, or the auth
+		// URL adoption where auth_ok already delivered the snapshot):
+		// replaying history again would flash the transcript.
+		srv.agentSessionsMu.Unlock()
 		return
 	}
 	entry.current = threadID // resume default
 	ac.current = threadID
-	history := renderAgentHistory(th.session.History())
-	todos := th.todos
-	if todos == nil {
-		todos = []todoItem{}
-	}
-	queue := queueTexts(th.queue)
-	running := th.running
-	live := append([]json.RawMessage(nil), th.live...)
-	usage := th.lastUsage
+	snap := srv.threadSnapshotLocked(entry, th)
+	model := th.model
 	srv.agentSessionsMu.Unlock()
 
-	if history == nil {
-		history = []agentHistoryEntry{}
-	}
 	// thread_switched is per-connection: only the requester's view changes.
 	ac.writeJSON(agentMsg{
 		Op:      "thread_switched",
 		Thread:  threadID,
-		History: history,
-		Todos:   todos,
-		Queue:   queue,
-		Running: running,
-		Live:    live,
-		Usage:   usage,
+		Model:   model,
+		History: snap.history,
+		Todos:   snap.todos,
+		Queue:   snap.queue,
+		Running: snap.running,
+		Working: snap.working,
+		Live:    snap.live,
+		Usage:   snap.usage,
 	})
 	srv.writeAgentPrefs(entry)
 	srv.broadcastThreadList(entry)
@@ -1524,32 +1630,22 @@ func (h *agentWSHandler) handlePeekThread(ac *agentConn, threadID string) {
 	th, ok := entry.threads[threadID]
 	if !ok {
 		srv.agentSessionsMu.Unlock()
-		ac.sendError("unknown thread " + threadID)
+		ac.sendErrorThread(threadID, "unknown thread "+threadID)
 		return
 	}
-	history := renderAgentHistory(th.session.History())
-	todos := th.todos
-	if todos == nil {
-		todos = []todoItem{}
-	}
-	queue := queueTexts(th.queue)
-	running := th.running
-	live := append([]json.RawMessage(nil), th.live...)
-	usage := th.lastUsage
+	snap := srv.threadSnapshotLocked(entry, th)
 	srv.agentSessionsMu.Unlock()
 
-	if history == nil {
-		history = []agentHistoryEntry{}
-	}
 	ac.writeJSON(agentMsg{
 		Op:      "thread_peeked",
 		Thread:  threadID,
-		History: history,
-		Todos:   todos,
-		Queue:   queue,
-		Running: running,
-		Live:    live,
-		Usage:   usage,
+		History: snap.history,
+		Todos:   snap.todos,
+		Queue:   snap.queue,
+		Running: snap.running,
+		Working: snap.working,
+		Live:    snap.live,
+		Usage:   snap.usage,
 	})
 }
 
@@ -1618,21 +1714,12 @@ func (h *agentWSHandler) handleDeleteThread(ac *agentConn, threadID string) {
 			affected = append(affected, conn)
 		}
 	}
-	var history []agentHistoryEntry
-	todos := []todoItem{}
-	queue := []string{}
+	var snap agentThreadSnapshot
+	var switchModel string
 	if switchedTo != "" {
 		cur := entry.threads[switchedTo]
-		history = renderAgentHistory(cur.session.History())
-		if history == nil {
-			history = []agentHistoryEntry{}
-		}
-		if len(cur.todos) > 0 {
-			todos = cur.todos
-		}
-		if len(cur.queue) > 0 {
-			queue = queueTexts(cur.queue)
-		}
+		snap = srv.threadSnapshotLocked(entry, cur)
+		switchModel = cur.model
 	}
 	srv.agentSessionsMu.Unlock()
 
@@ -1649,9 +1736,14 @@ func (h *agentWSHandler) handleDeleteThread(ac *agentConn, threadID string) {
 			conn.writeJSON(agentMsg{
 				Op:      "thread_switched",
 				Thread:  switchedTo,
-				History: history,
-				Todos:   todos,
-				Queue:   queue,
+				Model:   switchModel,
+				History: snap.history,
+				Todos:   snap.todos,
+				Queue:   snap.queue,
+				Running: snap.running,
+				Working: snap.working,
+				Live:    snap.live,
+				Usage:   snap.usage,
 			})
 		}
 		srv.scheduleThreadMetaProbe(entry, switchedTo)
@@ -1714,12 +1806,9 @@ func (h *agentWSHandler) handleSetCwd(ac *agentConn, path string) {
 	}
 	th.cwd = path
 	th.branch = ""
-	// Rebuild the session so tools and the system prompt use the new cwd.
-	provider, model, _, err := srv.Agent.Resolve(entry.model)
-	if err != nil {
-		provider, model, _, err = srv.Agent.Resolve("")
-	}
-	if err == nil {
+	// Rebuild the session so tools and the system prompt use the new cwd;
+	// the thread keeps its own model.
+	if provider, model, err := srv.resolveAgentModel(th.model); err == nil {
 		newSession := srv.buildAgentSession(entry, th, entry.client, provider, model)
 		newSession.SetHistory(th.session.History())
 		th.session = newSession
@@ -2123,9 +2212,10 @@ func (h *agentWSHandler) handleDirMkdir(ac *agentConn, path string) {
 	}()
 }
 
-// startAgentTurn marks the thread running and spawns the turn goroutine.
-func (s *Server) startAgentTurn(entry *agentSessionEntry, th *agentThread, text string, images []agent.MessageImage) {
-	s.agentSessionsMu.Lock()
+// startAgentTurnLocked performs the running-state transition of a new turn
+// and returns the turn_start frame to broadcast after unlocking. Caller
+// must hold agentSessionsMu.
+func (s *Server) startAgentTurnLocked(entry *agentSessionEntry, th *agentThread, text string, images []agent.MessageImage) agentMsg {
 	th.running = true
 	th.turnFiles = nil
 	th.toolPaths = make(map[string]string)
@@ -2133,11 +2223,11 @@ func (s *Server) startAgentTurn(entry *agentSessionEntry, th *agentThread, text 
 	th.workingTool = ""
 	th.updatedAt = th.workingSince
 	th.live = nil
+	th.turnHistIdx = len(th.session.History())
 	entry.lastActive = th.workingSince
 	ctx, cancel := context.WithCancel(context.Background())
 	th.turnCtx = ctx
 	th.cancel = cancel
-	s.agentSessionsMu.Unlock()
 
 	start := agentMsg{Op: "turn_start", Text: text}
 	if names := agentImageNames(images); len(names) > 0 {
@@ -2145,15 +2235,34 @@ func (s *Server) startAgentTurn(entry *agentSessionEntry, th *agentThread, text 
 			start.Images = raw
 		}
 	}
-	s.agentBroadcastTurn(entry, th, start)
+	return start
+}
+
+// startAgentTurn marks the thread running and spawns the turn goroutine.
+func (s *Server) startAgentTurn(entry *agentSessionEntry, th *agentThread, text string, images []agent.MessageImage) {
+	s.agentSessionsMu.Lock()
+	startFrame := s.startAgentTurnLocked(entry, th, text, images)
+	ctx := th.turnCtx
+	s.agentSessionsMu.Unlock()
+
+	s.agentBroadcastTurn(entry, th, startFrame)
 	go s.runAgentTurn(entry, th, ctx, text, images)
 }
 
 // runAgentTurn executes one turn to completion, broadcasts its lifecycle
 // events, persists the history, then dequeues the next queued turn.
+//
+// The goroutine only streams frames and computes; every turn-state
+// transition happens under agentSessionsMu: the terminal frame is appended
+// to th.live and running flips in one lock hold, so no attach/snapshot can
+// miss it (broadcast after unlock).
 func (s *Server) runAgentTurn(entry *agentSessionEntry, th *agentThread, ctx context.Context, text string, images []agent.MessageImage) {
 	sess := th.session
 	cancel := th.cancel
+	s.agentSessionsMu.Lock()
+	startEpoch := th.epoch
+	turnModel := th.model
+	s.agentSessionsMu.Unlock()
 	// A panic anywhere in the turn must not wedge the thread: without this,
 	// th.running would stay true forever, rejecting every future chat.
 	defer func() {
@@ -2163,17 +2272,16 @@ func (s *Server) runAgentTurn(entry *agentSessionEntry, th *agentThread, ctx con
 			th.running = false
 			th.cancel = nil
 			th.turnCtx = nil
-			th.live = nil
 			s.agentSessionsMu.Unlock()
 			cancel()
 			s.agentBroadcast(entry, agentMsg{Op: "error", Thread: th.id, Message: fmt.Sprintf("internal error: %v", r)})
 		}
 	}()
 
-	s.agentSessionsMu.Lock()
-	model := entry.model
-	s.agentSessionsMu.Unlock()
-
+	var (
+		doneUsage     *agentUsage
+		doneReasoning string
+	)
 	emit := func(e agent.Event) {
 		switch e.Type {
 		case agent.EventTextDelta:
@@ -2210,58 +2318,105 @@ func (s *Server) runAgentTurn(entry *agentSessionEntry, th *agentThread, ctx con
 				s.agentBroadcastTurn(entry, th, agentMsg{Op: "todo", Items: json.RawMessage(e.ToolResult)})
 			}
 		case agent.EventDone:
+			// Captured for the terminal frame the unwind builds; no
+			// broadcast here — the turn is not over until the transition.
+			usage := &agentUsage{InputTokens: e.Usage.InputTokens, OutputTokens: e.Usage.OutputTokens}
 			s.agentSessionsMu.Lock()
-			files := append([]string(nil), th.turnFiles...)
-			th.lastUsage = &agentUsage{InputTokens: e.Usage.InputTokens, OutputTokens: e.Usage.OutputTokens}
+			th.lastUsage = usage
 			s.agentSessionsMu.Unlock()
-			// Tagged but not stored in th.live: the turn is over and live is
-			// about to be cleared; history carries the final state.
-			s.agentBroadcast(entry, agentMsg{
-				Op:        "done",
-				Thread:    th.id,
-				Model:     model,
-				Usage:     &agentUsage{InputTokens: e.Usage.InputTokens, OutputTokens: e.Usage.OutputTokens},
-				Reasoning: e.Reasoning,
-				Files:     files,
-			})
+			doneUsage = usage
+			doneReasoning = e.Reasoning
 		}
 	}
 
 	_, runErr := sess.RunTurn(ctx, text, images, magicTurnEffort(text), emit)
-	// Persist the turn (done and error paths alike), even when no browser
-	// stayed attached.
-	if store := s.agentStore(); store != nil {
-		store.save(entry.deviceID, th.id, model, sess.History())
-	}
+
+	// Terminal frame + state transition in one lock hold.
 	s.agentSessionsMu.Lock()
+	// A reset mid-turn bumped the epoch: the pre-reset conversation is gone,
+	// so skip the save (it would resurrect cleared history) and the
+	// terminal broadcast (reset_ok already closed the transcript).
+	epochOK := th.epoch == startEpoch
+	var terminal agentMsg
+	switch {
+	case runErr == nil:
+		terminal = agentMsg{
+			Op:        "done",
+			Thread:    th.id,
+			Model:     turnModel,
+			Usage:     doneUsage,
+			Reasoning: doneReasoning,
+			Files:     append([]string(nil), th.turnFiles...),
+			Cwd:       agentEffectiveCwdLocked(entry, th),
+			Branch:    th.branch,
+		}
+	case ctx.Err() == context.Canceled:
+		terminal = agentMsg{Op: "stopped", Thread: th.id, Canceled: true}
+	default:
+		terminal = agentMsg{Op: "error", Thread: th.id, Message: runErr.Error()}
+	}
+	var terminalData []byte
+	if epochOK {
+		if data, err := json.Marshal(terminal); err == nil {
+			terminalData = data
+			th.live = append(th.live, json.RawMessage(data))
+		}
+	}
 	th.running = false
 	th.cancel = nil
 	th.turnCtx = nil
 	th.workingTool = ""
 	th.updatedAt = time.Now()
-	th.live = nil
 	denyApprovalsLocked(th)
+	// Persist the turn (done and error paths alike), even when no browser
+	// stayed attached. Under agentSessionsMu so a reset can never interleave
+	// with/resurrect a save.
+	if epochOK {
+		if store := s.agentStore(); store != nil {
+			store.save(entry.deviceID, th.id, turnModel, sess.History())
+		}
+	}
+	turnFiles := th.turnFiles
 	var next agentQueuedChat
+	var nextFrame agentMsg
+	var nextCtx context.Context
 	hasNext := len(th.queue) > 0
+	prefsDirty := false
 	if hasNext {
 		next = th.queue[0]
 		th.queue = th.queue[1:]
+		// A queued chat may carry a model switch; apply it before starting.
+		if next.model != "" && next.model != th.model {
+			if provider, model, canonical, err := s.Agent.Resolve(next.model); err == nil {
+				newSession := s.buildAgentSession(entry, th, entry.client, provider, model)
+				newSession.SetHistory(th.session.History())
+				th.session = newSession
+				th.sessionClient = entry.client
+				th.model = canonical
+				entry.model = canonical // last-used default for new threads
+				prefsDirty = true
+			}
+		}
+		nextFrame = s.startAgentTurnLocked(entry, th, next.text, next.images)
+		nextCtx = th.turnCtx
 	}
 	s.agentSessionsMu.Unlock()
 	cancel()
 
-	if runErr != nil {
-		if ctx.Err() == context.Canceled {
-			s.agentBroadcast(entry, agentMsg{Op: "stopped", Thread: th.id})
-		} else {
-			s.agentBroadcast(entry, agentMsg{Op: "error", Thread: th.id, Message: runErr.Error()})
-		}
+	if terminalData != nil {
+		s.agentBroadcastData(entry, terminalData)
+	}
+	if prefsDirty {
+		s.writeAgentPrefs(entry)
 	}
 	s.broadcastThreadList(entry)
-	s.scheduleThreadMetaProbe(entry, th.id)
+	if len(turnFiles) > 0 {
+		s.scheduleThreadMetaProbe(entry, th.id)
+	}
 	if hasNext {
 		s.broadcastQueue(entry, th)
-		s.startAgentTurn(entry, th, next.text, next.images)
+		s.agentBroadcastTurn(entry, th, nextFrame)
+		go s.runAgentTurn(entry, th, nextCtx, next.text, next.images)
 	}
 }
 

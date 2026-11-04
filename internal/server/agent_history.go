@@ -195,10 +195,10 @@ func (st *agentSessionStore) listThreads(deviceID string) []agentThreadMeta {
 		}
 		threadID := strings.TrimSuffix(e.Name(), ".jsonl")
 		msgs, model, cwd, metaTitle, updated := st.loadLocked(deviceID, threadID)
-		if updated.IsZero() {
-			if info, ierr := e.Info(); ierr == nil {
-				updated = info.ModTime()
-			}
+		// Append saves don't rewrite the meta line, so its Updated field
+		// goes stale; the file mtime is the fresher ordering signal.
+		if info, ierr := e.Info(); ierr == nil && info.ModTime().After(updated) {
+			updated = info.ModTime()
 		}
 		title := metaTitle
 		if title == "" {
@@ -341,6 +341,11 @@ func (st *agentSessionStore) save(deviceID, threadID, model string, history []ag
 		if len(kept) > agentHistoryKeepMessages {
 			kept = kept[len(kept)-agentHistoryKeepMessages:]
 		}
+		// Drop tool results orphaned by the cut (their assistant call is
+		// gone): a leading tool message would corrupt the conversation.
+		for len(kept) > 0 && kept[0].Role == "tool" {
+			kept = kept[1:]
+		}
 		if err := st.rewriteLocked(deviceID, threadID, model, kept); err != nil {
 			log.Printf("agent history: save %s/%s: %v", deviceID, threadID, err)
 			return
@@ -404,9 +409,14 @@ func (st *agentSessionStore) rewriteLocked(deviceID, threadID, model string, msg
 	}
 	tmp := st.path(deviceID, threadID) + ".tmp"
 	if err := os.WriteFile(tmp, buf.Bytes(), 0600); err != nil {
+		os.Remove(tmp)
 		return err
 	}
-	return os.Rename(tmp, st.path(deviceID, threadID))
+	if err := os.Rename(tmp, st.path(deviceID, threadID)); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	return nil
 }
 
 // setCwd records a thread's working directory and rewrites its history file
@@ -482,9 +492,20 @@ func (st *agentSessionStore) cleanup() {
 		return
 	}
 	cutoff := time.Now().Add(-st.ttl)
+	// Orphaned rewrite temp files (crash between WriteFile and Rename) are
+	// dropped much sooner than session data.
+	tmpCutoff := time.Now().Add(-time.Hour)
 	removed := 0
 	removeIfStale := func(path string, info os.FileInfo) {
 		if info.ModTime().After(cutoff) {
+			return
+		}
+		if err := os.Remove(path); err == nil {
+			removed++
+		}
+	}
+	removeTmpIfStale := func(path string, info os.FileInfo) {
+		if info.ModTime().After(tmpCutoff) {
 			return
 		}
 		if err := os.Remove(path); err == nil {
@@ -499,10 +520,13 @@ func (st *agentSessionStore) cleanup() {
 	for _, e := range entries {
 		full := filepath.Join(st.dir, e.Name())
 		if !e.IsDir() {
-			if !strings.HasSuffix(e.Name(), ".jsonl") {
+			info, err := e.Info()
+			if err != nil {
 				continue
 			}
-			if info, err := e.Info(); err == nil {
+			if strings.HasSuffix(e.Name(), ".jsonl.tmp") {
+				removeTmpIfStale(full, info)
+			} else if strings.HasSuffix(e.Name(), ".jsonl") {
 				removeIfStale(full, info)
 			}
 			continue
@@ -513,10 +537,16 @@ func (st *agentSessionStore) cleanup() {
 			continue
 		}
 		for _, se := range sub {
-			if se.IsDir() || !strings.HasSuffix(se.Name(), ".jsonl") {
+			if se.IsDir() {
 				continue
 			}
-			if info, err := se.Info(); err == nil {
+			info, err := se.Info()
+			if err != nil {
+				continue
+			}
+			if strings.HasSuffix(se.Name(), ".jsonl.tmp") {
+				removeTmpIfStale(filepath.Join(full, se.Name()), info)
+			} else if strings.HasSuffix(se.Name(), ".jsonl") {
 				removeIfStale(filepath.Join(full, se.Name()), info)
 			}
 		}

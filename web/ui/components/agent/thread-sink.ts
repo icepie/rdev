@@ -21,6 +21,7 @@ import {
   parseStringArray,
   parseTodos,
   parseUsage,
+  parseWorking,
   replayHistory,
   type TurnUsage,
 } from "./protocol";
@@ -36,6 +37,9 @@ export interface ThreadSinkState {
   todos: TodoItem[];
   queue: string[];
   running: boolean;
+  /* Stop requested, server not yet acked (the turn unwind's stopped frame
+   * clears it); keeps the stop button disabled in the meantime. */
+  stopping: boolean;
   turnUsage: TurnUsage | null;
   currentTool: string;
   workingSince: number | null;
@@ -46,6 +50,7 @@ export interface ThreadSinkOps {
   setTodos: Dispatch<SetStateAction<TodoItem[]>>;
   setQueue: Dispatch<SetStateAction<string[]>>;
   setRunning: Dispatch<SetStateAction<boolean>>;
+  setStopping: Dispatch<SetStateAction<boolean>>;
   setTurnUsage: Dispatch<SetStateAction<TurnUsage | null>>;
   setCurrentTool: Dispatch<SetStateAction<string>>;
   setWorkingSince: Dispatch<SetStateAction<number | null>>;
@@ -79,11 +84,21 @@ export interface ThreadSink {
   ops: ThreadSinkOps;
 }
 
+/* True while auth_ok / thread_switched / thread_peeked replay the server's
+ * live-frame backlog: replayed frames must not restart the elapsed timer
+ * (the server's working.since already set it). */
+let liveReplay = false;
+
+export function setLiveReplay(v: boolean): void {
+  liveReplay = v;
+}
+
 export function useThreadSink(): ThreadSink {
   const [items, setItems] = useState<TranscriptItem[]>([]);
   const [todos, setTodos] = useState<TodoItem[]>([]);
   const [queue, setQueue] = useState<string[]>([]);
   const [running, setRunning] = useState(false);
+  const [stopping, setStopping] = useState(false);
   const [turnUsage, setTurnUsage] = useState<TurnUsage | null>(null);
   const [currentTool, setCurrentTool] = useState("");
   const [workingSince, setWorkingSince] = useState<number | null>(null);
@@ -209,6 +224,9 @@ export function useThreadSink(): ThreadSink {
     openToolIds.current.clear();
     setCurrentTool("");
     setWorkingSince(null);
+    // The socket carrying any in-flight stop request is gone; the user must
+    // be able to press stop again after a reconnect.
+    setStopping(false);
   }, []);
 
   const ops = useMemo<ThreadSinkOps>(
@@ -217,6 +235,7 @@ export function useThreadSink(): ThreadSink {
       setTodos,
       setQueue,
       setRunning,
+      setStopping,
       setTurnUsage,
       setCurrentTool,
       setWorkingSince,
@@ -244,8 +263,8 @@ export function useThreadSink(): ThreadSink {
   );
 
   const state = useMemo<ThreadSinkState>(
-    () => ({ items, todos, queue, running, turnUsage, currentTool, workingSince }),
-    [items, todos, queue, running, turnUsage, currentTool, workingSince],
+    () => ({ items, todos, queue, running, stopping, turnUsage, currentTool, workingSince }),
+    [items, todos, queue, running, stopping, turnUsage, currentTool, workingSince],
   );
 
   return useMemo(() => ({ state, ops }), [state, ops]);
@@ -297,17 +316,23 @@ export function applyScopedMessage(
       ops.setQueue(parseStringArray(msg.queue));
       const running = !!msg.running;
       ops.setRunning(running);
-      ops.setCurrentTool("");
-      ops.setWorkingSince(running ? Date.now() : null);
+      const peekWorking = parseWorking(msg.working, running);
+      ops.setCurrentTool(peekWorking.tool);
+      ops.setWorkingSince(peekWorking.since);
       ops.setTurnUsage(parseUsage(msg.usage));
       const history = Array.isArray(msg.history) ? msg.history : [];
       ops.setItems(replayHistory(history));
       ops.scrollDown(true);
       if (Array.isArray(msg.live)) {
-        for (const raw of msg.live) {
-          if (raw && typeof raw === "object") {
-            applyScopedMessage(ops, raw as Record<string, unknown>, t);
+        setLiveReplay(true);
+        try {
+          for (const raw of msg.live) {
+            if (raw && typeof raw === "object") {
+              applyScopedMessage(ops, raw as Record<string, unknown>, t);
+            }
           }
+        } finally {
+          setLiveReplay(false);
         }
       }
       return;
@@ -315,7 +340,9 @@ export function applyScopedMessage(
     case "turn_start":
       ops.pushBubble("user", asString(msg.text), parseStringArray(msg.images));
       ops.setRunning(true);
-      ops.setWorkingSince(Date.now());
+      /* Replayed live frames (reattach mid-turn) must not restart the
+       * elapsed timer: working.since from the server already set it. */
+      if (!liveReplay) ops.setWorkingSince(Date.now());
       ops.setCurrentTool("");
       ops.openToolIds.current.clear();
       return;
@@ -468,6 +495,7 @@ export function applyScopedMessage(
         asString(msg.text) || undefined,
       );
       ops.setRunning(false);
+      ops.setStopping(false);
       ops.setCurrentTool("");
       ops.openToolIds.current.clear();
       return;
@@ -484,19 +512,33 @@ export function applyScopedMessage(
         }
       }
       ops.setRunning(false);
+      ops.setStopping(false);
       ops.setCurrentTool("");
       ops.openToolIds.current.clear();
       return;
     }
-    case "stopped":
-      ops.finishTurn();
+    case "stopped": {
+      /* A stop of a running turn closes the transcript with a marker; the
+       * idle-stop ack (canceled:false, no open turn) is a no-op — calling
+       * finishTurn unconditionally would append a phantom empty turn. */
+      const wasOpen = ops.turnOpen.current;
+      if (wasOpen) {
+        ops.finishTurn();
+        ops.pushBubble("system", t("agent.stopped"));
+      }
       ops.setRunning(false);
+      ops.setStopping(false);
       ops.setCurrentTool("");
       ops.openToolIds.current.clear();
       return;
+    }
     case "reset_ok":
       ops.turnOpen.current = false;
       ops.setItems([]);
+      ops.setRunning(false);
+      ops.setStopping(false);
+      ops.setWorkingSince(null);
+      ops.setCurrentTool("");
       ops.pushBubble("system", t("agent.resetDone"));
       return;
   }

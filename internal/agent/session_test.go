@@ -641,3 +641,163 @@ func TestRunWithImagesSendsParts(t *testing.T) {
 		t.Fatalf("history images = %+v", hist)
 	}
 }
+
+// --- stream strictness (readStream) ---
+
+// TestReadStreamTruncatedEOF: the connection dies mid-stream with no
+// [DONE] and no finish_reason: the partial content is returned for
+// cancel-partial persistence, but the error marks the turn failed.
+func TestReadStreamTruncatedEOF(t *testing.T) {
+	msg, _, err := readStream(strings.NewReader(sseChunk("partial answer", "")), nil, nil, nil)
+	if err == nil || !strings.Contains(err.Error(), "truncated") {
+		t.Fatalf("err = %v, want truncation error", err)
+	}
+	if msg.Content != "partial answer" {
+		t.Fatalf("partial content lost: %q", msg.Content)
+	}
+}
+
+// TestReadStreamFinishLength: the model hit its output cap: the stream is
+// well-formed but the answer is incomplete and must surface as an error.
+func TestReadStreamFinishLength(t *testing.T) {
+	chunk := map[string]any{"choices": []any{map[string]any{
+		"index":         0,
+		"delta":         map[string]any{"content": "half"},
+		"finish_reason": "length",
+	}}}
+	data, _ := json.Marshal(chunk)
+	body := "data: " + string(data) + "\n\n" + sseDone
+	msg, _, err := readStream(strings.NewReader(body), nil, nil, nil)
+	if err == nil || !strings.Contains(err.Error(), "length limit") {
+		t.Fatalf("err = %v, want length-limit error", err)
+	}
+	if msg.Content != "half" {
+		t.Fatalf("content = %q", msg.Content)
+	}
+}
+
+// TestReadStreamEmptyStream: a well-formed stream that emits nothing at
+// all must fail so the caller's no-progress retry applies.
+func TestReadStreamEmptyStream(t *testing.T) {
+	_, _, err := readStream(strings.NewReader(sseDone), nil, nil, nil)
+	if err == nil || !strings.Contains(err.Error(), "empty response stream") {
+		t.Fatalf("err = %v, want empty-stream error", err)
+	}
+}
+
+// TestReadStreamKeepalivePokes: SSE comment keepalives (`: ping`) must
+// count as stream liveness, or a comment-only gateway starves the idle
+// watchdog. Non-empty lines: 2 comments + 1 [DONE] = 3 pokes.
+func TestReadStreamKeepalivePokes(t *testing.T) {
+	body := ": ping\n\n: ping\n\n" + sseDone
+	pokes := 0
+	_, _, err := readStream(strings.NewReader(body), nil, nil, func() { pokes++ })
+	if err == nil || !strings.Contains(err.Error(), "empty response stream") {
+		t.Fatalf("err = %v, want empty-stream error", err)
+	}
+	if pokes != 3 {
+		t.Fatalf("pokes = %d, want 3 (comment keepalives must poke)", pokes)
+	}
+}
+
+// --- cancel / rollback (RunTurn) ---
+
+// TestRunTurnCancelKeepsPartial: a stop mid-stream persists the partial
+// assistant answer alongside the user message.
+func TestRunTurnCancelKeepsPartial(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fl, _ := w.(http.Flusher)
+		fmt.Fprint(w, sseChunk("partial ans", ""))
+		if fl != nil {
+			fl.Flush()
+		}
+		<-r.Context().Done()
+	}))
+	defer srv.Close()
+
+	cfg := testConfig(srv.URL, nil)
+	sess := New(cfg)
+	ctx, cancel := context.WithCancel(context.Background())
+	// Signal on the first streamed delta (channel: the emit goroutine and
+	// the test goroutine must not share the collectEvents slice).
+	gotDelta := make(chan struct{})
+	var deltaOnce atomic.Bool
+	emit := func(e Event) {
+		if e.Type == EventTextDelta && deltaOnce.CompareAndSwap(false, true) {
+			close(gotDelta)
+		}
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := sess.RunTurn(ctx, "hello", nil, "", emit)
+		done <- err
+	}()
+	// Cancel once the first delta is through.
+	select {
+	case <-gotDelta:
+	case err := <-done:
+		t.Fatalf("turn ended before cancel: %v", err)
+	}
+	cancel()
+	if err := <-done; err == nil {
+		t.Fatal("cancel: want non-nil error")
+	}
+	hist := sess.History()
+	if len(hist) != 2 || hist[0].Role != "user" || hist[1].Role != "assistant" {
+		t.Fatalf("history = %+v", hist)
+	}
+	if hist[1].Content != "partial ans" {
+		t.Fatalf("partial content = %q", hist[1].Content)
+	}
+}
+
+// TestRunTurnFirstRoundFailureRollback: when the very first round fails
+// with no output on either attempt, the user message is rolled back so a
+// retry does not send two consecutive user messages.
+func TestRunTurnFirstRoundFailureRollback(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	cfg := testConfig(srv.URL, nil)
+	sess := New(cfg)
+	if _, err := sess.Run(context.Background(), "hello", nil); err == nil {
+		t.Fatal("want error")
+	}
+	if hist := sess.History(); len(hist) != 0 {
+		t.Fatalf("history not rolled back: %+v", hist)
+	}
+}
+
+// TestRunTurnLaterRoundFailureKeepsUserMessage: a failure in round 2+
+// (after a tool round already produced output) must NOT roll back the user
+// message: rollback only applies to an empty first round.
+func TestRunTurnLaterRoundFailureKeepsUserMessage(t *testing.T) {
+	tool := &fakeTool{name: "probe"}
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		round := int(hits.Add(1))
+		if round == 1 {
+			w.Header().Set("Content-Type", "text/event-stream")
+			fmt.Fprint(w, sseChunk("", "", sseToolCall("c1", "probe", "{}"))+sseDone)
+			return
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	cfg := testConfig(srv.URL, []Tool{tool})
+	sess := New(cfg)
+	if _, err := sess.Run(context.Background(), "hello", nil); err == nil {
+		t.Fatal("want error")
+	}
+	hist := sess.History()
+	if len(hist) == 0 || hist[0].Role != "user" {
+		t.Fatalf("user message lost: %+v", hist)
+	}
+	if !tool.ran {
+		t.Fatal("tool never ran")
+	}
+}

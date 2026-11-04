@@ -142,3 +142,89 @@ func TestAgentHistoryCleanupRemovesStaleThreads(t *testing.T) {
 		t.Fatal("empty device dir not removed")
 	}
 }
+
+// TestAgentHistoryCleanupRemovesStaleTmp: rewrite temp files orphaned by a
+// crash are collected after 1h, in both the per-device dirs and the legacy
+// flat layout; fresh ones survive.
+func TestAgentHistoryCleanupRemovesStaleTmp(t *testing.T) {
+	st := newAgentSessionStore(filepath.Join(t.TempDir(), "sessions"), time.Hour)
+	// Keep one live thread so the device dir survives cleanup.
+	st.save("dev1", "t_1", "m", []agent.Message{{Role: "user", Content: "x"}})
+	old := time.Now().Add(-2 * time.Hour)
+	writeTmp := func(path string, mtime time.Time) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("partial"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(path, mtime, mtime); err != nil {
+			t.Fatal(err)
+		}
+	}
+	staleDevTmp := st.path("dev1", "t_2") + ".tmp"
+	staleFlatTmp := filepath.Join(st.dir, "legacy.jsonl.tmp")
+	freshTmp := st.path("dev1", "t_3") + ".tmp"
+	writeTmp(staleDevTmp, old)
+	writeTmp(staleFlatTmp, old)
+	writeTmp(freshTmp, time.Now())
+
+	st.cleanup()
+	for _, p := range []string{staleDevTmp, staleFlatTmp} {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Fatalf("stale tmp not removed: %s", p)
+		}
+	}
+	if _, err := os.Stat(freshTmp); err != nil {
+		t.Fatalf("fresh tmp removed: %v", err)
+	}
+}
+
+// TestAgentHistorySaveTrimDropsOrphanTool: when the keep-window cut lands
+// on a tool result, the orphaned result is dropped so the rewritten file
+// never starts with role "tool" (its assistant call is gone).
+func TestAgentHistorySaveTrimDropsOrphanTool(t *testing.T) {
+	st := newTestStore(t)
+	history := make([]agent.Message, 0, agentHistoryKeepMessages+2)
+	history = append(history,
+		agent.Message{Role: "user", Content: "old"},
+		agent.Message{Role: "user", Content: "older"},
+		agent.Message{Role: "assistant", ToolCalls: []agent.ToolCall{{ID: "c1", Name: "run", Arguments: "{}"}}},
+		// The keep-window cut lands exactly on this tool result (index 3 =
+		// len-keepMessages); its assistant call (index 2) is cut away.
+		agent.Message{Role: "tool", ToolCallID: "c1", Content: "out"},
+	)
+	for len(history) < agentHistoryKeepMessages+3 {
+		history = append(history, agent.Message{Role: "user", Content: "filler"})
+	}
+	st.save("dev1", "t_1", "m", history)
+
+	msgs, _, _, _ := st.load("dev1", "t_1")
+	if len(msgs) != agentHistoryKeepMessages-1 {
+		t.Fatalf("kept = %d, want %d (cut + orphan tool drop)", len(msgs), agentHistoryKeepMessages-1)
+	}
+	if msgs[0].Role == "tool" {
+		t.Fatal("first kept message is an orphaned tool result")
+	}
+}
+
+// TestAgentHistoryListThreadsPrefersMtime: append-only saves do not
+// rewrite the meta line, so ordering must fall back to the file mtime or
+// recently-active threads sink below untouched ones.
+func TestAgentHistoryListThreadsPrefersMtime(t *testing.T) {
+	st := newTestStore(t)
+	st.save("dev1", "t_1", "m", []agent.Message{{Role: "user", Content: "one"}})
+	time.Sleep(1100 * time.Millisecond) // meta timestamps are second-granular
+	st.save("dev1", "t_2", "m", []agent.Message{{Role: "user", Content: "two"}})
+	// Append to t_1 without touching its meta line: it becomes the most
+	// recently active thread by mtime, not by meta.
+	st.save("dev1", "t_1", "m", []agent.Message{
+		{Role: "user", Content: "one"},
+		{Role: "assistant", Content: "reply"},
+	})
+	metas := st.listThreads("dev1")
+	if len(metas) != 2 || metas[0].ID != "t_1" {
+		t.Fatalf("order = %+v, want t_1 first (mtime beats stale meta)", metas)
+	}
+}
