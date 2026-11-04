@@ -1,11 +1,11 @@
+use anyhow::{Context, Result};
+use futures_util::{SinkExt, StreamExt};
 use std::{
     collections::HashMap,
     net::SocketAddr,
     sync::{Arc, Mutex},
     time::Duration,
 };
-use anyhow::{Context, Result};
-use futures_util::{SinkExt, StreamExt};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
@@ -383,11 +383,9 @@ impl ForwardManager {
                     _ = done_rx.recv() => break,
                 }
             }
-            let _ = tokio::time::timeout(
-                TUNNEL_WRITE_TIMEOUT,
-                ws_write.send(WsMessage::Close(None)),
-            )
-            .await;
+            let _ =
+                tokio::time::timeout(TUNNEL_WRITE_TIMEOUT, ws_write.send(WsMessage::Close(None)))
+                    .await;
             reader_task.abort();
             manager.connections.lock().unwrap().remove(&forward_id);
         });
