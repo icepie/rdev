@@ -179,7 +179,7 @@ jobs:
             -o go-win7.zip \
             "https://github.com/XTLS/go-win7/releases/download/${GO_WIN7_VERSION}/go-for-win7-linux-amd64.zip"
           mkdir -p /home/runner/go-win7
-          unzip -q go-win7.zip -d /home/runner/go-win7
+          unzip -oq go-win7.zip -d /home/runner/go-win7
           test -x /home/runner/go-win7/bin/go
           /home/runner/go-win7/bin/go version
 
@@ -317,7 +317,7 @@ jobs:
             -o go-win7.zip \
             "https://github.com/XTLS/go-win7/releases/download/${GO_WIN7_VERSION}/go-for-win7-linux-amd64.zip"
           mkdir -p /home/runner/go-win7
-          unzip -q go-win7.zip -d /home/runner/go-win7
+          unzip -oq go-win7.zip -d /home/runner/go-win7
           test -x /home/runner/go-win7/bin/go
           /home/runner/go-win7/bin/go version
 

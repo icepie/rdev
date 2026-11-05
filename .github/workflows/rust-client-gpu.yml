@@ -52,6 +52,14 @@ jobs:
       - name: Test
         run: cargo test
 
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Build web UI
+        working-directory: .
+        run: |
+          bun install --frozen-lockfile
+          bun run build
+
       - name: Smoke test
         working-directory: .
         run: |

@@ -4,7 +4,6 @@ FROM oven/bun:1.3.14-alpine AS web-build
 WORKDIR /src
 COPY package.json bun.lock tsconfig.json vite.config.ts ./
 COPY web ./web
-COPY internal/server/static ./internal/server/static
 RUN bun install --frozen-lockfile && bun run build
 
 FROM golang:1.26-alpine AS go-build
