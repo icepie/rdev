@@ -2841,7 +2841,9 @@ export function AgentPage() {
       {/* bb ProjectPathDialog (create mode): browse the device filesystem,
        * submit sets the thread cwd. */}
       <CreateProjectDialog
+        key={JSON.stringify([device, thread])}
         open={createProjectOpen}
+        disabled={!ready}
         onOpenChange={setCreateProjectOpen}
         initialPath={cwd}
         listDir={listDir}

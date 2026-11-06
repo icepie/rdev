@@ -34,6 +34,7 @@ export function CreateProjectDialog({
   open,
   onOpenChange,
   initialPath,
+  disabled,
   listDir,
   mkdir,
   onSubmit,
@@ -44,6 +45,7 @@ export function CreateProjectDialog({
   /* Seed path: the thread's current cwd ("" → server falls back to the
    * thread's effective working directory). */
   initialPath: string;
+  disabled?: boolean;
   listDir: (path: string) => Promise<DirListing>;
   mkdir: (path: string) => Promise<void>;
   onSubmit: (path: string) => void;
@@ -68,6 +70,7 @@ export function CreateProjectDialog({
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault();
+    if (disabled) return;
     if (!selectedPath) {
       setValidation(t("agent.chooseProjectFolder"));
       return;
@@ -101,6 +104,7 @@ export function CreateProjectDialog({
               key={initialPath}
               initialPath={initialPath}
               allowCreateFolder
+              disabled={disabled}
               onDirectoryChange={setSelectedPath}
               listDir={listDir}
               mkdir={mkdir}
@@ -123,7 +127,7 @@ export function CreateProjectDialog({
             </div>
           ) : null}
           <DialogFooter>
-            <Button type="submit" disabled={!selectedPath}>
+            <Button type="submit" disabled={disabled || !selectedPath}>
               {t("agent.addProject")}
             </Button>
           </DialogFooter>
