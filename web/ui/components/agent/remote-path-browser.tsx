@@ -85,7 +85,9 @@ export function RemotePathBrowser({
       .catch(() => {
         if (seqRef.current !== seq) return;
         setCurrent(path);
+        setParent(toBreadcrumb(path).at(-2)?.path ?? "");
         setEntries([]);
+        setRoots([]);
         setStatus("error");
       });
   };

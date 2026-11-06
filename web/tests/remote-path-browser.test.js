@@ -165,3 +165,46 @@ it("does not allow selection or creation without a resolved directory", async ()
     delete globalThis.IS_REACT_ACT_ENVIRONMENT;
   }
 });
+
+it.each([
+  ["/missing/project", "/missing"],
+  ["D:\\missing\\project", "D:\\missing"],
+  ["/", null],
+  ["D:\\", null],
+])("uses the failed path's own parent when recovering from %s", async (path, parent) => {
+  globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  const listDir = vi.fn()
+    .mockResolvedValueOnce({ path: "/old/repo", parent: "/old", entries: [], roots: [] })
+    .mockRejectedValueOnce(new Error("not found"))
+    .mockImplementation(async requested => ({ path: requested, parent: "", entries: [], roots: [] }));
+  const onDirectoryChange = vi.fn();
+  try {
+    await act(async () => root.render(createElement(RemotePathBrowser, {
+      initialPath: "/old/repo", allowCreateFolder: true, listDir, mkdir: vi.fn(), onDirectoryChange, t: key => key,
+    })));
+    await act(async () => host.querySelector('[aria-label="agent.editPath"]').click());
+    const input = host.querySelector('[aria-label="agent.projectPath"]');
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(input, path);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => host.querySelector('[aria-label="agent.goToPath"]').click());
+    expect(host.querySelector('[role="alert"]').textContent).toBe("agent.pathLoadFailed");
+    expect(onDirectoryChange).toHaveBeenLastCalledWith(null);
+    const up = host.querySelector('[aria-label="agent.goToParentFolder"]');
+    expect(up.disabled).toBe(parent === null);
+    await act(async () => up.click());
+    expect(listDir.mock.calls).toEqual(parent ? [["/old/repo"], [path], [parent]] : [["/old/repo"], [path]]);
+    if (parent) {
+      expect(onDirectoryChange).toHaveBeenLastCalledWith(parent);
+      expect(host.querySelector('[role="alert"]')).toBeNull();
+    }
+  } finally {
+    await act(async () => root.unmount());
+    host.remove();
+    delete globalThis.IS_REACT_ACT_ENVIRONMENT;
+  }
+});
