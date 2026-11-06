@@ -128,6 +128,20 @@ func TestFilterFileSearch(t *testing.T) {
 	}
 }
 
+func TestFilterFileSearchDeduplicatesAndBreaksTiesDeterministically(t *testing.T) {
+	paths := []string{"b/file.ts", "A/file.ts", "b/file.ts", "a/file.ts"}
+	got, dropped := filterFileSearch(paths, "file", 50)
+	if dropped || len(got) != 3 {
+		t.Fatalf("dedupe = %v dropped=%v", got, dropped)
+	}
+	want := []string{"A/file.ts", "a/file.ts", "b/file.ts"}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("stable ranking = %v, want %v", got, want)
+		}
+	}
+}
+
 func TestGitProbeCommands(t *testing.T) {
 	if got := gitStatusProbeCommand("linux", "/home/x/proj"); got != `git -C '/home/x/proj' status --porcelain=v1 -uall` {
 		t.Fatalf("unix status = %q", got)

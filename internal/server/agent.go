@@ -2180,7 +2180,12 @@ func filterFileSearch(paths []string, q string, limit int) ([]string, bool) {
 		baseMatch bool
 	}
 	hits := []hit{}
+	seen := make(map[string]struct{}, len(paths))
 	for _, p := range paths {
+		if _, exists := seen[p]; exists {
+			continue
+		}
+		seen[p] = struct{}{}
 		lower := strings.ToLower(p)
 		ok := true
 		for _, w := range words {
@@ -2209,7 +2214,14 @@ func filterFileSearch(paths []string, q string, limit int) ([]string, bool) {
 		if hits[i].baseMatch != hits[j].baseMatch {
 			return hits[i].baseMatch
 		}
-		return len(hits[i].path) < len(hits[j].path)
+		if len(hits[i].path) != len(hits[j].path) {
+			return len(hits[i].path) < len(hits[j].path)
+		}
+		li, lj := strings.ToLower(hits[i].path), strings.ToLower(hits[j].path)
+		if li != lj {
+			return li < lj
+		}
+		return hits[i].path < hits[j].path
 	})
 	dropped := false
 	if len(hits) > limit {
