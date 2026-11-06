@@ -124,6 +124,7 @@ export interface PaneDragItem {
 export interface FilesPaneApi {
   deviceId(): string;
   currentPath(): string;
+  directoryReady(): boolean;
   transferItemsTo(targetLeaf: number, items: PaneDragItem[]): Promise<void>;
   createDirectory(path: string, device: string): Promise<void>;
   receiveUpload(file: File, parentDir: string, device: string): void;
@@ -258,6 +259,7 @@ export function FilesBrowser({
   const transferAttempts = useRef(createTransferAttempts(makeId));
   const filesByTaskRef = useRef(new Map<string, File>());
   const currentPathRef = useRef("");
+  const directoryReadyRef = useRef(false);
   const parentPathRef = useRef("");
   const listingGuard = useRef(createListingGuard());
   const listOffsetRef = useRef(0);
@@ -721,6 +723,7 @@ export function FilesBrowser({
         }
         const append = offset > 0 && resultPath === currentPathRef.current;
         currentPathRef.current = resultPath;
+        directoryReadyRef.current = !!resultPath;
         parentPathRef.current =
           typeof msg.parent === "string" && msg.parent ? msg.parent : resultPath;
         setPathInput(resultPath);
@@ -877,6 +880,7 @@ export function FilesBrowser({
         sendQueueRef.current = [];
         endPendingRequests();
         listingGuard.current.invalidate();
+        directoryReadyRef.current = false;
         setListView((previous) => ({ ...previous, notice: tRef.current("files.connectionLost") }));
         tasksRef.current!.forEach((task) => {
           if (task.dir === "upload" && (task.status === "running" || task.status === "queued")) {
@@ -953,6 +957,7 @@ export function FilesBrowser({
       const activeDevice = activeDeviceRef.current;
       const requestId = makeId();
       const offset = append ? listOffsetRef.current : 0;
+      if (!append) directoryReadyRef.current = false;
       listingGuard.current.begin(requestId, offset);
       if (!activeDevice || !(await ensureAuth(activeDevice)) ||
           !listingGuard.current.accepts(requestId) || activeDeviceRef.current !== activeDevice) return;
@@ -986,6 +991,7 @@ export function FilesBrowser({
     (id: string) => {
       if (activeDeviceRef.current !== id) {
         listingGuard.current.invalidate();
+        directoryReadyRef.current = false;
         listedForRef.current = "";
         currentPathRef.current = "";
         parentPathRef.current = "";
@@ -1087,6 +1093,10 @@ export function FilesBrowser({
         setAlertMsg(tRef.current("files.transferNoTarget"));
         return;
       }
+      if (!target.directoryReady()) {
+        setAlertMsg(tRef.current("files.transferTargetNotReady"));
+        return;
+      }
       const sourceDevice = activeDeviceRef.current;
       const destination = { targetLeaf, device: target.deviceId(), parentDir: target.currentPath() };
       try {
@@ -1112,6 +1122,7 @@ export function FilesBrowser({
     panesRef.current.set(leafId, {
       deviceId: () => activeDeviceRef.current,
       currentPath: () => currentPathRef.current,
+      directoryReady: () => directoryReadyRef.current,
       transferItemsTo,
       receiveUpload: startUpload,
       createDirectory,

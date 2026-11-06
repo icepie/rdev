@@ -556,6 +556,7 @@ export const dictionaries = {
     "files.transferTo": "Transfer to {device}",
     "files.noOtherPane": "No other pane",
     "files.paginationFailed": "The device returned an invalid directory page. Refresh the directory or update the device client.",
+    "files.transferTargetNotReady": "Load a destination folder before copying files. Refresh it if loading failed.",
     "files.transferIntoSelf": "Choose a destination outside the folder being copied.",
     "files.transferNoTarget": "Target pane has no device selected"
   },
@@ -1115,6 +1116,7 @@ export const dictionaries = {
     "files.transferTo": "传输到 {device}",
     "files.noOtherPane": "没有其他栏位",
     "files.paginationFailed": "设备返回的目录分页无效，请刷新目录或更新设备客户端。",
+    "files.transferTargetNotReady": "请先加载目标文件夹再复制文件；加载失败时请刷新重试。",
     "files.transferIntoSelf": "请选择源文件夹及其子目录以外的位置。",
     "files.transferNoTarget": "目标栏位未选择设备"
   }

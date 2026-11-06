@@ -125,11 +125,27 @@ it.each([false, true])("isolates reconnect attempts and waits for device authent
     await act(async () => targetSocket.open());
     await act(async () => fixtures.shell.onDevicePick("device-b"));
     expect(fixtures.shell.selectedDevice).toBe("device-b");
-    const targetList = targetSocket.sent.filter(m => m.op === "list").at(-1);
+    let targetList = targetSocket.sent.filter(m => m.op === "list").at(-1);
+    const blockedItems = [{ name: "not-ready", path: "/not-ready", isDir: true, size: 0 }];
+    const assertTransferBlocked = async () => {
+      const sent = second.sent.length;
+      await act(async () => fixtures.panes.current.get(0).transferItemsTo(1, blockedItems));
+      expect(second.sent).toHaveLength(sent);
+      expect(targetSocket.sent.some(m => m.op === "mkdir")).toBe(false);
+      expect(fixtures.panes.current.get(1).directoryReady()).toBe(false);
+    };
+    await assertTransferBlocked();
+    await act(async () => targetSocket.message({ op: "error", requestId: targetList.requestId, message: "cannot list destination" }));
+    await assertTransferBlocked();
+    const targetRefresh = [...document.querySelectorAll('button[aria-label="files.refresh"]')].at(-1);
+    await act(async () => targetRefresh.click());
+    targetList = targetSocket.sent.filter(m => m.op === "list").at(-1);
+    await assertTransferBlocked();
     expect(targetList.deviceId).toBe("device-b");
     await act(async () => targetSocket.message({ op: "list_result", requestId: targetList.requestId, path: "/destination", entries: [] }));
     expect(fixtures.panes.current.get(0).deviceId()).toBe("device-a");
     expect(fixtures.panes.current.get(1).deviceId()).toBe("device-b");
+    expect(fixtures.panes.current.get(1).directoryReady()).toBe(true);
     let copied;
     await act(async () => {
       copied = fixtures.panes.current.get(0).transferItemsTo(1, [{ name: "empty", path: "/empty", isDir: true, size: 0 }]);
@@ -142,6 +158,8 @@ it.each([false, true])("isolates reconnect attempts and waits for device authent
     expect(mkdir).toMatchObject({ deviceId: "device-b", path: "/destination/empty" });
     await act(async () => targetSocket.message({ op: "mkdir_result", requestId: mkdir.requestId, success: true }));
     await copied;
+    const refreshedTarget = targetSocket.sent.filter(m => m.op === "list").at(-1);
+    await act(async () => targetSocket.message({ op: "list_result", requestId: refreshedTarget.requestId, path: "/destination", entries: [] }));
     await act(async () => toggle.click());
     expect(fixtures.shell.selectedDevice).toBe("device-a");
     expect(document.querySelectorAll("section")[1].hidden).toBe(true);
