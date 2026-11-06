@@ -10,6 +10,7 @@ REMOTE_DIR=${RDEV_GPU_WIN7_REMOTE_DIR:-C:/Windows/Temp/rdev-gpu-win7}
 REMOTE_DIR_WIN=${REMOTE_DIR//\//\\}
 DEVICE_ID=${RDEV_GPU_WIN7_DEVICE_ID:-win7-rgpu-smoke}
 DEVICE_PASSWORD=${RDEV_GPU_WIN7_DEVICE_PASSWORD:-smoke}
+ADMIN_TOKEN=${RDEV_GPU_WIN7_ADMIN_TOKEN:-win7-rgpu-smoke-admin}
 BASE=${RDEV_GPU_WIN7_SMOKE_DIR:-/data/tmp/rdev-client-gpu-win7-smoke}
 SERVER_HOST=${RDEV_GPU_WIN7_SERVER_HOST:-}
 
@@ -110,7 +111,7 @@ stop_remote_client
 sshpass -p "$PASSWORD" ssh "${SSH_OPTS[@]}" "$REMOTE" "C:\\Windows\\System32\\cmd.exe /c \"if not exist $REMOTE_DIR_WIN mkdir $REMOTE_DIR_WIN & del /q $REMOTE_DIR_WIN\\* 2>nul\"" >/dev/null
 sshpass -p "$PASSWORD" scp -P "$PORT" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$ROOT"/clients/rdev-client-gpu/target/win7-dist/* "$REMOTE:$REMOTE_DIR/" >/dev/null
 
-"$SERVER_BIN" --http "0.0.0.0:$HTTP_PORT" --ssh "127.0.0.1:$SSH_PORT" --data "$BASE/data" >"$SERVER_LOG" 2>&1 &
+"$SERVER_BIN" --http "0.0.0.0:$HTTP_PORT" --ssh "127.0.0.1:$SSH_PORT" --data "$BASE/data" --admin-token "$ADMIN_TOKEN" >"$SERVER_LOG" 2>&1 &
 SERVER_PID=$!
 
 sshpass -p "$PASSWORD" ssh "${SSH_OPTS[@]}" "$REMOTE" \
@@ -119,7 +120,7 @@ sshpass -p "$PASSWORD" ssh "${SSH_OPTS[@]}" "$REMOTE" \
 REMOTE_SSH_PID=$!
 
 for i in $(seq 1 100); do
-  if curl -fsS "http://127.0.0.1:$HTTP_PORT/api/clients" 2>/dev/null | grep -q "$DEVICE_ID"; then
+  if curl -fsS "http://127.0.0.1:$HTTP_PORT/api/clients?token=$ADMIN_TOKEN" 2>/dev/null | grep -q "$DEVICE_ID"; then
     break
   fi
   sleep 0.25

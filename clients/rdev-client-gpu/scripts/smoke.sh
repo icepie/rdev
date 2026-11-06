@@ -5,6 +5,7 @@ ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)
 BASE=${RDEV_GPU_SMOKE_DIR:-/tmp/rdev-client-gpu-smoke}
 PASSWORD=${RDEV_GPU_SMOKE_PASSWORD:-smoke}
 DEVICE_ID=${RDEV_GPU_SMOKE_ID:-rgpu-smoke}
+ADMIN_TOKEN=${RDEV_GPU_SMOKE_ADMIN_TOKEN:-rgpu-smoke-admin}
 
 free_port() {
   python3 - <<'PY'
@@ -49,7 +50,7 @@ mkdir -p "$DATA"
 go build -o "$SERVER_BIN" "$ROOT/cmd/rdev-server"
 cargo build --release --manifest-path "$ROOT/clients/rdev-client-gpu/Cargo.toml"
 
-"$SERVER_BIN" --http "127.0.0.1:$HTTP_PORT" --ssh "127.0.0.1:$SSH_PORT" --data "$DATA" >"$SERVER_LOG" 2>&1 &
+"$SERVER_BIN" --http "127.0.0.1:$HTTP_PORT" --ssh "127.0.0.1:$SSH_PORT" --data "$DATA" --admin-token "$ADMIN_TOKEN" >"$SERVER_LOG" 2>&1 &
 SERVER_PID=$!
 "$CLIENT_BIN" --server "ws://127.0.0.1:$HTTP_PORT" --id "$DEVICE_ID" --password "$PASSWORD" --no-desktop >"$CLIENT_LOG" 2>&1 &
 CLIENT_PID=$!
@@ -72,7 +73,7 @@ cleanup() {
 trap cleanup EXIT
 
 for i in $(seq 1 80); do
-  if curl -fsS "http://127.0.0.1:$HTTP_PORT/api/clients" 2>/dev/null | grep -q "$DEVICE_ID"; then
+  if curl -fsS "http://127.0.0.1:$HTTP_PORT/api/clients?token=$ADMIN_TOKEN" 2>/dev/null | grep -q "$DEVICE_ID"; then
     break
   fi
   sleep 0.25
