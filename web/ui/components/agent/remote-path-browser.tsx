@@ -20,6 +20,7 @@ export interface DirEntry {
 }
 
 export interface DirListing {
+  path: string;
   parent: string;
   entries: DirEntry[];
   roots: string[];
@@ -73,12 +74,13 @@ export function RemotePathBrowser({
     listDir(path)
       .then((listing) => {
         if (seqRef.current !== seq) return;
-        setCurrent(path);
+        if (!listing.path) throw new Error("Missing resolved directory path");
+        setCurrent(listing.path);
         setParent(listing.parent);
         setEntries(listing.entries);
         setRoots(listing.roots);
         setStatus("ready");
-        onDirectoryChangeRef.current(path);
+        onDirectoryChangeRef.current(listing.path);
       })
       .catch(() => {
         if (seqRef.current !== seq) return;

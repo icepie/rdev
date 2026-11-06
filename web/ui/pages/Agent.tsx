@@ -965,7 +965,7 @@ export function AgentPage() {
         const roots = (Array.isArray(msg.roots) ? msg.roots : []).flatMap(
           (x): string[] => (typeof x === "string" && x ? [x] : []),
         );
-        pending.resolve({ parent: asString(msg.parent), entries, roots });
+        pending.resolve({ path, parent: asString(msg.parent), entries, roots });
         break;
       }
       case "dir_mkdir": {

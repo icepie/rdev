@@ -24,7 +24,7 @@ it("keeps failed paths unselectable and restores creation only after a successfu
     expect(listDir.mock.calls).toEqual([["/repo"], ["/repo"]]);
     expect(host.querySelector('[aria-label="agent.newFolder"]').disabled).toBe(true);
     expect(host.querySelector('[role="alert"]')).toBeNull();
-    await act(async () => retry.resolve({ parent: "/", entries: [], roots: [] }));
+    await act(async () => retry.resolve({ path: "/repo", parent: "/", entries: [], roots: [] }));
     expect(host.querySelector('[aria-label="agent.newFolder"]').disabled).toBe(false);
     expect(onDirectoryChange).toHaveBeenLastCalledWith("/repo");
   } finally {
@@ -41,7 +41,7 @@ it.each(["resolve", "reject"])("ignores stale folder creation %s after a directo
   const root = createRoot(host);
   const creation = Promise.withResolvers();
   const mkdir = vi.fn(() => creation.promise);
-  const listDir = vi.fn(async () => ({ parent: "/", entries: [], roots: [] }));
+  const listDir = vi.fn(async (path) => ({ path, parent: "/", entries: [], roots: [] }));
   const onDirectoryChange = vi.fn();
   const props = { initialPath: "/old", allowCreateFolder: true, mkdir, listDir, onDirectoryChange, t: key => key };
   const render = () => act(async () => root.render(createElement(RemotePathBrowser, props)));
@@ -76,9 +76,9 @@ it("keeps retry accessible when navigation fails with a folder draft open", asyn
   const root = createRoot(host);
   const failed = Promise.withResolvers();
   const listDir = vi.fn()
-    .mockResolvedValueOnce({ parent: "/", entries: [], roots: [] })
+    .mockResolvedValueOnce({ path: "/old", parent: "/", entries: [], roots: [] })
     .mockReturnValueOnce(failed.promise)
-    .mockResolvedValue({ parent: "/", entries: [], roots: [] });
+    .mockResolvedValue({ path: "/", parent: "/", entries: [], roots: [] });
   const props = { initialPath: "/old", allowCreateFolder: true, mkdir: vi.fn(), listDir, onDirectoryChange: vi.fn(), t: key => key };
   try {
     await act(async () => root.render(createElement(RemotePathBrowser, props)));
@@ -102,6 +102,63 @@ it("keeps retry accessible when navigation fails with a folder draft open", asyn
     await act(async () => host.querySelector('[aria-label="agent.newFolder"]').click());
     expect(host.querySelector('[aria-label="agent.folderName"]').value).toBe("");
     expect(host.querySelector('button[aria-label="agent.createFolder"]').disabled).toBe(true);
+  } finally {
+    await act(async () => root.unmount());
+    host.remove();
+    delete globalThis.IS_REACT_ACT_ENVIRONMENT;
+  }
+});
+
+it.each([
+  ["/home/user", "/home/user/child"],
+  ["C:\\Users\\user", "C:\\Users\\user\\child"],
+])("uses the resolved default directory %s for selection and creation", async (path, child) => {
+  globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  const listDir = vi.fn(async (requested) => ({ path: requested || path, parent: "", entries: [], roots: [] }));
+  const mkdir = vi.fn().mockResolvedValue(undefined);
+  const onDirectoryChange = vi.fn();
+  try {
+    await act(async () => root.render(createElement(RemotePathBrowser, {
+      initialPath: "", allowCreateFolder: true, listDir, mkdir, onDirectoryChange, t: key => key,
+    })));
+    expect(listDir).toHaveBeenCalledWith("");
+    expect(onDirectoryChange).toHaveBeenLastCalledWith(path);
+    expect([...host.querySelectorAll("button")].some(button => button.textContent === "user")).toBe(true);
+    await act(async () => host.querySelector('[aria-label="agent.newFolder"]').click());
+    const input = host.querySelector('[aria-label="agent.folderName"]');
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(input, "child");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => host.querySelector('button[aria-label="agent.createFolder"]').click());
+    expect(mkdir).toHaveBeenCalledExactlyOnceWith(child);
+    expect(listDir).toHaveBeenLastCalledWith(child);
+    expect(onDirectoryChange).toHaveBeenLastCalledWith(child);
+  } finally {
+    await act(async () => root.unmount());
+    host.remove();
+    delete globalThis.IS_REACT_ACT_ENVIRONMENT;
+  }
+});
+
+it("does not allow selection or creation without a resolved directory", async () => {
+  globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  const onDirectoryChange = vi.fn();
+  try {
+    await act(async () => root.render(createElement(RemotePathBrowser, {
+      initialPath: "", allowCreateFolder: true,
+      listDir: async () => ({ path: "", parent: "", entries: [], roots: [] }),
+      mkdir: vi.fn(), onDirectoryChange, t: key => key,
+    })));
+    expect(onDirectoryChange).toHaveBeenCalledExactlyOnceWith(null);
+    expect(host.querySelector('[aria-label="agent.newFolder"]').disabled).toBe(true);
+    expect(host.querySelector('[role="alert"]').textContent).toBe("agent.pathLoadFailed");
   } finally {
     await act(async () => root.unmount());
     host.remove();
