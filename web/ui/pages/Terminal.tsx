@@ -1,3 +1,4 @@
+import { useDevicePassword } from "../hooks/use-device-password";
 import {
   useCallback,
   useEffect,
@@ -16,7 +17,6 @@ import { useI18n } from "../lib/i18n";
 import { useDevices } from "../lib/devices";
 import {
   wsURL,
-  getDevicePassword,
   rememberDevicePassword,
   forgetDevicePassword,
 } from "../lib/api";
@@ -1028,45 +1028,11 @@ export function TabAuthOverlay({
   onSubmit: (pw: string) => void;
   t: (k: string, v?: Record<string, string | number>) => string;
 }) {
-  const [value, setValue] = useState(() => getDevicePassword(deviceId));
-  const [busy, setBusy] = useState(false);
+  const { value, setValue, busy, submit } = useDevicePassword({
+    device: deviceId, error, onSubmit, clearOnError: true,
+  });
   const inputRef = useRef<HTMLInputElement>(null);
-  const autoSubmitted = useRef("");
-  const rememberedPassword = useRef("");
-
-  const submit = () => {
-    if (!value) return;
-    setBusy(true);
-    onSubmit(value);
-  };
-
-  // A tab can be retargeted without unmounting the overlay; reset device state.
-  useEffect(() => {
-    const password = getDevicePassword(deviceId);
-    autoSubmitted.current = deviceId;
-    rememberedPassword.current = password;
-    setValue(password);
-    setBusy(false);
-    inputRef.current?.focus();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [deviceId]);
-
-  // Auto-submit a remembered password once per device and overlay.
-  useEffect(() => {
-    if (!value || value !== rememberedPassword.current || autoSubmitted.current.endsWith(":submitted")) return;
-    autoSubmitted.current = `${deviceId}:submitted`;
-    const timer = setTimeout(submit, 50);
-    return () => clearTimeout(timer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [deviceId, value]);
-
-  useEffect(() => {
-    if (error) {
-      setBusy(false);
-      setValue("");
-      inputRef.current?.focus();
-    }
-  }, [error]);
+  useEffect(() => { inputRef.current?.focus(); }, [deviceId, error]);
 
   return (
     <div className="absolute inset-0 z-10 flex overflow-y-auto bg-background/90 p-3">

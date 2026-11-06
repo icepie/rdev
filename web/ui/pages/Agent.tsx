@@ -1,3 +1,4 @@
+import { useDevicePassword } from "../hooks/use-device-password";
 import { shouldTogglePanel } from "../components/agent/panel-shortcut";
 import { isImeComposing } from "../lib/keyboard";
 import { ThreadRenameDialog, type RenameTarget } from "../components/agent/thread-rename-dialog";
@@ -27,7 +28,6 @@ import { useI18n } from "../lib/i18n";
 import { useDevices } from "../lib/devices";
 import {
   wsURL,
-  getDevicePassword,
   rememberDevicePassword,
   forgetDevicePassword,
 } from "../lib/api";
@@ -2913,43 +2913,9 @@ function PasswordDialog({
   onSubmit: (pw: string) => void;
   t: (k: string, v?: Record<string, string | number>) => string;
 }) {
-  const [value, setValue] = useState("");
-  const [busy, setBusy] = useState(false);
-
-  useEffect(() => {
-    if (open) {
-      setValue(getDevicePassword(device));
-      setBusy(false);
-    }
-  }, [open, device]);
-
-  const submit = () => {
-    if (!value) return;
-    setBusy(true);
-    onSubmit(value);
-  };
-
-  // Auto-submit a remembered password once per dialog open, like the vanilla page.
-  const autoSubmitted = useRef("");
-  useEffect(() => {
-    const key = `${open ? "open" : "closed"}:${device}`;
-    if (!open) {
-      autoSubmitted.current = key;
-      return;
-    }
-    if (autoSubmitted.current !== key) autoSubmitted.current = key;
-  }, [open, device]);
-  useEffect(() => {
-    if (open && value && !autoSubmitted.current.endsWith(":submitted")) {
-      autoSubmitted.current += ":submitted";
-      submit();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, value]);
-
-  useEffect(() => {
-    if (error) setBusy(false);
-  }, [error]);
+  const { value, setValue, busy, submit } = useDevicePassword({
+    device, open, error, onSubmit,
+  });
 
   return (
     <AlertDialog open={open}>
