@@ -66,6 +66,9 @@ export function RemotePathBrowser({
     const seq = ++seqRef.current;
     setStatus("loading");
     setEditing(false);
+    setCreating(false);
+    setFolderName("");
+    setFolderErr("");
     onDirectoryChangeRef.current(null);
     listDir(path)
       .then((listing) => {
@@ -121,16 +124,14 @@ export function RemotePathBrowser({
       .then(() => {
         // The user may have navigated while mkdir was in flight. Do not
         // unexpectedly pull the browser back to the old directory.
-        if (seqRef.current !== navigationSeq) {
-          setCreating(false);
-          setFolderName("");
-          return;
-        }
-        setCreating(false);
-        setFolderName("");
+        if (seqRef.current !== navigationSeq) return;
         navigate(path);
       })
-      .catch(() => setFolderErr(t("agent.folderCreateFailed")))
+      .catch(() => {
+        if (seqRef.current === navigationSeq) {
+          setFolderErr(t("agent.folderCreateFailed"));
+        }
+      })
       .finally(() => {
         folderSubmitting.current = false;
         setFolderBusy(false);
