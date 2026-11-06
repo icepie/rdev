@@ -35,6 +35,11 @@ export function createListingGuard() {
     accepts(id: string) {
       return id !== "" && id === latest;
     },
+    consume(id: string) {
+      if (!id || id !== latest) return false;
+      latest = "";
+      return true;
+    },
     offset() { return offset; },
   };
 }

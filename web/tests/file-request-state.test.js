@@ -111,3 +111,26 @@ it("reselecting a file resumes the original task destination and rejects mismatc
   ).toBeNull();
   expect(uploadResumeRequest(task, { ...file, size: 43 })).toBeNull();
 });
+
+it("consumes each visible page once while allowing a failed page to be retried", () => {
+  const guard = createListingGuard();
+  guard.begin("first-page");
+  expect(guard.consume("first-page")).toBe(true);
+  expect(guard.consume("first-page")).toBe(false);
+  expect(guard.accepts("first-page")).toBe(false);
+  guard.begin("second-page", 100);
+  expect(guard.consume("first-page")).toBe(false);
+  expect(guard.accepts("second-page")).toBe(true);
+  expect(guard.consume("second-page")).toBe(true);
+  // The error handler still needs the offset after consuming the reply.
+  expect(guard.offset()).toBe(100);
+  guard.begin("retry-page", 100);
+  expect(guard.consume("second-page")).toBe(false);
+  expect(guard.consume("retry-page")).toBe(true);
+  expect(guard.offset()).toBe(100);
+  expect(guard.consume("retry-page")).toBe(false);
+  guard.begin("other-device");
+  guard.invalidate();
+  expect(guard.consume("other-device")).toBe(false);
+  expect(guard.consume("")).toBe(false);
+});

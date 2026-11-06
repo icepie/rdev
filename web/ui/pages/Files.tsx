@@ -696,8 +696,16 @@ export function FilesBrowser({
           }
           return;
         }
-        if (!listingGuard.current.accepts(rid)) return;
+        if (!listingGuard.current.consume(rid)) return;
         if (msg.error) {
+          if (listingGuard.current.offset() > 0) {
+            // Keep the loaded pages and their next offset available for retry.
+            setAlertMsg(String(msg.error));
+            return;
+          }
+          listOffsetRef.current = 0;
+          listTotalRef.current = 0;
+          listTruncatedRef.current = false;
           setEntries([]);
           setListView({ notice: String(msg.error), truncated: false, shown: 0, total: 0 });
           return;

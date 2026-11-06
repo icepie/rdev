@@ -91,11 +91,31 @@ it.each([false, true])("isolates reconnect attempts and waits for device authent
     const listing = second.sent.filter(m => m.op === "list").at(-1);
     await act(async () => first.message({ op: "list_result", requestId: listing.requestId, path: "/stale", entries: [] }));
     expect(document.querySelector('input').value).not.toBe("/stale");
-    await act(async () => second.message({ op: "list_result", requestId: listing.requestId, path: "/current", entries: [] }));
+    await act(async () => second.message({ op: "list_result", requestId: listing.requestId, path: "/current", total: 2, truncated: true, entries: [{ name: "first.txt", path: "/current/first.txt", size: 1 }] }));
     expect(document.querySelector('input').value).toBe("/current");
     expect(document.querySelector("table").textContent).not.toContain("files.connectionLost");
     await act(async () => second.message({ op: "error", requestId: listing.requestId, message: "directory unavailable" }));
-    expect(document.body.textContent).toContain("directory unavailable");
+    expect(document.body.textContent).not.toContain("directory unavailable");
+    const loadMore = () => [...document.querySelectorAll("button")].find(b => b.textContent === "files.loadMore");
+    await act(async () => loadMore().click());
+    if (protectedDevice) await act(async () => second.message({ op: "auth_ok", deviceId: "device-a" }));
+    const nextPage = second.sent.filter(m => m.op === "list").at(-1);
+    expect(nextPage).toMatchObject({ path: "/current", offset: 1 });
+    await act(async () => second.message({ op: "error", requestId: nextPage.requestId, message: "page unavailable" }));
+    expect(document.querySelector("table").textContent).toContain("first.txt");
+    expect(loadMore()).toBeDefined();
+    await act(async () => loadMore().click());
+    if (protectedDevice) await act(async () => second.message({ op: "auth_ok", deviceId: "device-a" }));
+    const retryPage = second.sent.filter(m => m.op === "list").at(-1);
+    expect(retryPage).toMatchObject({ path: "/current", offset: 1 });
+    expect(retryPage.requestId).not.toBe(nextPage.requestId);
+    const page = { op: "list_result", requestId: retryPage.requestId, path: "/current", offset: 1, total: 2,
+      entries: [{ name: "second.txt", path: "/current/second.txt", size: 1 }] };
+    await act(async () => second.message(page));
+    await act(async () => second.message(page));
+    expect(document.querySelector("table").textContent.match(/second\.txt/g)).toHaveLength(1);
+    expect(document.querySelector("table").textContent).toContain("first.txt");
+    expect(loadMore()).toBeUndefined();
 
     // The actual page exposes a second pane without replacing the first browser.
     const toggle = [...document.querySelectorAll("button")].find(b => b.textContent === "files.showSecondPane");
