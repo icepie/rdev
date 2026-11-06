@@ -692,7 +692,7 @@ function FilePreview({
 /* bb "new tab" page: file search (bb NewTabFileSearch, scoped port:
  * query input + debounced search_files + keyboard navigation), Actions
  * (jump to pinned tabs), recently closed. */
-function NewTabPage({
+export function NewTabPage({
   recent,
   onOpenChanges,
   onOpenInfo,
@@ -716,11 +716,15 @@ function NewTabPage({
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<string[] | null>(null);
   const [searching, setSearching] = useState(false);
+  const [searchFailed, setSearchFailed] = useState(false);
+  const [retry, setRetry] = useState(0);
   const [activeIdx, setActiveIdx] = useState(0);
   const seqRef = useRef(0);
 
   useEffect(() => {
     const q = query.trim();
+    setResults(null);
+    setSearchFailed(false);
     if (!q) {
       seqRef.current++;
       setResults(null);
@@ -730,15 +734,22 @@ function NewTabPage({
     setSearching(true);
     const seq = ++seqRef.current;
     const timer = window.setTimeout(() => {
-      void onSearchFiles(q).then((files) => {
+      void Promise.resolve().then(() => onSearchFiles(q)).then((files) => {
         if (seqRef.current !== seq) return;
         setResults(files);
         setActiveIdx(0);
         setSearching(false);
+      }).catch(() => {
+        if (seqRef.current !== seq) return;
+        setSearching(false);
+        setSearchFailed(true);
       });
     }, 250);
-    return () => window.clearTimeout(timer);
-  }, [query, onSearchFiles]);
+    return () => {
+      window.clearTimeout(timer);
+      seqRef.current++;
+    };
+  }, [query, onSearchFiles, retry]);
 
   const pick = (path: string) => {
     seqRef.current++;
@@ -775,13 +786,22 @@ function NewTabPage({
           autoFocus
           placeholder={t("agent.searchFilesPlaceholder")}
           className="h-7 w-full rounded-md border border-border bg-background pr-2 pl-7 text-xs outline-none placeholder:text-muted-foreground/70 focus:border-timeline-accent"
-          onChange={(e) => setQuery(e.target.value)}
+          onChange={(e) => {
+            seqRef.current++;
+            setResults(null);
+            setQuery(e.target.value);
+          }}
           onKeyDown={onSearchKeyDown}
         />
       </div>
       {query.trim() !== "" && (
         <div>
-          {searching && results === null ? (
+          {searchFailed ? (
+            <div className="flex items-center gap-2 px-1 py-1.5 text-xs">
+              <span role="alert" className="text-destructive-text">{t("agent.searchFailed")}</span>
+              <Button size="sm" variant="outline" onClick={() => setRetry(value => value + 1)}>{t("agent.retry")}</Button>
+            </div>
+          ) : searching && results === null ? (
             <div className="flex items-center gap-2 px-1 py-1.5 text-xs text-muted-foreground">
               <Icon name="Spinner" className="size-3.5 animate-spin" />
               {t("agent.searching")}

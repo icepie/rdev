@@ -622,6 +622,7 @@ export function AgentPage() {
       string,
       {
         resolve: (files: string[]) => void;
+        reject: (error: Error) => void;
         timer: number;
         id: string;
       }
@@ -640,27 +641,27 @@ export function AgentPage() {
     }
     for (const [key, pending] of searchReqsRef.current) {
       window.clearTimeout(pending.timer);
-      pending.resolve([]);
+      pending.reject(new Error(reason));
       searchReqsRef.current.delete(key);
     }
   }, []);
   const requestFileSearch = useCallback((q: string): Promise<string[]> => {
     const ws = wsRef.current;
-    if (!ws || ws.readyState !== WebSocket.OPEN) return Promise.resolve([]);
-    const { promise, resolve } = Promise.withResolvers<string[]>();
+    if (!ws || ws.readyState !== WebSocket.OPEN) return Promise.reject(new Error("offline"));
+    const { promise, resolve, reject } = Promise.withResolvers<string[]>();
     const prev = searchReqsRef.current.get(q);
     if (prev) {
       window.clearTimeout(prev.timer);
-      prev.resolve([]);
+      prev.reject(new Error("superseded"));
     }
     const id = `search_${++requestSeqRef.current}`;
     const timer = window.setTimeout(() => {
       const current = searchReqsRef.current.get(q);
       if (current?.id !== id) return;
       searchReqsRef.current.delete(q);
-      resolve([]);
+      reject(new Error("timeout"));
     }, 8000);
-    searchReqsRef.current.set(q, { resolve, timer, id });
+    searchReqsRef.current.set(q, { resolve, reject, timer, id });
     ws.send(JSON.stringify({ op: "search_files", id, q }));
     return promise;
   }, []);
@@ -1010,6 +1011,10 @@ export function AgentPage() {
         const pending = takePendingResponse(searchReqsRef.current, asString(msg.id), q);
         if (pending) {
           window.clearTimeout(pending.timer);
+          if (asString(msg.message)) {
+            pending.reject(new Error(asString(msg.message)));
+            break;
+          }
           const files = (Array.isArray(msg.files) ? msg.files : []).flatMap(
             (x): string[] => (typeof x === "string" ? [x] : []),
           );
