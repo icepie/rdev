@@ -32,7 +32,26 @@ import type {
   TurnItem,
 } from "./types";
 
+export interface AgentJob {
+  id: string;
+  kind: string;
+  label: string;
+  state: "running" | "completed" | "failed" | "canceled";
+  output?: string;
+  result?: string;
+  error?: string;
+}
+
+function parseJob(value: unknown): AgentJob | null {
+  if (!value || typeof value !== "object") return null;
+  const job = value as Record<string, unknown>;
+  if (typeof job.id !== "string" || !["running", "completed", "failed", "canceled"].includes(String(job.state))) return null;
+  return { id: job.id, kind: asString(job.kind), label: asString(job.label), state: job.state as AgentJob["state"], output: asString(job.output), result: asString(job.result), error: asString(job.error) };
+}
+
 export interface ThreadSinkState {
+  jobs: AgentJob[];
+  jobsError: string;
   items: TranscriptItem[];
   todos: TodoItem[];
   queue: string[];
@@ -46,6 +65,8 @@ export interface ThreadSinkState {
 }
 
 export interface ThreadSinkOps {
+  setJobsError: Dispatch<SetStateAction<string>>;
+  setJobs: Dispatch<SetStateAction<AgentJob[]>>;
   setItems: Dispatch<SetStateAction<TranscriptItem[]>>;
   setTodos: Dispatch<SetStateAction<TodoItem[]>>;
   setQueue: Dispatch<SetStateAction<string[]>>;
@@ -96,6 +117,8 @@ export function setLiveReplay(v: boolean): void {
 }
 
 export function useThreadSink(): ThreadSink {
+  const [jobsError, setJobsError] = useState("");
+  const [jobs, setJobs] = useState<AgentJob[]>([]);
   const [items, setItems] = useState<TranscriptItem[]>([]);
   const [todos, setTodos] = useState<TodoItem[]>([]);
   const [queue, setQueue] = useState<string[]>([]);
@@ -233,6 +256,8 @@ export function useThreadSink(): ThreadSink {
 
   const reset = useCallback(() => {
     resetTransient();
+    setJobs([]);
+    setJobsError("");
     setItems([]);
     setTodos([]);
     setQueue([]);
@@ -242,6 +267,8 @@ export function useThreadSink(): ThreadSink {
 
   const ops = useMemo<ThreadSinkOps>(
     () => ({
+      setJobs,
+      setJobsError,
       setItems,
       setTodos,
       setQueue,
@@ -276,8 +303,8 @@ export function useThreadSink(): ThreadSink {
   );
 
   const state = useMemo<ThreadSinkState>(
-    () => ({ items, todos, queue, running, stopping, turnUsage, currentTool, workingSince }),
-    [items, todos, queue, running, stopping, turnUsage, currentTool, workingSince],
+    () => ({ jobs, jobsError, items, todos, queue, running, stopping, turnUsage, currentTool, workingSince }),
+    [jobs, jobsError, items, todos, queue, running, stopping, turnUsage, currentTool, workingSince],
   );
 
   return useMemo(() => ({ state, ops }), [state, ops]);
@@ -320,6 +347,41 @@ export function applyScopedMessage(
   t: Translator,
 ): void {
   switch (String(msg.op)) {
+    case "job_error":
+      ops.setJobsError(asString(msg.message) || t("common.error"));
+      return;
+    case "jobs":
+      ops.setJobs((previous) => (Array.isArray(msg.items) ? msg.items : []).flatMap((item) => {
+        const job = parseJob(item);
+        if (!job) return [];
+        const old = previous.find((entry) => entry.id === job.id);
+        const raw = item && typeof item === "object" ? item as Record<string, unknown> : {};
+        return [{
+          ...job,
+          output: typeof raw.output === "string" ? job.output : old?.output,
+          result: typeof raw.result === "string" ? job.result : old?.result,
+          error: typeof raw.error === "string" ? job.error : old?.error,
+        }];
+      }));
+      return;
+    case "job": {
+      ops.setJobsError("");
+      const job = parseJob(msg.items);
+      if (job) ops.setJobs((previous) => previous.some((entry) => entry.id === job.id)
+        ? previous.map((entry) => {
+            if (entry.id !== job.id) return entry;
+            const raw = msg.items && typeof msg.items === "object" ? msg.items as Record<string, unknown> : {};
+            return {
+              ...entry,
+              ...job,
+              output: typeof raw.output === "string" ? job.output : entry.output,
+              result: typeof raw.result === "string" ? job.result : entry.result,
+              error: typeof raw.error === "string" ? job.error : entry.error,
+            };
+          })
+        : [...previous, job]);
+      return;
+    }
     case "thread_peeked": {
       /* Read-only snapshot for a secondary pane: history + live frames,
        * without switching the connection's current thread. */
@@ -489,6 +551,13 @@ export function applyScopedMessage(
       const usage = msg.usage;
       const doneUsage = parseUsage(usage);
       if (doneUsage) ops.setTurnUsage(doneUsage);
+      if (msg.compacted === true && Array.isArray(msg.history)) {
+        ops.setItems(replayHistory(msg.history));
+        ops.setRunning(false);
+        ops.resetTransient();
+        ops.scrollDown(true);
+        return;
+      }
       ops.finishTurn(
         usage && typeof usage === "object"
           ? {

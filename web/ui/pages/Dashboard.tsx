@@ -587,10 +587,10 @@ export function DashboardPage() {
   });
 
   return (
-    <div className="mx-auto flex w-full min-w-0 max-w-7xl flex-col gap-4 px-3 py-4 sm:px-5 sm:py-6">
+    <div className="page-content">
       {/* Heading */}
       <div>
-        <h1 className="flex items-center gap-2 text-2xl font-bold tracking-tight">
+        <h1 className="page-title">
           <button
             type="button"
             aria-label={t("nav.label")}

@@ -1,3 +1,9 @@
+import { createKeyedRequest } from "../lib/keyed-request";
+import { createTransferAttempts } from "../lib/file-transfer-attempts";
+import { walkTransferFiles, type TransferDestination } from "../lib/file-transfer-route";
+import { encodeFrame, decodeFrame } from "../lib/file-transfer-frame";
+import { uploadChunks } from "../lib/upload-chunks";
+import { canResumeUpload, createListingGuard, readListingPage, restoreFileTask, uploadResumeRequest } from "../lib/file-request-state";
 import {
   useCallback,
   useEffect,
@@ -64,8 +70,6 @@ const FRAME_UPLOAD_ACK = 0x21;
 const FRAME_DOWNLOAD_CHUNK = 0x22;
 const FRAME_DOWNLOAD_END = 0x23;
 
-const enc = new TextEncoder();
-const dec = new TextDecoder();
 
 /* ── Types ── */
 
@@ -106,7 +110,7 @@ interface FileTask {
   waitAck?: (() => void) | null;
   /* Cross-pane transfer: on completion the bytes go to the target pane's
    * upload queue (parentDir on the target device) instead of a browser save. */
-  transfer?: { targetLeaf: number; parentDir: string };
+  transfer?: TransferDestination;
 }
 
 /* Drag payload + inter-pane API for moving files between split panes. */
@@ -121,7 +125,8 @@ export interface FilesPaneApi {
   deviceId(): string;
   currentPath(): string;
   transferItemsTo(targetLeaf: number, items: PaneDragItem[]): Promise<void>;
-  receiveUpload(file: File, parentDir: string): void;
+  createDirectory(path: string, device: string): Promise<void>;
+  receiveUpload(file: File, parentDir: string, device: string): void;
 }
 
 interface ListView {
@@ -161,32 +166,10 @@ function updateSpeed(task: FileTask) {
       : 0;
 }
 
-function encodeFrame(typ: number, taskId: string, offset: number, payload?: ArrayBuffer) {
-  const idb = enc.encode(taskId);
-  const data = payload ? new Uint8Array(payload) : new Uint8Array(0);
-  const buf = new ArrayBuffer(2 + idb.length + 8 + data.length);
-  const out = new Uint8Array(buf);
-  const view = new DataView(buf);
-  out[0] = typ;
-  out[1] = idb.length;
-  out.set(idb, 2);
-  view.setBigUint64(2 + idb.length, BigInt(offset));
-  out.set(data, 2 + idb.length + 8);
-  return buf;
-}
-
-function decodeFrame(buf: ArrayBuffer) {
-  const u = new Uint8Array(buf);
-  const len = u[1];
-  const taskId = dec.decode(u.slice(2, 2 + len));
-  const offset = Number(new DataView(buf).getBigUint64(2 + len));
-  return { typ: u[0], taskId, offset, payload: buf.slice(2 + len + 8) };
-}
-
-function loadPersistedTasks(): Map<string, FileTask> {
+function loadPersistedTasks(reselectMessage: string): Map<string, FileTask> {
   try {
     const raw = JSON.parse(localStorage.getItem(TASKS_KEY) || "[]") as FileTask[];
-    return new Map(raw.map((task) => [task.id, task]));
+    return new Map(raw.map((task) => [task.id, restoreFileTask(task, reselectMessage)]));
   } catch {
     return new Map();
   }
@@ -230,13 +213,15 @@ const EMPTY_PARAMS = new URLSearchParams();
 /* One file-browser instance = one split leaf. Only the primary (first) pane
  * syncs ?device= to the URL and loads/persists the transfer-task list, so
  * sibling panes never fight over shared storage. */
-function FilesBrowser({
+export function FilesBrowser({
   primary,
   deviceRequest,
+  onDeviceChange,
   leafId,
   panesRef,
 }: {
   primary: boolean;
+  onDeviceChange?: (device: string) => void;
   /* Rail click/drop requests: {id, seq} identity change → open that device. */
   deviceRequest?: { id: string; seq: number };
   /* Pane identity + registry for cross-pane transfers. */
@@ -249,9 +234,11 @@ function FilesBrowser({
   const searchParams = primary ? urlParams : EMPTY_PARAMS;
 
   const [device, setDeviceState] = useState("");
+  useEffect(() => { onDeviceChange?.(device); }, [device, onDeviceChange]);
   const [pathInput, setPathInput] = useState("");
   const [entries, setEntries] = useState<FileEntry[]>([]);
   const [listView, setListView] = useState<ListView>({ truncated: false, shown: 0, total: 0 });
+  const [tasksOpen, setTasksOpen] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [alertMsg, setAlertMsg] = useState("");
   const [pwDialog, setPwDialog] = useState<{ deviceId: string; message: string } | null>(null);
@@ -265,14 +252,18 @@ function FilesBrowser({
   const reconnectTimerRef = useRef(0);
   const tasksRef = useRef<Map<string, FileTask> | null>(null);
   if (!tasksRef.current)
-    tasksRef.current = primary ? loadPersistedTasks() : new Map();
+    tasksRef.current = primary ? loadPersistedTasks(t("files.reselect")) : new Map();
   const tasks = tasksRef.current;
+  const transferAuth = useRef(new Map<string, string>());
+  const transferAttempts = useRef(createTransferAttempts(makeId));
   const filesByTaskRef = useRef(new Map<string, File>());
   const currentPathRef = useRef("");
   const parentPathRef = useRef("");
+  const listingGuard = useRef(createListingGuard());
   const listOffsetRef = useRef(0);
   const listTotalRef = useRef(0);
   const listTruncatedRef = useRef(false);
+  const uploadRunsRef = useRef(new Map<string, AbortController>());
   const activeDeviceRef = useRef("");
   const listedForRef = useRef("");
   const devicesRef = useRef(devices);
@@ -280,6 +271,8 @@ function FilesBrowser({
   const tRef = useRef(t);
   tRef.current = t;
   const pwReqRef = useRef<{ deviceId: string; resolve: (pw: string | null) => void } | null>(null);
+  const connectionEpoch = useRef(0);
+  const authRequests = useRef(createKeyedRequest<boolean>());
   const authWaitersRef = useRef(
     new Map<string, { resolve: (ok: boolean) => void; pw: string; timer: number }>(),
   );
@@ -290,13 +283,22 @@ function FilesBrowser({
       string,
       {
         path: string;
+        device: string;
         entries: FileEntry[];
         resolve: (entries: FileEntry[]) => void;
         reject: (e: Error) => void;
       }
     >(),
   );
+  const directoryWaiters = useRef(new Map<string, { resolve(): void; reject(error: Error): void }>());
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const reselectTaskRef = useRef<string | null>(null);
+  useEffect(() => {
+    const input = fileInputRef.current;
+    const canceled = () => { reselectTaskRef.current = null; };
+    input?.addEventListener("cancel", canceled);
+    return () => input?.removeEventListener("cancel", canceled);
+  }, []);
   /* Latest list() for WS handlers declared before it. */
   const listRef = useRef<(path: string, append?: boolean) => Promise<void>>(
     () => Promise.resolve(),
@@ -332,15 +334,21 @@ function FilesBrowser({
   );
 
   const ensureAuth = useCallback(
-    async (deviceId: string): Promise<boolean> => {
+    (deviceId: string): Promise<boolean> => authRequests.current(deviceId, async () => {
+      const epoch = connectionEpoch.current;
+      const socket = wsRef.current;
+      const connected = () => epoch === connectionEpoch.current && socket === wsRef.current && socket?.readyState === WebSocket.OPEN;
+      if (!connected()) return false;
       const dev = devicesRef.current.find((d) => d.id === deviceId);
       if (!dev || !dev.hasPassword) return true;
-      if (await deviceAuthBypassed()) return true;
+      const bypassed = await deviceAuthBypassed();
+      if (!connected()) return false;
+      if (bypassed) return true;
       const pw = await requestDevicePassword(
         deviceId,
         tRef.current("files.authRequired", { id: deviceId }),
       );
-      if (!pw) return false;
+      if (!pw || !connected()) return false;
       send({ op: "auth", deviceId, password: pw });
       const { promise, resolve } = Promise.withResolvers<boolean>();
       const timer = window.setTimeout(() => {
@@ -349,9 +357,46 @@ function FilesBrowser({
       }, 30000);
       authWaitersRef.current.set(deviceId, { resolve, pw, timer });
       return promise;
-    },
+    }),
     [requestDevicePassword, send],
   );
+
+  // New operations must never be replayed on a later connection.
+  const requireConnectedDevice = useCallback(async (device: string): Promise<void> => {
+    const socket = wsRef.current;
+    const epoch = connectionEpoch.current;
+    if (!device || socket?.readyState !== WebSocket.OPEN) {
+      throw new Error(tRef.current("files.connectionLost"));
+    }
+    const authorized = await ensureAuth(device);
+    if (epoch !== connectionEpoch.current || socket !== wsRef.current || socket.readyState !== WebSocket.OPEN) {
+      throw new Error(tRef.current("files.connectionLost"));
+    }
+    if (!authorized) throw new Error(tRef.current("files.authCanceled"));
+  }, [ensureAuth]);
+
+  const startTransfer = useCallback((task: FileTask, request: Record<string, unknown>) => {
+    const previous = transferAttempts.current.current(task.id);
+    if (previous && wsRef.current?.readyState === WebSocket.OPEN) send({ op: "cancel", taskId: previous, offset: task.done || 0 });
+    const wireId = transferAttempts.current.begin(task.id);
+    const epoch = connectionEpoch.current;
+    transferAuth.current.set(task.id, wireId);
+    const current = () => epoch === connectionEpoch.current &&
+      transferAttempts.current.current(task.id) === wireId &&
+      (task.status === "running" || task.status === "queued");
+    void requireConnectedDevice(task.device).then(() => {
+      if (!current()) return;
+      send({ ...request, deviceId: task.device, taskId: wireId });
+    }).catch((error) => {
+      if (!current()) return;
+      task.status = "failed";
+      task.message = error instanceof Error ? error.message : String(error);
+      saveTasks();
+      bump();
+    }).finally(() => {
+      if (transferAuth.current.get(task.id) === wireId) transferAuth.current.delete(task.id);
+    });
+  }, [send, requireConnectedDevice, saveTasks, bump]);
 
   /* ── Downloads ── */
 
@@ -372,16 +417,15 @@ function FilesBrowser({
       task.message = message || "";
       task.lastRequested = Date.now();
       saveTasks();
-      send({
+      startTransfer(task, {
         op: "download_start",
         deviceId: task.device,
-        taskId: task.id,
         path: task.path,
         offset: resumeOffset,
       });
       bump();
     },
-    [saveTasks, send, bump],
+    [saveTasks, send, bump, startTransfer],
   );
 
   const finishDownload = useCallback(
@@ -396,13 +440,19 @@ function FilesBrowser({
        * queue instead of saving in the browser. */
       if (task.transfer) {
         const target = panesRef.current.get(task.transfer.targetLeaf);
-        if (target) {
-          target.receiveUpload(
-            new File(task.blobParts, task.name || "download"),
-            task.transfer.parentDir,
-          );
+        if (!target || !task.transfer.device) {
+          task.status = "failed";
+          task.message = tRef.current("files.transferNoTarget");
+          saveTasks();
+          return;
         }
+        target.receiveUpload(
+          new File(task.blobParts, task.name || "download"),
+          task.transfer.parentDir,
+          task.transfer.device,
+        );
         task.saved = true;
+        task.blobParts = undefined;
         saveTasks();
         return;
       }
@@ -416,6 +466,7 @@ function FilesBrowser({
         a.remove();
       }, 1000);
       task.saved = true;
+      task.blobParts = undefined;
       saveTasks();
     },
     [resumeDownload, saveTasks, panesRef],
@@ -423,7 +474,7 @@ function FilesBrowser({
 
   const completeDownload = useCallback(
     (task: FileTask, offset: number) => {
-      if (!task || task.dir !== "download" || task.saved) return;
+      if (!task || task.dir !== "download" || task.saved || task.status !== "running") return;
       const finalOffset = Number(offset || task.done || 0);
       if (task.size && finalOffset < task.size) {
         task.done = Math.max(task.done || 0, finalOffset);
@@ -444,9 +495,9 @@ function FilesBrowser({
       path: string,
       name: string,
       size: number,
-      transfer?: { targetLeaf: number; parentDir: string },
+      transfer?: TransferDestination,
+      activeDevice = activeDeviceRef.current,
     ) => {
-      const activeDevice = activeDeviceRef.current;
       const now = Date.now();
       const task: FileTask = {
         id: makeId(),
@@ -467,48 +518,65 @@ function FilesBrowser({
       tasksRef.current!.set(task.id, task);
       saveTasks();
       bump();
-      send({ op: "download_start", deviceId: activeDevice, taskId: task.id, path, offset: 0 });
+      startTransfer(task, { op: "download_start", path, offset: 0 });
     },
-    [saveTasks, send, bump],
+    [saveTasks, send, bump, startTransfer],
   );
 
   /* ── Uploads ── */
 
+  const stopUpload = useCallback((task: FileTask) => {
+    uploadRunsRef.current.get(task.id)?.abort();
+    uploadRunsRef.current.delete(task.id);
+    task.waitAck = null;
+  }, []);
+
   const uploadLoop = useCallback(
     async (task: FileTask) => {
-      const file = filesByTaskRef.current.get(task.id);
-      if (!file) {
-        task.status = "failed";
-        task.message = tRef.current("files.reselect");
-        saveTasks();
-        bump();
-        return;
+      stopUpload(task);
+      const wireId = transferAttempts.current.current(task.id);
+      if (!wireId) return;
+      const controller = new AbortController();
+      uploadRunsRef.current.set(task.id, controller);
+      try {
+        const file = filesByTaskRef.current.get(task.id);
+        if (!file) throw new Error(tRef.current("files.reselect"));
+        const complete = await uploadChunks({
+          file, chunkSize: CHUNK, offset: () => task.done || 0, signal: controller.signal,
+          write: (chunk, offset) => {
+            const ws = wsRef.current;
+            if (!ws || ws.readyState !== WebSocket.OPEN) throw new Error(tRef.current("files.disconnected"));
+            const ack = Promise.withResolvers<void>();
+            task.waitAck = ack.resolve;
+            ws.send(encodeFrame(FRAME_UPLOAD_CHUNK, wireId, offset, chunk));
+            return ack.promise;
+          },
+        });
+        if (complete && !controller.signal.aborted && transferAttempts.current.current(task.id) === wireId && task.status === "running") send({ op: "upload_end", taskId: wireId, path: task.path, size: file.size });
+      } catch (error) {
+        if (!controller.signal.aborted) {
+          task.status = "failed";
+          task.message = error instanceof Error ? error.message : String(error);
+          saveTasks();
+          bump();
+        }
+      } finally {
+        if (uploadRunsRef.current.get(task.id) === controller) {
+          uploadRunsRef.current.delete(task.id);
+          task.waitAck = null;
+        }
       }
-      for (let off = task.done || 0; off < file.size; off = task.done) {
-        if (task.status !== "running") return;
-        const chunk = await file.slice(off, off + CHUNK).arrayBuffer();
-        const ws = wsRef.current;
-        if (!ws || ws.readyState !== WebSocket.OPEN) return;
-        ws.send(encodeFrame(FRAME_UPLOAD_CHUNK, task.id, off, chunk));
-        const ack = Promise.withResolvers<void>();
-        task.waitAck = ack.resolve;
-        await ack.promise;
-      }
-      send({ op: "upload_end", taskId: task.id, path: task.path, size: file.size });
     },
-    [saveTasks, send, bump],
+    [saveTasks, send, bump, stopUpload],
   );
 
   const startUpload = useCallback(
-    (file: File, destDir?: string) => {
-      const activeDevice = activeDeviceRef.current;
+    (file: File, destDir?: string, activeDevice = activeDeviceRef.current) => {
       if (!activeDevice || !file) return;
+      const parentDir = destDir ?? currentPathRef.current;
       const pending = [...tasksRef.current!.values()].find(
         (task) =>
-          task.dir === "upload" &&
-          task.status === "failed" &&
-          task.name === file.name &&
-          task.size === file.size &&
+          canResumeUpload(task, { device: activeDevice, path: parentDir, name: file.name, size: file.size }) &&
           !filesByTaskRef.current.has(task.id),
       );
       if (pending) {
@@ -517,10 +585,9 @@ function FilesBrowser({
         pending.message = "";
         saveTasks();
         bump();
-        send({
+        startTransfer(pending, {
           op: "upload_start",
           deviceId: pending.device,
-          taskId: pending.id,
           parentPath: pending.parentPath,
           name: pending.name,
           size: pending.size,
@@ -528,7 +595,6 @@ function FilesBrowser({
         });
         return;
       }
-      const parentDir = destDir ?? currentPathRef.current;
       const task: FileTask = {
         id: makeId(),
         dir: "upload",
@@ -545,17 +611,16 @@ function FilesBrowser({
       filesByTaskRef.current.set(task.id, file);
       saveTasks();
       bump();
-      send({
+      startTransfer(task, {
         op: "upload_start",
         deviceId: activeDevice,
-        taskId: task.id,
         parentPath: parentDir,
         name: file.name,
         size: file.size,
         modTime: new Date(file.lastModified).toISOString(),
       });
     },
-    [saveTasks, send, bump],
+    [saveTasks, send, bump, startTransfer],
   );
 
   /* ── WS message handlers ── */
@@ -584,7 +649,18 @@ function FilesBrowser({
               : tRef.current("common.passwordWrong"),
           );
         }
+        if (msg.op !== "auth_required" || (!msg.taskId && !msg.requestId)) return;
+        msg = { ...msg, op: "error" };
+      }
+      const directoryRequest = typeof msg.requestId === "string" ? directoryWaiters.current.get(msg.requestId) : undefined;
+      if (directoryRequest && (msg.op === "mkdir_result" || msg.op === "error")) {
+        directoryWaiters.current.delete(String(msg.requestId));
+        if (msg.op === "mkdir_result" && msg.success === true) directoryRequest.resolve();
+        else directoryRequest.reject(new Error(String(msg.error || msg.message || tRef.current("common.error"))));
         return;
+      }
+      if (msg.op === "error" && msg.requestId) {
+        msg = { ...msg, op: "list_result", error: msg.message || msg.error || tRef.current("common.error") };
       }
       if (msg.op === "list_result") {
         const rid = typeof msg.requestId === "string" ? msg.requestId : "";
@@ -598,12 +674,17 @@ function FilesBrowser({
             return;
           }
           const page = (Array.isArray(msg.entries) ? msg.entries : []) as FileEntry[];
+          const pagination = readListingPage(msg, waiter.entries.length, page.length);
+          if (!pagination) {
+            listWaitersRef.current.delete(rid);
+            waiter.reject(new Error(tRef.current("files.paginationFailed")));
+            return;
+          }
           waiter.entries = waiter.entries.concat(page);
-          const total = Number(msg.total || msg.fileMode || waiter.entries.length);
-          if (msg.truncated || waiter.entries.length < total) {
+          if (pagination.more) {
             send({
               op: "list",
-              deviceId: activeDeviceRef.current,
+              deviceId: waiter.device,
               requestId: rid,
               path: waiter.path,
               offset: waiter.entries.length,
@@ -615,6 +696,7 @@ function FilesBrowser({
           }
           return;
         }
+        if (!listingGuard.current.accepts(rid)) return;
         if (msg.error) {
           setEntries([]);
           setListView({ notice: String(msg.error), truncated: false, shown: 0, total: 0 });
@@ -623,16 +705,21 @@ function FilesBrowser({
         const resultPath = typeof msg.path === "string" && msg.path ? msg.path : currentPathRef.current;
         const offset = Number(msg.offset || 0);
         const newEntries = (Array.isArray(msg.entries) ? msg.entries : []) as FileEntry[];
+        const pagination = readListingPage(msg, listingGuard.current.offset(), newEntries.length);
+        if (!pagination) {
+          listTruncatedRef.current = false;
+          setListView((previous) => ({ ...previous, truncated: false, notice: tRef.current("files.paginationFailed") }));
+          return;
+        }
         const append = offset > 0 && resultPath === currentPathRef.current;
         currentPathRef.current = resultPath;
         parentPathRef.current =
           typeof msg.parent === "string" && msg.parent ? msg.parent : resultPath;
         setPathInput(resultPath);
         setEntries((prev) => (append ? prev.concat(newEntries) : newEntries));
-        listOffsetRef.current = offset + newEntries.length;
-        listTotalRef.current = Number(msg.total || msg.fileMode || listOffsetRef.current);
-        listTruncatedRef.current =
-          !!msg.truncated || listOffsetRef.current < listTotalRef.current;
+        listOffsetRef.current = pagination.nextOffset;
+        listTotalRef.current = pagination.total;
+        listTruncatedRef.current = pagination.more;
         setListView({
           truncated: listTruncatedRef.current,
           shown: append ? listOffsetRef.current : newEntries.length,
@@ -641,14 +728,16 @@ function FilesBrowser({
         return;
       }
       const taskId = typeof msg.taskId === "string" ? msg.taskId : "";
-      const task = tasksRef.current!.get(taskId);
+      const task = tasksRef.current!.get(transferAttempts.current.resolve(taskId) || "");
       if (msg.op === "upload_ready" && task) {
+        if (task.status !== "queued" && task.status !== "running") return;
         task.path = typeof msg.path === "string" ? msg.path : task.path;
         task.done = Number(msg.offset || 0);
         task.status = "running";
         saveTasks();
         void uploadLoop(task);
       } else if (msg.op === "download_start" && task) {
+        if (task.dir !== "download" || task.status !== "running" || task.saved) return;
         task.size = Number(msg.size || 0) || task.size;
         task.name = typeof msg.name === "string" && msg.name ? msg.name : task.name;
         task.status = "running";
@@ -660,8 +749,18 @@ function FilesBrowser({
         completeDownload(task, Number(msg.offset || task.done || 0));
         /* Upload finished (browser upload or cross-pane transfer): refresh
          * the visible listing so the new file shows up. */
-        if (task.dir === "upload") void listRef.current(currentPathRef.current);
+        if (task.dir === "upload" && task.status === "running") {
+          stopUpload(task);
+          task.status = "completed";
+          task.done = task.size;
+          task.message = "";
+          filesByTaskRef.current.delete(task.id);
+          saveTasks();
+          if (task.device === activeDeviceRef.current && task.parentPath === currentPathRef.current) void listRef.current(currentPathRef.current);
+        }
       } else if ((msg.op === "transfer_error" || msg.op === "error") && task) {
+        if (task.status !== "running" && task.status !== "queued") return;
+        stopUpload(task);
         task.status = "failed";
         task.message =
           (typeof msg.message === "string" && msg.message) ||
@@ -669,20 +768,28 @@ function FilesBrowser({
           tRef.current("common.error");
         saveTasks();
       } else if (msg.op === "canceled" && task) {
-        task.status = "canceled";
+        if (task.status === "completed" || task.status === "failed") return;
+        stopUpload(task);
+        if (task.status !== "paused") {
+          task.status = "canceled";
+          task.blobParts = undefined;
+          filesByTaskRef.current.delete(task.id);
+        }
         saveTasks();
       }
       bump();
     },
-    [saveTasks, uploadLoop, completeDownload, bump, send],
+    [saveTasks, uploadLoop, completeDownload, bump, send, stopUpload],
   );
 
   const onBinary = useCallback(
     (buf: ArrayBuffer) => {
       const f = decodeFrame(buf);
-      const task = tasksRef.current!.get(f.taskId);
+      if (!f) return;
+      const task = tasksRef.current!.get(transferAttempts.current.resolve(f.taskId) || "");
       if (!task) return;
       if (f.typ === FRAME_UPLOAD_ACK) {
+        if (task.dir !== "upload" || task.status !== "running") return;
         task.done = f.offset;
         updateSpeed(task);
         saveTasks();
@@ -692,6 +799,7 @@ function FilesBrowser({
           r();
         }
       } else if (f.typ === FRAME_DOWNLOAD_CHUNK) {
+        if (task.dir !== "download" || task.status !== "running" || task.saved) return;
         if (f.offset === (task.done || 0)) {
           task.blobParts = task.blobParts || [];
           task.blobParts.push(f.payload);
@@ -729,6 +837,7 @@ function FilesBrowser({
       ws.binaryType = "arraybuffer";
       wsRef.current = ws;
       ws.onopen = () => {
+        if (disposed || wsRef.current !== ws) return;
         reconnectDelayRef.current = 1000;
         const queue = sendQueueRef.current;
         while (queue.length && ws.readyState === WebSocket.OPEN) ws.send(queue.shift()!);
@@ -737,11 +846,15 @@ function FilesBrowser({
             resumeDownload(task, task.done || 0, tRef.current("files.resuming"));
           }
         });
+        if (activeDeviceRef.current) void listRef.current(currentPathRef.current);
       };
       ws.onmessage = (evt) => {
+        if (disposed || wsRef.current !== ws) return;
         if (evt.data instanceof ArrayBuffer) return onBinary(evt.data);
         if (evt.data instanceof Blob) {
-          void evt.data.arrayBuffer().then(onBinary);
+          void evt.data.arrayBuffer().then((data) => {
+            if (!disposed && wsRef.current === ws) onBinary(data);
+          });
           return;
         }
         try {
@@ -753,13 +866,45 @@ function FilesBrowser({
       ws.onclose = () => {
         if (wsRef.current === ws) wsRef.current = null;
         if (disposed) return;
+        sendQueueRef.current = [];
+        endPendingRequests();
+        listingGuard.current.invalidate();
+        setListView((previous) => ({ ...previous, notice: tRef.current("files.connectionLost") }));
+        tasksRef.current!.forEach((task) => {
+          if (task.dir === "upload" && (task.status === "running" || task.status === "queued")) {
+            stopUpload(task);
+            task.status = "failed";
+            task.message = tRef.current("files.disconnected");
+          }
+        });
+        saveTasks();
+        bump();
         window.clearTimeout(reconnectTimerRef.current);
         reconnectTimerRef.current = window.setTimeout(connect, nextDelay());
       };
     };
+    const endPendingRequests = () => {
+      connectionEpoch.current++;
+      transferAuth.current.clear();
+      pwReqRef.current?.resolve(null);
+      pwReqRef.current = null;
+      if (!disposed) setPwDialog(null);
+      for (const waiter of listWaitersRef.current.values()) waiter.reject(new Error(tRef.current("files.connectionLost")));
+      listWaitersRef.current.clear();
+      for (const waiter of directoryWaiters.current.values()) waiter.reject(new Error(tRef.current("files.connectionLost")));
+      directoryWaiters.current.clear();
+      for (const waiter of authWaitersRef.current.values()) {
+        window.clearTimeout(waiter.timer);
+        waiter.resolve(false);
+      }
+      authWaitersRef.current.clear();
+    };
     connect();
     return () => {
       disposed = true;
+      endPendingRequests();
+      uploadRunsRef.current.forEach(controller => controller.abort());
+      uploadRunsRef.current.clear();
       window.clearTimeout(reconnectTimerRef.current);
       const ws = wsRef.current;
       if (ws) {
@@ -768,7 +913,7 @@ function FilesBrowser({
         wsRef.current = null;
       }
     };
-  }, [onBinary, onText, resumeDownload]);
+  }, [onBinary, onText, resumeDownload, stopUpload, saveTasks, bump, ensureAuth]);
 
   /* Speed sampling + stalled-download watchdog + task re-render, every 500ms. */
   useEffect(() => {
@@ -777,6 +922,8 @@ function FilesBrowser({
       tasksRef.current!.forEach((task) => {
         if (task.status === "running") updateSpeed(task);
         if (
+          wsRef.current?.readyState === WebSocket.OPEN &&
+          !transferAuth.current.has(task.id) &&
           task.dir === "download" &&
           task.status === "running" &&
           !task.saved &&
@@ -796,9 +943,12 @@ function FilesBrowser({
   const list = useCallback(
     async (path: string, append = false) => {
       const activeDevice = activeDeviceRef.current;
-      if (!activeDevice || !(await ensureAuth(activeDevice))) return;
-      const targetPath = append ? currentPathRef.current : path;
+      const requestId = makeId();
       const offset = append ? listOffsetRef.current : 0;
+      listingGuard.current.begin(requestId, offset);
+      if (!activeDevice || !(await ensureAuth(activeDevice)) ||
+          !listingGuard.current.accepts(requestId) || activeDeviceRef.current !== activeDevice) return;
+      const targetPath = append ? currentPathRef.current : path;
       if (!append) {
         setEntries([]);
         listOffsetRef.current = 0;
@@ -814,7 +964,7 @@ function FilesBrowser({
       send({
         op: "list",
         deviceId: activeDevice,
-        requestId: makeId(),
+        requestId,
         path: targetPath,
         offset,
         limit: FILE_LIST_LIMIT,
@@ -826,6 +976,18 @@ function FilesBrowser({
 
   const setDevice = useCallback(
     (id: string) => {
+      if (activeDeviceRef.current !== id) {
+        listingGuard.current.invalidate();
+        listedForRef.current = "";
+        currentPathRef.current = "";
+        parentPathRef.current = "";
+        listOffsetRef.current = 0;
+        listTotalRef.current = 0;
+        listTruncatedRef.current = false;
+        setEntries([]);
+        setPathInput("");
+        setListView({ truncated: false, shown: 0, total: 0 });
+      }
       setDeviceState(id);
       activeDeviceRef.current = id;
       if (primary) {
@@ -855,11 +1017,8 @@ function FilesBrowser({
   /* Full (paginated) listing of one directory without touching the visible
    * listing; used by recursive transfer walks. */
   const listDirAll = useCallback(
-    async (path: string): Promise<FileEntry[]> => {
-      const activeDevice = activeDeviceRef.current;
-      if (!activeDevice || !(await ensureAuth(activeDevice))) {
-        throw new Error("device unavailable");
-      }
+    async (path: string, activeDevice: string): Promise<FileEntry[]> => {
+      await requireConnectedDevice(activeDevice);
       const requestId = makeId();
       const { promise, resolve, reject } = Promise.withResolvers<FileEntry[]>();
       const timer = window.setTimeout(() => {
@@ -869,6 +1028,7 @@ function FilesBrowser({
       }, 30000);
       listWaitersRef.current.set(requestId, {
         path,
+        device: activeDevice,
         entries: [],
         resolve: (v) => {
           window.clearTimeout(timer);
@@ -889,12 +1049,29 @@ function FilesBrowser({
       });
       return promise;
     },
-    [ensureAuth, send],
+    [requireConnectedDevice, send],
   );
+
+  const createDirectory = useCallback(async (path: string, device: string): Promise<void> => {
+    await requireConnectedDevice(device);
+    const requestId = makeId();
+    const { promise, resolve, reject } = Promise.withResolvers<void>();
+    const timer = window.setTimeout(() => {
+      directoryWaiters.current.delete(requestId);
+      reject(new Error(tRef.current("files.directoryTimeout")));
+    }, 30000);
+    directoryWaiters.current.set(requestId, {
+      resolve: () => { window.clearTimeout(timer); resolve(); },
+      reject: (error) => { window.clearTimeout(timer); reject(error); },
+    });
+    send({ op: "mkdir", requestId, deviceId: device, path });
+    await promise;
+    if (activeDeviceRef.current === device) void listRef.current(currentPathRef.current);
+  }, [requireConnectedDevice, send]);
 
   /* Transfer entries from THIS pane's device to another pane's device:
    * files download to memory here, then upload there; directories walk
-   * recursively (the target creates subdirs on upload). */
+   * recursively, explicitly creating empty directories on the destination. */
   const transferItemsTo = useCallback(
     async (targetLeaf: number, items: PaneDragItem[]) => {
       const target = panesRef.current.get(targetLeaf);
@@ -902,24 +1079,20 @@ function FilesBrowser({
         setAlertMsg(tRef.current("files.transferNoTarget"));
         return;
       }
-      const destBase = target.currentPath();
-      const walk = async (item: PaneDragItem, parentRel: string): Promise<void> => {
-        if (!item.isDir) {
-          startDownload(item.path, item.name, item.size, {
-            targetLeaf,
-            parentDir: destBase + parentRel,
-          });
-          return;
-        }
-        const sub = await listDirAll(item.path);
-        for (const e of sub) {
-          await walk(
-            { name: e.name, isDir: e.isDir, size: e.size, path: e.path },
-            parentRel + "/" + item.name,
-          );
-        }
-      };
-      for (const item of items) await walk(item, "");
+      const sourceDevice = activeDeviceRef.current;
+      const destination = { targetLeaf, device: target.deviceId(), parentDir: target.currentPath() };
+      try {
+        if (!sourceDevice) return;
+        await walkTransferFiles(items, sourceDevice, destination, {
+          list: listDirAll,
+          mkdir: (path, device) => target.createDirectory(path, device),
+          download: (item, device, transfer) => {
+            startDownload(item.path, item.name, item.size, transfer, device);
+          },
+        });
+      } catch (error) {
+        setAlertMsg(error instanceof Error ? error.message : String(error));
+      }
     },
     [panesRef, startDownload, listDirAll],
   );
@@ -931,11 +1104,12 @@ function FilesBrowser({
       currentPath: () => currentPathRef.current,
       transferItemsTo,
       receiveUpload: startUpload,
+      createDirectory,
     });
     return () => {
       panesRef.current.delete(leafId);
     };
-  }, [leafId, panesRef, transferItemsTo, startUpload]);
+  }, [leafId, panesRef, transferItemsTo, startUpload, createDirectory]);
 
   /* Rail pick/drop → open the requested device in this pane. */
   useEffect(() => {
@@ -960,8 +1134,9 @@ function FilesBrowser({
   const taskAction = useCallback(
     (task: FileTask, act: "pause" | "resume" | "cancel" | "clear") => {
       if (act === "pause") {
+        stopUpload(task);
         task.status = "paused";
-        send({ op: "cancel", taskId: task.id, offset: task.done || 0 });
+        send({ op: "cancel", taskId: transferAttempts.current.current(task.id), offset: task.done || 0 });
       }
       if (act === "resume") {
         task.status = "running";
@@ -969,14 +1144,14 @@ function FilesBrowser({
         if (task.dir === "upload") {
           const file = filesByTaskRef.current.get(task.id);
           if (!file) {
+            reselectTaskRef.current = task.id;
             fileInputRef.current?.click();
             task.status = "failed";
             task.message = tRef.current("files.reselect");
           } else {
-            send({
+            startTransfer(task, {
               op: "upload_start",
               deviceId: task.device,
-              taskId: task.id,
               parentPath: task.parentPath,
               name: task.name,
               size: task.size,
@@ -988,21 +1163,48 @@ function FilesBrowser({
         }
       }
       if (act === "cancel") {
+        stopUpload(task);
         task.status = "canceled";
-        send({ op: "cancel", taskId: task.id, offset: task.done || 0 });
+        task.blobParts = undefined;
+        filesByTaskRef.current.delete(task.id);
+        send({ op: "cancel", taskId: transferAttempts.current.current(task.id), offset: task.done || 0 });
       }
-      if (act === "clear") tasksRef.current!.delete(task.id);
+      if (act === "clear") {
+        stopUpload(task);
+        transferAttempts.current.remove(task.id);
+        tasksRef.current!.delete(task.id);
+        filesByTaskRef.current.delete(task.id);
+      }
       saveTasks();
       bump();
     },
-    [resumeDownload, saveTasks, send, bump],
+    [resumeDownload, saveTasks, send, bump, stopUpload, startTransfer],
   );
 
   /* ── UI handlers ── */
 
   const onFilesPicked = (e: ChangeEvent<HTMLInputElement>) => {
-    [...(e.target.files || [])].forEach((f) => startUpload(f));
+    const files = [...(e.target.files || [])];
+    const taskId = reselectTaskRef.current;
+    reselectTaskRef.current = null;
     e.target.value = "";
+    if (taskId) {
+      const task = tasksRef.current!.get(taskId);
+      if (!task || task.status !== "failed") return;
+      const request = files.length === 1 ? uploadResumeRequest(task, files[0]) : null;
+      if (!request) {
+        setAlertMsg(t("files.reselectMismatch"));
+        return;
+      }
+      filesByTaskRef.current.set(task.id, files[0]);
+      task.status = "queued";
+      task.message = "";
+      saveTasks();
+      bump();
+      startTransfer(task, request);
+      return;
+    }
+    files.forEach((file) => startUpload(file));
   };
 
   const onDrop = (e: DragEvent) => {
@@ -1054,9 +1256,9 @@ function FilesBrowser({
     !listView.notice && (listView.truncated || listView.total > entries.length);
 
   return (
-    <div className="flex h-full min-w-0 flex-col gap-3 overflow-y-auto p-3 sm:p-4">
+    <div className="page-workspace @container/files overflow-hidden">
       {/* Toolbar */}
-      <Card className="flex shrink-0 flex-wrap items-center gap-2 p-3">
+      <div className="page-toolbar">
         {/* Device is picked from the left rail; the toolbar only shows it. */}
         <div className="flex h-9 items-center gap-1.5 rounded-md border border-border-seam px-2.5 text-sm text-muted-foreground select-none">
           <OsIcon
@@ -1082,26 +1284,30 @@ function FilesBrowser({
         />
         <Button
           variant="outline"
+          aria-label={t("files.up")}
           disabled={!device}
           onClick={() => void list(parentPathRef.current || currentPathRef.current)}
         >
           <Icon name="Folder" />
-          {t("files.up")}
+          <span className="hidden @min-[480px]/files:inline">{t("files.up")}</span>
         </Button>
-        <Button variant="outline" disabled={!device} onClick={() => void list(currentPathRef.current)}>
+        <Button variant="outline" aria-label={t("files.refresh")} disabled={!device} onClick={() => void list(currentPathRef.current)}>
           <Icon name="Refresh" />
-          {t("files.refresh")}
+          <span className="hidden @min-[480px]/files:inline">{t("files.refresh")}</span>
         </Button>
-        <Button disabled={!device} onClick={() => fileInputRef.current?.click()}>
+        <Button disabled={!device} onClick={() => { reselectTaskRef.current = null; fileInputRef.current?.click(); }}>
           <Icon name="Upload" />
           {t("files.upload")}
         </Button>
-      </Card>
+        <Button variant="ghost" aria-label={t("files.tasks")} aria-expanded={tasksOpen} onClick={() => setTasksOpen((open) => !open)}>
+          <Icon name="Files" /><span className="hidden @min-[480px]/files:inline">{t("files.tasks")}</span>{sortedTasks.length > 0 && ` (${sortedTasks.length})`}
+        </Button>
+      </div>
 
       {/* Drop zone */}
       <div
         className={cn(
-          "flex min-h-14 shrink-0 items-center justify-center gap-2 rounded-lg border-2 border-dashed border-border p-3 text-sm text-muted-foreground",
+          "flex min-h-9 shrink-0 items-center justify-center gap-2 border-b border-dashed border-border-seam px-3 py-1 text-xs text-muted-foreground",
           dragging && "border-timeline-accent bg-timeline-accent/5 text-timeline-accent",
         )}
         onDragOver={(e) => {
@@ -1116,19 +1322,19 @@ function FilesBrowser({
       </div>
       <input ref={fileInputRef} type="file" multiple className="hidden" onChange={onFilesPicked} />
 
-      <div className="grid items-start gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(320px,400px)]">
+      <div className="file-workspace-grid min-h-0 flex-1 overflow-hidden" data-tasks-open={tasksOpen}>
         {/* Browser (also a cross-pane transfer drop target) */}
         <Card
-          className="min-h-[40vh] min-w-0 overflow-hidden"
+          className="min-h-0 min-w-0 flex-1 overflow-auto rounded-none border-0 [&>div]:h-full"
           onDragOver={onPaneDragOver}
           onDrop={onDrop}
         >
           <Table>
-            <TableHeader>
+            <TableHeader className="sticky top-0 z-10 bg-background">
               <TableRow>
                 <TableHead>{t("files.name")}</TableHead>
                 <TableHead>{t("files.size")}</TableHead>
-                <TableHead>{t("files.modified")}</TableHead>
+                <TableHead className="hidden @min-[800px]/files:table-cell">{t("files.modified")}</TableHead>
                 <TableHead>{t("files.actions")}</TableHead>
               </TableRow>
             </TableHeader>
@@ -1210,7 +1416,7 @@ function FilesBrowser({
                           </button>
                         </TableCell>
                         <TableCell>{entry.isDir ? "--" : fmtBytes(entry.size)}</TableCell>
-                        <TableCell className="text-muted-foreground">
+                        <TableCell className="hidden text-muted-foreground @min-[800px]/files:table-cell">
                           {entry.modTime ? new Date(entry.modTime).toLocaleString() : ""}
                         </TableCell>
                         <TableCell>
@@ -1250,6 +1456,7 @@ function FilesBrowser({
                                   .map(([id, api]) => (
                                     <DropdownMenuItem
                                       key={id}
+                                      disabled={!api.deviceId()}
                                       onSelect={() =>
                                         void transferItemsTo(id, [
                                           {
@@ -1283,12 +1490,13 @@ function FilesBrowser({
         </Card>
 
         {/* Tasks */}
-        <Card className="min-w-0 p-3">
+        <div className="file-task-region min-h-0 min-w-0 overflow-hidden" inert={!tasksOpen} aria-hidden={!tasksOpen}>
+        <Card className="h-full min-h-0 min-w-0 overflow-y-auto rounded-none border-0 border-t border-border-seam bg-sidebar p-3 @min-[800px]/files:border-t-0 @min-[800px]/files:border-l">
           <h2 className="mb-3 flex items-center gap-1.5 text-base font-semibold">
             <Icon name="Files" className="size-4" />
             {t("files.tasks")}
           </h2>
-          <div className="flex max-h-[calc(100vh-260px)] flex-col gap-2.5 overflow-y-auto pr-0.5">
+          <div className="flex flex-col gap-2.5">
             {sortedTasks.length === 0 && (
               <div className="text-sm text-muted-foreground">{t("files.noTasks")}</div>
             )}
@@ -1388,6 +1596,7 @@ function FilesBrowser({
             })}
           </div>
         </Card>
+        </div>
       </div>
 
       {/* Device password prompt */}
@@ -1440,37 +1649,73 @@ function FilesBrowser({
   );
 }
 
-/* ── Single-pane wrapper: the page IS the rail + browser columns. ── */
-
+/* Keep each browser mounted while the second pane is folded, so ongoing
+ * transfers and directory navigation survive layout changes. */
 export function FilesPage() {
+  const { t } = useI18n();
+  const [paneDevices, setPaneDevices] = useState<Record<number, string>>({});
+  const [focusedPane, setFocusedPane] = useState(0);
+  const [secondMounted, setSecondMounted] = useState(false);
+  const [secondOpen, setSecondOpen] = useState(false);
   const seqRef = useRef(0);
-  const [requests, setRequests] = useState<
-    Map<number, { id: string; seq: number }>
-  >(new Map());
+  const [requests, setRequests] = useState<Map<number, { id: string; seq: number }>>(new Map());
   const panesRef = useRef(new Map<number, FilesPaneApi>());
 
   const requestDevice = (leafId: number, deviceId: string) => {
-    setRequests((prev) =>
-      new Map(prev).set(leafId, { id: deviceId, seq: ++seqRef.current }),
-    );
+    setFocusedPane(leafId);
+    setRequests((prev) => new Map(prev).set(leafId, { id: deviceId, seq: ++seqRef.current }));
   };
+  const reportFirstDevice = useCallback((id: string) => setPaneDevices(prev =>
+    prev[0] === id ? prev : { ...prev, 0: id }), []);
+  const reportSecondDevice = useCallback((id: string) => setPaneDevices(prev =>
+    prev[1] === id ? prev : { ...prev, 1: id }), []);
 
   return (
     <SplitPageShell
       storageKey="rdev.split.files.rail"
-      onDevicePick={(id) => requestDevice(0, id)}
+      selectedDevice={paneDevices[focusedPane] || ""}
+      onDevicePick={(id) => requestDevice(focusedPane, id)}
     >
-      <DeviceDropTarget
-        className="h-full min-h-0"
-        onDropDevice={(id) => requestDevice(0, id)}
-      >
-        <FilesBrowser
-          primary
-          deviceRequest={requests.get(0)}
-          leafId={0}
-          panesRef={panesRef}
-        />
-      </DeviceDropTarget>
+      <div className="flex h-full min-h-0 flex-col @container/file-workspace">
+        <div className="page-toolbar shrink-0">
+          <Button variant={focusedPane === 0 ? "secondary" : "ghost"} size="sm"
+            aria-pressed={focusedPane === 0} onClick={() => setFocusedPane(0)}>
+            {t("files.pane", { number: 1 })}
+          </Button>
+          {secondOpen && <Button variant={focusedPane === 1 ? "secondary" : "ghost"} size="sm"
+            aria-pressed={focusedPane === 1} onClick={() => setFocusedPane(1)}>
+            {t("files.pane", { number: 2 })}
+          </Button>}
+          <Button variant="ghost" size="sm" className="ml-auto" aria-expanded={secondOpen}
+            onClick={() => {
+              setSecondMounted(true);
+              setSecondOpen(!secondOpen);
+              setFocusedPane(secondOpen ? 0 : 1);
+            }}>
+            <Icon name="PanelRight" />
+            {t(secondOpen ? "files.hideSecondPane" : "files.showSecondPane")}
+          </Button>
+        </div>
+        <div className="flex min-h-0 flex-1 flex-col @[900px]/file-workspace:flex-row">
+          {[0, ...(secondMounted ? [1] : [])].map(leafId => (
+            <section key={leafId} hidden={leafId === 1 && !secondOpen}
+              aria-label={t("files.pane", { number: leafId + 1 })}
+              className={cn("min-h-0 min-w-0 flex-1 overflow-hidden", leafId === 1 && secondOpen && "border-t border-border-seam @[900px]/file-workspace:border-l @[900px]/file-workspace:border-t-0")}
+              onPointerDownCapture={() => setFocusedPane(leafId)}
+              onFocusCapture={() => setFocusedPane(leafId)}>
+              <DeviceDropTarget className="h-full min-h-0" onDropDevice={(id) => requestDevice(leafId, id)}>
+                <FilesBrowser
+                  onDeviceChange={leafId === 0 ? reportFirstDevice : reportSecondDevice}
+                  primary={leafId === 0}
+                  deviceRequest={requests.get(leafId)}
+                  leafId={leafId}
+                  panesRef={panesRef}
+                />
+              </DeviceDropTarget>
+            </section>
+          ))}
+        </div>
+      </div>
     </SplitPageShell>
   );
 }

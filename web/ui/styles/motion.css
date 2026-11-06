@@ -1,0 +1,111 @@
+/* BB's panel curve, shared by workspaces and disclosure controls. */
+:root {
+  --motion-fast: 150ms;
+  --motion-panel: 220ms;
+  --motion-ease: cubic-bezier(0.32, 0.72, 0, 1);
+  --panel-collapse-duration: var(--motion-panel);
+}
+
+@keyframes workspace-enter {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .page-content,
+  .page-workspace {
+    animation: workspace-enter var(--motion-panel) var(--motion-ease);
+  }
+}
+
+/* Cover pseudo-elements too (streaming cursor), including third-party
+ * overlays and existing utility animations. Keep final layout and state. */
+@media (prefers-reduced-motion: reduce) {
+  :root { --panel-collapse-duration: 0ms; }
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    animation-delay: 0ms !important;
+    transition-duration: 0ms !important;
+    transition-delay: 0ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+.workspace-device-sidebar {
+  transition: width var(--motion-panel) var(--motion-ease);
+}
+.workspace-split[data-dragging] .workspace-device-sidebar {
+  transition: none;
+}
+@media (max-width: 767px) {
+  .workspace-device-sidebar {
+    position: absolute;
+    inset: 0 auto 0 0;
+    z-index: 20;
+    width: min(312px, calc(100vw - 48px));
+    border-right: 1px solid var(--border-seam);
+    translate: -100% 0;
+    visibility: hidden;
+    transition: translate var(--motion-panel) var(--motion-ease), visibility 0s var(--motion-panel);
+  }
+  .workspace-device-sidebar[data-open="true"] {
+    translate: 0;
+    visibility: visible;
+    transition-delay: 0s;
+  }
+  .workspace-device-content {
+    transition: translate var(--motion-panel) var(--motion-ease);
+  }
+  .workspace-device-content[data-sidebar-open="true"] {
+    translate: min(312px, calc(100vw - 48px)) 0;
+  }
+}
+
+/* Matches BB disclosure.tsx: 200ms grid-height and opacity, ease-out. */
+.disclosure-body {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transition: grid-template-rows 200ms ease-out, opacity 200ms ease-out;
+}
+.disclosure-body[data-open="true"] {
+  grid-template-rows: 1fr;
+  opacity: 1;
+}
+.disclosure-body[data-open="false"] {
+  pointer-events: none;
+}
+.disclosure-body[data-open="false"] *,
+.disclosure-body[data-open="false"] *::before,
+.disclosure-body[data-open="false"] *::after {
+  animation-play-state: paused !important;
+}
+
+.file-workspace-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) 0px;
+  transition: grid-template-columns var(--motion-panel) var(--motion-ease), grid-template-rows var(--motion-panel) var(--motion-ease);
+}
+.file-workspace-grid[data-tasks-open="true"] {
+  grid-template-rows: minmax(0, 1fr) min(35dvh, 320px);
+}
+.file-task-region {
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity var(--motion-panel) var(--motion-ease), visibility 0s var(--motion-panel);
+}
+.file-workspace-grid[data-tasks-open="true"] > .file-task-region {
+  opacity: 1;
+  visibility: visible;
+  transition-delay: 0s;
+}
+@container files (min-width: 800px) {
+  .file-workspace-grid,
+  .file-workspace-grid[data-tasks-open="true"] {
+    grid-template-rows: minmax(0, 1fr);
+  }
+  .file-workspace-grid { grid-template-columns: minmax(0, 1fr) 0px; }
+  .file-workspace-grid[data-tasks-open="true"] { grid-template-columns: minmax(0, 1fr) 288px; }
+}

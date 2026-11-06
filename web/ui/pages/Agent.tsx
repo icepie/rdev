@@ -1,3 +1,7 @@
+import { ThreadRenameInput } from "../components/agent/thread-rename-input";
+import { takePendingResponse } from "../components/agent/pending-response";
+import { consumeChangesReply } from "../components/agent/changes-request";
+import { SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH, SIDEBAR_DEFAULT_WIDTH, SIDEBAR_ROW_CLASS } from "../components/workspace-sidebar";
 import {
   Fragment,
   useCallback,
@@ -15,7 +19,7 @@ import {
   type ImperativePanelHandle,
 } from "react-resizable-panels";
 import { useSearchParams } from "react-router-dom";
-import { MobileNavList } from "../shell/AppShell";
+import { setRailControl } from "../lib/rail-control";
 import { useI18n } from "../lib/i18n";
 import { useDevices } from "../lib/devices";
 import {
@@ -68,6 +72,7 @@ import {
 import { Icon } from "../components/icon";
 import { OsIcon } from "../components/os-icon";
 import { useCopy } from "../lib/clipboard";
+import { SERVER_AGENT_ID } from "../components/agent/protocol";
 import { ChatPaneView } from "../components/agent/chat-pane";
 import { CreateProjectDialog } from "../components/agent/create-project-dialog";
 import type { DirListing } from "../components/agent/remote-path-browser";
@@ -142,9 +147,6 @@ const MODEL_KEY = "rdev.agent.model";
 const SIDEBAR_KEY = "rdev.agent.sidebar";
 const SIDEBAR_VIEW_KEY = "rdev.agent.sidebar.view";
 const SIDEBAR_WIDTH_KEY = "rdev.agent.sidebar.width";
-const SIDEBAR_MIN_WIDTH = 240;
-const SIDEBAR_MAX_WIDTH = 460;
-const SIDEBAR_DEFAULT_WIDTH = 320;
 const REASONING_KEY = "rdev.agent.reasoning";
 const PANEL_OPEN_KEY = "rdev.agent.panel.open";
 const PANEL_WIDTH_KEY = "rdev.agent.panel.width";
@@ -177,7 +179,7 @@ interface SidebarView {
 const DEFAULT_SIDEBAR_VIEW: SidebarView = {
   sort: "updated",
   dir: "desc",
-  organize: "flat",
+  organize: "device",
   showRunning: true,
   showAll: true,
   hiddenGroups: [],
@@ -213,7 +215,8 @@ const SIDEBAR_SORTS: { id: SidebarView["sort"]; label: string }[] = [
 
 export function AgentPage() {
   const { t } = useI18n();
-  const { devices } = useDevices();
+  const { devices: connectedDevices } = useDevices();
+  const devices = useMemo(() => [{ id: SERVER_AGENT_ID, hostname: t("agent.server"), hasPassword: false, connectedAt: "" }, ...connectedDevices], [connectedDevices, t]);
   const [copiedId, copy] = useCopy();
   const [searchParams, setSearchParams] = useSearchParams();
 
@@ -252,15 +255,15 @@ export function AgentPage() {
   /* In-app rename/delete dialogs (bb: no native prompt/confirm). */
   const [renameOpen, setRenameOpen] = useState(false);
   const [renameValue, setRenameValue] = useState("");
-  const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; device: string; title: string; running?: boolean } | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const pendingDeleteRef = useRef<{ id: string; device: string } | null>(null);
+  const pendingRenameRef = useRef<{ id: string; device: string } | null>(null);
+  const [managementError, setManagementError] = useState("");
   /* bb-style inline rename: id of the sidebar row currently being edited. */
   const [renamingId, setRenamingId] = useState<string | null>(null);
-  const dirReqsRef = useRef(
-    new Map<string, { resolve: (l: DirListing) => void; reject: (e: Error) => void; timer: number }>(),
-  );
-  const mkdirReqsRef = useRef(
-    new Map<string, { resolve: () => void; reject: (e: Error) => void; timer: number }>(),
-  );
+  const dirReqsRef = useRef(new Map<string, { resolve: (l: DirListing) => void; reject: (e: Error) => void; timer: number; id: string }>());
+  const mkdirReqsRef = useRef(new Map<string, { resolve: () => void; reject: (e: Error) => void; timer: number; id: string }>());
   const [sidebarView, setSidebarView] = useState<SidebarView>(loadSidebarView);
   const [reconnecting, setReconnecting] = useState(false);
   const isNarrow = useIsCompactViewport();
@@ -278,6 +281,10 @@ export function AgentPage() {
       setDesktopSidebarOpen(open);
     }
   }, [isNarrow]);
+  useEffect(() => {
+    setRailControl({ collapsed: !sidebarOpen, toggle: () => setSidebarOpen(!sidebarOpen) });
+    return () => setRailControl(null);
+  }, [sidebarOpen, setSidebarOpen]);
   /* Resizable sidebar width (md+), persisted in px. */
   const [sidebarWidth, setSidebarWidth] = useState(() => {
     const saved = parseFloat(localStorage.getItem(SIDEBAR_WIDTH_KEY) ?? "");
@@ -328,6 +335,15 @@ export function AgentPage() {
   /* get_diff replies keyed by path (the changes deck fetches lazily per
    * expanded card); cleared with the change set. */
   const [diffs, setDiffs] = useState<Record<string, DiffState>>({});
+  /* Incremented whenever the right-panel working context changes. Device
+   * probes have no request id in the wire protocol, so this local epoch
+   * prevents late replies from an older cwd/thread view overwriting current
+   * panel state. */
+  const panelRequestEpochRef = useRef(0);
+  const diffRequestEpochRef = useRef(new Map<string, { epoch: number; id: string }>());
+  const fileRequestEpochRef = useRef(new Map<string, { epoch: number; id: string }>());
+  const changesRequestRef = useRef<{ epoch: number; id: string } | null>(null);
+  const requestSeqRef = useRef(0);
   useEffect(() => {
     if (isNarrow && panelOpen) setMobileSidebarOpen(false);
   }, [isNarrow, panelOpen]);
@@ -543,13 +559,18 @@ export function AgentPage() {
       /* Patches are stale once the working tree is re-probed; expanded
        * cards re-request on the next render. */
       setDiffs({});
-      wsRef.current.send(JSON.stringify({ op: "get_changes" }));
+      const id = `changes_${++requestSeqRef.current}`;
+      const epoch = panelRequestEpochRef.current;
+      changesRequestRef.current = { epoch, id };
+      wsRef.current.send(JSON.stringify({ op: "get_changes", id }));
     }
   }, []);
 
   const requestDiff = useCallback((path: string) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ op: "get_diff", path }));
+      const id = `diff_${++requestSeqRef.current}`;
+      diffRequestEpochRef.current.set(path, { epoch: panelRequestEpochRef.current, id });
+      wsRef.current.send(JSON.stringify({ op: "get_diff", id, path }));
     }
   }, []);
 
@@ -566,7 +587,9 @@ export function AgentPage() {
             message: "",
           },
         }));
-        wsRef.current.send(JSON.stringify({ op: "file_read", path }));
+        const id = `file_${++requestSeqRef.current}`;
+        fileRequestEpochRef.current.set(path, { epoch: panelRequestEpochRef.current, id });
+        wsRef.current.send(JSON.stringify({ op: "file_read", id, path }));
       } else {
         setFileStates((prev) => ({
           ...prev,
@@ -612,9 +635,27 @@ export function AgentPage() {
       {
         resolve: (files: string[]) => void;
         timer: number;
+        id: string;
       }
     >(),
   );
+  const rejectPendingPanelRequests = useCallback((reason = "disconnected") => {
+    for (const [key, pending] of dirReqsRef.current) {
+      window.clearTimeout(pending.timer);
+      pending.reject(new Error(reason));
+      dirReqsRef.current.delete(key);
+    }
+    for (const [key, pending] of mkdirReqsRef.current) {
+      window.clearTimeout(pending.timer);
+      pending.reject(new Error(reason));
+      mkdirReqsRef.current.delete(key);
+    }
+    for (const [key, pending] of searchReqsRef.current) {
+      window.clearTimeout(pending.timer);
+      pending.resolve([]);
+      searchReqsRef.current.delete(key);
+    }
+  }, []);
   const requestFileSearch = useCallback((q: string): Promise<string[]> => {
     const ws = wsRef.current;
     if (!ws || ws.readyState !== WebSocket.OPEN) return Promise.resolve([]);
@@ -624,12 +665,15 @@ export function AgentPage() {
       window.clearTimeout(prev.timer);
       prev.resolve([]);
     }
+    const id = `search_${++requestSeqRef.current}`;
     const timer = window.setTimeout(() => {
+      const current = searchReqsRef.current.get(q);
+      if (current?.id !== id) return;
       searchReqsRef.current.delete(q);
       resolve([]);
     }, 8000);
-    searchReqsRef.current.set(q, { resolve, timer });
-    ws.send(JSON.stringify({ op: "search_files", q }));
+    searchReqsRef.current.set(q, { resolve, timer, id });
+    ws.send(JSON.stringify({ op: "search_files", id, q }));
     return promise;
   }, []);
 
@@ -694,6 +738,38 @@ export function AgentPage() {
       return;
     }
     switch (msg.op) {
+      case "thread_deleted":
+        if (pendingDeleteRef.current?.id !== frameThread ||
+            pendingDeleteRef.current.device !== asString(msg.device)) break;
+        pendingDeleteRef.current = null;
+        setDeleteBusy(false);
+        setDeleteTarget((target) =>
+          target?.id === frameThread && target.device === asString(msg.device) ? null : target,
+        );
+        setManagementError("");
+        break;
+      case "thread_renamed":
+        if (!pendingRenameRef.current ||
+            pendingRenameRef.current.id !== frameThread ||
+            pendingRenameRef.current.device !== asString(msg.device)) break;
+        pendingRenameRef.current = null;
+        setManagementError("");
+        break;
+      case "thread_action_error":
+        if (pendingDeleteRef.current &&
+            (pendingDeleteRef.current.id === frameThread &&
+             pendingDeleteRef.current.device === asString(msg.device))) {
+          pendingDeleteRef.current = null;
+          setDeleteBusy(false);
+          setManagementError(asString(msg.message));
+          break;
+        }
+        if (pendingRenameRef.current?.id === frameThread &&
+            pendingRenameRef.current.device === asString(msg.device)) {
+          pendingRenameRef.current = null;
+          setManagementError(asString(msg.message));
+        }
+        break;
       case "auth":
         setStatus("authing");
         setAuthError("");
@@ -706,6 +782,10 @@ export function AgentPage() {
         setFileStates({});
         setChanges(null);
         setDiffs({});
+        panelRequestEpochRef.current++;
+        diffRequestEpochRef.current.clear();
+        fileRequestEpochRef.current.clear();
+        changesRequestRef.current = null;
         primaryOps.setRunning(!!msg.running);
         const list = (Array.isArray(msg.models) ? msg.models : []).flatMap(
           (x): ModelInfo[] => {
@@ -842,6 +922,9 @@ export function AgentPage() {
       case "file_content": {
         const path = asString(msg.path);
         if (!path) break;
+        const request = fileRequestEpochRef.current.get(path);
+        const responseID = asString(msg.id);
+        if (!request || request.epoch !== panelRequestEpochRef.current || (responseID && request.id !== responseID)) break;
         const message = asString(msg.message);
         setFileStates((prev) => ({
           ...prev,
@@ -861,9 +944,8 @@ export function AgentPage() {
       /* Replies to the create-project dialog's dir_list/dir_mkdir ops. */
       case "dir_entries": {
         const path = asString(msg.path);
-        const pending = path ? dirReqsRef.current.get(path) : undefined;
+        const pending = takePendingResponse(dirReqsRef.current, asString(msg.id), path);
         if (!pending) break;
-        dirReqsRef.current.delete(path);
         window.clearTimeout(pending.timer);
         const message = asString(msg.message);
         if (message) {
@@ -888,9 +970,8 @@ export function AgentPage() {
       }
       case "dir_mkdir": {
         const path = asString(msg.path);
-        const pending = path ? mkdirReqsRef.current.get(path) : undefined;
+        const pending = takePendingResponse(mkdirReqsRef.current, asString(msg.id), path);
         if (!pending) break;
-        mkdirReqsRef.current.delete(path);
         window.clearTimeout(pending.timer);
         const message = asString(msg.message);
         if (message) pending.reject(new Error(message));
@@ -898,6 +979,8 @@ export function AgentPage() {
         break;
       }
       case "changes": {
+        const responseID = asString(msg.id);
+        if (!consumeChangesReply(changesRequestRef, panelRequestEpochRef.current, responseID)) break;
         const files = (Array.isArray(msg.files) ? msg.files : []).flatMap(
           (x): ChangedFile[] => {
             if (!x || typeof x !== "object") return [];
@@ -924,6 +1007,9 @@ export function AgentPage() {
       }
       case "diff": {
         const path = asString(msg.path);
+        const request = diffRequestEpochRef.current.get(path);
+        const responseID = asString(msg.id);
+        if (!request || request.epoch !== panelRequestEpochRef.current || (responseID && request.id !== responseID)) break;
         setDiffs((prev) => ({
           ...prev,
           [path]: {
@@ -936,10 +1022,9 @@ export function AgentPage() {
       }
       case "file_search": {
         const q = asString(msg.q);
-        const pending = searchReqsRef.current.get(q);
+        const pending = takePendingResponse(searchReqsRef.current, asString(msg.id), q);
         if (pending) {
           window.clearTimeout(pending.timer);
-          searchReqsRef.current.delete(q);
           const files = (Array.isArray(msg.files) ? msg.files : []).flatMap(
             (x): string[] => (typeof x === "string" ? [x] : []),
           );
@@ -959,6 +1044,7 @@ export function AgentPage() {
         break;
       }
       case "thread_switched": {
+        rejectPendingPanelRequests("thread changed");
         primaryOps.resetTransient();
         const switchThread = asString(msg.thread);
         setThread(switchThread);
@@ -976,6 +1062,10 @@ export function AgentPage() {
         /* Stale until the server pushes the new thread's changes. */
         setChanges(null);
         setDiffs({});
+        changesRequestRef.current = null;
+        diffRequestEpochRef.current.clear();
+        fileRequestEpochRef.current.clear();
+        panelRequestEpochRef.current++;
         const history = Array.isArray(msg.history) ? msg.history : [];
         primaryOps.setItems(replayHistory(history));
         primaryOps.scrollDown(true);
@@ -1004,7 +1094,7 @@ export function AgentPage() {
         break;
       }
     }
-  }, [device, primaryOps, setSearchParams, startPing, t]);
+  }, [device, primaryOps, rejectPendingPanelRequests, setSearchParams, startPing, t]);
 
   /* Auto-reconnect with exponential backoff: 1s → 2s → 4s → 8s … cap 30s.
    * Reset on successful auth_ok (see handleMessage) or manual connect.
@@ -1073,6 +1163,7 @@ export function AgentPage() {
     ws.onclose = (event) => {
       if (wsRef.current !== ws) return;
       clearPing();
+      rejectPendingPanelRequests();
       setAuthed(false);
       if (primaryOps.turnOpen.current) primaryOps.finishTurn();
       primaryOps.resetTransient();
@@ -1083,6 +1174,9 @@ export function AgentPage() {
         ops.setRunning(false);
       }
       setStatus("disconnected");
+      pendingDeleteRef.current = null;
+      pendingRenameRef.current = null;
+      setDeleteBusy(false);
       if (rejected) return;
       // A clean 1000 close with a reason is the server rejecting the
       // session at open time (unknown/offline device, agent not
@@ -1101,11 +1195,16 @@ export function AgentPage() {
         setStatus("disconnected");
       }
     };
-  }, [clearPing, clearReconnectTimer, handleMessage, primaryOps, scheduleReconnect, t]);
+  }, [clearPing, clearReconnectTimer, handleMessage, primaryOps, rejectPendingPanelRequests, scheduleReconnect, t]);
   connectRef.current = connect;
 
   const setDevice = useCallback((id: string) => {
     setDeviceState(id);
+    rejectPendingPanelRequests("device changed");
+    pendingDeleteRef.current = null;
+    pendingRenameRef.current = null;
+    setDeleteBusy(false);
+    setManagementError("");
     setSearchParams(
       (prev) => {
         const next = new URLSearchParams(prev);
@@ -1142,12 +1241,15 @@ export function AgentPage() {
     setFileStates({});
     setChanges(null);
     setDiffs({});
+    panelRequestEpochRef.current++;
+    diffRequestEpochRef.current.clear();
+    fileRequestEpochRef.current.clear();
     setStatus("disconnected");
     if (id) connect(id);
-  }, [clearPing, clearReconnectTimer, connect, primaryOps, setSearchParams]);
+  }, [clearPing, clearReconnectTimer, connect, primaryOps, rejectPendingPanelRequests, setSearchParams]);
 
-  /* Pick the device from the list: keep current while present, else the URL
-   * preselect, else none. Mirrors the vanilla page's loadDevices. */
+  /* A bare /agent opens the server workspace immediately. Explicit device
+   * links wait for discovery rather than being overwritten by the default. */
   useEffect(() => {
     if (!devices.length) return;
     const preselect = searchParams.get("device") || "";
@@ -1156,6 +1258,8 @@ export function AgentPage() {
       setDevice(preselect);
     } else if (device) {
       setDevice("");
+    } else if (!preselect) {
+      setDevice(SERVER_AGENT_ID);
     }
   }, [devices, device, searchParams, setDevice]);
 
@@ -1163,13 +1267,14 @@ export function AgentPage() {
     () => () => {
       clearReconnectTimer();
       clearPing();
+      rejectPendingPanelRequests();
       if (wsRef.current) {
         wsRef.current.onclose = null;
         wsRef.current.close();
         wsRef.current = null;
       }
     },
-    [clearPing, clearReconnectTimer],
+    [clearPing, clearReconnectTimer, rejectPendingPanelRequests],
   );
 
   /* ── Actions ── */
@@ -1183,13 +1288,16 @@ export function AgentPage() {
 
   const sendSetCwd = (path: string) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
+      panelRequestEpochRef.current++;
+      diffRequestEpochRef.current.clear();
+      fileRequestEpochRef.current.clear();
+      changesRequestRef.current = null;
       wsRef.current.send(JSON.stringify({ op: "set_cwd", path }));
     }
   };
 
-  /* Create-project dialog data ops: request/response over the agent WS,
-   * correlated by the echoed path (rapid same-path requests resolve
-   * together harmlessly). ~20s timeout rejects as an error state. */
+  /* IDs correlate replies even when the server resolves an empty path to
+   * cwd. Repeating a path supersedes its previous request. */
   const listDir = useCallback((path: string): Promise<DirListing> => {
     const { promise, resolve, reject } = Promise.withResolvers<DirListing>();
     const ws = wsRef.current;
@@ -1197,12 +1305,20 @@ export function AgentPage() {
       reject(new Error("offline"));
       return promise;
     }
+    const id = `dir_${++requestSeqRef.current}`;
+    const previous = dirReqsRef.current.get(path);
+    if (previous) {
+      window.clearTimeout(previous.timer);
+      previous.reject(new Error("superseded"));
+    }
     const timer = window.setTimeout(() => {
+      const current = dirReqsRef.current.get(path);
+      if (current?.id !== id) return;
       dirReqsRef.current.delete(path);
       reject(new Error("timeout"));
     }, 20000);
-    dirReqsRef.current.set(path, { resolve, reject, timer });
-    ws.send(JSON.stringify({ op: "dir_list", path }));
+    dirReqsRef.current.set(path, { resolve, reject, timer, id });
+    ws.send(JSON.stringify({ op: "dir_list", id, path }));
     return promise;
   }, []);
 
@@ -1213,31 +1329,30 @@ export function AgentPage() {
       reject(new Error("offline"));
       return promise;
     }
+    const id = `mkdir_${++requestSeqRef.current}`;
+    const previous = mkdirReqsRef.current.get(path);
+    if (previous) {
+      window.clearTimeout(previous.timer);
+      previous.reject(new Error("superseded"));
+    }
     const timer = window.setTimeout(() => {
+      const current = mkdirReqsRef.current.get(path);
+      if (current?.id !== id) return;
       mkdirReqsRef.current.delete(path);
       reject(new Error("timeout"));
     }, 20000);
-    mkdirReqsRef.current.set(path, { resolve, reject, timer });
-    ws.send(JSON.stringify({ op: "dir_mkdir", path }));
+    mkdirReqsRef.current.set(path, { resolve, reject, timer, id });
+    ws.send(JSON.stringify({ op: "dir_mkdir", id, path }));
     return promise;
   }, []);
 
-  const renameThread = (id: string, title: string) => {
-    if (!title || !id) return;
-    if (!sendRaw({ op: "rename_thread", thread: id, title })) return;
-    setThreads((prev) => prev.map((th) => (th.id === id ? { ...th, title } : th)));
-    setAllThreads((prev) =>
-      prev?.map((d) =>
-        d.device === device
-          ? {
-              ...d,
-              threads: d.threads.map((th) =>
-                th.id === id ? { ...th, title } : th,
-              ),
-            }
-          : d,
-      ) ?? null,
-    );
+  const renameThread = (id: string, title: string, targetDevice = device): boolean => {
+    if (!title || !id) return false;
+    setManagementError("");
+    const sent = sendRaw({ op: "rename_thread", thread: id, device: targetDevice, title });
+    if (sent) pendingRenameRef.current = { id, device: targetDevice };
+    else setManagementError(t("common.disconnected"));
+    return sent;
   };
 
   const openRenameDialog = () => {
@@ -1246,9 +1361,12 @@ export function AgentPage() {
   };
 
   const confirmDeleteThread = () => {
-    if (!deleteTarget) return;
-    sendRaw({ op: "delete_thread", thread: deleteTarget });
-    setDeleteTarget(null);
+    if (!deleteTarget || deleteBusy) return;
+    setManagementError("");
+    if (sendRaw({ op: "delete_thread", thread: deleteTarget.id, device: deleteTarget.device })) {
+      pendingDeleteRef.current = { id: deleteTarget.id, device: deleteTarget.device };
+      setDeleteBusy(true);
+    }
   };
 
   const selectPermMode = useCallback(
@@ -1503,31 +1621,46 @@ export function AgentPage() {
     return threads.map((th) => ({ ...th, device, os: currentDevice?.os }));
   }, [allThreads, threads, device, currentDevice]);
 
-  /* Sidebar device list: all_threads devices (online + offline, with OS)
-   * when available, else the online-only REST list; the connected device
-   * floats to the top, then id ascending. */
+  /* Sidebar device list merges live REST devices with all_threads history.
+   * The server coordinator has no client row, so keep @server from `devices`
+   * even when the history snapshot omits it. Live status wins over stale
+   * history; historical-only devices remain visible but disabled. */
   const sidebarDevices: {
     id: string;
     os?: string;
     online: boolean;
     count?: number;
   }[] = useMemo(() => {
-      const base =
-        allThreads !== null
-          ? allThreads.map((d) => ({
-              id: d.device,
-              os: d.os,
-              online: d.online,
-              count: d.threads.length,
-            }))
-          : devices.map((d) => ({ id: d.id, os: d.os, online: true }));
-      return [...base].sort(
-        (a, b) =>
-          Number(b.id === device) - Number(a.id === device) ||
-          Number(b.online) - Number(a.online) ||
-          a.id.localeCompare(b.id),
-      );
-    }, [allThreads, devices, device]);
+    const merged = new Map<string, {
+      id: string;
+      os?: string;
+      online: boolean;
+      count?: number;
+    }>();
+    for (const d of allThreads ?? []) {
+      merged.set(d.device, {
+        id: d.device,
+        os: d.os,
+        online: d.online,
+        count: d.threads.length,
+      });
+    }
+    for (const d of devices) {
+      const previous = merged.get(d.id);
+      merged.set(d.id, {
+        id: d.id,
+        os: d.os ?? previous?.os,
+        online: true,
+        count: previous?.count,
+      });
+    }
+    return [...merged.values()].sort(
+      (a, b) =>
+        Number(b.id === device) - Number(a.id === device) ||
+        Number(b.online) - Number(a.online) ||
+        a.id.localeCompare(b.id),
+    );
+  }, [allThreads, devices, device]);
 
   /* Filter (All/Running) + title search + sort with the direction
    * multiplier. */
@@ -1571,6 +1704,11 @@ export function AgentPage() {
     useMemo(() => {
       if (sidebarView.organize !== "device") return null;
       const map = new Map<string, { device: string; os?: string; rows: SidebarRow[] }>();
+      if (!threadQuery.trim() && sidebarView.showAll) {
+        for (const d of sidebarDevices) {
+          if (!sidebarView.deviceFilter || sidebarView.deviceFilter === d.id) map.set(d.id, { device: d.id, os: d.os, rows: [] });
+        }
+      }
       for (const row of filteredRows) {
         const g = map.get(row.device);
         if (g) {
@@ -1584,10 +1722,10 @@ export function AgentPage() {
           Number(b.device === device) - Number(a.device === device) ||
           a.device.localeCompare(b.device),
       );
-    }, [filteredRows, sidebarView.organize, device]);
+    }, [filteredRows, sidebarView.organize, sidebarView.showAll, sidebarView.deviceFilter, device, sidebarDevices, threadQuery]);
 
   const visibleGroups =
-    sidebarGroups?.filter((g) => !sidebarView.hiddenGroups.includes(g.device)) ??
+    sidebarGroups?.filter((g) => threadQuery.trim() || !sidebarView.hiddenGroups.includes(g.device)) ??
     null;
   /* Hidden groups that still have threads (the More … row restores them). */
   const hiddenExistingGroups =
@@ -1671,7 +1809,9 @@ export function AgentPage() {
       t,
       sendRaw,
       ready,
-      emptyHint: device ? t("agent.empty") : t("agent.selectDevice"),
+      emptyHint: !device ? t("agent.selectDevice")
+        : !ready ? (reconnecting ? t("agent.reconnecting") : t(`agent.status.${status}`))
+        : device === SERVER_AGENT_ID ? t("agent.serverEmpty") : t("agent.empty"),
       copiedId,
       onCopy: copy,
       model,
@@ -1987,8 +2127,9 @@ export function AgentPage() {
       key={th.device + ":" + th.id}
       title={th.device + " · " + (th.title || th.id)}
       className={cn(
-        "group/thread relative flex h-7 max-md:pointer-coarse:h-10 w-full cursor-pointer items-center gap-2 rounded-md pr-0 pl-2 text-sm text-sidebar-foreground transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
-        th.device === device && openThreadIds.has(th.id) && "bg-state-active",
+        "group/thread relative",
+        SIDEBAR_ROW_CLASS,
+        th.device === device && openThreadIds.has(th.id) && "bg-state-active font-medium",
       )}
       onPointerDown={onRowPointerDown({
         id: th.id,
@@ -2004,49 +2145,23 @@ export function AgentPage() {
         openInFocusedPane(th);
       }}
     >
-      {/* Device glyph on every row: it marks the device in the flat
-       * mixed-device list, and grouped mode keeps it as the row icon. */}
-      <OsIcon
-        os={th.os}
-        className="size-4 shrink-0 text-muted-foreground"
-      />
-      {renamingId === th.id ? (
+      {sidebarView.organize === "flat" && (th.device === SERVER_AGENT_ID
+        ? <Icon name="Bot" className="size-3.5 shrink-0 text-subtle-foreground" />
+        : <OsIcon os={th.os} className="size-3.5 shrink-0 text-subtle-foreground" />)}
+      {renamingId === `${th.device}:${th.id}` ? (
         /* bb inline rename: input replaces the title; Enter/blur commits,
          * Escape cancels. */
-        <input
-          autoFocus
-          defaultValue={th.title || th.id}
-          aria-label={t("agent.renamePrompt")}
-          className="h-5 min-w-0 flex-1 rounded-sm border border-timeline-accent bg-background px-1 text-sm outline-none"
-          onClick={(e) => e.stopPropagation()}
-          onPointerDown={(e) => e.stopPropagation()}
-          onKeyDown={(e) => {
-            e.stopPropagation();
-            if (e.key === "Enter") {
-              e.currentTarget.dataset.settled = "true";
-              renameThread(th.id, e.currentTarget.value.trim());
-              setRenamingId(null);
-            } else if (e.key === "Escape") {
-              e.currentTarget.dataset.settled = "true";
-              setRenamingId(null);
-            }
-          }}
-          onBlur={(e) => {
-            if (e.currentTarget.dataset.settled) return;
-            renameThread(th.id, e.currentTarget.value.trim());
-            setRenamingId(null);
-          }}
+        <ThreadRenameInput
+          title={th.title || th.id}
+          label={t("agent.renamePrompt")}
+          onCommit={title => renameThread(th.id, title, th.device)}
+          onFinish={() => setRenamingId(null)}
         />
       ) : (
         <button
           type="button"
           aria-pressed={th.device === device && openThreadIds.has(th.id)}
-          className={cn(
-            "min-w-0 flex-1 truncate text-left focus-visible:outline focus-visible:outline-ring",
-            th.device === device &&
-              renamingId !== th.id &&
-              "group-hover/thread:pr-7",
-          )}
+          className="h-full min-w-0 flex-1 truncate text-left font-inherit focus-visible:outline focus-visible:outline-ring"
         >
           {th.title || th.id}
         </button>
@@ -2055,18 +2170,18 @@ export function AgentPage() {
         {th.running && (
           <Icon
             name="Spinner"
-            className="size-4 animate-spin text-muted-foreground/50 motion-reduce:animate-none"
+            className="size-3.5 animate-spin text-timeline-accent motion-reduce:animate-none"
           />
         )}
       </span>
-      {th.device === device && renamingId !== th.id && (
+      {renamingId !== `${th.device}:${th.id}` && (
         /* bb row actions: hover-revealed ⋯ menu (rename inline / delete). */
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button
               type="button"
               aria-label={t("agent.threadActions")}
-              className="absolute right-0 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-md text-subtle-foreground opacity-0 transition-opacity group-hover/thread:opacity-100 group-focus-within/thread:opacity-100 max-md:pointer-coarse:opacity-100 hover:bg-state-hover hover:text-muted-foreground data-[state=open]:bg-state-active data-[state=open]:opacity-100"
+              className="flex h-7 w-7 pointer-coarse:h-10 pointer-coarse:w-10 shrink-0 items-center justify-center rounded-md text-subtle-foreground opacity-0 transition-opacity group-hover/thread:opacity-100 group-focus-within/thread:opacity-100 pointer-coarse:opacity-100 focus-visible:outline focus-visible:outline-ring hover:bg-state-hover hover:text-muted-foreground data-[state=open]:bg-state-active data-[state=open]:opacity-100"
               onClick={(e) => e.stopPropagation()}
               onPointerDown={(e) => e.stopPropagation()}
             >
@@ -2074,13 +2189,13 @@ export function AgentPage() {
             </button>
           </DropdownMenuTrigger>
           <DropdownMenuContent side="right" align="start" sideOffset={8}>
-            <DropdownMenuItem onSelect={() => setRenamingId(th.id)}>
+            <DropdownMenuItem onSelect={() => setRenamingId(`${th.device}:${th.id}`)}>
               <Icon name="Edit" className="size-4 shrink-0" />
               {t("agent.rename")}
             </DropdownMenuItem>
             <DropdownMenuItem
               className="text-destructive-text focus:text-destructive-text"
-              onSelect={() => setDeleteTarget(th.id)}
+              onSelect={() => setDeleteTarget({ id: th.id, device: th.device, title: th.title || th.id, running: th.running })}
             >
               <Icon name="Trash2" className="size-4 shrink-0" />
               {t("agent.deleteThread")}
@@ -2172,14 +2287,14 @@ export function AgentPage() {
         name={threadQuery.trim() ? "Search" : "MessageSquare"}
         className="size-3.5 shrink-0 text-subtle-foreground/50"
       />
-      <span className="text-xs leading-4 text-subtle-foreground/60">
+      <span className="text-xs leading-4 text-muted-foreground">
         {threadQuery.trim() ? t("agent.noMatchingThreads") : t("agent.noThreads")}
       </span>
     </div>
   );
 
   return (
-    <div className="relative flex h-full overflow-hidden">
+    <div className="relative flex h-full overflow-hidden [--agent-mobile-sidebar-width:min(calc(100vw_-_48px),312px)]">
       {/* BB offcanvas on desktop; below 768px reveal the fixed-width drawer
        * and translate the full-width conversation without squeezing it. */}
       <div
@@ -2200,7 +2315,7 @@ export function AgentPage() {
             transitionsReady &&
               "[transition:opacity_220ms_cubic-bezier(0.32,0.72,0,1),translate_220ms_cubic-bezier(0.32,0.72,0,1)] motion-reduce:transition-none",
             sidebarOpen
-              ? "translate-x-[min(86vw,360px)] opacity-100"
+              ? "translate-x-[var(--agent-mobile-sidebar-width)] opacity-100"
               : "pointer-events-none opacity-0",
           )}
           onClick={closeSidebar}
@@ -2212,7 +2327,7 @@ export function AgentPage() {
         className={cn(
           "flex shrink-0 flex-col overflow-hidden border-r border-border-seam bg-sidebar text-sidebar-foreground select-none",
           isNarrow
-            ? "absolute inset-y-0 left-0 z-20 w-[min(86vw,360px)]"
+            ? "absolute inset-y-0 left-0 z-20 w-[var(--agent-mobile-sidebar-width)]"
             : "absolute inset-y-0 left-0 z-20 w-[var(--sidebar-w)]",
           transitionsReady && !sidebarDragging
             ? isNarrow
@@ -2226,10 +2341,10 @@ export function AgentPage() {
           sidebarOpen ? "translate-x-0" : "invisible -translate-x-full",
         )}
       >
-        <div className="flex h-full w-full shrink-0 flex-col max-md:overflow-y-auto md:w-[var(--sidebar-w)]">
+        <div className="flex h-full min-h-0 w-full shrink-0 flex-col md:w-[var(--sidebar-w)]">
           {/* bb sidebar navigation rows: primary actions + device panels as
            * full-width rows above the threads section. */}
-          <div className="flex shrink-0 flex-col gap-1 px-2 pt-2 pb-2">
+          <div className="flex min-h-12 shrink-0 flex-wrap items-center gap-1 border-b border-border-seam px-2 py-2">
             <button
               type="button"
               disabled={!ready}
@@ -2245,7 +2360,7 @@ export function AgentPage() {
                 }
                 /* Mobile keeps the left-right split: no auto-dismiss. */
               }}
-              className="flex h-7 max-md:pointer-coarse:h-10 w-full cursor-pointer items-center gap-2 rounded-md pr-0 pl-2 text-sm transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring disabled:cursor-default disabled:opacity-70"
+              className="flex h-7 max-md:pointer-coarse:h-10 min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-md pr-0 pl-2 text-sm transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring disabled:cursor-default disabled:opacity-70"
             >
               <Icon
                 name="MessageSquarePlus"
@@ -2257,6 +2372,7 @@ export function AgentPage() {
             </button>
             <button
               type="button"
+              aria-label={t("agent.searchThreads")}
               aria-expanded={threadSearchOpen}
               onClick={() => {
                 setThreadSearchOpen((v) => {
@@ -2265,7 +2381,7 @@ export function AgentPage() {
                 });
               }}
               className={cn(
-                "flex h-7 max-md:pointer-coarse:h-10 w-full cursor-pointer items-center gap-2 rounded-md pr-0 pl-2 text-sm transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring",
+                "flex size-7 max-md:pointer-coarse:size-10 shrink-0 cursor-pointer items-center justify-center rounded-md text-sm transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring",
                 threadSearchOpen && "bg-state-active",
               )}
             >
@@ -2273,97 +2389,10 @@ export function AgentPage() {
                 name="Search"
                 className="size-3.5 shrink-0 text-muted-foreground"
               />
-              <span className="min-w-0 flex-1 truncate text-left">
+              <span className="sr-only">
                 {t("agent.searchThreads")}
               </span>
             </button>
-            {threadSearchOpen && (
-              <div className="px-2 pb-0.5">
-                <input
-                  autoFocus
-                  value={threadQuery}
-                  onChange={(e) => setThreadQuery(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Escape") {
-                      setThreadQuery("");
-                      setThreadSearchOpen(false);
-                    }
-                  }}
-                  placeholder={t("agent.searchThreads")}
-                  className="h-7 w-full rounded-md border border-border bg-background px-2 text-sm outline-none placeholder:text-muted-foreground focus:border-timeline-accent"
-                />
-              </div>
-            )}
-          </div>
-          {/* Device list: picking one filters the thread list below and
-           * (when online) switches the connected device; 所有对话 = every
-           * device's threads. Replaces the old header device picker. */}
-          <div className="flex shrink-0 flex-col gap-1 px-2 pt-1.5">
-            <div className="px-2 pb-0.5 text-xs leading-5 font-normal text-subtle-foreground/75">
-              {t("agent.devices")}
-            </div>
-            <button
-              type="button"
-              onClick={() => updateSidebarView({ deviceFilter: "" })}
-              className={cn(
-                "flex h-7 max-md:pointer-coarse:h-10 w-full cursor-pointer items-center gap-2 rounded-md pr-0 pl-2 text-sm transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring",
-                !sidebarView.deviceFilter && "bg-state-active",
-              )}
-            >
-              <Icon
-                name="Inbox"
-                className="size-3.5 shrink-0 text-muted-foreground"
-              />
-              <span className="min-w-0 flex-1 truncate text-left">
-                {t("agent.allThreads")}
-              </span>
-            </button>
-            {sidebarDevices.map((d) => (
-              <button
-                key={d.id}
-                type="button"
-                title={d.id}
-                onClick={() => {
-                  updateSidebarView({ deviceFilter: d.id });
-                  if (d.online && d.id !== device) {
-                    setDevice(d.id);
-                  }
-                }}
-                className={cn(
-                  "flex h-7 max-md:pointer-coarse:h-10 w-full cursor-pointer items-center gap-2 rounded-md pr-0 pl-2 text-sm transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring",
-                  sidebarView.deviceFilter === d.id && "bg-state-active",
-                )}
-              >
-                <OsIcon
-                  os={d.os}
-                  className="size-3.5 shrink-0 text-muted-foreground"
-                />
-                <span className="min-w-0 flex-1 truncate text-left">{d.id}</span>
-                {d.count !== undefined && d.count > 0 && (
-                  <span className="shrink-0 pr-1 text-2xs text-muted-foreground tabular-nums">
-                    {d.count}
-                  </span>
-                )}
-                <span
-                  className={cn(
-                    "size-1.5 shrink-0 rounded-full",
-                    d.online
-                      ? "bg-success shadow-[0_0_4px_var(--success)]"
-                      : "bg-muted-foreground/40",
-                  )}
-                />
-              </button>
-            ))}
-          </div>
-          {/* bb sidebar section header: label + new thread + list actions */}
-          <div className="group/sidebar-section flex shrink-0 items-center justify-between gap-1 px-1 pt-1.5">
-            <span
-              className="min-w-0 truncate rounded-md pl-2 text-xs leading-5 font-normal text-subtle-foreground/75"
-              title={t("agent.threads")}
-            >
-              {t("agent.threads")}
-            </span>
-            <span className="inline-flex h-7 shrink-0 items-center gap-0.5 max-md:pointer-coarse:h-9">
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button
@@ -2422,9 +2451,27 @@ export function AgentPage() {
                   )}
                 </DropdownMenuContent>
               </DropdownMenu>
-            </span>
+            {threadSearchOpen && (
+              <div className="w-full px-2 pb-0.5">
+                <input
+                  autoFocus
+                  value={threadQuery}
+                  onChange={(e) => setThreadQuery(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Escape") {
+                      setThreadQuery("");
+                      setThreadSearchOpen(false);
+                    }
+                  }}
+                  aria-label={t("agent.searchThreads")}
+                  placeholder={t("agent.searchThreads")}
+                  className="h-9 w-full rounded-md border border-border bg-background px-2 text-sm outline-none placeholder:text-muted-foreground focus:border-timeline-accent"
+                />
+              </div>
+            )}
           </div>
-          <div className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto px-2 pb-2 max-md:flex-auto max-md:overflow-visible">
+          {managementError && !deleteTarget && <p role="alert" className="px-3 py-2 text-xs text-destructive-text">{managementError}</p>}
+          <div className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto px-2 py-2">
             {visibleGroups === null ? (
               filteredRows.length === 0 ? (
                 sidebarEmpty
@@ -2435,49 +2482,33 @@ export function AgentPage() {
               sidebarEmpty
             ) : (
               visibleGroups.map((g) => {
-                const collapsed = sidebarView.collapsedGroups.includes(g.device);
+                const collapsed = !threadQuery.trim() && sidebarView.collapsedGroups.includes(g.device);
                 return (
-                <div key={g.device} className="flex flex-col gap-1">
+                <div key={g.device} className="mb-2 flex flex-col gap-0.5">
                   {/* bb TopLevelSidebarSection: sticky label tier with a
                    * collapse chevron and a hover ⋯ → Hide from list. */}
-                  <div className="group/devhead sticky top-0 z-10 flex h-7 max-md:pointer-coarse:h-10 items-center gap-1 rounded-md bg-sidebar pl-2 pr-0 text-xs text-subtle-foreground/75 select-none">
-                    <span className="min-w-0 flex-1 truncate" title={g.device}>
-                      {g.device}
-                    </span>
+                  <div className="group/devhead sticky top-0 z-10 flex min-h-9 items-center gap-1 bg-sidebar px-1 text-xs text-muted-foreground select-none">
                     <button
                       type="button"
                       aria-expanded={!collapsed}
-                      aria-label={g.device}
-                      onClick={() =>
-                        updateSidebarView({
-                          collapsedGroups: collapsed
-                            ? sidebarView.collapsedGroups.filter(
-                                (x) => x !== g.device,
-                              )
-                            : [...sidebarView.collapsedGroups, g.device],
-                        })
-                      }
-                      className={cn(
-                        "inline-flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-subtle-foreground transition-opacity hover:bg-state-hover hover:text-muted-foreground max-md:pointer-coarse:opacity-100",
-                        collapsed
-                          ? "opacity-100"
-                          : "opacity-0 group-hover/devhead:opacity-100",
-                      )}
+                      title={g.device}
+                      onClick={() => updateSidebarView({ collapsedGroups: collapsed
+                        ? sidebarView.collapsedGroups.filter((id) => id !== g.device)
+                        : [...sidebarView.collapsedGroups, g.device] })}
+                      className="flex min-h-9 min-w-0 flex-1 cursor-pointer items-center gap-1.5 rounded-md px-1 text-left hover:bg-state-hover hover:text-foreground"
                     >
-                      <Icon
-                        name="ChevronRight"
-                        className={cn(
-                          "size-3 transition-transform duration-150",
-                          !collapsed && "rotate-90",
-                        )}
-                      />
+                      <Icon name="ChevronRight" className={cn("size-3 shrink-0 transition-transform", !collapsed && "rotate-90")} />
+                      {g.device === SERVER_AGENT_ID ? <Icon name="Bot" className="size-3.5 shrink-0" /> : <OsIcon os={g.os} className="size-3.5 shrink-0" />}
+                      <span className="min-w-0 flex-1 truncate font-medium">{g.device === SERVER_AGENT_ID ? t("agent.server") : g.device}</span>
+                      <span className="shrink-0 text-2xs tabular-nums text-subtle-foreground">{g.rows.length}</span>
+                      <span className={cn("size-1.5 shrink-0 rounded-full", sidebarDevices.some((d) => d.id === g.device && d.online) ? "bg-success" : "bg-muted-foreground/40")} />
                     </button>
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>
                         <button
                           type="button"
                           aria-label={t("agent.threadActions")}
-                          className="inline-flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-subtle-foreground opacity-0 transition-opacity group-hover/devhead:opacity-100 max-md:pointer-coarse:opacity-100 hover:bg-state-hover hover:text-muted-foreground data-[state=open]:bg-state-active data-[state=open]:opacity-100"
+                          className="inline-flex h-7 w-7 pointer-coarse:h-10 pointer-coarse:w-10 shrink-0 cursor-pointer items-center justify-center rounded-md text-subtle-foreground opacity-0 transition-opacity group-hover/devhead:opacity-100 group-focus-within/devhead:opacity-100 pointer-coarse:opacity-100 focus-visible:outline focus-visible:outline-ring hover:bg-state-hover hover:text-muted-foreground data-[state=open]:bg-state-active data-[state=open]:opacity-100"
                         >
                           <Icon name="MoreHorizontal" className="size-4" />
                         </button>
@@ -2496,7 +2527,22 @@ export function AgentPage() {
                       </DropdownMenuContent>
                     </DropdownMenu>
                   </div>
-                  {!collapsed && g.rows.map(renderSidebarRow)}
+                  {!collapsed && <div className="ml-3 flex flex-col gap-0.5 border-l border-border-seam pl-1">{g.rows.length ? g.rows.map(renderSidebarRow) : threadQuery.trim() ? <div className="px-2 py-2">{sidebarEmpty}</div> : (
+                    <button
+                      type="button"
+                      disabled={!sidebarDevices.some((d) => d.id === g.device && d.online)}
+                      onClick={() => {
+                        if (device !== g.device) setDevice(g.device);
+                        else if (ready) sendRaw({ op: "new_thread" });
+                        else manualReconnect();
+                        if (isNarrow) closeSidebar();
+                      }}
+                      className="flex min-h-9 pointer-coarse:min-h-10 items-center gap-2 rounded-md px-2 text-left text-xs text-muted-foreground transition-colors hover:bg-state-hover hover:text-foreground focus-visible:outline focus-visible:outline-ring disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      <Icon name="MessageSquarePlus" className="size-3.5 shrink-0" />
+                      {t("agent.newThread")}
+                    </button>
+                  )}</div>}
                 </div>
                 );
               })
@@ -2528,7 +2574,7 @@ export function AgentPage() {
                       }
                     >
                       <Icon name="Eye" className="size-4 shrink-0" />
-                      <span className="min-w-0 flex-1 truncate">{g.device}</span>
+                      <span className="min-w-0 flex-1 truncate">{g.device === SERVER_AGENT_ID ? t("agent.server") : g.device}</span>
                       <span className="ml-auto pl-2 text-2xs text-muted-foreground">
                         {t("agent.addToList")}
                       </span>
@@ -2538,14 +2584,6 @@ export function AgentPage() {
               </DropdownMenu>
             </div>
           )}
-          {/* Mobile-only: global page nav inside the same drawer (bb: one
-           * button opens one drawer containing everything). */}
-          <nav
-            className="flex shrink-0 flex-col gap-0.5 border-t border-border-seam p-2 md:hidden"
-            onClick={closeSidebar}
-          >
-            <MobileNavList />
-          </nav>
           {/* Sidebar footer: current device + connection status */}
           <div className="flex shrink-0 items-center gap-1.5 border-t border-border-seam p-2 text-xs text-muted-foreground select-none">
             <span
@@ -2558,9 +2596,14 @@ export function AgentPage() {
                     : "bg-attention",
               )}
             />
-            <span className="min-w-0 truncate">
-              {device || t("agent.selectDeviceShort")}
-            </span>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild><button type="button" className="flex min-w-0 flex-1 items-center gap-1 rounded px-1 py-1 text-left hover:bg-state-hover"><span className="min-w-0 flex-1 truncate">{device === SERVER_AGENT_ID ? t("agent.server") : device || t("agent.selectDeviceShort")}</span><Icon name="ChevronDown" className="size-3 shrink-0" /></button></DropdownMenuTrigger>
+              <DropdownMenuContent side="top" align="start">
+                <DropdownMenuItem onSelect={() => updateSidebarView({ deviceFilter: "" })}>{t("agent.allThreads")}</DropdownMenuItem>
+                <DropdownMenuSeparator />
+                {sidebarDevices.map((d) => <DropdownMenuItem key={d.id} disabled={!d.online} onSelect={() => { updateSidebarView({ deviceFilter: "" }); setDevice(d.id); }}><OsIcon os={d.os} className="size-3.5" /><span className="max-w-64 truncate">{d.id === SERVER_AGENT_ID ? t("agent.server") : d.id}</span>{d.id === device && <Icon name="Check" className="size-3.5" />}</DropdownMenuItem>)}
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
         </div>
       </aside>
@@ -2615,7 +2658,7 @@ export function AgentPage() {
           isNarrow && panelOpen
             ? "-translate-x-full"
             : isNarrow && sidebarOpen
-              ? "translate-x-[min(86vw,360px)]"
+              ? "translate-x-[var(--agent-mobile-sidebar-width)]"
               : "",
         )}
         style={
@@ -2649,31 +2692,7 @@ export function AgentPage() {
       <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col bg-background">
       {/* Slim header: sidebar toggle + status + thread title | device */}
       <div className="flex h-12 shrink-0 items-center gap-x-2 border-b border-border-seam px-3 text-xs text-muted-foreground select-none">
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              variant="ghost"
-              size="icon"
-              aria-label={t("agent.toggleSidebar")}
-              aria-pressed={sidebarOpen}
-              aria-expanded={sidebarOpen}
-              className={COARSE_POINTER_HEADER_ICON_BUTTON_CLASS}
-              onClick={() => {
-                const next = !sidebarOpen;
-                setSidebarOpen(next);
-                /* Compact: the full-width shelf would cover the drawer —
-                 * opening one dismisses the other. */
-                if (next && window.innerWidth < 768 && panelOpen) {
-                  localStorage.setItem(PANEL_OPEN_KEY, "0");
-                  setPanelOpen(false);
-                }
-              }}
-            >
-              <Icon name="PanelLeft" />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent>{t("agent.toggleSidebar")}</TooltipContent>
-        </Tooltip>
+
         <span
           className={cn(
             "size-2 shrink-0 rounded-full",
@@ -2710,7 +2729,7 @@ export function AgentPage() {
               <DropdownMenuItem
                 disabled={!ready}
                 className="text-destructive-text focus:text-destructive-text"
-                onSelect={() => setDeleteTarget(thread)}
+                onSelect={() => setDeleteTarget({ id: thread, device, title: currentThreadTitle, running: primary.state.running })}
               >
                 <Icon name="Trash2" className="size-4 shrink-0" />
                 {t("agent.deleteThread")}
@@ -2769,8 +2788,7 @@ export function AgentPage() {
             onKeyDown={(e) => {
               if (e.key === "Enter" && !e.nativeEvent.isComposing) {
                 e.preventDefault();
-                renameThread(thread, renameValue.trim());
-                setRenameOpen(false);
+                if (renameThread(thread, renameValue.trim())) setRenameOpen(false);
               }
             }}
           />
@@ -2781,8 +2799,7 @@ export function AgentPage() {
             <Button
               disabled={!renameValue.trim()}
               onClick={() => {
-                renameThread(thread, renameValue.trim());
-                setRenameOpen(false);
+                if (renameThread(thread, renameValue.trim())) setRenameOpen(false);
               }}
             >
               {t("common.save")}
@@ -2796,21 +2813,24 @@ export function AgentPage() {
       <AlertDialog
         open={deleteTarget !== null}
         onOpenChange={(open) => {
-          if (!open) setDeleteTarget(null);
+          if (!open && !deleteBusy) { setDeleteTarget(null); setManagementError(""); }
         }}
       >
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>{t("agent.deleteThread")}</AlertDialogTitle>
             <AlertDialogDescription>
-              {t("agent.deleteThreadConfirm")}
+              {t("agent.deleteThreadConfirm", { title: deleteTarget?.title || "" })}
+              <span className="mt-2 block">{t("agent.deleteStopsTasks")}</span>
             </AlertDialogDescription>
           </AlertDialogHeader>
+          {managementError && <p role="alert" className="text-sm text-destructive-text">{managementError}</p>}
           <AlertDialogFooter>
-            <AlertDialogCancel>{t("common.cancel")}</AlertDialogCancel>
+            <AlertDialogCancel disabled={deleteBusy}>{t("common.cancel")}</AlertDialogCancel>
             <AlertDialogAction
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-              onClick={confirmDeleteThread}
+              disabled={deleteBusy || !ready}
+              onClick={(event) => { event.preventDefault(); confirmDeleteThread(); }}
             >
               {t("common.delete")}
             </AlertDialogAction>

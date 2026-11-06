@@ -47,12 +47,38 @@ impl FileManager {
         Self::default()
     }
 
+    pub async fn mkdir(&self, msg: Message, outbound: mpsc::Sender<OutboundEvent>) {
+        let result = if msg.path.trim().is_empty() {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "missing directory path",
+            ))
+        } else {
+            fs::create_dir_all(&msg.path).await
+        };
+        let response = Message {
+            ty: Some(MessageType::FileMkdirResult),
+            request_id: msg.request_id,
+            path: msg.path,
+            success: result.is_ok(),
+            error: result.err().map(|e| e.to_string()).unwrap_or_default(),
+            ..Default::default()
+        };
+        let _ = outbound.send(OutboundEvent::Message(response)).await;
+    }
+
     pub async fn list(&self, msg: Message, outbound: mpsc::Sender<OutboundEvent>) {
         let request_id = msg.request_id.clone();
         let path = default_path(&msg.path);
-        let result = list_entries(&path, 2000).await;
+        let limit = if msg.size <= 0 {
+            200
+        } else {
+            msg.size.min(2000)
+        };
+        let offset = msg.offset.max(0);
+        let result = list_entries(&path, offset, limit as usize).await;
         let response = match result {
-            Ok((entries, truncated)) => Message {
+            Ok((entries, total)) => Message {
                 ty: Some(MessageType::FileListResult),
                 request_id,
                 path: path.to_string_lossy().to_string(),
@@ -61,8 +87,11 @@ impl FileManager {
                     .unwrap_or_default()
                     .to_string_lossy()
                     .to_string(),
+                truncated: offset + (entries.len() as i64) < total as i64,
                 file_entries: entries,
-                truncated,
+                offset,
+                size: limit,
+                file_mode: total as i32,
                 ..Default::default()
             },
             Err(err) => Message {
@@ -215,8 +244,9 @@ impl FileManager {
         }
         let upload = self.uploads.lock().unwrap().remove(task_id);
         if let Some(mut up) = upload {
+            // Cancel also implements pause. Keep the partial file so a new
+            // protocol task can resume it, matching the Go client.
             let _ = up.file.flush().await;
-            let _ = fs::remove_file(up.part_path).await;
         }
         let download = self.downloads.lock().unwrap().remove(task_id);
         if let Some(download) = download {
@@ -240,8 +270,8 @@ impl FileManager {
             .map(|(_, u)| u)
             .collect();
         for mut up in uploads {
+            // A disconnected transport must not discard acknowledged bytes.
             let _ = up.file.flush().await;
-            let _ = fs::remove_file(up.part_path).await;
         }
         let downloads: Vec<_> = self
             .downloads
@@ -360,7 +390,7 @@ async fn download_task(msg: Message, outbound: mpsc::Sender<OutboundEvent>) {
     }
 }
 
-async fn list_entries(path: &Path, limit: usize) -> Result<(Vec<FileEntry>, bool)> {
+async fn list_entries(path: &Path, offset: i64, limit: usize) -> Result<(Vec<FileEntry>, usize)> {
     let mut read_dir = fs::read_dir(path).await?;
     let mut entries = Vec::new();
     while let Some(ent) = read_dir.next_entry().await? {
@@ -377,12 +407,11 @@ async fn list_entries(path: &Path, limit: usize) -> Result<(Vec<FileEntry>, bool
         b.is_dir
             .cmp(&a.is_dir)
             .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+            .then_with(|| a.name.cmp(&b.name))
     });
-    let truncated = entries.len() > limit;
-    if truncated {
-        entries.truncate(limit);
-    }
-    Ok((entries, truncated))
+    let total = entries.len();
+    let start = (offset.max(0) as u64).min(total as u64) as usize;
+    Ok((entries.into_iter().skip(start).take(limit).collect(), total))
 }
 
 fn upload_target(msg: &Message) -> PathBuf {
@@ -445,6 +474,153 @@ async fn send_transfer_error(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn mkdir_preserves_empty_directories_and_reports_conflicts() {
+        let dir = tempfile::tempdir().unwrap();
+        let nested = dir.path().join("nested/empty");
+        let file = dir.path().join("existing-file");
+        fs::write(&file, b"keep").await.unwrap();
+        let manager = FileManager::new();
+        let (tx, mut rx) = mpsc::channel(1);
+        for (path, success) in [
+            (nested.clone(), true),
+            (nested.clone(), true),
+            (file.clone(), false),
+            (file.join("child"), false),
+            (PathBuf::new(), false),
+        ] {
+            manager
+                .mkdir(
+                    Message {
+                        request_id: "mkdir-1".into(),
+                        path: path.to_string_lossy().into_owned(),
+                        ..Default::default()
+                    },
+                    tx.clone(),
+                )
+                .await;
+            let Some(OutboundEvent::Message(response)) = rx.recv().await else {
+                panic!("missing response")
+            };
+            let wire = serde_json::to_value(&response).unwrap();
+            assert_eq!(wire["type"], "file_mkdir_result");
+            assert_eq!(response.request_id, "mkdir-1");
+            assert_eq!(response.success, success);
+            assert_eq!(response.error.is_empty(), success);
+        }
+        assert!(nested.is_dir());
+        assert_eq!(fs::read(file).await.unwrap(), b"keep");
+    }
+
+    #[tokio::test]
+    async fn directory_pages_are_stable_and_report_total() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join("z-dir")).await.unwrap();
+        for name in ["b", "a", "c"] {
+            fs::write(dir.path().join(name), b"").await.unwrap();
+        }
+        let manager = FileManager::new();
+        let (tx, mut rx) = mpsc::channel(1);
+        for (offset, names, truncated) in [
+            (0, vec!["z-dir", "a"], true),
+            (2, vec!["b", "c"], false),
+            (3, vec!["c"], false),
+            (4, vec![], false),
+            (i64::MAX, vec![], false),
+            (-1, vec!["z-dir", "a"], true),
+        ] {
+            manager
+                .list(
+                    Message {
+                        request_id: "page".into(),
+                        path: dir.path().to_string_lossy().into_owned(),
+                        offset,
+                        size: 2,
+                        ..Default::default()
+                    },
+                    tx.clone(),
+                )
+                .await;
+            let Some(OutboundEvent::Message(response)) = rx.recv().await else {
+                panic!("missing page")
+            };
+            assert_eq!(
+                response
+                    .file_entries
+                    .iter()
+                    .map(|e| e.name.as_str())
+                    .collect::<Vec<_>>(),
+                names
+            );
+            assert_eq!(response.truncated, truncated);
+            assert_eq!(response.offset, offset.max(0));
+            assert_eq!(response.file_mode, 4);
+            assert_eq!(response.size, 2);
+            let wire = serde_json::to_value(response).unwrap();
+            assert_eq!(wire["fileMode"], 4);
+        }
+    }
+
+    async fn check_upload_resume(disconnect: bool) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("resumed.bin");
+        let part = dir.path().join("resumed.bin.rdevpart");
+        let manager = FileManager::new();
+        let (tx, mut rx) = mpsc::channel(16);
+        let start = |id: &str| Message {
+            task_id: id.into(),
+            path: path.to_string_lossy().into_owned(),
+            size: 6,
+            ..Default::default()
+        };
+        manager.upload_start(start("first"), tx.clone()).await;
+        assert!(matches!(rx.recv().await, Some(OutboundEvent::Message(msg))
+            if msg.ty == Some(MessageType::FileUploadReady) && msg.offset == 0));
+        manager
+            .upload_chunk("first", 0, b"abc".to_vec(), tx.clone())
+            .await;
+        assert!(matches!(
+            rx.recv().await,
+            Some(OutboundEvent::BinaryOffset { offset: 3, .. })
+        ));
+        if disconnect {
+            manager.close_all().await;
+        } else {
+            manager.cancel("first").await;
+        }
+        assert!(manager.uploads.lock().unwrap().is_empty());
+        assert_eq!(fs::read(&part).await.unwrap(), b"abc");
+        assert!(!path.exists());
+
+        manager.upload_start(start("resumed"), tx.clone()).await;
+        assert!(matches!(rx.recv().await, Some(OutboundEvent::Message(msg))
+            if msg.ty == Some(MessageType::FileUploadReady) && msg.offset == 3));
+        // Late duplicate cancellation of the old generation cannot touch it.
+        manager.cancel("first").await;
+        manager
+            .upload_chunk("resumed", 3, b"def".to_vec(), tx.clone())
+            .await;
+        assert!(matches!(
+            rx.recv().await,
+            Some(OutboundEvent::BinaryOffset { offset: 6, .. })
+        ));
+        manager.upload_end(start("resumed"), tx).await;
+        assert!(matches!(rx.recv().await, Some(OutboundEvent::Message(msg))
+            if msg.ty == Some(MessageType::FileTransferEnd) && msg.success));
+        assert_eq!(fs::read(&path).await.unwrap(), b"abcdef");
+        assert!(!part.exists());
+    }
+
+    #[tokio::test]
+    async fn upload_resumes_after_pause_with_new_task_id() {
+        check_upload_resume(false).await;
+    }
+
+    #[tokio::test]
+    async fn upload_resumes_after_transport_disconnect() {
+        check_upload_resume(true).await;
+    }
 
     #[test]
     fn upload_target_prefers_absolute_path() {

@@ -55,6 +55,7 @@ export function RemotePathBrowser({
   const [folderName, setFolderName] = useState("");
   const [folderErr, setFolderErr] = useState("");
   const [folderBusy, setFolderBusy] = useState(false);
+  const folderSubmitting = useRef(false);
   /* Stale-response guard: rapid navigation must not let an older reply
    * clobber a newer directory. */
   const seqRef = useRef(0);
@@ -100,6 +101,7 @@ export function RemotePathBrowser({
   };
 
   const submitFolder = () => {
+    if (disabled || status !== "ready" || folderSubmitting.current) return;
     const name = folderName.trim();
     if (!name) {
       setFolderErr(t("agent.folderNameRequired"));
@@ -110,6 +112,7 @@ export function RemotePathBrowser({
       return;
     }
     const path = joinPath(current, name);
+    folderSubmitting.current = true;
     setFolderBusy(true);
     setFolderErr("");
     mkdir(path)
@@ -119,7 +122,10 @@ export function RemotePathBrowser({
         navigate(path);
       })
       .catch(() => setFolderErr(t("agent.folderCreateFailed")))
-      .finally(() => setFolderBusy(false));
+      .finally(() => {
+        folderSubmitting.current = false;
+        setFolderBusy(false);
+      });
   };
 
   const uiDisabled = disabled || status === "loading";
@@ -144,6 +150,7 @@ export function RemotePathBrowser({
             disabled={disabled}
             onChange={(e) => setEditDraft(e.target.value)}
             onKeyDown={(e) => {
+              if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
               if (e.key === "Enter") {
                 e.preventDefault();
                 commitEditor();
@@ -220,6 +227,14 @@ export function RemotePathBrowser({
         )}
       </div>
       <div className="h-56 min-h-0 overflow-y-auto px-1.5 py-1">
+        {status === "error" && !creating && (
+          <div className="flex flex-col items-center gap-2 px-2 py-8 text-center text-xs text-muted-foreground">
+            <span role="alert">{t("agent.pathLoadFailed")}</span>
+            <button type="button" disabled={disabled} onClick={() => navigate(current)} className="rounded-md border border-border px-2 py-1 text-foreground hover:bg-state-hover disabled:opacity-50">
+              {t("agent.retry")}
+            </button>
+          </div>
+        )}
         {creating && (
           <div
             role="group"
@@ -235,6 +250,7 @@ export function RemotePathBrowser({
                 disabled={folderBusy}
                 onChange={(e) => setFolderName(e.target.value)}
                 onKeyDown={(e) => {
+                  if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
                   if (e.key === "Enter") {
                     e.preventDefault();
                     submitFolder();
@@ -244,6 +260,16 @@ export function RemotePathBrowser({
                 }}
                 className="-ml-1 h-7 min-w-0 flex-1 rounded-md border border-input bg-transparent px-1 text-sm outline-none focus-visible:ring-1 focus-visible:ring-ring"
               />
+              <button
+                type="button"
+                aria-label={t("agent.createFolder")}
+                disabled={disabled || status !== "ready" || folderBusy || !folderName.trim()}
+                onClick={submitFolder}
+                className="inline-flex min-h-7 pointer-coarse:min-h-10 shrink-0 items-center gap-1 rounded-md border border-border px-2 text-xs hover:bg-state-hover disabled:opacity-50"
+              >
+                {folderBusy && <Icon name="Spinner" className="size-3.5 animate-spin" />}
+                {t("agent.createFolder")}
+              </button>
               <button
                 type="button"
                 aria-label={t("agent.cancelNewFolder")}
@@ -266,12 +292,7 @@ export function RemotePathBrowser({
             <Icon name="Spinner" className="size-4 animate-spin" />
             {t("agent.loadingFolders")}
           </div>
-        ) : status === "error" ? (
-          <div className="flex items-center gap-2 px-2 py-3 text-sm text-destructive-text">
-            <Icon name="AlertCircle" className="size-4 shrink-0" />
-            {t("agent.folderReadFailed")}
-          </div>
-        ) : entries.length === 0 ? (
+        ) : status === "error" ? null : entries.length === 0 ? (
           <div className="px-2 py-3 text-sm text-muted-foreground">
             {t("agent.folderEmpty")}
           </div>

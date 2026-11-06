@@ -1,3 +1,7 @@
+import { writeOwnedClipboard } from "../lib/clipboard-write";
+import { paintDesktopImage } from "../lib/desktop-frame";
+import { DisclosureBody } from "../components/disclosure-body";
+import { Icon } from "../components/icon";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useSearchParams } from "react-router-dom";
 import { SplitPageShell } from "../components/split-layout";
@@ -247,8 +251,10 @@ function loadSettings(): Settings {
 function DesktopSession({
   primary,
   deviceRequest,
+  onDeviceChange,
 }: {
   primary: boolean;
+  onDeviceChange?: (device: string) => void;
   /* Rail click/drop requests: {id, seq} identity change → connect. */
   deviceRequest?: { id: string; seq: number };
 }) {
@@ -256,8 +262,10 @@ function DesktopSession({
   const [urlParams, setUrlParams] = useSearchParams();
   const searchParams = primary ? urlParams : EMPTY_PARAMS;
 
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsState, setSettingsState] = useState<Settings>(loadSettings);
   const [device, setDeviceState] = useState("");
+  useEffect(() => { onDeviceChange?.(device); }, [device, onDeviceChange]);
   const [password, setPassword] = useState("");
   const [devices, setDevices] = useState<DesktopDevice[]>([]);
   const [status, setStatusState] = useState<{ text: string; cls: StatusCls }>({
@@ -321,7 +329,7 @@ function DesktopSession({
   const controlPreferenceSet = useRef(localStorage.getItem(P + "control") !== null);
 
   const drawingRef = useRef(false);
-  const pendingFrameRef = useRef<ArrayBuffer | null>(null);
+  const pendingFrameRef = useRef<{ data: ArrayBuffer; connection: number; socket: WebSocket | null } | null>(null);
   const reconnectTimerRef = useRef<number | undefined>(undefined);
   const resizeTimerRef = useRef<number | undefined>(undefined);
   const lastMouseSentRef = useRef(0);
@@ -352,6 +360,7 @@ function DesktopSession({
   const gpuComposingRef = useRef(false);
   const gpuIgnoreNextTextInputRef = useRef(false);
 
+  const clipRemoteWritePendingRef = useRef(false);
   const clipGenRef = useRef(0);
   const clipPollTimerRef = useRef<number | undefined>(undefined);
   const clipReadPendingRef = useRef(false);
@@ -668,12 +677,14 @@ function DesktopSession({
       const decoder = new VideoDecoder({
         output: (frame) => {
           try {
+            if (h264DecoderRef.current !== decoder) return;
             paintImage(frame, frame.displayWidth || frame.codedWidth, frame.displayHeight || frame.codedHeight);
           } finally {
             frame.close();
           }
         },
         error: (e) => {
+          if (h264DecoderRef.current !== decoder) return;
           console.error("h264 decoder error", e);
           fallbackToMjpeg();
         },
@@ -732,13 +743,16 @@ function DesktopSession({
   };
 
   const drawFrame = (data: ArrayBuffer) => {
-    pendingFrameRef.current = data;
+    pendingFrameRef.current = { data, connection: connSeqRef.current, socket: wsRef.current };
     if (drawingRef.current) return;
     drawingRef.current = true;
     requestAnimationFrame(async () => {
-      const frame = pendingFrameRef.current;
+      const pending = pendingFrameRef.current;
       pendingFrameRef.current = null;
       const format = videoFormatRef.current;
+      const current = () => !!pending && pending.connection === connSeqRef.current &&
+        pending.socket === wsRef.current && videoFormatRef.current === format;
+      const frame = current() ? pending?.data : null;
       try {
         if (format === "h264") {
           if (frame && feedH264Frame(frame)) {
@@ -750,23 +764,7 @@ function DesktopSession({
           }
         } else if (frame) {
           const blob = new Blob([frame], { type: "image/jpeg" });
-          if (typeof window.createImageBitmap === "function") {
-            try {
-              const bitmap = await createImageBitmap(blob);
-              if (videoFormatRef.current === format)
-                paintImage(bitmap, bitmap.width, bitmap.height);
-              bitmap.close();
-            } catch {
-              const img = await decodeImage(blob);
-              if (videoFormatRef.current === format)
-                paintImage(img, img.naturalWidth || img.width, img.naturalHeight || img.height);
-            }
-          } else {
-            const img = await decodeImage(blob);
-            if (videoFormatRef.current === format)
-              paintImage(img, img.naturalWidth || img.width, img.naturalHeight || img.height);
-          }
-          if (videoFormatRef.current === format) {
+          if (await paintDesktopImage(blob, current, paintImage, decodeImage)) {
             frameCountRef.current++;
             frameBytesRef.current += frame.byteLength || 0;
             if (!statsStartedAtRef.current) statsStartedAtRef.current = performance.now();
@@ -778,7 +776,10 @@ function DesktopSession({
         console.error(e);
       }
       drawingRef.current = false;
-      if (pendingFrameRef.current) drawFrame(pendingFrameRef.current);
+      // New socket frames can arrive while decoding awaits.
+      const next = pendingFrameRef.current as typeof pending;
+      if (next && next.connection === connSeqRef.current && next.socket === wsRef.current) drawFrame(next.data);
+      else pendingFrameRef.current = null;
     });
   };
 
@@ -909,17 +910,21 @@ function DesktopSession({
     }
     const decoder = new VideoDecoder({
       output: (frame) => {
-        if (gpuCanvas && gpuCtx) {
-          gpuCanvas.width = frame.displayWidth || frame.codedWidth || gpuCanvas.width;
-          gpuCanvas.height = frame.displayHeight || frame.codedHeight || gpuCanvas.height;
-          gpuCtx.clearRect(0, 0, gpuCanvas.width, gpuCanvas.height);
-          gpuCtx.drawImage(frame, 0, 0, gpuCanvas.width, gpuCanvas.height);
-          setGpuEmpty(null);
-        }
-        frame.close();
-        gpuUpdateFrameInfo();
+        try {
+          if (gpuVideoDecoderRef.current !== decoder) return;
+          if (gpuCanvas && gpuCtx) {
+            gpuCanvas.width = frame.displayWidth || frame.codedWidth || gpuCanvas.width;
+            gpuCanvas.height = frame.displayHeight || frame.codedHeight || gpuCanvas.height;
+            gpuCtx.clearRect(0, 0, gpuCanvas.width, gpuCanvas.height);
+            gpuCtx.drawImage(frame, 0, 0, gpuCanvas.width, gpuCanvas.height);
+            setGpuEmpty(null);
+          }
+          gpuUpdateFrameInfo();
+        } finally { frame.close(); }
       },
-      error: (err) => setStatus(errMessage(err), "err"),
+      error: (err) => {
+        if (gpuVideoDecoderRef.current === decoder) setStatus(errMessage(err), "err");
+      },
     });
     decoder.configure({
       codec: config.codec || "avc1.42E01F",
@@ -1084,6 +1089,7 @@ function DesktopSession({
 
   const stopClipboardSync = () => {
     clipGenRef.current++;
+    clipRemoteWritePendingRef.current = false;
     clearInterval(clipPollTimerRef.current);
     clipPollTimerRef.current = undefined;
     clipReadPendingRef.current = false;
@@ -1161,9 +1167,7 @@ function DesktopSession({
         throw new Error(tRef.current("desktop.clipboardFormatUnsupported"));
       await navigator.clipboard.writeText(new TextDecoder().decode(base64ToBytes(text.data)));
     }
-    setClipStatus(
-      `${tRef.current("desktop.clipboardSyncedLocal")}（${items.map((item) => item.mime).join(", ")}）`,
-    );
+
   };
 
   const requestRemoteClipboard = () => {
@@ -1177,13 +1181,13 @@ function DesktopSession({
   };
 
   const syncLocalClipboard = async () => {
-    if (!clipCapsRef.current || !clipboardSyncsLocalToRemote() || clipLocalReadPendingRef.current)
+    if (!clipCapsRef.current || !clipboardSyncsLocalToRemote() || clipLocalReadPendingRef.current || clipRemoteWritePendingRef.current)
       return;
     const generation = clipGenRef.current;
     clipLocalReadPendingRef.current = true;
     try {
       const items = await readBrowserClipboardItems();
-      if (generation !== clipGenRef.current || !clipboardSyncsLocalToRemote() || !items.length)
+      if (generation !== clipGenRef.current || !clipboardSyncsLocalToRemote() || clipRemoteWritePendingRef.current || !items.length)
         return;
       const fingerprint = clipboardFingerprint(items);
       if (clipLastLocalFpRef.current === null) {
@@ -1222,17 +1226,23 @@ function DesktopSession({
       }
       return;
     }
-    if (clipLastRemoteFpRef.current === null) {
+    if (clipLastRemoteFpRef.current === null && settingsRef.current.clipboardMode === "bidirectional") {
       clipLastRemoteFpRef.current = fingerprint;
-      if (settingsRef.current.clipboardMode === "bidirectional") return;
-    } else if (fingerprint === clipLastRemoteFpRef.current) {
       return;
-    } else {
-      clipLastRemoteFpRef.current = fingerprint;
     }
-    clipLastLocalFpRef.current = fingerprint;
-    writeBrowserClipboardItems({ items }).catch((err) => {
+    if (fingerprint === clipLastRemoteFpRef.current || clipRemoteWritePendingRef.current) return;
+    const generation = clipGenRef.current;
+    const socket = wsRef.current;
+    const current = () => generation === clipGenRef.current && socket === wsRef.current && clipboardSyncsRemoteToLocal();
+    clipRemoteWritePendingRef.current = true;
+    void writeOwnedClipboard(current, () => writeBrowserClipboardItems({ items }), () => {
+      clipLastRemoteFpRef.current = fingerprint;
+      clipLastLocalFpRef.current = fingerprint;
+      setClipStatus(`${tRef.current("desktop.clipboardSyncedLocal")}（${items.map((item) => item.mime).join(", ")}）`);
+    }, (err) => {
       setClipStatus(`${tRef.current("desktop.clipboardWriteFailed")}：${errMessage(err)}`);
+    }).finally(() => {
+      if (generation === clipGenRef.current) clipRemoteWritePendingRef.current = false;
     });
   };
 
@@ -1327,18 +1337,18 @@ function DesktopSession({
     ws.binaryType = "arraybuffer";
     setStatus(tt("common.connecting"));
     ws.onopen = () => {
-      if (connID !== connSeqRef.current) return;
+      if (connID !== connSeqRef.current || wsRef.current !== ws) return;
       gpuReconnectDelayRef.current = 1000;
       setStatus(tRef.current("desktop.starting"));
       gpuSend("GetCapturableList");
       gpuSendConfig();
     };
     ws.onerror = () => {
-      if (connID !== connSeqRef.current) return;
+      if (connID !== connSeqRef.current || wsRef.current !== ws) return;
       setStatus(tRef.current("common.error"), "err");
     };
     ws.onclose = () => {
-      if (connID !== connSeqRef.current) return;
+      if (connID !== connSeqRef.current || wsRef.current !== ws) return;
       wsRef.current = null;
       stopClipboardSync();
       setClipboardCapabilities(null);
@@ -1349,7 +1359,7 @@ function DesktopSession({
       scheduleGPUReconnect(dev, connID);
     };
     ws.onmessage = (evt) => {
-      if (connID !== connSeqRef.current) return;
+      if (connID !== connSeqRef.current || wsRef.current !== ws) return;
       if (evt.data instanceof ArrayBuffer) {
         if (gpuHandleAndroidVideoPacket(evt.data)) return;
         frameCountRef.current++;
@@ -1430,7 +1440,7 @@ function DesktopSession({
     ws.binaryType = "arraybuffer";
     setStatus(tRef.current("common.connecting"));
     ws.onmessage = (evt) => {
-      if (connID !== connSeqRef.current) return;
+      if (connID !== connSeqRef.current || wsRef.current !== ws) return;
       if (evt.data instanceof ArrayBuffer) {
         drawFrame(evt.data);
         return;
@@ -1507,7 +1517,7 @@ function DesktopSession({
       }
     };
     ws.onclose = () => {
-      if (connID !== connSeqRef.current) return;
+      if (connID !== connSeqRef.current || wsRef.current !== ws) return;
       wsRef.current = null;
       stopClipboardSync();
       setClipboardCapabilities(null);
@@ -2237,9 +2247,9 @@ function DesktopSession({
   /* ── Render ── */
 
   return (
-    <div className="flex h-full min-h-0 min-w-0 flex-col overflow-y-auto">
+    <div className="page-workspace overflow-hidden">
       {/* Controls bar */}
-      <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border-seam px-3 py-2">
+      <div className="page-toolbar">
         {/* Device comes from the left rail; the bar only shows it. */}
         <div className="flex h-8 items-center gap-1.5 rounded-md border border-border-seam px-2.5 text-xs text-muted-foreground select-none">
           <OsIcon
@@ -2263,13 +2273,16 @@ function DesktopSession({
             if (e.key === "Enter") connect();
           }}
           placeholder={t("terminal.passwordPlaceholder")}
-          className="h-8 w-44 text-xs"
+          className="h-8 min-w-24 w-36 flex-1 sm:flex-none text-xs"
         />
         <Button size="sm" disabled={!device} onClick={() => connect()}>
           {t("common.connect")}
         </Button>
-        <Button size="sm" variant="outline" onClick={() => disconnect()}>
+        <Button size="sm" variant="outline" disabled={!connMode} onClick={() => disconnect()}>
           {t("desktop.disconnect")}
+        </Button>
+        <Button size="sm" variant="ghost" aria-expanded={settingsOpen} onClick={() => setSettingsOpen((open) => !open)}>
+          <Icon name="Settings" />{t("desktop.settings")}
         </Button>
         <span
           role="status"
@@ -2285,8 +2298,9 @@ function DesktopSession({
         </span>
       </div>
 
-      {/* Settings bar */}
-      <div className="flex max-h-[40dvh] shrink-0 flex-wrap items-center gap-x-3 gap-y-2 overflow-auto border-b border-border-seam px-3 py-2 text-xs text-muted-foreground">
+      {/* Settings remain mounted so toggling the panel never resets a connection. */}
+      <DisclosureBody open={settingsOpen} forceMount className="shrink-0">
+      <div className="flex max-h-[35dvh] flex-wrap items-center gap-x-3 gap-y-2 overflow-auto border-b border-border-seam bg-sidebar px-3 py-3 text-xs text-muted-foreground">
         {!isGpuDevice && (
           <>
             <label className="inline-flex items-center gap-1.5 whitespace-nowrap">
@@ -2751,12 +2765,13 @@ function DesktopSession({
           </div>
         )}
       </div>
+      </DisclosureBody>
 
       {/* Stage */}
       <div
         ref={stageRef}
         className={cn(
-          "flex min-h-40 min-w-0 flex-1 p-3 overscroll-contain",
+          "flex min-h-0 min-w-0 flex-1 bg-surface-recessed p-2 sm:p-3 overscroll-contain",
           connMode === "gpu"
             ? "flex-col items-stretch justify-start gap-2 overflow-hidden"
             : cn(
@@ -2786,7 +2801,7 @@ function DesktopSession({
         {connMode === "gpu" && (
           <div
             ref={viewerRef}
-            className="relative min-h-0 w-full flex-1 overflow-hidden rounded-lg border border-border-seam bg-black shadow-[0_16px_40px_rgba(0,0,0,.20)]"
+            className="relative min-h-0 w-full flex-1 overflow-hidden rounded-lg border border-border-seam bg-black"
           >
             <video
               ref={videoRef}
@@ -2813,7 +2828,7 @@ function DesktopSession({
                 className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center p-6 text-center leading-loose text-muted-foreground"
                 style={{
                   background:
-                    "radial-gradient(circle at center, rgba(34,211,238,.07), transparent 42%)",
+                    "radial-gradient(circle at center, color-mix(in oklab, var(--timeline-accent) 10%, transparent), transparent 42%)",
                 }}
               >
                 <strong className="mb-1 text-base text-foreground">{gpuEmpty.title}</strong>
@@ -2835,6 +2850,7 @@ function DesktopSession({
 /* ── Single-pane wrapper: the page IS the rail + desktop columns. ── */
 
 export function DesktopPage() {
+  const [selectedDevice, setSelectedDevice] = useState("");
   const seqRef = useRef(0);
   const [requests, setRequests] = useState<
     Map<number, { id: string; seq: number }>
@@ -2849,13 +2865,14 @@ export function DesktopPage() {
   return (
     <SplitPageShell
       storageKey="rdev.split.desktop.rail"
+      selectedDevice={selectedDevice}
       onDevicePick={(id) => requestDevice(0, id)}
     >
       <DeviceDropTarget
         className="h-full min-h-0"
         onDropDevice={(id) => requestDevice(0, id)}
       >
-        <DesktopSession primary deviceRequest={requests.get(0)} />
+        <DesktopSession onDeviceChange={setSelectedDevice} primary deviceRequest={requests.get(0)} />
       </DeviceDropTarget>
     </SplitPageShell>
   );

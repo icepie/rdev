@@ -58,3 +58,46 @@ it('replaces stale state and unlocks stop when a secondary snapshot arrives', as
   await frame({ op: 'thread_peeked', running: false, history: [], queue: [], todos: [] });
   expect(sink.state).toMatchObject({ items: [], queue: [], todos: [], running: false, stopping: false, workingSince: null });
 });
+
+it('keeps inspected job output during list refresh and removes it on reset', async () => {
+  await frame({ op: 'job', items: { id: 'job1', kind: 'shell', label: 'build', state: 'running', output: 'compiling' } });
+  await frame({ op: 'jobs', items: [{ id: 'job1', kind: 'shell', label: 'build', state: 'completed' }] });
+  expect(sink.state.jobs).toMatchObject([{ id: 'job1', state: 'completed', output: 'compiling' }]);
+  await frame({ op: 'job', items: { id: 'job1', kind: 'shell', label: 'build', state: 'completed', output: 'compiled', result: 'exit code: 0' } });
+  expect(sink.state.jobs).toHaveLength(1);
+  expect(sink.state.jobs[0].result).toBe('exit code: 0');
+  await frame({ op: 'job', items: { id: 'job1', kind: 'shell', label: 'build', state: 'failed', error: 'failed' } });
+  expect(sink.state.jobs[0]).toMatchObject({ output: 'compiled', result: 'exit code: 0', error: 'failed' });
+  await frame({ op: 'reset_ok' });
+  expect(sink.state.jobs).toEqual([]);
+});
+
+it('replaces the live transcript with the authoritative compacted history', async () => {
+  await frame({ op: 'turn_start', text: '/compact' });
+  await frame({ op: 'delta', text: 'compressing' });
+  await frame({ op: 'done', compacted: true, history: [{ role: 'user', text: 'Summary with task state' }, { role: 'assistant', text: 'Latest preserved answer' }] });
+  expect(sink.state.running).toBe(false);
+  expect(sink.ops.turnOpen.current).toBe(false);
+  expect(sink.state.items.map(item => item.text)).toEqual(['Summary with task state', 'Latest preserved answer']);
+});
+
+it('keeps task list order when refreshing an inspected task', async () => {
+  const jobs = ['first', 'second'].map(id => ({ id, kind: 'shell', label: id, state: 'running' }));
+  await frame({ op: 'jobs', items: jobs });
+  await frame({ op: 'job', items: { ...jobs[0], output: 'progress' } });
+  expect(sink.state.jobs.map(job => job.id)).toEqual(['first', 'second']);
+  expect(sink.state.jobs[0].output).toBe('progress');
+});
+
+it('keeps foreground streaming intact after a background job operation fails', async () => {
+  await frame({ op: 'turn_start', text: 'continue working' });
+  await act(async () => sink.ops.appendDelta('before'));
+  await frame({ op: 'job_error', message: 'unknown job in this thread' });
+  await act(async () => sink.ops.appendDelta(' after'));
+  expect(sink.state.running).toBe(true);
+  expect(sink.ops.turnOpen.current).toBe(true);
+  expect(sink.state.jobsError).toBe('unknown job in this thread');
+  expect(sink.state.items.filter(x => x.kind === 'turn').map(x => x.text)).toEqual(['before after']);
+  await frame({ op: 'reset_ok' });
+  expect(sink.state.jobsError).toBe('');
+});

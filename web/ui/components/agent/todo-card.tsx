@@ -1,3 +1,4 @@
+import { DisclosureBody } from "../disclosure-body";
 import { useState } from "react";
 import { cn } from "../../lib/utils";
 import { Icon } from "../icon";
@@ -54,7 +55,7 @@ export function TodoCard({ todos, t }: { todos: TodoItem[]; t: Translator }) {
           )}
         />
       </button>
-      {open && (
+      <DisclosureBody open={open}>
         <ul className="max-h-40 space-y-1 overflow-y-auto px-2.5 pt-2 pb-2">
           {ordered.map((todo, i) => (
             <li
@@ -81,7 +82,7 @@ export function TodoCard({ todos, t }: { todos: TodoItem[]; t: Translator }) {
             </li>
           ))}
         </ul>
-      )}
+      </DisclosureBody>
     </div>
   );
 }

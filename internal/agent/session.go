@@ -117,7 +117,7 @@ func (s *Session) RunTurn(ctx context.Context, userText string, images []Message
 // appendHistory appends messages under the session lock.
 func (s *Session) appendHistory(msgs ...Message) {
 	s.mu.Lock()
-	s.history = append(s.history, msgs...)
+	s.history = append(s.history, cloneMessages(msgs)...)
 	s.mu.Unlock()
 }
 

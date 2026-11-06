@@ -1,9 +1,12 @@
 package server
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -227,4 +230,49 @@ func TestAgentHistoryListThreadsPrefersMtime(t *testing.T) {
 	if len(metas) != 2 || metas[0].ID != "t_1" {
 		t.Fatalf("order = %+v, want t_1 first (mtime beats stale meta)", metas)
 	}
+}
+
+func TestAgentHistoryReplacementPersistsEqualLengthSummary(t *testing.T) {
+	st := newTestStore(t)
+	original := []agent.Message{{Role: "user", Content: "old request"}, {Role: "assistant", Content: "old response"}}
+	replacement := []agent.Message{{Role: "user", Content: "summary of earlier context"}, {Role: "assistant", Content: "continue from summary"}}
+	st.save("device", "thread", "model", original)
+	st.replace("device", "thread", "model", replacement)
+	// Reload through a new store to exercise disk state, not the writer's cache.
+	reopened := newAgentSessionStore(st.dir, 30*24*time.Hour)
+	got, _, _, _ := reopened.load("device", "thread")
+	if !reflect.DeepEqual(got, replacement) {
+		t.Fatalf("reload lost summary: %+v", got)
+	}
+	next := append(replacement, agent.Message{Role: "user", Content: "next request"})
+	st.save("device", "thread", "model", next)
+	got, _, _, _ = reopened.load("device", "thread")
+	if !reflect.DeepEqual(got, next) {
+		t.Fatalf("append after compaction corrupted history: %+v", got)
+	}
+}
+
+func TestHistoryCleanupDoesNotRaceNewDeviceWrites(t *testing.T) {
+	st := newTestStore(t)
+	var wg sync.WaitGroup
+	for worker := 0; worker < 4; worker++ {
+		wg.Add(1)
+		go func(worker int) {
+			defer wg.Done()
+			for i := 0; i < 40; i++ {
+				if worker == 0 {
+					st.cleanup()
+					continue
+				}
+				device := fmt.Sprintf("device-%d-%d", worker, i)
+				history := []agent.Message{{Role: "user", Content: device}}
+				st.save(device, "thread", "model", history)
+				got, _, _, _ := st.load(device, "thread")
+				if !reflect.DeepEqual(got, history) {
+					t.Errorf("history lost during cleanup: %s", device)
+				}
+			}
+		}(worker)
+	}
+	wg.Wait()
 }

@@ -1,7 +1,7 @@
 /* PierreFileDiff: thin wrapper over the @pierre/diffs FileDiff renderer
  * (shiki highlighting, unified/split, hunk headers, line numbers). Renders
  * on the main thread with stock shiki github themes. */
-import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import { useMemo, type CSSProperties } from "react";
 import { parsePatchFiles, type FileDiffMetadata } from "@pierre/diffs";
 import { FileDiff } from "@pierre/diffs/react";
 import type { FileDiffOptions } from "@pierre/diffs";
@@ -27,19 +27,7 @@ export const DIFF_THEME = {
  * plus the system preference when set to auto. Shared by the diff deck
  * and the file preview code view. */
 export function useThemeType(): "dark" | "light" {
-  const { choice } = useTheme();
-  const [systemLight, setSystemLight] = useState(
-    () => window.matchMedia("(prefers-color-scheme: light)").matches,
-  );
-  useEffect(() => {
-    if (choice !== "auto") return;
-    const mq = window.matchMedia("(prefers-color-scheme: light)");
-    const onChange = () => setSystemLight(mq.matches);
-    mq.addEventListener("change", onChange);
-    return () => mq.removeEventListener("change", onChange);
-  }, [choice]);
-  if (choice === "auto") return systemLight ? "light" : "dark";
-  return choice;
+  return useTheme().resolved;
 }
 
 /* Renders the FIRST file of a unified patch (rdev fetches diffs per

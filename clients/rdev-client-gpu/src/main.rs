@@ -595,6 +595,13 @@ async fn handle_text(
                 forwards.close_forward(&msg.forward_id).await;
             }
         }
+        Some(MessageType::FileMkdir) => {
+            let files = files.clone();
+            let out_tx = out_tx.clone();
+            modules.files.spawn(async move {
+                files.mkdir(msg, out_tx).await;
+            });
+        }
         Some(MessageType::FileList) => {
             let files = files.clone();
             let out_tx = out_tx.clone();

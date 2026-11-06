@@ -1,18 +1,32 @@
 import { useCallback, useRef, useState } from "react";
 
-export function copyText(text: string): Promise<void> {
+export async function copyText(text: string): Promise<void> {
   if (navigator.clipboard && window.isSecureContext)
     return navigator.clipboard.writeText(text);
   const area = document.createElement("textarea");
+  const active = document.activeElement;
+  const selection = active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement
+    ? { start: active.selectionStart, end: active.selectionEnd, direction: active.selectionDirection }
+    : null;
   area.value = text;
   area.style.position = "fixed";
   area.style.left = "-9999px";
   document.body.appendChild(area);
-  area.focus();
-  area.select();
-  const ok = document.execCommand("copy");
-  area.remove();
-  return ok ? Promise.resolve() : Promise.reject(new Error("copy failed"));
+  try {
+    area.focus({ preventScroll: true });
+    area.select();
+    if (!document.execCommand("copy")) throw new Error("copy failed");
+  } finally {
+    area.remove();
+    if (active instanceof HTMLElement && active.isConnected && !active.closest("[inert]")) {
+      active.focus({ preventScroll: true });
+      if (selection && selection.start !== null && selection.end !== null) {
+        (active as HTMLInputElement | HTMLTextAreaElement).setSelectionRange(
+          selection.start, selection.end, selection.direction ?? undefined,
+        );
+      }
+    }
+  }
 }
 
 /* copiedId/copy pair: copy(text) flashes copiedId for 1.5s. */

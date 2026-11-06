@@ -5,6 +5,7 @@ import type { ITheme } from "@xterm/xterm";
  * Terminal page and the agent right-panel terminal tabs. */
 
 let colorProbe: HTMLSpanElement | null = null;
+let colorContext: CanvasRenderingContext2D | null = null;
 
 function resolveColor(value: string, fallback: string): string {
   if (!value) return fallback;
@@ -15,7 +16,19 @@ function resolveColor(value: string, fallback: string): string {
   }
   colorProbe.style.color = "";
   colorProbe.style.color = value;
-  return getComputedStyle(colorProbe).color || fallback;
+  if (!colorProbe.style.color) return fallback;
+  const computed = getComputedStyle(colorProbe).color;
+  // CSSOM retains modern color spaces. Rasterize into an sRGB canvas so
+  // xterm receives rgba even for oklch and color-mix theme variables.
+  colorContext ??= document.createElement("canvas").getContext("2d", {
+    willReadFrequently: true,
+  });
+  if (!colorContext) return fallback;
+  colorContext.clearRect(0, 0, 1, 1);
+  colorContext.fillStyle = computed;
+  colorContext.fillRect(0, 0, 1, 1);
+  const [red, green, blue, alpha] = colorContext.getImageData(0, 0, 1, 1).data;
+  return `rgba(${red}, ${green}, ${blue}, ${alpha / 255})`;
 }
 
 function cssVar(name: string): string {

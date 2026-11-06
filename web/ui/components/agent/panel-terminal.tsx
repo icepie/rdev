@@ -42,6 +42,8 @@ export function PanelTerminal({
   visible: boolean;
   t: Translator;
 }) {
+  const visibleRef = useRef(visible);
+  visibleRef.current = visible;
   const hostRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<XTerm | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
@@ -131,7 +133,7 @@ export function PanelTerminal({
         setAuthOpen(false);
         setAuthError("");
         setStatus("connected");
-        term.focus();
+        if (visibleRef.current) term.focus();
       } else if (msg.op === "auth_fail") {
         forgetDevicePassword(device);
         pendingPwRef.current = "";
@@ -161,6 +163,7 @@ export function PanelTerminal({
       }
     };
     ws.onclose = () => {
+      if (wsRef.current !== ws) return;
       setAuthOpen(false);
       if (wsRef.current === ws) wsRef.current = null;
       if (statusRef.current !== "disconnected") {
@@ -169,6 +172,7 @@ export function PanelTerminal({
       }
     };
     ws.onerror = () => {
+      if (wsRef.current !== ws) return;
       setAuthOpen(false);
       setStatus("disconnected");
     };
@@ -226,7 +230,7 @@ export function PanelTerminal({
     });
     themeObserver.observe(document.documentElement, {
       attributes: true,
-      attributeFilter: ["class"],
+      attributeFilter: ["class", "data-theme-preset"],
     });
 
     connect();

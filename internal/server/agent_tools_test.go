@@ -96,3 +96,16 @@ func TestTruncateRunes(t *testing.T) {
 		t.Fatalf("runes = %q", got)
 	}
 }
+
+func TestDrainAgentOutputRetainsFinalCommandOutput(t *testing.T) {
+	sess := &ProxySession{WriteCh: make(chan []byte, 2), StderrCh: make(chan []byte, 2)}
+	sess.WriteCh <- []byte("archive created\n")
+	sess.WriteCh <- []byte("verification passed\n")
+	sess.StderrCh <- []byte("warning: file changed\n")
+	sess.CloseOutput()
+	stdout, stderr := &cappedBuffer{cap: 1024}, &cappedBuffer{cap: 1024}
+	drainAgentOutput(sess, stdout, stderr)
+	if stdout.String() != "archive created\nverification passed\n" || stderr.String() != "warning: file changed\n" {
+		t.Fatalf("lost final output: stdout=%q stderr=%q", stdout, stderr)
+	}
+}

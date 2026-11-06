@@ -19,18 +19,18 @@ import (
 
 func TestParseGitStatusPorcelain(t *testing.T) {
 	out := strings.Join([]string{
-		" M internal/x.go",       // worktree-modified
-		"M  staged.go",           // index-modified
-		"MM both.go",             // both
-		"A  new file.go",         // added, space in path
-		" D gone.go",             // deleted in worktree
-		"D  staged_gone.go",      // deleted in index
-		"?? untracked dir/f.go",  // untracked
+		" M internal/x.go",         // worktree-modified
+		"M  staged.go",             // index-modified
+		"MM both.go",               // both
+		"A  new file.go",           // added, space in path
+		" D gone.go",               // deleted in worktree
+		"D  staged_gone.go",        // deleted in index
+		"?? untracked dir/f.go",    // untracked
 		"R  old.go -> new name.go", // rename: take the new path
-		`M  "quo\"ted.go"`,       // C-quoted path
-		"U  conflicted.go",       // unmerged
-		"!! ignored.go",          // ignored: skipped
-		"",                       // trailing newline
+		`M  "quo\"ted.go"`,         // C-quoted path
+		"U  conflicted.go",         // unmerged
+		"!! ignored.go",            // ignored: skipped
+		"",                         // trailing newline
 		"garbage",
 		"XYnospace",
 	}, "\n")
@@ -58,19 +58,19 @@ func TestParseGitNumstat(t *testing.T) {
 	out := strings.Join([]string{
 		"10\t2\tinternal/x.go",
 		"0\t5\tgone.go",
-		"-\t-\timg.png",           // binary: zeros
-		"3\t1\tweb/{old.tsx => new.tsx}", // brace rename: new path
+		"-\t-\timg.png",                            // binary: zeros
+		"3\t1\tweb/{old.tsx => new.tsx}",           // brace rename: new path
 		"7\t0\tdir/old name.go => dir/new name.go", // plain rename
-		"2\t2\t\"quo\\\"ted.go\"", // C-quoted path
+		"2\t2\t\"quo\\\"ted.go\"",                  // C-quoted path
 		"garbage",
-		"1\t2",                    // missing path field
+		"1\t2", // missing path field
 	}, "\n")
 	want := map[string][2]int{
-		"internal/x.go":     {10, 2},
-		"gone.go":           {0, 5},
-		"web/new.tsx":       {3, 1},
-		"dir/new name.go":   {7, 0},
-		`quo"ted.go`:        {2, 2},
+		"internal/x.go":   {10, 2},
+		"gone.go":         {0, 5},
+		"web/new.tsx":     {3, 1},
+		"dir/new name.go": {7, 0},
+		`quo"ted.go`:      {2, 2},
 	}
 	if got := parseGitNumstat(out); !reflect.DeepEqual(got, want) {
 		t.Fatalf("parseGitNumstat = %v, want %v", got, want)
@@ -532,5 +532,22 @@ func TestAgentWSGetChangesAndDiff(t *testing.T) {
 	})
 	if got := rawString(t, untrackedReply, "error"); got != "untracked" {
 		t.Fatalf("untracked error = %q", got)
+	}
+
+	// Modern clients correlate successful refreshes and diffs by ID; the
+	// legacy no-ID requests above must continue to work as well.
+	send(`{"op":"get_changes","id":"refresh-1"}`)
+	correlated := waitRawMsg(t, rec.msgs, "correlated changes", func(m map[string]json.RawMessage) bool {
+		return isOp("changes")(m) && rawString(t, m, "id") == "refresh-1"
+	})
+	if got := rawString(t, correlated, "cwd"); got != "/repo" {
+		t.Fatalf("correlated cwd = %q", got)
+	}
+	send(`{"op":"get_diff","id":"diff-1","path":"internal/x.go"}`)
+	correlated = waitRawMsg(t, rec.msgs, "correlated diff", func(m map[string]json.RawMessage) bool {
+		return isOp("diff")(m) && rawString(t, m, "id") == "diff-1"
+	})
+	if got := rawString(t, correlated, "diff"); got != diffText {
+		t.Fatalf("correlated diff = %q", got)
 	}
 }

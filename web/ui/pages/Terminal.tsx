@@ -321,7 +321,7 @@ export function TerminalPage() {
           tab.authOpen = false;
           tab.status = "connected";
           patchMeta(tab.id, { status: "connected", authOpen: false, authError: "" });
-          tab.term.focus();
+          if (tab.id === activeTabIdRef.current) tab.term.focus();
           doResize(tab);
         } else if (msg.op === "auth_fail") {
           forgetDevicePassword(tab.deviceId);
@@ -356,6 +356,7 @@ export function TerminalPage() {
       };
 
       ws.onclose = () => {
+        if (tab.ws !== ws) return;
         removeAuthOverlay(tab);
         if (tab.ws === ws) tab.ws = null;
         if (tab.status !== "disconnected") {
@@ -367,6 +368,7 @@ export function TerminalPage() {
         }
       };
       ws.onerror = () => {
+        if (tab.ws !== ws) return;
         removeAuthOverlay(tab);
         tab.status = "disconnected";
         patchMeta(tab.id, { status: "disconnected" });
@@ -397,7 +399,7 @@ export function TerminalPage() {
       const pane = document.createElement("div");
       pane.dataset.pane = String(id);
       pane.className =
-        "absolute inset-0 touch-manipulation p-2 max-[720px]:p-1 [&>.xterm]:h-full [&>.xterm]:w-full [&_.xterm-screen]:box-content [&_.xterm-viewport]:box-content [&_.xterm-screen_canvas]:block invisible pointer-events-none";
+        "absolute inset-0 touch-manipulation p-2 max-md:p-1 [&>.xterm]:h-full [&>.xterm]:w-full [&_.xterm-screen]:box-content [&_.xterm-viewport]:box-content [&_.xterm-screen_canvas]:block invisible pointer-events-none";
       const term = new XTerm({
         cursorBlink: true,
         fontSize: 14,
@@ -749,7 +751,7 @@ export function TerminalPage() {
     });
     observer.observe(document.documentElement, {
       attributes: true,
-      attributeFilter: ["class"],
+      attributeFilter: ["class", "data-theme-preset"],
     });
     return () => observer.disconnect();
   }, []);
@@ -790,9 +792,10 @@ export function TerminalPage() {
   return (
     <SplitPageShell
       storageKey="rdev.split.terminal.rail"
+      selectedDevice={metas.find((tab) => tab.id === activeTabId)?.deviceId}
       onDevicePick={(id) => createTab(id)}
     >
-    <div className="flex h-full min-w-0 flex-col">
+    <div className="page-workspace">
       {/* Split panes: each pane owns a tab strip; only the pane's active
        * tab is shown, the rest stay mounted (and connected) in the hidden
        * parking container so sessions survive. */}
@@ -824,7 +827,7 @@ export function TerminalPage() {
                 {/* Pane tab strip */}
                 <div
                   className={cn(
-                    "flex h-8 shrink-0 items-center gap-1 border-b bg-sidebar pl-1.5 pr-1 text-xs select-none max-md:pointer-coarse:h-10",
+                    "flex h-12 shrink-0 items-center gap-1 border-b bg-background px-2 text-xs select-none",
                     paneId === focusedPane
                       ? "border-b-timeline-accent"
                       : "border-b-border-seam",
@@ -835,7 +838,7 @@ export function TerminalPage() {
                       <div
                         key={m.id}
                         className={cn(
-                          "flex h-7 shrink-0 items-center gap-1 rounded-md pr-1 max-md:pointer-coarse:h-9",
+                          "flex h-8 min-w-0 max-w-56 shrink-0 items-center gap-1 rounded-md pr-1 max-md:pointer-coarse:h-9",
                           m.id === pane?.active
                             ? "bg-state-active text-foreground"
                             : "text-muted-foreground hover:bg-state-hover",
@@ -960,7 +963,7 @@ export function TerminalPage() {
       </div>
 
       {/* Mobile helper keys */}
-      <div className="scrollbar-none hidden shrink-0 gap-1.5 overflow-x-auto border-t border-border/50 bg-sidebar px-2 py-1.5 max-[720px]:flex">
+      <div className="scrollbar-none hidden shrink-0 gap-1.5 overflow-x-auto border-t border-border/50 bg-sidebar px-2 py-1.5 max-md:flex">
         {MOBILE_KEYS.map((k) => (
           <button
             key={k.label}
@@ -1056,7 +1059,7 @@ export function TabAuthOverlay({
 
   return (
     <div className="absolute inset-0 z-10 flex overflow-y-auto bg-background/90 p-3">
-      <div className="m-auto w-full max-w-[340px] shrink-0 rounded-2xl border border-border bg-card p-5 text-center">
+      <div className="page-empty-card">
         <h3 className="mb-1.5 flex items-center justify-center gap-1.5 text-base text-timeline-accent">
           <Icon name="Lock" className="size-4" />
           {t("terminal.authTitle")}

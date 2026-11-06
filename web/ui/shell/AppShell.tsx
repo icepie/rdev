@@ -1,3 +1,4 @@
+import { themePresets, type ThemePreset } from "../lib/themes";
 import { Suspense, createContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { NavLink, Outlet, useLocation, useMatch } from "react-router-dom";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
@@ -8,6 +9,8 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "../components/dropdown-menu";
 import {
@@ -17,6 +20,8 @@ import {
 } from "../components/tooltip";
 import { Button } from "../components/button";
 import { cn } from "../lib/utils";
+import { useMobileViewport } from "../hooks/use-mobile-viewport";
+import { useIsCompactViewport } from "../components/hooks/use-compact-viewport";
 import { useRailControl } from "../lib/rail-control";
 import { COARSE_POINTER_HEADER_ICON_BUTTON_CLASS } from "../components/coarse-pointer-sizing";
 
@@ -39,7 +44,7 @@ const THEME_CHOICES: { value: ThemeChoice; key: string }[] = [
 ];
 
 const RAIL_BUTTON_CLASS =
-  "flex size-9 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-state-hover hover:text-foreground";
+  "flex size-8 max-md:pointer-coarse:size-9 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-state-hover hover:text-foreground";
 
 function RailLink({
   item,
@@ -206,6 +211,28 @@ function RailFooterButtons({ className }: { className?: string }) {
   );
 }
 
+function RailSettings() {
+  const { t, lang, setLang } = useI18n();
+  const { choice, setChoice, preset, setPreset } = useTheme();
+  return <DropdownMenu>
+    <DropdownMenuTrigger asChild>
+      <Button variant="ghost" size="icon" className={cn(RAIL_BUTTON_CLASS, "mt-auto")} aria-label={t("nav.settings")}><Icon name="Settings" className="size-4" /></Button>
+    </DropdownMenuTrigger>
+    <DropdownMenuContent side="right" align="end">
+      <DropdownMenuLabel>{t("theme.toggle")}</DropdownMenuLabel>
+      {THEME_CHOICES.map((theme) => <DropdownMenuItem key={theme.value} onSelect={() => setChoice(theme.value)}><span className="flex-1">{t(theme.key)}</span>{choice === theme.value && <Icon name="Check" className="size-4" />}</DropdownMenuItem>)}
+      <DropdownMenuSeparator />
+      <DropdownMenuLabel>{t("theme.palette")}</DropdownMenuLabel>
+      {(Object.keys(themePresets) as ThemePreset[]).map((id) => <DropdownMenuItem key={id} onSelect={() => setPreset(id)}><span className="flex-1">{themePresets[id].label}</span>{preset === id && <Icon name="Check" className="size-4" />}</DropdownMenuItem>)}
+      <DropdownMenuSeparator />
+      <DropdownMenuLabel>{t("lang.label")}</DropdownMenuLabel>
+      {(["zh", "en"] as const).map((language) => <DropdownMenuItem key={language} onSelect={() => setLang(language)}><span className="flex-1">{language === "zh" ? "中文" : "English"}</span>{lang === language && <Icon name="Check" className="size-4" />}</DropdownMenuItem>)}
+      <DropdownMenuSeparator />
+      <DropdownMenuItem asChild><a href="https://github.com/icepie/rdev" target="_blank" rel="noreferrer">GitHub</a></DropdownMenuItem>
+    </DropdownMenuContent>
+  </DropdownMenu>;
+}
+
 /* Drawer rail icon (bb: the drawer keeps the desktop rail column). */
 function DrawerRailLink({ item }: { item: (typeof NAV_ITEMS)[number] }) {
   const { t } = useI18n();
@@ -231,9 +258,13 @@ function DrawerRailLink({ item }: { item: (typeof NAV_ITEMS)[number] }) {
 }
 
 export function AppShell() {
+  const shellRef = useRef<HTMLDivElement>(null);
+  const compactViewport = useIsCompactViewport();
+  useMobileViewport(shellRef, compactViewport);
   const { t, lang, setLang } = useI18n();
-  const { choice, setChoice } = useTheme();
+  const { choice, setChoice, preset, setPreset } = useTheme();
   const location = useLocation();
+  const isWorkspacePage = ["/agent", "/terminal", "/files", "/remote-desktop"].includes(location.pathname);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [drawerSection, setDrawerSection] = useState<ReactNode>(null);
   const railControl = useRailControl();
@@ -256,11 +287,11 @@ export function AppShell() {
   }, []);
 
   return (
-    <div className="flex h-full flex-row">
-      {/* Desktop: 60px icon rail (md+ only). */}
+    <div ref={shellRef} className="relative flex h-full min-h-0 flex-row overflow-hidden max-md:pt-[env(safe-area-inset-top)] max-md:pr-[env(safe-area-inset-right)] max-md:pb-[var(--app-safe-area-bottom,env(safe-area-inset-bottom))] max-md:pl-[env(safe-area-inset-left)]">
+      {/* Agent keeps its navigation rail beside the thread list at every width. */}
       <nav
         aria-label={t("nav.label")}
-        className="flex w-[60px] shrink-0 flex-col items-center gap-1 overflow-y-auto border-r border-border-seam bg-sidebar py-3 select-none max-md:hidden"
+        className={cn("flex w-12 shrink-0 flex-col items-center gap-0.5 overflow-y-auto border-r border-border-seam bg-sidebar py-2 select-none", !isWorkspacePage && "max-md:hidden")}
       >
         {railControl ? (
           <Tooltip>
@@ -291,7 +322,7 @@ export function AppShell() {
         {NAV_ITEMS.map((item) => (
           <RailLink key={item.to} item={item} label={t(item.key)} />
         ))}
-        <RailFooterButtons className="mt-auto" />
+        <RailSettings />
       </nav>
 
       {/* Mobile (<md): rail hidden; pages open this left drawer from their
@@ -344,6 +375,12 @@ export function AppShell() {
               <MobileNavList />
             </nav>
         <div className="mt-auto flex flex-col gap-0.5 border-t border-border-seam p-2">
+          <label className="flex items-center justify-between gap-2 px-2 py-2 text-sm text-muted-foreground">
+            {t("theme.palette")}
+            <select aria-label={t("theme.palette")} value={preset} onChange={(event) => setPreset(event.target.value as ThemePreset)} className="h-10 rounded-md border border-input bg-background px-2 text-foreground">
+              {(Object.keys(themePresets) as ThemePreset[]).map((id) => <option key={id} value={id}>{themePresets[id].label}</option>)}
+            </select>
+          </label>
           <a
             href="https://github.com/icepie/rdev"
             target="_blank"

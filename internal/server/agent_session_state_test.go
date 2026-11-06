@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -39,14 +40,14 @@ func TestAgentPrefsAtomicWriteAndLoad(t *testing.T) {
 		t.Fatal("tmp file left behind")
 	}
 	got := srv.loadAgentPrefs("dev 1")
-	if got != p {
+	if !reflect.DeepEqual(got, p) {
 		t.Fatalf("loaded = %+v, want %+v", got, p)
 	}
 	// A corrupt file yields zero prefs.
 	if err := os.WriteFile(path, []byte("{nope"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if zero := srv.loadAgentPrefs("dev 1"); zero != (agentPrefs{}) {
+	if zero := srv.loadAgentPrefs("dev 1"); !reflect.DeepEqual(zero, agentPrefs{}) {
 		t.Fatalf("corrupt load = %+v", zero)
 	}
 }
@@ -369,7 +370,7 @@ func TestAgentWSSessionState(t *testing.T) {
 
 	// Empty title is rejected.
 	send(`{"op":"rename_thread","thread":"` + threadID + `","title":"  "}`)
-	waitAgentMsg(t, rec.msgs, "rename error", func(m agentMsg) bool { return m.Op == "error" })
+	waitAgentMsg(t, rec.msgs, "rename error", func(m agentMsg) bool { return m.Op == "thread_action_error" })
 
 	// set_cwd → thread_meta with the new cwd, persisted in the meta line.
 	send(`{"op":"set_cwd","path":"/tmp/proj"}`)
@@ -434,6 +435,7 @@ const sseDoneLine = "data: [DONE]\n\n"
 func newTurnTestServer(t *testing.T, llmURL string) *Server {
 	t.Helper()
 	srv := newPrefsTestServer(t)
+	t.Cleanup(func() { srv.waitAgentWork() })
 	srv.Agent.Providers[0].BaseURL = llmURL
 	srv.clients = map[string]*ClientConn{}
 	srv.sessions = map[string]*ProxySession{}
@@ -491,7 +493,7 @@ func blockingLLM(t *testing.T, release <-chan struct{}) *httptest.Server {
 				return
 			}
 		}
-		fmt.Fprint(w, sseTextLine("answer") + sseDoneLine)
+		fmt.Fprint(w, sseTextLine("answer")+sseDoneLine)
 	}))
 	t.Cleanup(llm.Close)
 	return llm

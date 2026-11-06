@@ -1,9 +1,12 @@
+import { useComposerDraft } from "./use-composer-draft";
+import { dispatchSlashCommand } from "./slash-command";
+import { parseJobsCommand } from "./jobs-command";
 /* ChatPaneView: one pane of the agent chat — transcript + queue + composer
  * + status strip, extracted from the Agent page so the split-screen layout
  * renders several of them side by side. Presentational over a ThreadSink:
  * the page feeds the connection's current thread, secondary panes feed the
  * thread they were dropped with. Composer state (draft text, pending
- * images) is local per pane, bb-style. */
+ * images) is retained per device/thread within each pane. */
 import {
   Fragment,
   useCallback,
@@ -44,6 +47,8 @@ import { AskCard } from "./ask-card";
 import { ContextWindowIndicator } from "./context-window-indicator";
 import { CwdPicker } from "./cwd-picker";
 import { MessageActionBar } from "./message-action-bar";
+import { SERVER_AGENT_ID } from "./protocol";
+import { JobsPanel } from "./jobs-panel";
 import { TodoCard } from "./todo-card";
 import { TurnView } from "./turn-view";
 import type { Translator } from "./types";
@@ -65,6 +70,8 @@ import {
   decideAskIn,
   type ThreadSink,
 } from "./thread-sink";
+
+const EMPTY_COMPOSER_IMAGES: PendingImage[] = [];
 
 export interface ChatPaneViewProps {
   sink: ThreadSink;
@@ -138,9 +145,20 @@ export function ChatPaneView({
   const { state, ops } = sink;
   const { items, todos, queue, running, stopping, turnUsage, currentTool, workingSince } = state;
 
-  const [input, setInput] = useState("");
-  const [pendingImages, setPendingImages] = useState<PendingImage[]>([]);
+  const draftKey = JSON.stringify([device, threadId]);
+  const [input, setInput] = useComposerDraft(draftKey, "");
+  const [pendingImages, setPendingImages] = useComposerDraft(draftKey, EMPTY_COMPOSER_IMAGES);
+  const imageReaders = useRef(new Set<FileReader>());
+  const [readingImages, setReadingImages] = useState(0);
+  const cancelImageReads = useCallback(() => {
+    const readers = [...imageReaders.current];
+    imageReaders.current.clear();
+    setReadingImages(0);
+    for (const reader of readers) reader.abort();
+  }, []);
+  useEffect(() => () => cancelImageReads(), [draftKey, cancelImageReads]);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const composerRef = useRef<HTMLTextAreaElement>(null);
   const [nowTick, setNowTick] = useState(0);
   const slashListId = useId();
 
@@ -178,7 +196,7 @@ export function ChatPaneView({
    * blockquote — the rdev composer has no quote rendering). */
   const addToChat = useCallback((text: string) => {
     setInput((prev) => (prev ? prev.replace(/\n+$/, "") + "\n" + text : text));
-  }, []);
+  }, [setInput]);
 
   /* Right-panel selection "Add to chat" reaches this pane through the page
    * registry (focused pane wins). */
@@ -203,7 +221,7 @@ export function ChatPaneView({
   const addImageFiles = (filesIn: File[]) => {
     const files = filesIn.filter((f) => f.type.startsWith("image/"));
     if (!files.length) return;
-    let room = MAX_IMAGES - pendingImages.length;
+    let room = MAX_IMAGES - pendingImages.length - imageReaders.current.size;
     if (files.length > room) {
       ops.pushBubble("error", t("agent.tooManyImages", { max: MAX_IMAGES }));
     }
@@ -215,7 +233,16 @@ export function ChatPaneView({
       }
       room--;
       const reader = new FileReader();
+      imageReaders.current.add(reader);
+      setReadingImages(imageReaders.current.size);
+      reader.onerror = () => {
+        if (!imageReaders.current.delete(reader)) return;
+        setReadingImages(imageReaders.current.size);
+        ops.pushBubble("error", t("agent.imageReadFailed", { name: f.name }));
+      };
       reader.onload = () => {
+        if (!imageReaders.current.delete(reader)) return;
+        setReadingImages(imageReaders.current.size);
         const url = String(reader.result || "");
         const img: PendingImage = {
           name:
@@ -235,7 +262,7 @@ export function ChatPaneView({
 
   const sendChat = () => {
     const text = input.trim();
-    if ((!text && pendingImages.length === 0) || !ready) return;
+    if ((!text && pendingImages.length === 0) || !ready || imageReaders.current.size > 0) return;
     if (text.startsWith("/") && pendingImages.length === 0 && runSlashLine(text)) {
       return;
     }
@@ -246,8 +273,9 @@ export function ChatPaneView({
       payload.images = pendingImages.map(({ name, mime, data }) => ({ name, mime, data }));
     }
     if (!sendRaw(payload)) return;
+    cancelImageReads();
     setInput("");
-    setPendingImages([]);
+    setPendingImages(EMPTY_COMPOSER_IMAGES);
     if (!running) {
       /* Server broadcasts turn_start once execution begins; while running
        * the message lands in the queue and its bubble appears then. */
@@ -266,11 +294,13 @@ export function ChatPaneView({
   };
 
   const sendStop = useCallback(() => {
-    if (!ready || !running || stopping) return;
+    if (!ready || !running || stopping) return false;
     const payload: Record<string, unknown> = { op: "stop" };
     if (threadId) payload.thread = threadId;
     /* Lock until acknowledgement; reconnect/snapshot clears stale locks. */
-    if (sendRaw(payload)) ops.setStopping(true);
+    if (!sendRaw(payload)) return false;
+    ops.setStopping(true);
+    return true;
   }, [ready, running, stopping, threadId, sendRaw, ops]);
 
   /* Slash commands: typing "/" in the composer opens a filtered menu;
@@ -283,8 +313,11 @@ export function ChatPaneView({
     icon: string;
     needsArg?: boolean;
     runningOnly?: boolean;
-    run: (arg: string) => void;
+    run: (arg: string) => boolean;
   }
+  const [jobsOpen, setJobsOpen] = useState(false);
+  const [jobsFull, setJobsFull] = useState(false);
+  useEffect(() => { setJobsOpen(false); setJobsFull(false); }, [threadId]);
   const slashCommands: SlashCommand[] = useMemo(
     () => [
       {
@@ -295,6 +328,68 @@ export function ChatPaneView({
         run: () => sendRaw({ op: "new_thread" }),
       },
       {
+        name: "jobs",
+        label: t("agent.jobs.title"),
+        desc: t("agent.jobs.commandDesc"),
+        icon: "ListTodo",
+        run: (arg) => {
+          const request = parseJobsCommand(arg);
+          if (!request) {
+            ops.pushBubble("system", "/jobs [full|kill <id>|kill all]");
+            return false;
+          }
+          setJobsOpen(true);
+          setJobsFull(request.full);
+          return sendRaw({ ...request.payload, thread: threadId });
+        },
+      },
+      {
+        name: "compact",
+        label: t("agent.cmd.compact"),
+        desc: t("agent.cmd.compactDesc"),
+        icon: "Minimize2",
+        run: (arg) => {
+          const payload: Record<string, unknown> = { op: "chat", text: `/compact${arg ? ` ${arg}` : ""}` };
+          if (threadId) payload.thread = threadId;
+          if (model) payload.model = model;
+          return sendRaw(payload);
+        },
+      },
+      {
+        name: "bg",
+        label: t("agent.cmd.bg"),
+        desc: t("agent.cmd.bgDesc"),
+        icon: "Terminal",
+        needsArg: true,
+        run: (arg) => {
+          if (!arg) return false;
+          const payload: Record<string, unknown> = {
+            op: "chat",
+            text: `Use the bg tool to run this command in the background: ${arg}`,
+          };
+          if (threadId) payload.thread = threadId;
+          if (model) payload.model = model;
+          return sendRaw(payload);
+        },
+      },
+      {
+        name: "subagent",
+        label: t("agent.cmd.subagent"),
+        desc: t("agent.cmd.subagentDesc"),
+        icon: "UserRoundPlus",
+        needsArg: true,
+        run: (arg) => {
+          if (!arg) return false;
+          const payload: Record<string, unknown> = {
+            op: "chat",
+            text: `Use the subagent tool to complete this delegated task: ${arg}`,
+          };
+          if (threadId) payload.thread = threadId;
+          if (model) payload.model = model;
+          return sendRaw(payload);
+        },
+      },
+      {
         name: "reset",
         label: t("agent.cmd.reset"),
         desc: t("agent.cmd.resetDesc"),
@@ -302,7 +397,7 @@ export function ChatPaneView({
         run: () => {
           const payload: Record<string, unknown> = { op: "reset" };
           if (threadId) payload.thread = threadId;
-          sendRaw(payload);
+          return sendRaw(payload);
         },
       },
       {
@@ -321,14 +416,14 @@ export function ChatPaneView({
         needsArg: true,
         runningOnly: true,
         run: (arg) => {
-          if (!arg) return;
+          if (!arg) return false;
           const payload: Record<string, unknown> = { op: "steer", text: arg };
           if (threadId) payload.thread = threadId;
-          if (sendRaw(payload)) setInput("");
+          return sendRaw(payload);
         },
       },
     ],
-    [t, sendRaw, threadId, sendStop],
+    [t, sendRaw, threadId, model, sendStop, ops],
   );
 
   const slashQuery = (() => {
@@ -348,7 +443,7 @@ export function ChatPaneView({
   const [slashIndex, setSlashIndex] = useState(0);
   const [slashDismissed, setSlashDismissed] = useState(false);
   const slashOpen =
-    ready && slashQuery !== null && !slashDismissed && slashFiltered.length > 0;
+    ready && readingImages === 0 && pendingImages.length === 0 && slashQuery !== null && !slashDismissed && slashFiltered.length > 0;
   useEffect(() => {
     setSlashIndex(0);
     setSlashDismissed(false);
@@ -361,24 +456,13 @@ export function ChatPaneView({
       setSlashDismissed(true);
       return;
     }
-    setInput("");
-    cmd.run("");
+    if (cmd.run("")) setInput("");
   };
 
   /* Executes a "/name arg" line; returns true when the input was consumed
    * as a command (unknown commands fall back to a normal chat send). */
-  const runSlashLine = (text: string): boolean => {
-    const m = text.match(/^\/([a-z]+)(?:\s+([\s\S]*))?$/i);
-    if (!m) return false;
-    const cmd = slashCommands.find(
-      (c) =>
-        c.name === m[1].toLowerCase() && (!c.runningOnly || running),
-    );
-    if (!cmd) return false;
-    setInput("");
-    cmd.run((m[2] ?? "").trim());
-    return true;
-  };
+  const runSlashLine = (text: string): boolean =>
+    dispatchSlashCommand(text, slashCommands, running, () => setInput(""));
 
 
   /* bb pastRowDimClassName: every turn but the transcript's last renders
@@ -424,6 +508,16 @@ export function ChatPaneView({
           {items.length === 0 && (
             <div className="px-4 py-12 text-center text-sm whitespace-pre-wrap text-muted-foreground">
               {emptyHint}
+              {ready && device === SERVER_AGENT_ID && !input.trim() && pendingImages.length === 0 && (
+                <div className="mt-4 flex justify-center">
+                  <Button variant="outline" size="sm" onClick={() => {
+                    setInput(t("agent.listDevicesPrompt"));
+                    composerRef.current?.focus();
+                  }}>
+                    {t("agent.listDevicesPrompt")}
+                  </Button>
+                </div>
+              )}
             </div>
           )}
           {items.map((item) => {
@@ -610,6 +704,7 @@ export function ChatPaneView({
 
       {/* Composer (bb footer: same 760px column and padding as the content) */}
       <div className="mx-auto w-full max-w-[760px] shrink-0 px-4 pb-2">
+        <JobsPanel open={jobsOpen} onOpenChange={setJobsOpen} full={jobsFull} sink={sink} threadId={threadId} ready={ready} sendRaw={sendRaw} t={t} />
         {/* bb prompt-stack banner: the todo checklist card sits directly
          * above the composer. */}
         {todos.length > 0 && (
@@ -619,7 +714,7 @@ export function ChatPaneView({
         )}
         <div className="relative w-full rounded-xl border border-border bg-background shadow-lift">
           {slashOpen && (
-            <div id={slashListId} role="listbox" aria-label={t("agent.slashCommands")} className="absolute inset-x-2 bottom-full z-20 mb-1 overflow-hidden rounded-lg border border-border bg-surface-raised-solid shadow-lift">
+            <div id={slashListId} role="listbox" aria-label={t("agent.slashCommands")} className="absolute inset-x-2 bottom-full z-20 mb-1 max-h-[min(20rem,45dvh)] overflow-y-auto rounded-lg border border-border bg-surface-raised-solid shadow-lift">
               <div className="px-2.5 pt-1.5 pb-1 text-2xs tracking-wide text-muted-foreground uppercase">
                 {t("agent.slashCommands")}
               </div>
@@ -652,6 +747,11 @@ export function ChatPaneView({
               ))}
             </div>
           )}
+          {readingImages > 0 && (
+            <p role="status" className="px-4 pt-2 text-xs text-muted-foreground">
+              {t("agent.readingImages", { count: readingImages })}
+            </p>
+          )}
           {pendingImages.length > 0 && (
             <div className="flex flex-wrap gap-2 px-3 pt-2.5">
               {pendingImages.map((img, i) => (
@@ -680,6 +780,7 @@ export function ChatPaneView({
             </div>
           )}
           <Textarea
+            ref={composerRef}
             rows={1}
             value={input}
             disabled={!ready}
@@ -703,7 +804,8 @@ export function ChatPaneView({
               }
             }}
             onKeyDown={(e) => {
-              if (slashOpen && !e.nativeEvent.isComposing) {
+              const composing = e.nativeEvent.isComposing || e.keyCode === 229;
+              if (slashOpen && !composing) {
                 if (e.key === "ArrowDown") {
                   e.preventDefault();
                   setSlashIndex((i) => (i + 1) % slashFiltered.length);
@@ -716,7 +818,7 @@ export function ChatPaneView({
                   );
                   return;
                 }
-                if (e.key === "Enter" || e.key === "Tab") {
+                if ((e.key === "Enter" || e.key === "Tab") && !e.shiftKey) {
                   e.preventDefault();
                   acceptSlash(slashFiltered[Math.min(slashIndex, slashFiltered.length - 1)]);
                   return;
@@ -727,7 +829,7 @@ export function ChatPaneView({
                   return;
                 }
               }
-              if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+              if (e.key === "Enter" && !e.shiftKey && !composing) {
                 e.preventDefault();
                 sendChat();
               }
@@ -851,7 +953,7 @@ export function ChatPaneView({
                     <Button
                       size="sm"
                       aria-label={t("agent.queued")}
-                      disabled={!ready || (!input.trim() && pendingImages.length === 0)}
+                      disabled={!ready || readingImages > 0 || (!input.trim() && pendingImages.length === 0)}
                       className={cn(COARSE_POINTER_PROMPT_ACTION_BUTTON_CLASS, "gap-1.5 px-2.5")}
                       onClick={sendChat}
                     >
@@ -866,7 +968,7 @@ export function ChatPaneView({
                   <TooltipTrigger asChild>
                     <Button
                       aria-label={t("agent.send")}
-                      disabled={!ready || (!input.trim() && pendingImages.length === 0)}
+                      disabled={!ready || readingImages > 0 || (!input.trim() && pendingImages.length === 0)}
                       className={cn(COARSE_POINTER_PROMPT_ACTION_BUTTON_CLASS, "ml-1")}
                       onClick={sendChat}
                     >
@@ -880,15 +982,18 @@ export function ChatPaneView({
           </div>
         </div>
         {/* bb footer strip: device + connection | permission mode + tokens */}
-        <div className="mt-1 flex min-h-6 max-h-6 select-none items-center justify-between gap-2 overflow-hidden pl-[15px] pr-3.5">
+        <div className="mt-1 max-md:mt-0 flex min-h-6 max-h-6 max-md:pointer-coarse:min-h-11 max-md:pointer-coarse:max-h-11 select-none items-center justify-between gap-2 overflow-hidden pl-[15px] pr-3.5">
           <span className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden text-xs text-muted-foreground">
             <OsIcon os={deviceOs} className="size-4 shrink-0" />
             <span className="min-w-0 truncate">
               {/* Short placeholder: the empty body above already shows the
                * full guidance; repeating it here duplicates the line. */}
-              {device || t("agent.selectDeviceShort")}
+              {device === SERVER_AGENT_ID ? t("agent.server") : device || t("agent.selectDeviceShort")}
             </span>
             <span
+              role="img"
+              aria-label={t(`agent.status.${connStatus}`)}
+              title={t(`agent.status.${connStatus}`)}
               className={cn(
                 "size-1.5 shrink-0 rounded-full",
                 connStatus === "connected"
@@ -898,7 +1003,12 @@ export function ChatPaneView({
                     : "bg-attention",
               )}
             />
-            {device && cwd !== undefined && onSelectCwd && onCreateProject && (
+            {device && connStatus !== "connected" && (
+              <span role="status" className="shrink-0 text-2xs">
+                {t(`agent.status.${connStatus}`)}
+              </span>
+            )}
+            {device && device !== SERVER_AGENT_ID && cwd !== undefined && onSelectCwd && onCreateProject && (
               /* bb ProjectSelector: current thread cwd + known cwds. */
               <CwdPicker
                 cwd={cwd}

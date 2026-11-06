@@ -557,40 +557,42 @@ func (f *ReverseForward) Result() (uint32, string) {
 
 // Server manages WebSocket clients and SSH proxy
 type Server struct {
-	clients           map[string]*ClientConn
-	mu                sync.RWMutex
-	sessions          map[string]*ProxySession
-	sessMu            sync.RWMutex
-	forwards          map[string]*ProxyForward
-	fwdMu             sync.RWMutex
-	revForwards       map[string]*ReverseForward
-	revMu             sync.RWMutex
-	fileResults       map[string]chan *protocol.Message
-	fileRequests      map[string]*fileSocket
-	fileTasks         map[string]*fileTaskRoute
-	fileMu            sync.RWMutex
-	agentFileReqs     map[string]chan *protocol.Message
-	agentFileTasks    map[string]*agentFileTask
-	agentFileMu       sync.Mutex
-	desktops          map[string]*desktopRoute
-	desktopMu         sync.RWMutex
-	vncMu             sync.RWMutex
-	vncSettings       map[string]protocol.Message
-	vncStreams        map[string]*vncDesktopStream
-	gpuDesktopMu      sync.RWMutex
-	gpuDesktopTunnels map[string]*gpuDesktopTunnel
-	proxyTunnelsMu    sync.Mutex
-	proxyTunnels      map[string]*proxyTunnelPending
-	releaseLatestMu   sync.Mutex
-	releaseLatestTag  string
-	releaseLatestAt   time.Time
-	upgrader          *gws.Upgrader
-	authLimiter       *authRateLimiter // per-device password brute-force throttle
-	agentStoreOnce    sync.Once
-	agentStoreInst    *agentSessionStore
-	agentSessionsMu   sync.Mutex
-	agentSessions     map[string]*agentSessionEntry // per-device agent state, owned by the server
-	agentEvictOnce    sync.Once
+	clients            map[string]*ClientConn
+	mu                 sync.RWMutex
+	sessions           map[string]*ProxySession
+	sessMu             sync.RWMutex
+	forwards           map[string]*ProxyForward
+	fwdMu              sync.RWMutex
+	revForwards        map[string]*ReverseForward
+	revMu              sync.RWMutex
+	fileResults        map[string]chan *protocol.Message
+	fileRequests       map[string]*fileSocket
+	fileTasks          map[string]*fileTaskRoute
+	fileMu             sync.RWMutex
+	agentFileReqs      map[string]chan *protocol.Message
+	agentFileTasks     map[string]*agentFileTask
+	agentFileMu        sync.Mutex
+	desktops           map[string]*desktopRoute
+	desktopMu          sync.RWMutex
+	vncMu              sync.RWMutex
+	vncSettings        map[string]protocol.Message
+	vncStreams         map[string]*vncDesktopStream
+	gpuDesktopMu       sync.RWMutex
+	gpuDesktopTunnels  map[string]*gpuDesktopTunnel
+	proxyTunnelsMu     sync.Mutex
+	proxyTunnels       map[string]*proxyTunnelPending
+	releaseLatestMu    sync.Mutex
+	releaseLatestTag   string
+	releaseLatestAt    time.Time
+	upgrader           *gws.Upgrader
+	authLimiter        *authRateLimiter // per-device password brute-force throttle
+	agentStoreOnce     sync.Once
+	agentStoreInst     *agentSessionStore
+	agentFileMutations agentFileMutations
+	agentSessionsMu    sync.Mutex
+	agentSessions      map[string]*agentSessionEntry // per-device agent state, owned by the server
+	agentEvictOnce     sync.Once
+	agentWG            sync.WaitGroup // server-owned agent goroutines (turns/probes)
 
 	// Public config (set by main) for API/UI
 	SSHPort          string // e.g. "2222"

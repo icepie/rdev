@@ -37,6 +37,8 @@ const (
 	MsgFileResult MessageType = "file_result" // C->S: file write result {success, error}
 
 	// File manager (text frames for control/metadata, binary for data)
+	MsgFileMkdir          MessageType = "file_mkdir"
+	MsgFileMkdirResult    MessageType = "file_mkdir_result"
 	MsgFileListRequest    MessageType = "file_list"            // S->C: list a directory
 	MsgFileListResult     MessageType = "file_list_result"     // C->S: directory listing
 	MsgFileUploadStart    MessageType = "file_upload_start"    // S->C: prepare resumable upload

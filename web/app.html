@@ -7,10 +7,12 @@
     <script>
       // Pre-paint theme application: avoids a flash of the wrong scheme.
       (function () {
-        var c = localStorage.getItem("rdevTheme") || "auto";
+        var c = "auto";
+        try { c = localStorage.getItem("rdevTheme") || "auto"; } catch (_) {}
+        if (c !== "dark" && c !== "light") c = "auto";
         var light =
           c === "light" ||
-          (c === "auto" && matchMedia("(prefers-color-scheme: light)").matches);
+          (c === "auto" && !matchMedia("(prefers-color-scheme: dark)").matches);
         document.documentElement.classList.add(light ? "light" : "dark");
       })();
     </script>

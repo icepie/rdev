@@ -66,7 +66,7 @@
 # 多提供商多模型（omp 格式配置文件；页面顶部出现模型切换下拉框，切换保留对话历史）
 ./rdev-server --agent-config /etc/rdev/model-config.json   # 或 RDEV_AGENT_CONFIG
 
-# 会话历史持久化：每台设备一个 JSONL 文件 <data>/agent/sessions/<device>.jsonl，
+# 会话历史持久化：每个会话一个 JSONL 文件 <data>/agent/sessions/<device>/<thread>.jsonl，
 # 会话与正在执行的轮次都在服务端：关闭/刷新页面不中断执行，重新打开自动恢复并继续观看；
 # 默认 30 天未更新自动清理（启动时 + 每小时扫描）
 ./rdev-server --agent-config ... --agent-session-ttl 720h   # 或 RDEV_AGENT_SESSION_TTL；0 = 关闭持久化
@@ -218,7 +218,7 @@ curl -x 'http://my-device%40devpass:x@your-server:11080' http://example.com
 
 - 页面按路由加载；Dashboard 不预加载 Agent、终端和桌面的重型模块。
 - 移动端沿用 BB 的响应式组件和触屏尺寸：导航抽屉支持 Escape 关闭与焦点恢复，窄屏触屏页头图标按钮为 36px、Agent 输入区操作为 40px；桌面保留紧凑密度。文件表格、批量输出和桌面设置在各自区域滚动，终端和 Agent 保留分屏。
-- Agent 侧栏以 768px 为断点（不依赖鼠标或触屏）：窄屏使用 `min(86vw, 360px)` 揭开式抽屉，对话区保持宽度整体平移；右侧面板使用全宽滑入布局。移动侧栏默认收起，展开状态不覆盖桌面偏好；横屏短高度时侧栏整体可滚动，导航和底部信息仍可到达。
+- Agent 侧栏以 768px 为断点（不依赖鼠标或触屏）：固定保留 48px 导航轨，默认会话栏 312px；窄屏使用 `min(100vw - 48px, 312px)` 揭开式侧栏，对话区保持宽度整体平移；右侧面板使用全宽滑入布局。移动侧栏默认收起，展开状态不覆盖桌面偏好；横屏短高度时侧栏整体可滚动，导航和底部信息仍可到达。
 - Agent 停止请求等待回执期间不可重复提交；重置清空队列、待办和运行状态。明确的连接前配置错误停止自动重连，修正配置后可手动重连；普通网络中断仍自动重试。
 - 批量命令与文件分发同一时间只运行一个操作，连接中断会结束未完成的结果并恢复操作按钮；文件列表点击普通文件名可直接下载。
 
@@ -339,3 +339,8 @@ make client-cgo
 ```
 
 该二进制静态嵌入 x264，受 GPL-2.0-only 约束；不要将它替换为默认客户端或与不兼容许可证的发布物混合。
+
+### Agent 与界面规范
+
+- [Agent 工作区、上下文压缩、后台任务与服务端设备路由](docs/agent-workspace.md)
+- [统一 UI 风格与响应式规则](docs/ui-style-guide.md)

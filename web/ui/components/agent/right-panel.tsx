@@ -462,17 +462,21 @@ function SortablePanelTab({
  * File) or rendered markdown for .md files in preview mode. A text
  * selection inside the body surfaces a floating "Add to chat" action (bb
  * SecondaryPanelSelectionActions, scoped port). Skipped bb surfaces:
- * CSV/image/video/iframe (file_read is text-only) and download/refresh/
+ * CSV/video/iframe and download/
  * open-external (no such ops). */
 function FilePreview({
   path,
   state,
+  connected,
+  onRefresh,
   t,
   onAddToChat,
   lineRange,
 }: {
   path: string;
   state: FilePreviewState | undefined;
+  connected: boolean;
+  onRefresh: () => void;
   t: Translator;
   onAddToChat: (text: string) => void;
   /* bb line-suffix highlight (markdown `/path:12` links): one-shot
@@ -567,6 +571,16 @@ function FilePreview({
           {dir && <span className="text-muted-foreground"> {dir}</span>}
         </span>
         <div className="ml-auto flex shrink-0 items-center gap-0.5">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="size-7 max-md:pointer-coarse:size-10"
+            aria-label={t("agent.refresh")}
+            disabled={!connected || state?.status === "loading"}
+            onClick={onRefresh}
+          >
+            <Icon name="Refresh" className="size-3.5" />
+          </Button>
           {isMarkdown && (
             <button
               type="button"
@@ -607,8 +621,12 @@ function FilePreview({
           <Icon name="Spinner" className="size-4 animate-spin" />
         </div>
       ) : state.status === "error" ? (
-        <div className="flex flex-1 items-center justify-center px-3 text-center text-xs break-words text-muted-foreground">
-          {state.message}
+        <div className="flex flex-1 flex-col items-center justify-center gap-3 px-3 text-center text-xs break-words text-muted-foreground">
+          <span role="status">{state.message}</span>
+          <Button variant="outline" size="sm" disabled={!connected} onClick={onRefresh}>
+            <Icon name="Refresh" className="size-3.5" />
+            {t("agent.refresh")}
+          </Button>
         </div>
       ) : (
         <>
@@ -704,6 +722,7 @@ function NewTabPage({
   useEffect(() => {
     const q = query.trim();
     if (!q) {
+      seqRef.current++;
       setResults(null);
       setSearching(false);
       return;
@@ -722,13 +741,15 @@ function NewTabPage({
   }, [query, onSearchFiles]);
 
   const pick = (path: string) => {
+    seqRef.current++;
     setQuery("");
     setResults(null);
     onOpenFile(path);
   };
 
   const onSearchKeyDown = (e: React.KeyboardEvent) => {
-    if (!results || results.length === 0) return;
+    if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
+    if (!results || results.length === 0 || searching) return;
     if (e.key === "ArrowDown") {
       e.preventDefault();
       setActiveIdx((i) => Math.min(i + 1, results.length - 1));
@@ -1412,6 +1433,8 @@ export function AgentRightPanel({
         <FilePreview
           path={active.slice(5)}
           state={fileStates[active.slice(5)]}
+          connected={connected}
+          onRefresh={() => onRequestFile(active.slice(5))}
           t={t}
           onAddToChat={onAddToChat}
           lineRange={

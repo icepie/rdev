@@ -190,12 +190,16 @@ func resolveDevicePath(goos, cwd, path string) string {
 
 // cappedBuffer keeps the last cap bytes written to it.
 type cappedBuffer struct {
+	onWrite   func(string)
 	buf       []byte
 	cap       int
 	truncated bool
 }
 
 func (b *cappedBuffer) Write(p []byte) {
+	if b.onWrite != nil {
+		b.onWrite(string(p))
+	}
 	b.buf = append(b.buf, p...)
 	if len(b.buf) > b.cap {
 		b.buf = append([]byte(nil), b.buf[len(b.buf)-b.cap:]...)
@@ -208,6 +212,17 @@ func (b *cappedBuffer) String() string {
 		return fmt.Sprintf("[truncated, last %d bytes shown]\n%s", b.cap, b.buf)
 	}
 	return string(b.buf)
+}
+
+// drainAgentOutput collects output already accepted before a session closed.
+// CloseOutput must run first so both ranges terminate deterministically.
+func drainAgentOutput(sess *ProxySession, stdout, stderr *cappedBuffer) {
+	for data := range sess.WriteCh {
+		stdout.Write(data)
+	}
+	for data := range sess.StderrCh {
+		stderr.Write(data)
+	}
 }
 
 // --- shell ---
@@ -274,6 +289,23 @@ func (t *shellTool) runShell(ctx context.Context, command string, timeout int) (
 	if timeout > 600 {
 		timeout = 600
 	}
+	runCtx, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
+	defer cancel()
+	result, err := t.runShellReporting(runCtx, command, nil)
+	return result.Output, err
+}
+
+type agentCommandResult struct {
+	Output   string
+	ExitCode int
+}
+
+// runShellReporting uses the caller's lifetime. Background services may live
+// beyond the foreground shell timeout and stream output until explicitly stopped.
+func (t *shellTool) runShellReporting(ctx context.Context, command string, output func(string)) (agentCommandResult, error) {
+	if err := ctx.Err(); err != nil {
+		return agentCommandResult{}, err
+	}
 
 	sessionID := generateID()
 	sess := &ProxySession{
@@ -289,7 +321,7 @@ func (t *shellTool) runShell(ctx context.Context, command string, timeout int) (
 	}
 	sess.SetSessionMeta(false, "", command, "", 0, 0)
 	if !t.srv.RegisterSession(sess, t.client) {
-		return "", fmt.Errorf("too many active sessions on device")
+		return agentCommandResult{}, fmt.Errorf("too many active sessions on device")
 	}
 	defer func() {
 		t.srv.removeSession(sessionID)
@@ -306,13 +338,11 @@ func (t *shellTool) runShell(ctx context.Context, command string, timeout int) (
 		Cwd:       t.Cwd,
 		Pty:       false,
 	}); err != nil {
-		return "", fmt.Errorf("failed to reach device: %v", err)
+		return agentCommandResult{}, fmt.Errorf("failed to reach device: %v", err)
 	}
 
-	stdout := &cappedBuffer{cap: 48 * 1024}
-	stderr := &cappedBuffer{cap: 16 * 1024}
-	timer := time.NewTimer(time.Duration(timeout) * time.Second)
-	defer timer.Stop()
+	stdout := &cappedBuffer{cap: 48 * 1024, onWrite: output}
+	stderr := &cappedBuffer{cap: 16 * 1024, onWrite: output}
 
 	format := func(codeLine string) string {
 		return fmt.Sprintf("%s\n<stdout>\n%s\n</stdout>\n<stderr>\n%s\n</stderr>", codeLine, stdout, stderr)
@@ -333,29 +363,22 @@ func (t *shellTool) runShell(ctx context.Context, command string, timeout int) (
 		case <-sess.CloseCh:
 			sess.NotifyObserversClose()
 			sess.CloseOutput()
+			drainAgentOutput(sess, stdout, stderr)
 			code := sess.WaitExitCode(500 * time.Millisecond)
 			if code < 0 {
-				return format("exit code: unknown"), nil
+				return agentCommandResult{Output: format("exit code: unknown"), ExitCode: -1}, nil
 			}
-			return format(fmt.Sprintf("exit code: %d", code)), nil
+			return agentCommandResult{Output: format(fmt.Sprintf("exit code: %d", code)), ExitCode: code}, nil
 		case <-ctx.Done():
 			_ = t.client.Send(&protocol.Message{Type: protocol.MsgClose, SessionID: sessionID})
 			select {
 			case <-sess.CloseCh:
 				sess.NotifyObserversClose()
 				sess.CloseOutput()
+				drainAgentOutput(sess, stdout, stderr)
 			case <-time.After(2 * time.Second):
 			}
-			return "", fmt.Errorf("canceled; partial output:\n%s", format("exit code: unknown (canceled)"))
-		case <-timer.C:
-			_ = t.client.Send(&protocol.Message{Type: protocol.MsgClose, SessionID: sessionID})
-			select {
-			case <-sess.CloseCh:
-				sess.NotifyObserversClose()
-				sess.CloseOutput()
-			case <-time.After(2 * time.Second):
-			}
-			return "", fmt.Errorf("timed out after %ds; partial output:\n%s", timeout, format("exit code: unknown (timed out)"))
+			return agentCommandResult{}, fmt.Errorf("%w; partial output:\n%s", ctx.Err(), format("exit code: unknown (interrupted)"))
 		}
 	}
 }
@@ -757,6 +780,11 @@ func (t *writeFileTool) Execute(ctx context.Context, raw json.RawMessage) (strin
 		mode = int32(v)
 	}
 
+	release, err := t.srv.agentFileMutations.Acquire(ctx, t.client.ID, clientOS(t.client), args.Path)
+	if err != nil {
+		return "", err
+	}
+	defer release()
 	return t.upload(ctx, args.Path, []byte(args.Content), mode)
 }
 
@@ -968,10 +996,10 @@ func (t *editTool) setLastDiff(diff string) {
 
 func (t *editTool) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
 	var args struct {
-		Path       string `json:"path"`
-		OldString  string `json:"old_string"`
-		NewString  string `json:"new_string"`
-		ReplaceAll bool   `json:"replace_all"`
+		Path       string        `json:"path"`
+		OldString  string        `json:"old_string"`
+		NewString  string        `json:"new_string"`
+		ReplaceAll bool          `json:"replace_all"`
 		LineEdits  []lineEditArg `json:"line_edits"`
 	}
 	if err := json.Unmarshal(raw, &args); err != nil {
@@ -987,6 +1015,11 @@ func (t *editTool) Execute(ctx context.Context, raw json.RawMessage) (string, er
 		return "", fmt.Errorf("old_string or line_edits is required")
 	}
 	args.Path = t.reader.resolve(args.Path)
+	release, err := t.reader.srv.agentFileMutations.Acquire(ctx, t.reader.client.ID, clientOS(t.reader.client), args.Path)
+	if err != nil {
+		return "", err
+	}
+	defer release()
 
 	data, err := t.reader.download(ctx, args.Path, readFileHardCap)
 	if err != nil {

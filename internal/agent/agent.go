@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"slices"
 )
 
 // EventType identifies Session.Run stream events.
@@ -240,16 +241,25 @@ func (s *Session) Reset() {
 func (s *Session) History() []Message {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	out := make([]Message, len(s.history))
-	copy(out, s.history)
-	return out
+	return cloneMessages(s.history)
 }
 
 // SetHistory replaces the conversation history with a copy of h, e.g. to
 // carry a conversation over when the session is rebuilt for a model switch.
 func (s *Session) SetHistory(h []Message) {
 	s.mu.Lock()
-	s.history = make([]Message, len(h))
-	copy(s.history, h)
+	s.history = cloneMessages(h)
 	s.mu.Unlock()
+}
+
+// Message values contain mutable slices even though their payload strings are
+// immutable. Clone those slices at every history ownership boundary.
+func cloneMessages(messages []Message) []Message {
+	cloned := make([]Message, len(messages))
+	for i, message := range messages {
+		cloned[i] = message
+		cloned[i].ToolCalls = slices.Clone(message.ToolCalls)
+		cloned[i].Images = slices.Clone(message.Images)
+	}
+	return cloned
 }

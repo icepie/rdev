@@ -1,3 +1,5 @@
+export const SERVER_AGENT_ID = "@server";
+
 /* Agent WS protocol shared by the page and the split-screen panes: frame
  * parsers, composer constants and the transcript key sequence. Moved out of
  * pages/Agent.tsx so secondary panes (split view) reuse the exact same
@@ -162,10 +164,14 @@ export const THREAD_SCOPED_OPS: Record<string, true> = {
   ask_resolved: true,
   queue: true,
   reset_ok: true,
+  jobs: true,
+  job: true,
+  job_error: true,
   changes: true,
   diff: true,
   thread_meta: true,
   file_content: true,
+  file_search: true,
   dir_entries: true,
   dir_mkdir: true,
 };
@@ -188,6 +194,9 @@ export const TRANSCRIPT_OPS: Record<string, true> = {
   ask_resolved: true,
   queue: true,
   reset_ok: true,
+  jobs: true,
+  job: true,
+  job_error: true,
 };
 
 /* auth_ok / thread_switched / thread_peeked history → transcript items,

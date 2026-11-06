@@ -11,6 +11,7 @@ import {
 } from "../lib/api";
 import { cn } from "../lib/utils";
 import { Button } from "../components/button";
+import { COARSE_POINTER_HEADER_ICON_BUTTON_CLASS } from "../components/coarse-pointer-sizing";
 import { Input } from "../components/input";
 import { Badge } from "../components/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/card";
@@ -581,12 +582,12 @@ export function BatchPage() {
 
   return (
     <div className="h-full overflow-y-auto">
-      <div className="mx-auto flex w-full max-w-6xl flex-col gap-3 p-4">
+      <div className="page-content">
         <button
           type="button"
           aria-label={t("nav.label")}
           onClick={() => openMobileNav()}
-          className="flex size-8 cursor-pointer items-center justify-center self-start rounded-md text-muted-foreground transition-colors hover:bg-state-hover hover:text-foreground md:hidden"
+          className={cn(COARSE_POINTER_HEADER_ICON_BUTTON_CLASS, "flex cursor-pointer items-center justify-center self-start text-muted-foreground transition-colors hover:bg-state-hover hover:text-foreground md:hidden")}
         >
           <Icon name="AlignLeft" className="size-5" />
         </button>

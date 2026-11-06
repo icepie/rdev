@@ -931,10 +931,10 @@ export function SessionsPage() {
   };
 
   return (
-    <div className="flex h-full min-h-0 flex-col min-[781px]:flex-row">
+    <div className="page-workspace md:flex-row">
       {/* ── Session list panel ── */}
-      <div className="flex max-h-[38dvh] w-full shrink-0 flex-col border-b border-border-seam bg-card min-[781px]:max-h-none min-[781px]:w-[360px] min-[781px]:min-w-[260px] min-[781px]:border-r min-[781px]:border-b-0">
-        <div className="flex items-center gap-2 border-b border-border-seam px-3.5 py-3">
+      <div className="flex max-h-[38dvh] w-full shrink-0 flex-col border-b border-border-seam bg-card md:max-h-none md:w-[360px] md:min-w-[260px] md:border-r md:border-b-0">
+        <div className="page-toolbar">
           <button
             type="button"
             aria-label={t("nav.label")}
@@ -1028,7 +1028,7 @@ export function SessionsPage() {
       {/* ── Attach panel ── */}
       {activeId ? (
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-          <div className="flex shrink-0 flex-wrap items-center gap-2.5 border-b border-border-seam bg-card px-3 py-2">
+          <div className="page-toolbar">
             <span className="min-w-0 break-words text-xs text-muted-foreground">
               {attachedInfo && (
                 <>
@@ -1056,7 +1056,7 @@ export function SessionsPage() {
             <div ref={hostRef} className="absolute inset-1 [&_.xterm]:h-full" />
             {needAuth && (
               <div className="absolute inset-0 z-10 flex overflow-y-auto bg-background/90 p-3">
-                <div className="m-auto w-full max-w-[340px] shrink-0 rounded-2xl border border-border bg-card p-5 text-center">
+                <div className="page-empty-card">
                   <h3 className="mb-2 inline-flex items-center gap-1.5 text-base font-medium text-primary">
                     <Icon name="Lock" className="size-4" />
                     {t("sessions.authTitle")}
@@ -1096,7 +1096,7 @@ export function SessionsPage() {
             )}
           </div>
           {/* Mobile helper keys */}
-          <div className="flex shrink-0 gap-1.5 overflow-x-auto border-t border-border-seam bg-card px-2 py-1.5 min-[781px]:hidden">
+          <div className="flex shrink-0 gap-1.5 overflow-x-auto border-t border-border-seam bg-card px-2 py-1.5 md:hidden">
             {MOBILE_KEYS.map((k) => (
               <button
                 key={k.label}

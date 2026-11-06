@@ -1,19 +1,10 @@
 import { useMemo } from "react";
-import AnsiToHtml from "ansi-to-html";
+import { renderAnsiOutput } from "../../lib/ansi-output";
+import { SyntaxCode } from "../syntax-code";
 import { cn } from "../../lib/utils";
 import type { ToolItem, Translator } from "./types";
 
 const RESULT_CAP = 4000;
-
-/* bb TerminalOutputBlock: ANSI-colored command output inside the shared
- * mono card. escapeXML keeps raw output safe for dangerouslySetInnerHTML;
- * newline turns \n into <br> so the pre-wrap card keeps its rhythm. */
-const ANSI_TO_HTML = new AnsiToHtml({
-  fg: "var(--fg)",
-  bg: "transparent",
-  newline: true,
-  escapeXML: true,
-});
 
 function commandOf(tool: ToolItem): string {
   try {
@@ -40,9 +31,10 @@ interface ShellResult {
 }
 
 function parseShellResult(result: string): ShellResult | null {
-  const m = /^([^\n]*)\n<stdout>\n([\s\S]*?)\n<\/stdout>\n<stderr>\n([\s\S]*?)\n<\/stderr>\s*$/.exec(
-    result,
-  );
+  const m =
+    /^([^\n]*)\n<stdout>\n([\s\S]*?)\n<\/stdout>\n<stderr>\n([\s\S]*?)\n<\/stderr>\s*$/.exec(
+      result,
+    );
   if (!m) return null;
   const code = /^exit code: (-?\d+)$/.exec(m[1]);
   return {
@@ -64,22 +56,20 @@ export function CommandOutputBody({
   t: Translator;
 }) {
   const command = commandOf(tool);
-  const parsed = parseShellResult(tool.result);
+  const parsed = useMemo(() => parseShellResult(tool.result), [tool.result]);
   const cap = (s: string) =>
     s.length > RESULT_CAP
       ? s.slice(0, RESULT_CAP) + "\n" + t("agent.truncated")
       : s;
   const stdoutHtml = useMemo(
     () =>
-      parsed && parsed.stdout ? ANSI_TO_HTML.toHtml(cap(parsed.stdout)) : null,
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [parsed],
+      parsed && parsed.stdout ? renderAnsiOutput(cap(parsed.stdout)) : null,
+    [parsed, t],
   );
   const stderrHtml = useMemo(
     () =>
-      parsed && parsed.stderr ? ANSI_TO_HTML.toHtml(cap(parsed.stderr)) : null,
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [parsed],
+      parsed && parsed.stderr ? renderAnsiOutput(cap(parsed.stderr)) : null,
+    [parsed, t],
   );
 
   /* Legacy / in-flight results without the envelope: raw ANSI as before. */
@@ -87,7 +77,7 @@ export function CommandOutputBody({
     let output = tool.result;
     if (output.length > RESULT_CAP)
       output = output.slice(0, RESULT_CAP) + "\n" + t("agent.truncated");
-    const html = output ? ANSI_TO_HTML.toHtml(output) : null;
+    const html = output ? renderAnsiOutput(output) : null;
     return (
       <div
         className={cn(
@@ -95,8 +85,12 @@ export function CommandOutputBody({
           tool.isError ? "border-destructive" : "border-border",
         )}
       >
-        <div className="max-h-72 overflow-auto px-4 py-3 font-mono text-xs leading-tight break-words whitespace-pre-wrap text-foreground opacity-70 select-text">
-          {command && <div className="text-muted-foreground">$ {command}</div>}
+        <div className="max-h-72 overflow-auto px-4 py-3 font-mono text-xs leading-tight break-words whitespace-pre-wrap text-foreground select-text">
+          {command && (
+            <div className="text-muted-foreground">
+              $ <SyntaxCode code={command} language="shell" />
+            </div>
+          )}
           {html ? (
             <div dangerouslySetInnerHTML={{ __html: html }} />
           ) : (
@@ -116,8 +110,12 @@ export function CommandOutputBody({
         failed ? "border-destructive" : "border-border",
       )}
     >
-      <div className="max-h-72 overflow-auto px-4 py-3 font-mono text-xs leading-tight break-words whitespace-pre-wrap text-foreground opacity-70 select-text">
-        {command && <div className="text-muted-foreground">$ {command}</div>}
+      <div className="max-h-72 overflow-auto px-4 py-3 font-mono text-xs leading-tight break-words whitespace-pre-wrap text-foreground select-text">
+        {command && (
+          <div className="text-muted-foreground">
+            $ <SyntaxCode code={command} language="shell" />
+          </div>
+        )}
         {stdoutHtml && (
           /* bb AnsiBlock: stdout scrolls horizontally (whitespace-pre). */
           <div

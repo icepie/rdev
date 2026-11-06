@@ -1,9 +1,8 @@
-import { memo, useMemo, useState, type ReactNode } from "react";
+import { memo, isValidElement, useMemo, useState, type ReactNode } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkBreaks from "remark-breaks";
-import { highlight } from "sugar-high";
-import { lang } from "sugar-high/lang";
+import { SyntaxCode } from "./syntax-code";
 import { cn } from "../lib/utils";
 import { copyText } from "../lib/clipboard";
 import { useI18n } from "../lib/i18n";
@@ -26,13 +25,7 @@ function FencedCodeBlock({
 }) {
   const [copied, setCopied] = useState(false);
   const [softWrap, setSoftWrap] = useState(false);
-  const html = useMemo(() => {
-    try {
-      return highlight(code, { lang: language ? lang(language) : undefined });
-    } catch {
-      return null;
-    }
-  }, [code, language]);
+  const { t } = useI18n();
   return (
     <div className="my-2 overflow-hidden rounded-md border border-border-seam bg-surface-recessed">
       <div className="flex items-center justify-between pt-1.5 pr-1.5 pl-3">
@@ -42,15 +35,17 @@ function FencedCodeBlock({
         <div className="flex items-center gap-0.5">
           <button
             type="button"
+            aria-label={t("code.wrap")}
             aria-pressed={softWrap}
-            className="inline-flex size-5 cursor-pointer items-center justify-center text-muted-foreground transition-colors hover:text-foreground aria-pressed:text-foreground"
+            className="inline-flex size-7 max-md:pointer-coarse:size-9 cursor-pointer items-center justify-center text-muted-foreground transition-colors hover:text-foreground aria-pressed:text-foreground"
             onClick={() => setSoftWrap((v) => !v)}
           >
             <Icon name="TextWrap" className="size-3" />
           </button>
           <button
             type="button"
-            className="inline-flex size-5 items-center justify-center text-muted-foreground transition-colors hover:text-foreground"
+            aria-label={t("common.copy")}
+            className="inline-flex size-7 max-md:pointer-coarse:size-9 items-center justify-center text-muted-foreground transition-colors hover:text-foreground"
             onClick={() => {
               copyText(code)
                 .then(() => {
@@ -72,14 +67,7 @@ function FencedCodeBlock({
             : "overflow-x-auto",
         )}
       >
-        {html === null ? (
-          <code className="font-mono text-xs">{code}</code>
-        ) : (
-          <code
-            className="font-mono text-xs"
-            dangerouslySetInnerHTML={{ __html: html }}
-          />
-        )}
+        <SyntaxCode code={code} language={language} className="text-xs" />
       </pre>
     </div>
   );
@@ -93,11 +81,13 @@ export function CodeBlock({
   className,
   label,
   copyValue,
+  language,
 }: {
   children?: ReactNode;
   className?: string;
   label?: string;
   copyValue?: string;
+  language?: string;
 }) {
   const { t } = useI18n();
   const [copied, setCopied] = useState(false);
@@ -109,7 +99,7 @@ export function CodeBlock({
           className,
         )}
       >
-        {children}
+        {typeof children === "string" ? <SyntaxCode code={children} language={language ?? "json"} /> : children}
       </pre>
     );
   }
@@ -127,7 +117,7 @@ export function CodeBlock({
         <button
           type="button"
           aria-label={t("common.copy")}
-          className="inline-flex size-5 cursor-pointer items-center justify-center text-muted-foreground transition-colors hover:text-foreground"
+          className="inline-flex size-7 max-md:pointer-coarse:size-9 cursor-pointer items-center justify-center text-muted-foreground transition-colors hover:text-foreground"
           onClick={() => {
             copyText(copyValue)
               .then(() => {
@@ -141,7 +131,7 @@ export function CodeBlock({
         </button>
       </div>
       <pre className="overflow-x-auto px-3 pt-1 pb-3 font-mono text-xs whitespace-pre select-text">
-        {children}
+        {typeof children === "string" ? <SyntaxCode code={children} language={language ?? "json"} /> : children}
       </pre>
     </div>
   );
@@ -161,18 +151,14 @@ const externalAnchor: NonNullable<Components["a"]> = (props) => (
 const markdownComponents: Components = {
   p: (props) => <p className="my-2 first:mt-0 last:mb-0" {...props} />,
   a: externalAnchor,
-  pre: ({ children }) => <>{children}</>,
-  code: ({ className, children }) => {
-    const text = String(children ?? "").replace(/\n$/, "");
-    const language = /language-([\w-]+)/.exec(className ?? "")?.[1] ?? null;
-    if (language || text.includes("\n"))
-      return <FencedCodeBlock code={text} language={language} />;
-    return (
-      <code className="rounded bg-surface-recessed px-1 py-0.5 font-mono text-[0.85em]">
-        {children}
-      </code>
-    );
+  pre: ({ children }) => {
+    if (isValidElement<{ className?: string; children?: ReactNode }>(children)) {
+      const language = /(?:^|\s)language-([^\s]+)/.exec(children.props.className ?? "")?.[1]?.toLowerCase() ?? null;
+      return <FencedCodeBlock code={String(children.props.children ?? "").replace(/\n$/, "")} language={language} />;
+    }
+    return <pre>{children}</pre>;
   },
+  code: ({ children }) => <code className="rounded bg-surface-recessed px-1 py-0.5 font-mono text-[0.85em]">{children}</code>,
   ul: (props) => <ul className="my-2 list-disc pl-5" {...props} />,
   ol: (props) => <ol className="my-2 list-decimal pl-5" {...props} />,
   li: (props) => <li className="my-0.5" {...props} />,

@@ -1,3 +1,5 @@
+import { writeOwnedClipboard } from "../../lib/clipboard-write";
+import { paintDesktopImage } from "../../lib/desktop-frame";
 /* PanelDesktop: one device remote-desktop session inside an agent right-panel
  * tab. Self-contained WS client derived from the Desktop page, preserving both
  * stream modes: the legacy JPEG/H264 canvas stream over /desktop and the GPU
@@ -317,7 +319,7 @@ export function PanelDesktop({
   const gpuHadMsgRef = useRef(false);
 
   const drawingRef = useRef(false);
-  const pendingFrameRef = useRef<ArrayBuffer | null>(null);
+  const pendingFrameRef = useRef<{ data: ArrayBuffer; connection: number; socket: WebSocket | null } | null>(null);
   const reconnectTimerRef = useRef<number | undefined>(undefined);
   const resizeTimerRef = useRef<number | undefined>(undefined);
   const lastMouseSentRef = useRef(0);
@@ -348,6 +350,7 @@ export function PanelDesktop({
   const gpuComposingRef = useRef(false);
   const gpuIgnoreNextTextInputRef = useRef(false);
 
+  const clipRemoteWritePendingRef = useRef(false);
   const clipGenRef = useRef(0);
   const clipPollTimerRef = useRef<number | undefined>(undefined);
   const clipReadPendingRef = useRef(false);
@@ -649,12 +652,14 @@ export function PanelDesktop({
       const decoder = new VideoDecoder({
         output: (frame) => {
           try {
+            if (h264DecoderRef.current !== decoder) return;
             paintImage(frame, frame.displayWidth || frame.codedWidth, frame.displayHeight || frame.codedHeight);
           } finally {
             frame.close();
           }
         },
         error: (e) => {
+          if (h264DecoderRef.current !== decoder) return;
           console.error("h264 decoder error", e);
           fallbackToMjpeg();
         },
@@ -713,13 +718,16 @@ export function PanelDesktop({
   };
 
   const drawFrame = (data: ArrayBuffer) => {
-    pendingFrameRef.current = data;
+    pendingFrameRef.current = { data, connection: connSeqRef.current, socket: wsRef.current };
     if (drawingRef.current) return;
     drawingRef.current = true;
     requestAnimationFrame(async () => {
-      const frame = pendingFrameRef.current;
+      const pending = pendingFrameRef.current;
       pendingFrameRef.current = null;
       const format = videoFormatRef.current;
+      const current = () => !!pending && pending.connection === connSeqRef.current &&
+        pending.socket === wsRef.current && videoFormatRef.current === format;
+      const frame = current() ? pending?.data : null;
       try {
         if (format === "h264") {
           if (frame && feedH264Frame(frame)) {
@@ -731,23 +739,7 @@ export function PanelDesktop({
           }
         } else if (frame) {
           const blob = new Blob([frame], { type: "image/jpeg" });
-          if (typeof window.createImageBitmap === "function") {
-            try {
-              const bitmap = await createImageBitmap(blob);
-              if (videoFormatRef.current === format)
-                paintImage(bitmap, bitmap.width, bitmap.height);
-              bitmap.close();
-            } catch {
-              const img = await decodeImage(blob);
-              if (videoFormatRef.current === format)
-                paintImage(img, img.naturalWidth || img.width, img.naturalHeight || img.height);
-            }
-          } else {
-            const img = await decodeImage(blob);
-            if (videoFormatRef.current === format)
-              paintImage(img, img.naturalWidth || img.width, img.naturalHeight || img.height);
-          }
-          if (videoFormatRef.current === format) {
+          if (await paintDesktopImage(blob, current, paintImage, decodeImage)) {
             frameCountRef.current++;
             frameBytesRef.current += frame.byteLength || 0;
             if (!statsStartedAtRef.current) statsStartedAtRef.current = performance.now();
@@ -759,7 +751,10 @@ export function PanelDesktop({
         console.error(e);
       }
       drawingRef.current = false;
-      if (pendingFrameRef.current) drawFrame(pendingFrameRef.current);
+      // New socket frames can arrive while decoding awaits.
+      const next = pendingFrameRef.current as typeof pending;
+      if (next && next.connection === connSeqRef.current && next.socket === wsRef.current) drawFrame(next.data);
+      else pendingFrameRef.current = null;
     });
   };
 
@@ -890,17 +885,21 @@ export function PanelDesktop({
     }
     const decoder = new VideoDecoder({
       output: (frame) => {
-        if (gpuCanvas && gpuCtx) {
-          gpuCanvas.width = frame.displayWidth || frame.codedWidth || gpuCanvas.width;
-          gpuCanvas.height = frame.displayHeight || frame.codedHeight || gpuCanvas.height;
-          gpuCtx.clearRect(0, 0, gpuCanvas.width, gpuCanvas.height);
-          gpuCtx.drawImage(frame, 0, 0, gpuCanvas.width, gpuCanvas.height);
-          setGpuEmpty(null);
-        }
-        frame.close();
-        gpuUpdateFrameInfo();
+        try {
+          if (gpuVideoDecoderRef.current !== decoder) return;
+          if (gpuCanvas && gpuCtx) {
+            gpuCanvas.width = frame.displayWidth || frame.codedWidth || gpuCanvas.width;
+            gpuCanvas.height = frame.displayHeight || frame.codedHeight || gpuCanvas.height;
+            gpuCtx.clearRect(0, 0, gpuCanvas.width, gpuCanvas.height);
+            gpuCtx.drawImage(frame, 0, 0, gpuCanvas.width, gpuCanvas.height);
+            setGpuEmpty(null);
+          }
+          gpuUpdateFrameInfo();
+        } finally { frame.close(); }
       },
-      error: (err) => setStatus(errMessage(err), "err"),
+      error: (err) => {
+        if (gpuVideoDecoderRef.current === decoder) setStatus(errMessage(err), "err");
+      },
     });
     decoder.configure({
       codec: config.codec || "avc1.42E01F",
@@ -1053,6 +1052,7 @@ export function PanelDesktop({
 
   const stopClipboardSync = () => {
     clipGenRef.current++;
+    clipRemoteWritePendingRef.current = false;
     clearInterval(clipPollTimerRef.current);
     clipPollTimerRef.current = undefined;
     clipReadPendingRef.current = false;
@@ -1131,9 +1131,7 @@ export function PanelDesktop({
         throw new Error(tRef.current("desktop.clipboardFormatUnsupported"));
       await navigator.clipboard.writeText(new TextDecoder().decode(base64ToBytes(text.data)));
     }
-    setClipStatus(
-      `${tRef.current("desktop.clipboardSyncedLocal")}（${items.map((item) => item.mime).join(", ")}）`,
-    );
+
   };
 
   const requestRemoteClipboard = () => {
@@ -1147,13 +1145,13 @@ export function PanelDesktop({
   };
 
   const syncLocalClipboard = async () => {
-    if (!clipCapsRef.current || !clipboardSyncsLocalToRemote() || clipLocalReadPendingRef.current)
+    if (!clipCapsRef.current || !clipboardSyncsLocalToRemote() || clipLocalReadPendingRef.current || clipRemoteWritePendingRef.current)
       return;
     const generation = clipGenRef.current;
     clipLocalReadPendingRef.current = true;
     try {
       const items = await readBrowserClipboardItems();
-      if (generation !== clipGenRef.current || !clipboardSyncsLocalToRemote() || !items.length)
+      if (generation !== clipGenRef.current || !visibleRef.current || !clipboardSyncsLocalToRemote() || clipRemoteWritePendingRef.current || !items.length)
         return;
       const fingerprint = clipboardFingerprint(items);
       if (clipLastLocalFpRef.current === null) {
@@ -1183,7 +1181,7 @@ export function PanelDesktop({
   const handleRemoteClipboard = (event: { items?: ClipItem[]; text?: string }) => {
     clipReadPendingRef.current = false;
     const items = clipboardItems(event);
-    if (!clipboardSyncsRemoteToLocal() || !items.length) return;
+    if (!visibleRef.current || !clipboardSyncsRemoteToLocal() || !items.length) return;
     const fingerprint = clipboardFingerprint(items);
     if (clipPendingRemoteFpRef.current !== null) {
       if (fingerprint === clipPendingRemoteFpRef.current) {
@@ -1192,17 +1190,23 @@ export function PanelDesktop({
       }
       return;
     }
-    if (clipLastRemoteFpRef.current === null) {
+    if (clipLastRemoteFpRef.current === null && settingsRef.current.clipboardMode === "bidirectional") {
       clipLastRemoteFpRef.current = fingerprint;
-      if (settingsRef.current.clipboardMode === "bidirectional") return;
-    } else if (fingerprint === clipLastRemoteFpRef.current) {
       return;
-    } else {
-      clipLastRemoteFpRef.current = fingerprint;
     }
-    clipLastLocalFpRef.current = fingerprint;
-    writeBrowserClipboardItems({ items }).catch((err) => {
+    if (fingerprint === clipLastRemoteFpRef.current || clipRemoteWritePendingRef.current) return;
+    const generation = clipGenRef.current;
+    const socket = wsRef.current;
+    const current = () => generation === clipGenRef.current && socket === wsRef.current && visibleRef.current && clipboardSyncsRemoteToLocal();
+    clipRemoteWritePendingRef.current = true;
+    void writeOwnedClipboard(current, () => writeBrowserClipboardItems({ items }), () => {
+      clipLastRemoteFpRef.current = fingerprint;
+      clipLastLocalFpRef.current = fingerprint;
+      setClipStatus(`${tRef.current("desktop.clipboardSyncedLocal")}（${items.map((item) => item.mime).join(", ")}）`);
+    }, (err) => {
       setClipStatus(`${tRef.current("desktop.clipboardWriteFailed")}：${errMessage(err)}`);
+    }).finally(() => {
+      if (generation === clipGenRef.current) clipRemoteWritePendingRef.current = false;
     });
   };
 
@@ -1304,18 +1308,18 @@ export function PanelDesktop({
     ws.binaryType = "arraybuffer";
     setStatus(tt("common.connecting"));
     ws.onopen = () => {
-      if (connID !== connSeqRef.current) return;
+      if (connID !== connSeqRef.current || wsRef.current !== ws) return;
       gpuReconnectDelayRef.current = 1000;
       setStatus(tRef.current("desktop.starting"));
       gpuSend("GetCapturableList");
       gpuSendConfig();
     };
     ws.onerror = () => {
-      if (connID !== connSeqRef.current) return;
+      if (connID !== connSeqRef.current || wsRef.current !== ws) return;
       setStatus(tRef.current("common.error"), "err");
     };
     ws.onclose = () => {
-      if (connID !== connSeqRef.current) return;
+      if (connID !== connSeqRef.current || wsRef.current !== ws) return;
       wsRef.current = null;
       stopClipboardSync();
       setClipboardCapabilities(null);
@@ -1345,7 +1349,7 @@ export function PanelDesktop({
       scheduleGPUReconnect(dev, connID);
     };
     ws.onmessage = (evt) => {
-      if (connID !== connSeqRef.current) return;
+      if (connID !== connSeqRef.current || wsRef.current !== ws) return;
       gpuHadMsgRef.current = true;
       if (evt.data instanceof ArrayBuffer) {
         if (gpuHandleAndroidVideoPacket(evt.data)) return;
@@ -1448,7 +1452,7 @@ export function PanelDesktop({
     ws.binaryType = "arraybuffer";
     setStatus(tRef.current("common.connecting"));
     ws.onmessage = (evt) => {
-      if (connID !== connSeqRef.current) return;
+      if (connID !== connSeqRef.current || wsRef.current !== ws) return;
       if (evt.data instanceof ArrayBuffer) {
         drawFrame(evt.data);
         return;
@@ -1527,7 +1531,7 @@ export function PanelDesktop({
       }
     };
     ws.onclose = () => {
-      if (connID !== connSeqRef.current) return;
+      if (connID !== connSeqRef.current || wsRef.current !== ws) return;
       wsRef.current = null;
       stopClipboardSync();
       setClipboardCapabilities(null);
@@ -2475,7 +2479,7 @@ export function PanelDesktop({
                 className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center p-4 text-center leading-loose text-muted-foreground"
                 style={{
                   background:
-                    "radial-gradient(circle at center, rgba(34,211,238,.07), transparent 42%)",
+                    "radial-gradient(circle at center, color-mix(in oklab, var(--timeline-accent) 10%, transparent), transparent 42%)",
                 }}
               >
                 <strong className="mb-1 text-sm text-foreground">{gpuEmpty.title}</strong>

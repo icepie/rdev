@@ -1,3 +1,5 @@
+import { DisclosureBody } from "../disclosure-body";
+import { SyntaxCode } from "../syntax-code";
 import { Fragment, useState } from "react";
 import { cn } from "../../lib/utils";
 import { Icon } from "../icon";
@@ -78,8 +80,8 @@ function ResultCard({ tool, t }: { tool: ToolItem; t: Translator }) {
         tool.isError ? "border-destructive" : "border-border",
       )}
     >
-      <div className="max-h-72 overflow-auto px-4 py-3 font-mono text-xs leading-tight break-words whitespace-pre-wrap text-foreground opacity-70 select-text">
-        {result || "…"}
+      <div className="max-h-72 overflow-auto px-4 py-3 font-mono text-xs leading-tight break-words whitespace-pre-wrap text-foreground select-text">
+        <SyntaxCode code={result || "…"} language={tool.name === "read_file" ? pathArgOf(tool)?.split(".").pop() ?? "text" : /^[\s]*[\[{]/.test(result) ? "json" : "text"} />
       </div>
     </div>
   );
@@ -106,7 +108,7 @@ function ArgsBlock({
   const collapsible = joined.split("\n").length > 3 || joined.length > 240;
   return (
     <div className="overflow-hidden rounded-lg border border-border bg-card">
-      <div className="px-4 py-3 font-mono text-xs leading-tight text-foreground opacity-70 select-text">
+      <div className="px-4 py-3 font-mono text-xs leading-tight text-foreground select-text">
         <div className="relative">
           <div
             className={cn(
@@ -118,7 +120,7 @@ function ArgsBlock({
               <Fragment key={key}>
                 {"\n"}
                 <span className="text-muted-foreground">{key}: </span>
-                <span>{value}</span>
+                <SyntaxCode code={value} language="json" className="[&_.sh__line]:min-w-0" />
               </Fragment>
             ))}
           </div>
@@ -348,11 +350,11 @@ export function ToolRow({ tool, t, dimmed, onOpenFile, onOpenDiff }: RowProps) {
           )}
         />
       </button>
-      {open && (
+      <DisclosureBody open={open}>
         <div className="flex flex-col gap-1.5 px-2 pb-1 pt-0.5">
           <ToolRowBody tool={tool} t={t} onOpenFile={onOpenFile} />
         </div>
-      )}
+      </DisclosureBody>
     </div>
   );
 }
@@ -399,7 +401,7 @@ export function ToolBundleRow({
           )}
         />
       </button>
-      {open && (
+      <DisclosureBody open={open}>
         <div className="flex flex-col">
           {bundle.tools.map((tool) => (
             <ToolRow
@@ -411,7 +413,7 @@ export function ToolBundleRow({
             />
           ))}
         </div>
-      )}
+      </DisclosureBody>
     </div>
   );
 }

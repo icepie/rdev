@@ -89,22 +89,32 @@ func (h *filesWSHandler) OnClose(socket *gws.Conn, err error) {
 		return
 	}
 	fs := fsRaw.(*fileSocket)
-	h.srv.fileMu.Lock()
-	for id, owner := range h.srv.fileRequests {
+	h.srv.closeFileSocket(fs)
+}
+
+func (s *Server) closeFileSocket(fs *fileSocket) {
+	// Detach this browser atomically. Device writes may block, so perform them
+	// after releasing the global routing lock used by every file workspace.
+	tasks := make(map[string]string)
+	s.fileMu.Lock()
+	for id, owner := range s.fileRequests {
 		if owner == fs {
-			delete(h.srv.fileRequests, id)
+			delete(s.fileRequests, id)
 		}
 	}
-	for id, route := range h.srv.fileTasks {
+	for id, route := range s.fileTasks {
 		if route.socket == fs {
-			if client, ok := h.srv.GetClient(route.deviceID); ok {
-				client.Send(&protocol.Message{Type: protocol.MsgFileTransferCancel, TaskID: id})
-				client.SendBinaryOffset(protocol.BinFileTransferCancel, id, 0, nil)
-			}
-			delete(h.srv.fileTasks, id)
+			tasks[id] = route.deviceID
+			delete(s.fileTasks, id)
 		}
 	}
-	h.srv.fileMu.Unlock()
+	s.fileMu.Unlock()
+	for id, deviceID := range tasks {
+		if client, ok := s.GetClient(deviceID); ok {
+			client.Send(&protocol.Message{Type: protocol.MsgFileTransferCancel, TaskID: id})
+			client.SendBinaryOffset(protocol.BinFileTransferCancel, id, 0, nil)
+		}
+	}
 }
 
 func (h *filesWSHandler) OnMessage(socket *gws.Conn, message *gws.Message) {
@@ -188,14 +198,14 @@ func (h *filesWSHandler) isAuthorized(socket *fileSocket, client *ClientConn) bo
 	return fp != "" && fp == passwordFingerprint(client.Password)
 }
 
-func (h *filesWSHandler) clientFor(socket *fileSocket, deviceID string) (*ClientConn, bool) {
-	client, ok := h.srv.GetClient(deviceID)
+func (h *filesWSHandler) clientFor(socket *fileSocket, msg fileMsg) (*ClientConn, bool) {
+	client, ok := h.srv.GetClient(msg.DeviceID)
 	if !ok {
-		socket.writeText(fileMsg{Op: "error", DeviceID: deviceID, Message: "device not connected"})
+		socket.writeText(fileMsg{Op: "error", DeviceID: msg.DeviceID, RequestID: msg.RequestID, TaskID: msg.TaskID, Message: "device not connected"})
 		return nil, false
 	}
 	if !h.isAuthorized(socket, client) {
-		socket.writeText(fileMsg{Op: "auth_required", DeviceID: deviceID, Message: "device password required"})
+		socket.writeText(fileMsg{Op: "auth_required", DeviceID: msg.DeviceID, RequestID: msg.RequestID, TaskID: msg.TaskID, Message: "device password required"})
 		return nil, false
 	}
 	return client, true
@@ -205,7 +215,7 @@ func (h *filesWSHandler) handleList(socket *fileSocket, msg fileMsg) {
 	if msg.RequestID == "" {
 		msg.RequestID = generateID()
 	}
-	client, ok := h.clientFor(socket, msg.DeviceID)
+	client, ok := h.clientFor(socket, msg)
 	if !ok {
 		return
 	}
@@ -225,7 +235,7 @@ func (h *filesWSHandler) handleUploadStart(socket *fileSocket, msg fileMsg) {
 	if msg.TaskID == "" {
 		msg.TaskID = generateID()
 	}
-	client, ok := h.clientFor(socket, msg.DeviceID)
+	client, ok := h.clientFor(socket, msg)
 	if !ok {
 		return
 	}
@@ -249,7 +259,7 @@ func (h *filesWSHandler) handleDownloadStart(socket *fileSocket, msg fileMsg) {
 	if msg.TaskID == "" {
 		msg.TaskID = generateID()
 	}
-	client, ok := h.clientFor(socket, msg.DeviceID)
+	client, ok := h.clientFor(socket, msg)
 	if !ok {
 		return
 	}
@@ -264,7 +274,7 @@ func (h *filesWSHandler) handleFileOp(socket *fileSocket, msg fileMsg) {
 	if msg.RequestID == "" {
 		msg.RequestID = generateID()
 	}
-	client, ok := h.clientFor(socket, msg.DeviceID)
+	client, ok := h.clientFor(socket, msg)
 	if !ok {
 		return
 	}

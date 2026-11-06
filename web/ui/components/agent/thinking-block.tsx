@@ -1,3 +1,4 @@
+import { DisclosureBody } from "../disclosure-body";
 import { useEffect, useState } from "react";
 import { cn } from "../../lib/utils";
 import { Icon } from "../icon";
@@ -73,7 +74,7 @@ export function ThinkingBlock({
           )}
         />
       </button>
-      {open && (
+      <DisclosureBody open={open}>
         <div className="px-2 pb-1 pt-0.5">
           <div
             className={cn(
@@ -84,7 +85,7 @@ export function ThinkingBlock({
             {text}
           </div>
         </div>
-      )}
+      </DisclosureBody>
     </div>
   );
 }

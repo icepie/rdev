@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -40,6 +39,7 @@ import (
 // device, not by a browser connection: events are broadcast to every
 // attached socket and a reopened tab reattaches mid-run (auth_ok.running).
 type agentMsg struct {
+	Compacted bool                `json:"compacted,omitempty"`
 	Op        string              `json:"op"`
 	Password  string              `json:"password,omitempty"`
 	Text      string              `json:"text,omitempty"`
@@ -149,6 +149,7 @@ type agentChangeFile struct {
 // non-empty when the device is offline or cwd is not a git repository.
 type agentChangesMsg struct {
 	Op     string            `json:"op"`
+	ID     string            `json:"id,omitempty"`
 	Thread string            `json:"thread,omitempty"`
 	Cwd    string            `json:"cwd"`
 	Branch string            `json:"branch"`
@@ -160,6 +161,7 @@ type agentChangesMsg struct {
 // error ("untracked" for files git does not track).
 type agentDiffMsg struct {
 	Op     string `json:"op"`
+	ID     string `json:"id,omitempty"`
 	Thread string `json:"thread,omitempty"`
 	Path   string `json:"path"`
 	Diff   string `json:"diff"`
@@ -273,6 +275,9 @@ func queueTexts(q []agentQueuedChat) []string {
 // history, todo list, message queue and (at most one) in-flight turn.
 // Guarded by Server.agentSessionsMu.
 type agentThread struct {
+	// Acquire before agentSessionsMu; disk I/O never holds the global lock.
+	persistMu     sync.Mutex
+	jobs          *agentJobs
 	id            string
 	session       *agent.Session
 	sessionClient *ClientConn // device connection session's tools are bound to
@@ -301,10 +306,11 @@ type agentThread struct {
 	updatedAt    time.Time
 	// lastUsage is the token accounting of the most recent completed turn,
 	// replayed in auth_ok/thread_switched for the context-usage indicator.
-	lastUsage *agentUsage
-	cwd       string // working directory for tools ("" = device default)
-	branch    string // last probed git branch of cwd ("" = unknown/not a repo)
-	title     string // explicit thread title ("" = derive from first user message)
+	lastUsage    *agentUsage
+	cwd          string // working directory for tools ("" = device default)
+	branch       string // last probed git branch of cwd ("" = unknown/not a repo)
+	metaProbeSeq uint64 // rejects stale Git probe results after cwd changes
+	title        string // explicit thread title ("" = derive from first user message)
 	// live holds the marshaled frames of the in-flight turn (turn_start …
 	// terminal frame) so a browser switching in mid-turn can replay the
 	// exact UI state; cleared at the next turn start, read only while
@@ -352,6 +358,7 @@ func validReasoningLevel(level string) bool {
 // lifetimes. Browsers attach as subscribers; events are broadcast to all.
 // Guarded by Server.agentSessionsMu.
 type agentSessionEntry struct {
+	prefsMu        sync.Mutex // serializes disk updates for this device, outside agentSessionsMu
 	deviceID       string
 	client         *ClientConn // latest known live device connection
 	os             string      // device OS (client registration or desktop platform)
@@ -372,15 +379,32 @@ type agentSessionEntry struct {
 // entry.current only seeds new connections and persists as the resume
 // default.
 type agentConn struct {
-	socket   *gws.Conn
-	deviceID string
-	client   *ClientConn
-	authed   bool
-	entry    *agentSessionEntry
-	current  string
+	// Management views share the original connection write lock.
+	responseTo     *agentConn
+	responseThread string
+	socket         *gws.Conn
+	deviceID       string
+	client         *ClientConn
+	authed         bool
+	entry          *agentSessionEntry
+	current        string
 
 	writeMu sync.Mutex
 }
+
+// goAgent tracks server-owned asynchronous agent work so test and shutdown
+// callers can wait until persistence and device probes have stopped.
+func (s *Server) goAgent(fn func()) {
+	s.agentWG.Add(1)
+	go func() {
+		defer s.agentWG.Done()
+		fn()
+	}()
+}
+
+// waitAgentWork is intentionally small and safe for tests; production callers
+// may use it while draining the server.
+func (s *Server) waitAgentWork() { s.agentWG.Wait() }
 
 // writeData sends one pre-marshaled frame; reports whether the write worked
 // so broadcasts can prune dead subscribers.
@@ -397,6 +421,15 @@ func (ac *agentConn) writeData(data []byte) bool {
 }
 
 func (ac *agentConn) writeJSON(msg agentMsg) {
+	if ac.responseTo != nil {
+		if msg.Op == "error" {
+			msg.Op = "thread_action_error"
+			msg.Thread = ac.responseThread
+		}
+		msg.Device = ac.deviceID
+		ac.responseTo.writeJSON(msg)
+		return
+	}
 	data, err := json.Marshal(msg)
 	if err != nil {
 		log.Printf("agent marshal error: %v", err)
@@ -454,6 +487,10 @@ func (h *agentWSHandler) OnOpen(socket *gws.Conn) {
 	h.srv.mu.RLock()
 	client, ok := h.srv.clients[deviceID]
 	h.srv.mu.RUnlock()
+	if deviceID == agentServerDeviceID {
+		client = &ClientConn{ID: agentServerDeviceID}
+		ok = true
+	}
 	if !ok {
 		socket.WriteClose(1000, []byte("device '"+deviceID+"' is not connected"))
 		return
@@ -480,11 +517,28 @@ func (h *agentWSHandler) OnOpen(socket *gws.Conn) {
 // buildAgentSession creates the LLM session for one provider/model pair,
 // bound to the device tools and the thread's approval flow.
 func (s *Server) buildAgentSession(entry *agentSessionEntry, th *agentThread, client *ClientConn, provider *AgentProvider, model *AgentModelConfig) *agent.Session {
-	tools := newDeviceTools(s, client, th.cwd)
+	if th.jobs == nil {
+		jobs := newAgentJobs(nil)
+		jobs.onComplete = func(job agentJobSnapshot) { s.deliverAgentJob(entry, th, jobs, job) }
+		th.jobs = jobs
+	}
+	tools := s.agentBaseTools(entry, client, th.cwd)
+	if entry.deviceID != agentServerDeviceID {
+		tools = append(tools, &backgroundTool{jobs: th.jobs, shell: &shellTool{srv: s, client: client, Cwd: th.cwd}})
+	} else {
+		tools = append(tools, &backgroundTool{jobs: th.jobs, resolveShell: func(device string) (*shellTool, error) {
+			tool, err := s.resolveDeviceTool(device, "shell")
+			if err != nil {
+				return nil, err
+			}
+			return tool.(*shellTool), nil
+		}})
+	}
+	tools = append(tools, &jobsTool{jobs: th.jobs})
 	tools = append(tools, &askTool{ask: func(_ context.Context, question string, options []askOption) string {
 		return s.requestQuestion(entry, th, question, marshalAskOptions(options))
 	}})
-	return agent.New(agent.Config{
+	cfg := agent.Config{
 		BaseURL:         provider.BaseURL,
 		APIKey:          provider.APIKey,
 		Model:           model.ID,
@@ -502,7 +556,13 @@ func (s *Server) buildAgentSession(entry *agentSessionEntry, th *agentThread, cl
 			defer s.agentSessionsMu.Unlock()
 			return agentPermNeedsApproval(entry.permMode, false)
 		},
+	}
+	cwd := th.cwd
+	cfg.Tools = append(cfg.Tools, &subagentTool{
+		jobs: th.jobs, config: cfg,
+		tools: func() []agent.Tool { return s.agentBaseTools(entry, client, cwd) },
 	})
+	return agent.New(cfg)
 }
 
 // newAgentThreadLocked creates a thread (new session for entry's model) with
@@ -627,8 +687,8 @@ func (s *Server) agentSessionFor(deviceID string, client *ClientConn) (*agentSes
 	s.agentSessions[deviceID] = entry
 	// Probe the device's default working directory once (off-lock); the
 	// result backfills thread_meta for the current thread.
-	if client != nil {
-		go s.probeAgentDefaultCwd(entry)
+	if client != nil && deviceID != agentServerDeviceID {
+		s.goAgent(func() { s.probeAgentDefaultCwd(entry) })
 	}
 	return entry, nil
 }
@@ -736,7 +796,7 @@ func (s *Server) agentEvictionLoop() {
 		for id, entry := range s.agentSessions {
 			busy := false
 			for _, th := range entry.threads {
-				if th.running || th.turnCtx != nil || len(th.queue) > 0 {
+				if th.running || th.turnCtx != nil || len(th.queue) > 0 || (th.jobs != nil && th.jobs.Running()) {
 					busy = true
 					break
 				}
@@ -745,6 +805,12 @@ func (s *Server) agentEvictionLoop() {
 			// expect the warm session (30 min grace).
 			if busy || len(entry.subs) > 0 || time.Since(entry.lastActive) < 30*time.Minute {
 				continue
+			}
+			for _, th := range entry.threads {
+				if th.jobs != nil {
+					th.jobs.Close()
+					th.jobs = nil
+				}
 			}
 			delete(s.agentSessions, id)
 		}
@@ -896,7 +962,7 @@ func denyApprovalsLocked(th *agentThread) {
 func (s *Server) requestQuestion(entry *agentSessionEntry, th *agentThread, question string, options json.RawMessage) string {
 	s.agentSessionsMu.Lock()
 	th.aprSeq++
-	id := fmt.Sprintf("ask_%d", th.aprSeq)
+	id := fmt.Sprintf("ask_%s_%d", th.id, th.aprSeq)
 	ch := make(chan string, 1)
 	th.questions[id] = ch
 	turnCtx := th.turnCtx
@@ -938,7 +1004,7 @@ func (s *Server) requestApproval(entry *agentSessionEntry, th *agentThread, tc a
 		return true, nil
 	}
 	th.aprSeq++
-	id := fmt.Sprintf("apr_%d", th.aprSeq)
+	id := fmt.Sprintf("apr_%s_%d", th.id, th.aprSeq)
 	ch := make(chan approvalDecision, 1)
 	th.approvals[id] = ch
 	turnCtx := th.turnCtx
@@ -1188,6 +1254,10 @@ func (h *agentWSHandler) OnMessage(socket *gws.Conn, message *gws.Message) {
 	}
 
 	switch msg.Op {
+	case "get_jobs":
+		h.handleJobs(ac, msg.Thread, msg.ID, false)
+	case "cancel_job":
+		h.handleJobs(ac, msg.Thread, msg.ID, true)
 	case "chat":
 		h.handleChat(ac, msg.Text, msg.Model, msg.Thread, msg.Images)
 	case "approve":
@@ -1256,23 +1326,23 @@ func (h *agentWSHandler) OnMessage(socket *gws.Conn, message *gws.Message) {
 	case "peek_thread":
 		h.handlePeekThread(ac, msg.Thread)
 	case "delete_thread":
-		h.handleDeleteThread(ac, msg.Thread)
+		h.handleThreadAction(ac, msg)
 	case "rename_thread":
-		h.handleRenameThread(ac, msg.Thread, msg.Title)
+		h.handleThreadAction(ac, msg)
 	case "set_cwd":
 		h.handleSetCwd(ac, msg.Path)
 	case "get_changes":
-		h.handleGetChanges(ac)
+		h.handleGetChanges(ac, msg.ID)
 	case "get_diff":
-		h.handleGetDiff(ac, msg.Path)
+		h.handleGetDiff(ac, msg.Path, msg.ID)
 	case "file_read":
-		h.handleFileRead(ac, msg.Path)
+		h.handleFileRead(ac, msg.Path, msg.ID)
 	case "dir_list":
-		h.handleDirList(ac, msg.Path)
+		h.handleDirList(ac, msg.Path, msg.ID)
 	case "dir_mkdir":
-		h.handleDirMkdir(ac, msg.Path)
+		h.handleDirMkdir(ac, msg.Path, msg.ID)
 	case "search_files":
-		h.handleSearchFiles(ac, msg.Q)
+		h.handleSearchFiles(ac, msg.Q, msg.ID)
 	case "ping":
 		ac.writeJSON(agentMsg{Op: "pong"})
 	}
@@ -1421,14 +1491,14 @@ func (h *agentWSHandler) handleChat(ac *agentConn, text, modelRef, threadRef str
 	}
 	th.updatedAt = time.Now()
 	startFrame := srv.startAgentTurnLocked(entry, th, text, images)
-	ctx := th.turnCtx
+	turn := snapshotAgentTurnLocked(th)
 	srv.agentSessionsMu.Unlock()
 
 	if modelChanged {
 		srv.writeAgentPrefs(entry)
 	}
 	srv.agentBroadcastTurn(entry, th, startFrame)
-	go srv.runAgentTurn(entry, th, ctx, text, images)
+	srv.goAgent(func() { srv.runAgentTurn(entry, th, turn, text, images) })
 }
 
 // handleSteer cancels the running turn and puts the text at the front of
@@ -1500,17 +1570,20 @@ func (h *agentWSHandler) handleReset(ac *agentConn, threadRef string) {
 		threadID = threadRef
 	}
 	srv := h.srv
-	srv.agentSessionsMu.Lock()
-	th := entry.threads[threadID]
+	th := srv.lockAgentThreadPersistence(entry, threadID)
 	if th == nil {
-		srv.agentSessionsMu.Unlock()
 		ac.sendErrorThread(threadID, "unknown thread "+threadID)
 		return
 	}
+	defer th.persistMu.Unlock()
 	var cancel context.CancelFunc
 	if th.running {
 		th.epoch++
 		cancel = th.cancel
+	}
+	if th.jobs != nil {
+		th.jobs.Close()
+		th.jobs = nil
 	}
 	// Fresh session with the thread's own model and an empty history.
 	provider, model, _, err := srv.Agent.Resolve(th.model)
@@ -1661,7 +1734,7 @@ func connsViewThreadLocked(entry *agentSessionEntry, threadID string) bool {
 	return false
 }
 
-// handleDeleteThread removes a thread (not while it is running). Every
+// handleDeleteThread cancels active work and removes a thread. Every
 // connection viewing the deleted thread is switched to the most recently
 // updated remaining one, or a fresh thread when none is left.
 func (h *agentWSHandler) handleDeleteThread(ac *agentConn, threadID string) {
@@ -1671,17 +1744,21 @@ func (h *agentWSHandler) handleDeleteThread(ac *agentConn, threadID string) {
 		return
 	}
 	srv := h.srv
-	srv.agentSessionsMu.Lock()
-	th, ok := entry.threads[threadID]
-	if !ok {
-		srv.agentSessionsMu.Unlock()
+	th := srv.lockAgentThreadPersistence(entry, threadID)
+	if th == nil {
 		ac.sendError("unknown thread " + threadID)
 		return
 	}
-	if th.running {
-		srv.agentSessionsMu.Unlock()
-		ac.sendError("thread is running; stop it first")
-		return
+	defer th.persistMu.Unlock()
+	// Invalidate the old generation before canceling: its late events and
+	// final save cannot recreate the deleted conversation.
+	th.epoch++
+	cancel := th.cancel
+	th.queue = nil
+	th.turnFiles = nil
+	denyApprovalsLocked(th)
+	if th.jobs != nil {
+		th.jobs.Close()
 	}
 	delete(entry.threads, threadID)
 	// Remap every connection viewing the deleted thread (plus the resume
@@ -1722,11 +1799,15 @@ func (h *agentWSHandler) handleDeleteThread(ac *agentConn, threadID string) {
 		switchModel = cur.model
 	}
 	srv.agentSessionsMu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
 
 	if store := srv.agentStore(); store != nil {
 		store.clear(ac.deviceID, threadID)
 		store.dropExtras(ac.deviceID, threadID)
 	}
+	ac.writeJSON(agentMsg{Op: "thread_deleted", Thread: threadID, Device: ac.deviceID})
 	srv.broadcastThreadList(entry)
 	if switchedTo != "" {
 		srv.writeAgentPrefs(entry)
@@ -1764,13 +1845,12 @@ func (h *agentWSHandler) handleRenameThread(ac *agentConn, threadID, title strin
 		return
 	}
 	srv := h.srv
-	srv.agentSessionsMu.Lock()
-	th, ok := entry.threads[threadID]
-	if !ok {
-		srv.agentSessionsMu.Unlock()
+	th := srv.lockAgentThreadPersistence(entry, threadID)
+	if th == nil {
 		ac.sendError("unknown thread " + threadID)
 		return
 	}
+	defer th.persistMu.Unlock()
 	th.title = title
 	history := th.session.History()
 	srv.agentSessionsMu.Unlock()
@@ -1778,6 +1858,7 @@ func (h *agentWSHandler) handleRenameThread(ac *agentConn, threadID, title strin
 	if store := srv.agentStore(); store != nil {
 		store.setTitle(ac.deviceID, threadID, title, history)
 	}
+	ac.writeJSON(agentMsg{Op: "thread_renamed", Thread: threadID, Title: title, Device: ac.deviceID})
 	srv.broadcastThreadList(entry)
 }
 
@@ -1792,13 +1873,12 @@ func (h *agentWSHandler) handleSetCwd(ac *agentConn, path string) {
 	}
 	path = strings.TrimSpace(path)
 	srv := h.srv
-	srv.agentSessionsMu.Lock()
-	th := entry.threads[ac.current]
+	th := srv.lockAgentThreadPersistence(entry, ac.current)
 	if th == nil {
-		srv.agentSessionsMu.Unlock()
 		ac.sendError("agent session not ready")
 		return
 	}
+	defer th.persistMu.Unlock()
 	if th.running {
 		srv.agentSessionsMu.Unlock()
 		ac.sendError("agent is busy; stop first")
@@ -1806,6 +1886,10 @@ func (h *agentWSHandler) handleSetCwd(ac *agentConn, path string) {
 	}
 	th.cwd = path
 	th.branch = ""
+	// Invalidate an already-running probe immediately. This matters when a
+	// probe for the same path races with a rapid cwd reset before the next
+	// probe has been scheduled.
+	th.metaProbeSeq++
 	// Rebuild the session so tools and the system prompt use the new cwd;
 	// the thread keeps its own model.
 	if provider, model, err := srv.resolveAgentModel(th.model); err == nil {
@@ -1829,7 +1913,7 @@ func (h *agentWSHandler) handleSetCwd(ac *agentConn, path string) {
 // handleGetChanges replies with the current thread's git working-tree
 // status. The probe round-trips the device, so it runs off the socket
 // goroutine; failures come back in the reply's error field.
-func (h *agentWSHandler) handleGetChanges(ac *agentConn) {
+func (h *agentWSHandler) handleGetChanges(ac *agentConn, requestID string) {
 	entry := ac.entry
 	if entry == nil {
 		ac.sendError("agent session not ready")
@@ -1848,8 +1932,8 @@ func (h *agentWSHandler) handleGetChanges(ac *agentConn) {
 	threadID := th.id
 	srv.agentSessionsMu.Unlock()
 
-	go func() {
-		reply := agentChangesMsg{Op: "changes", Thread: threadID, Cwd: cwd, Branch: branch, Files: []agentChangeFile{}}
+	srv.goAgent(func() {
+		reply := agentChangesMsg{Op: "changes", ID: requestID, Thread: threadID, Cwd: cwd, Branch: branch, Files: []agentChangeFile{}}
 		if cwd == "" {
 			reply.Error = "no working directory"
 		} else if files, err := srv.probeGitChanges(entry.deviceID, cwd); err != nil {
@@ -1858,12 +1942,12 @@ func (h *agentWSHandler) handleGetChanges(ac *agentConn) {
 			reply.Files = files
 		}
 		ac.writeChanges(reply)
-	}()
+	})
 }
 
 // handleGetDiff replies with the unified diff of one path in the current
 // thread's working tree; untracked files come back with error "untracked".
-func (h *agentWSHandler) handleGetDiff(ac *agentConn, path string) {
+func (h *agentWSHandler) handleGetDiff(ac *agentConn, path, requestID string) {
 	entry := ac.entry
 	if entry == nil {
 		ac.sendError("agent session not ready")
@@ -1871,7 +1955,7 @@ func (h *agentWSHandler) handleGetDiff(ac *agentConn, path string) {
 	}
 	path = strings.TrimSpace(path)
 	if path == "" {
-		ac.writeDiff(agentDiffMsg{Op: "diff", Error: "missing path"})
+		ac.writeDiff(agentDiffMsg{Op: "diff", ID: requestID, Error: "missing path"})
 		return
 	}
 	srv := h.srv
@@ -1884,8 +1968,8 @@ func (h *agentWSHandler) handleGetDiff(ac *agentConn, path string) {
 	}
 	srv.agentSessionsMu.Unlock()
 
-	go func() {
-		reply := agentDiffMsg{Op: "diff", Thread: threadID, Path: path}
+	srv.goAgent(func() {
+		reply := agentDiffMsg{Op: "diff", ID: requestID, Thread: threadID, Path: path}
 		if cwd == "" {
 			reply.Error = "no working directory"
 		} else if diff, err := srv.probeGitDiff(entry.deviceID, cwd, path); err != nil {
@@ -1894,13 +1978,13 @@ func (h *agentWSHandler) handleGetDiff(ac *agentConn, path string) {
 			reply.Diff = diff
 		}
 		ac.writeDiff(reply)
-	}()
+	})
 }
 
 // handleFileRead answers one browser's file_read op with the file's content
 // from the current thread's working directory (op "file_content", reply to
 // the requesting socket only). Powers the right-panel file preview tabs.
-func (h *agentWSHandler) handleFileRead(ac *agentConn, path string) {
+func (h *agentWSHandler) handleFileRead(ac *agentConn, path, requestID string) {
 	entry := ac.entry
 	if entry == nil {
 		ac.sendError("agent session not ready")
@@ -1917,13 +2001,13 @@ func (h *agentWSHandler) handleFileRead(ac *agentConn, path string) {
 	}
 	srv.agentSessionsMu.Unlock()
 
-	reply := agentMsg{Op: "file_content", Thread: threadID, Path: path}
+	reply := agentMsg{Op: "file_content", ID: requestID, Thread: threadID, Path: path}
 	if path == "" {
 		reply.Message = "missing path"
 		ac.writeJSON(reply)
 		return
 	}
-	go func() {
+	srv.goAgent(func() {
 		switch {
 		case cwd == "":
 			reply.Message = "no working directory"
@@ -1949,7 +2033,7 @@ func (h *agentWSHandler) handleFileRead(ac *agentConn, path string) {
 			}
 		}
 		ac.writeJSON(reply)
-	}()
+	})
 }
 
 // imageMIME maps a path's extension to a browser-renderable image mime, or
@@ -2031,7 +2115,7 @@ const (
 // socket only). Powers the right-panel new-tab file search (bb's
 // NewTabFileSearch). Git repos only; every query word must appear in the
 // path (case-insensitive), basename hits rank first.
-func (h *agentWSHandler) handleSearchFiles(ac *agentConn, q string) {
+func (h *agentWSHandler) handleSearchFiles(ac *agentConn, q, requestID string) {
 	entry := ac.entry
 	if entry == nil {
 		ac.sendError("agent session not ready")
@@ -2048,12 +2132,12 @@ func (h *agentWSHandler) handleSearchFiles(ac *agentConn, q string) {
 	}
 	srv.agentSessionsMu.Unlock()
 
-	reply := agentMsg{Op: "file_search", Thread: threadID, Q: q, Files: []string{}}
+	reply := agentMsg{Op: "file_search", ID: requestID, Thread: threadID, Q: q, Files: []string{}}
 	if q == "" {
 		ac.writeJSON(reply)
 		return
 	}
-	go func() {
+	h.srv.goAgent(func() {
 		if cwd == "" {
 			reply.Message = "no working directory"
 			ac.writeJSON(reply)
@@ -2078,7 +2162,7 @@ func (h *agentWSHandler) handleSearchFiles(ac *agentConn, q string) {
 			reply.Truncated = dropped
 		}
 		ac.writeJSON(reply)
-	}()
+	})
 }
 
 // filterFileSearch AND-matches the lowercase query words against each path
@@ -2142,7 +2226,7 @@ func filterFileSearch(paths []string, q string, limit int) ([]string, bool) {
 // socket only). An empty path resolves to the current thread's effective
 // working directory. Powers the create-project path browser (bb's
 // RemotePathBrowser).
-func (h *agentWSHandler) handleDirList(ac *agentConn, path string) {
+func (h *agentWSHandler) handleDirList(ac *agentConn, path, requestID string) {
 	entry := ac.entry
 	if entry == nil {
 		ac.sendError("agent session not ready")
@@ -2162,13 +2246,13 @@ func (h *agentWSHandler) handleDirList(ac *agentConn, path string) {
 	if path == "" {
 		path = cwd
 	}
-	reply := agentMsg{Op: "dir_entries", Thread: threadID, Path: path}
+	reply := agentMsg{Op: "dir_entries", ID: requestID, Thread: threadID, Path: path}
 	if path == "" {
 		reply.Message = "no working directory"
 		ac.writeJSON(reply)
 		return
 	}
-	go func() {
+	h.srv.goAgent(func() {
 		parent, entries, roots, err := srv.probeListDir(entry.deviceID, path)
 		if err != nil {
 			reply.Message = err.Error()
@@ -2178,13 +2262,13 @@ func (h *agentWSHandler) handleDirList(ac *agentConn, path string) {
 			reply.Roots = roots
 		}
 		ac.writeJSON(reply)
-	}()
+	})
 }
 
 // handleDirMkdir answers one browser's dir_mkdir op, creating the directory
 // (and parents) on the device (op "dir_mkdir", reply to the requesting
 // socket only). Powers the path browser's "New folder" action.
-func (h *agentWSHandler) handleDirMkdir(ac *agentConn, path string) {
+func (h *agentWSHandler) handleDirMkdir(ac *agentConn, path, requestID string) {
 	entry := ac.entry
 	if entry == nil {
 		ac.sendError("agent session not ready")
@@ -2198,18 +2282,18 @@ func (h *agentWSHandler) handleDirMkdir(ac *agentConn, path string) {
 	}
 	h.srv.agentSessionsMu.Unlock()
 
-	reply := agentMsg{Op: "dir_mkdir", Thread: threadID, Path: path}
+	reply := agentMsg{Op: "dir_mkdir", ID: requestID, Thread: threadID, Path: path}
 	if path == "" {
 		reply.Message = "missing path"
 		ac.writeJSON(reply)
 		return
 	}
-	go func() {
+	h.srv.goAgent(func() {
 		if err := h.srv.probeMkdir(entry.deviceID, path); err != nil {
 			reply.Message = err.Error()
 		}
 		ac.writeJSON(reply)
-	}()
+	})
 }
 
 // startAgentTurnLocked performs the running-state transition of a new turn
@@ -2242,11 +2326,11 @@ func (s *Server) startAgentTurnLocked(entry *agentSessionEntry, th *agentThread,
 func (s *Server) startAgentTurn(entry *agentSessionEntry, th *agentThread, text string, images []agent.MessageImage) {
 	s.agentSessionsMu.Lock()
 	startFrame := s.startAgentTurnLocked(entry, th, text, images)
-	ctx := th.turnCtx
+	turn := snapshotAgentTurnLocked(th)
 	s.agentSessionsMu.Unlock()
 
 	s.agentBroadcastTurn(entry, th, startFrame)
-	go s.runAgentTurn(entry, th, ctx, text, images)
+	s.goAgent(func() { s.runAgentTurn(entry, th, turn, text, images) })
 }
 
 // runAgentTurn executes one turn to completion, broadcasts its lifecycle
@@ -2256,13 +2340,9 @@ func (s *Server) startAgentTurn(entry *agentSessionEntry, th *agentThread, text 
 // transition happens under agentSessionsMu: the terminal frame is appended
 // to th.live and running flips in one lock hold, so no attach/snapshot can
 // miss it (broadcast after unlock).
-func (s *Server) runAgentTurn(entry *agentSessionEntry, th *agentThread, ctx context.Context, text string, images []agent.MessageImage) {
-	sess := th.session
-	cancel := th.cancel
-	s.agentSessionsMu.Lock()
-	startEpoch := th.epoch
-	turnModel := th.model
-	s.agentSessionsMu.Unlock()
+func (s *Server) runAgentTurn(entry *agentSessionEntry, th *agentThread, turn agentTurnSnapshot, text string, images []agent.MessageImage) {
+	ctx, sess, cancel := turn.ctx, turn.session, turn.cancel
+	startEpoch, turnModel := turn.epoch, turn.model
 	// A panic anywhere in the turn must not wedge the thread: without this,
 	// th.running would stay true forever, rejecting every future chat.
 	defer func() {
@@ -2283,55 +2363,30 @@ func (s *Server) runAgentTurn(entry *agentSessionEntry, th *agentThread, ctx con
 		doneReasoning string
 	)
 	emit := func(e agent.Event) {
-		switch e.Type {
-		case agent.EventTextDelta:
-			s.agentBroadcastTurn(entry, th, agentMsg{Op: "delta", Text: e.Text})
-		case agent.EventReasoning:
-			s.agentBroadcastTurn(entry, th, agentMsg{Op: "reasoning", Text: e.Reasoning})
-		case agent.EventToolStart:
-			s.agentSessionsMu.Lock()
-			th.workingTool = e.ToolName
-			if e.ToolName == "edit" || e.ToolName == "write_file" {
-				if p := toolPathArg(e.ToolArgs); p != "" {
-					th.toolPaths[e.ToolID] = p
-				}
-			}
-			s.agentSessionsMu.Unlock()
-			s.agentBroadcastTurn(entry, th, agentMsg{Op: "tool_start", ID: e.ToolID, Name: e.ToolName, Args: string(e.ToolArgs), Summary: e.Summary})
-		case agent.EventToolEnd:
-			s.agentSessionsMu.Lock()
-			th.workingTool = ""
-			if p, ok := th.toolPaths[e.ToolID]; ok {
-				delete(th.toolPaths, e.ToolID)
-				if !e.IsError && !slices.Contains(th.turnFiles, p) {
-					th.turnFiles = append(th.turnFiles, p)
-				}
-			}
-			s.agentSessionsMu.Unlock()
-			s.agentBroadcastTurn(entry, th, agentMsg{Op: "tool_end", ID: e.ToolID, Name: e.ToolName, Result: e.ToolResult, IsError: e.IsError, Diff: e.Diff})
-		case agent.EventTodo:
-			var items []todoItem
-			if err := json.Unmarshal([]byte(e.ToolResult), &items); err == nil {
-				s.agentSessionsMu.Lock()
-				th.todos = items
-				s.agentSessionsMu.Unlock()
-				s.agentBroadcastTurn(entry, th, agentMsg{Op: "todo", Items: json.RawMessage(e.ToolResult)})
-			}
-		case agent.EventDone:
-			// Captured for the terminal frame the unwind builds; no
-			// broadcast here — the turn is not over until the transition.
-			usage := &agentUsage{InputTokens: e.Usage.InputTokens, OutputTokens: e.Usage.OutputTokens}
-			s.agentSessionsMu.Lock()
-			th.lastUsage = usage
-			s.agentSessionsMu.Unlock()
-			doneUsage = usage
+		if s.emitAgentTurnEvent(entry, th, startEpoch, e) && e.Type == agent.EventDone {
+			doneUsage = &agentUsage{InputTokens: e.Usage.InputTokens, OutputTokens: e.Usage.OutputTokens}
 			doneReasoning = e.Reasoning
 		}
 	}
 
-	_, runErr := sess.RunTurn(ctx, text, images, magicTurnEffort(text), emit)
+	historyReplaced, runErr := runAgentConversation(ctx, sess, text, images, emit)
 
-	// Terminal frame + state transition in one lock hold.
+	// Serialize history with reset/delete for this thread, leaving other
+	// conversations and streaming/control messages free during slow storage.
+	th.persistMu.Lock()
+	s.agentSessionsMu.Lock()
+	valid := th.epoch == startEpoch && entry.threads[th.id] == th
+	s.agentSessionsMu.Unlock()
+	if valid {
+		if store := s.agentStore(); store != nil {
+			if historyReplaced {
+				store.replace(entry.deviceID, th.id, turnModel, sess.History())
+			} else {
+				store.save(entry.deviceID, th.id, turnModel, sess.History())
+			}
+		}
+	}
+	// Remain running until persistence completes.
 	s.agentSessionsMu.Lock()
 	// A reset mid-turn bumped the epoch: the pre-reset conversation is gone,
 	// so skip the save (it would resurrect cleared history) and the
@@ -2349,6 +2404,10 @@ func (s *Server) runAgentTurn(entry *agentSessionEntry, th *agentThread, ctx con
 			Files:     append([]string(nil), th.turnFiles...),
 			Cwd:       agentEffectiveCwdLocked(entry, th),
 			Branch:    th.branch,
+		}
+		if historyReplaced {
+			terminal.Compacted = true
+			terminal.History = renderAgentHistory(sess.History())
 		}
 	case ctx.Err() == context.Canceled:
 		terminal = agentMsg{Op: "stopped", Thread: th.id, Canceled: true}
@@ -2368,18 +2427,11 @@ func (s *Server) runAgentTurn(entry *agentSessionEntry, th *agentThread, ctx con
 	th.workingTool = ""
 	th.updatedAt = time.Now()
 	denyApprovalsLocked(th)
-	// Persist the turn (done and error paths alike), even when no browser
-	// stayed attached. Under agentSessionsMu so a reset can never interleave
-	// with/resurrect a save.
-	if epochOK {
-		if store := s.agentStore(); store != nil {
-			store.save(entry.deviceID, th.id, turnModel, sess.History())
-		}
-	}
+
 	turnFiles := th.turnFiles
 	var next agentQueuedChat
 	var nextFrame agentMsg
-	var nextCtx context.Context
+	var nextTurn agentTurnSnapshot
 	hasNext := len(th.queue) > 0
 	prefsDirty := false
 	if hasNext {
@@ -2398,9 +2450,10 @@ func (s *Server) runAgentTurn(entry *agentSessionEntry, th *agentThread, ctx con
 			}
 		}
 		nextFrame = s.startAgentTurnLocked(entry, th, next.text, next.images)
-		nextCtx = th.turnCtx
+		nextTurn = snapshotAgentTurnLocked(th)
 	}
 	s.agentSessionsMu.Unlock()
+	th.persistMu.Unlock()
 	cancel()
 
 	if terminalData != nil {
@@ -2416,7 +2469,7 @@ func (s *Server) runAgentTurn(entry *agentSessionEntry, th *agentThread, ctx con
 	if hasNext {
 		s.broadcastQueue(entry, th)
 		s.agentBroadcastTurn(entry, th, nextFrame)
-		go s.runAgentTurn(entry, th, nextCtx, next.text, next.images)
+		s.goAgent(func() { s.runAgentTurn(entry, th, nextTurn, next.text, next.images) })
 	}
 }
 
@@ -2455,10 +2508,16 @@ func (s *Server) HandleAgentWS(w http.ResponseWriter, r *http.Request) {
 }
 
 func buildAgentSystemPrompt(deviceID, cwd string) string {
+	if deviceID == agentServerDeviceID {
+		return "You are the server agent in rdev. The server is your coordination environment only. No server-host shell or filesystem access is available. Call list_devices to discover currently connected remote devices and their tool schemas, then device_tool with an explicit device ID. No device registration is needed. Check the live device list rather than inventing device IDs. Use subagent for isolated delegated tasks, jobs to inspect or cancel them, and verify their results. Work autonomously within these capabilities and answer in the user's language."
+	}
 	prompt := fmt.Sprintf(`You are an agent inside rdev, a remote-device management server. You operate the device %q through tools; every tool call runs ON THE DEVICE, not on the server or the user's machine.
 
 Tools:
 - shell: run a shell command. Prefer it for discovery (uname, ls, cat small files, system info).
+- bg: start a device shell command in the background; completion is automatically delivered.
+- jobs: list/read/wait/cancel background work. Waiting does not cancel a job.
+- subagent: delegate a self-contained task with an explicit subset of tools; children report back automatically. Verify their claimed results.
 - list_dir: list a directory.
 - read_file / write_file: read/write file contents. read_file pages long files with offset/limit; with anchors=true every line gets an N#hash anchor.
 - edit: modify an existing file. Prefer line_edits mode (hashline anchors from read_file anchors=true — cheaper and verified) over old_string for targeted changes; stale anchors are rejected, just re-read and retry.
@@ -2492,7 +2551,7 @@ func agentEffectiveCwdLocked(entry *agentSessionEntry, th *agentThread) string {
 // thread_meta snapshot once done, followed by a changes push with the
 // working-tree status.
 func (s *Server) scheduleThreadMetaProbe(entry *agentSessionEntry, threadID string) {
-	go func() {
+	s.goAgent(func() {
 		s.agentSessionsMu.Lock()
 		th := entry.threads[threadID]
 		if th == nil {
@@ -2500,6 +2559,8 @@ func (s *Server) scheduleThreadMetaProbe(entry *agentSessionEntry, threadID stri
 			return
 		}
 		cwd := agentEffectiveCwdLocked(entry, th)
+		th.metaProbeSeq++
+		probeSeq := th.metaProbeSeq
 		s.agentSessionsMu.Unlock()
 
 		branch := ""
@@ -2508,9 +2569,12 @@ func (s *Server) scheduleThreadMetaProbe(entry *agentSessionEntry, threadID stri
 		}
 
 		s.agentSessionsMu.Lock()
-		if th := entry.threads[threadID]; th != nil {
-			th.branch = branch
+		th = entry.threads[threadID]
+		if th == nil || th.metaProbeSeq != probeSeq || agentEffectiveCwdLocked(entry, th) != cwd {
+			s.agentSessionsMu.Unlock()
+			return
 		}
+		th.branch = branch
 		s.agentSessionsMu.Unlock()
 		s.agentBroadcast(entry, agentMsg{Op: "thread_meta", Thread: threadID, Cwd: cwd, Branch: branch})
 
@@ -2525,10 +2589,17 @@ func (s *Server) scheduleThreadMetaProbe(entry *agentSessionEntry, threadID stri
 		} else {
 			changes.Files = files
 		}
+		s.agentSessionsMu.Lock()
+		th = entry.threads[threadID]
+		current := th != nil && th.metaProbeSeq == probeSeq && agentEffectiveCwdLocked(entry, th) == cwd
+		s.agentSessionsMu.Unlock()
+		if !current {
+			return
+		}
 		if data, err := json.Marshal(changes); err == nil {
 			s.agentBroadcastData(entry, data)
 		}
-	}()
+	})
 }
 
 // probeAgentDefaultCwd discovers the device client's own working directory

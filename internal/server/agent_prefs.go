@@ -68,17 +68,24 @@ func (s *Server) writeAgentPrefs(entry *agentSessionEntry) {
 	if s.DataDir == "" || entry == nil {
 		return
 	}
+	entry.prefsMu.Lock()
+	defer entry.prefsMu.Unlock()
 	s.agentSessionsMu.Lock()
-	p := agentPrefs{
+	p := s.agentPrefsLocked(entry)
+	deviceID := entry.deviceID
+	s.agentSessionsMu.Unlock()
+	if err := s.saveAgentPrefs(deviceID, p); err != nil {
+		log.Printf("agent prefs: save %s: %v", deviceID, err)
+	}
+}
+
+// agentPrefsLocked snapshots preferences while agentSessionsMu is held.
+func (s *Server) agentPrefsLocked(entry *agentSessionEntry) agentPrefs {
+	return agentPrefs{
 		Model:          entry.model,
 		PermissionMode: entry.permMode,
 		ReasoningLevel: entry.reasoningLevel,
 		CurrentThread:  entry.current,
 		OS:             entry.os,
-	}
-	deviceID := entry.deviceID
-	s.agentSessionsMu.Unlock()
-	if err := s.saveAgentPrefs(deviceID, p); err != nil {
-		log.Printf("agent prefs: save %s: %v", deviceID, err)
 	}
 }

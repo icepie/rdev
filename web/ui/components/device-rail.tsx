@@ -1,10 +1,11 @@
-import { useState, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import { useDevices } from "../lib/devices";
 import { useI18n } from "../lib/i18n";
 import { cn } from "../lib/utils";
+import { Input } from "./input";
 import { Icon } from "./icon";
 import { OsIcon } from "./os-icon";
-import { COARSE_POINTER_HEADER_ICON_BUTTON_CLASS } from "./coarse-pointer-sizing";
+import { SIDEBAR_ROW_CLASS } from "./workspace-sidebar";
 
 /* Left device-list rail shared by the Terminal / Files / Desktop pages,
  * mirroring the agent page's sidebar: rows are clickable (open in the
@@ -14,47 +15,97 @@ export const DEVICE_DRAG_MIME = "application/x-rdev-device";
 
 export function DeviceRail({
   onPick,
-  onCollapse,
+  selectedDevice,
 }: {
   onPick: (deviceId: string) => void;
-  onCollapse?: () => void;
+  selectedDevice?: string;
 }) {
   const { devices, error } = useDevices();
   const { t } = useI18n();
+  const searchTriggerRef = useRef<HTMLButtonElement>(null);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const visibleDevices = devices.filter((device) =>
+    device.id.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()),
+  );
   return (
     <div className="flex h-full min-h-0 flex-col bg-sidebar">
-      <div className="flex items-center gap-1 px-3 pt-2.5 pb-1">
-        <span className="flex-1 text-2xs font-medium uppercase tracking-wide text-muted-foreground">
+      <div className="flex min-h-12 shrink-0 flex-wrap items-center gap-1 border-b border-border-seam px-2 py-2">
+        <span className="min-w-0 flex-1 px-2 text-sm font-medium text-sidebar-foreground">
           {t("rail.devices")}
         </span>
-        {onCollapse && (
-          <button
-            type="button"
-            aria-label={t("rail.collapse")}
-            onClick={onCollapse}
-            className={cn("flex cursor-pointer items-center justify-center text-muted-foreground transition-colors hover:bg-state-hover hover:text-foreground", COARSE_POINTER_HEADER_ICON_BUTTON_CLASS)}
-          >
-            <Icon name="PanelLeft" className="size-3.5" />
-          </button>
+        <span className="text-2xs tabular-nums text-subtle-foreground">
+          {devices.length}
+        </span>
+        <button
+          type="button"
+          aria-label={t("rail.search")}
+          ref={searchTriggerRef}
+          aria-expanded={searchOpen}
+          onClick={() => {
+            setSearchOpen(!searchOpen);
+            setQuery("");
+          }}
+          className="flex size-7 max-md:pointer-coarse:size-10 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring"
+        >
+          <Icon name="Search" className="size-4" />
+        </button>
+        {searchOpen && (
+          <div className="w-full px-2 pb-0.5">
+            <Input
+              autoFocus
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Escape") {
+                  event.preventDefault();
+                  setQuery("");
+                  setSearchOpen(false);
+                  searchTriggerRef.current?.focus();
+                }
+              }}
+              aria-label={t("rail.search")}
+              placeholder={t("rail.search")}
+            />
+          </div>
         )}
       </div>
-      <div className="scrollbar-thin min-h-0 flex-1 overflow-y-auto p-1.5">
-        {error && <p role="alert" className="break-words px-2 py-2 text-xs text-destructive-text">{error}</p>}
-        {devices.map((d) => (
+      <div className="scrollbar-thin min-h-0 flex-1 overflow-y-auto px-2 py-2">
+        {error && (
+          <p
+            role="alert"
+            className="break-words px-2 py-2 text-xs text-destructive-text"
+          >
+            {error}
+          </p>
+        )}
+        {visibleDevices.map((d) => (
           <button
             key={d.id}
             type="button"
             draggable
+            aria-pressed={d.id === selectedDevice}
             title={d.id}
             onDragStart={(e) => {
               e.dataTransfer.setData(DEVICE_DRAG_MIME, d.id);
               e.dataTransfer.effectAllowed = "copy";
             }}
             onClick={() => onPick(d.id)}
-            className="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm text-muted-foreground transition-colors hover:bg-state-hover hover:text-foreground max-md:pointer-coarse:min-h-9"
+            className={cn(
+              SIDEBAR_ROW_CLASS,
+              "mb-0.5",
+              d.id === selectedDevice && "bg-state-active font-medium",
+            )}
           >
-            <OsIcon os={d.os} className="shrink-0 text-muted-foreground" />
+            <OsIcon
+              os={d.os}
+              className="size-3.5 shrink-0 text-subtle-foreground"
+            />
             <span className="min-w-0 flex-1 truncate">{d.id}</span>
+            <span
+              className="size-1.5 shrink-0 rounded-full bg-success"
+              aria-hidden="true"
+            />
             {d.hasPassword && (
               <Icon
                 name="Lock"
@@ -63,9 +114,9 @@ export function DeviceRail({
             )}
           </button>
         ))}
-        {devices.length === 0 && !error && (
+        {visibleDevices.length === 0 && !error && (
           <div className="px-2 py-3 text-center text-xs text-muted-foreground">
-            {t("rail.empty")}
+            {t(query.trim() ? "rail.noMatches" : "rail.empty")}
           </div>
         )}
       </div>
@@ -89,7 +140,10 @@ export function DeviceDropTarget({
   const [over, setOver] = useState(false);
   return (
     <div
-      className={cn(className, over && "ring-2 ring-inset ring-timeline-accent")}
+      className={cn(
+        className,
+        over && "ring-2 ring-inset ring-timeline-accent",
+      )}
       onPointerDown={onPointerDown}
       onDragOver={(e) => {
         if (e.dataTransfer.types.includes(DEVICE_DRAG_MIME)) {

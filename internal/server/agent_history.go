@@ -385,6 +385,18 @@ func (st *agentSessionStore) save(deviceID, threadID, model string, history []ag
 
 // rewriteLocked atomically replaces a thread file: fresh meta line + msgs.
 // The meta line carries the thread extras (cwd/title) recorded in st.extras.
+// replace persists an explicitly rewritten conversation, including rewrites
+// with the same message count. The existing file survives a failed write.
+func (st *agentSessionStore) replace(deviceID, threadID, model string, history []agent.Message) {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if err := st.rewriteLocked(deviceID, threadID, model, history); err != nil {
+		log.Printf("agent history: replace %s/%s: %v", deviceID, threadID, err)
+		return
+	}
+	st.saved[deviceID+"/"+threadID] = len(history)
+}
+
 func (st *agentSessionStore) rewriteLocked(deviceID, threadID, model string, msgs []agent.Message) error {
 	extras := st.extras[deviceID+"/"+threadID]
 	var buf bytes.Buffer
@@ -488,6 +500,10 @@ func (st *agentSessionStore) dropExtras(deviceID, threadID string) {
 // cleanup deletes history files idle beyond the TTL: thread files inside
 // per-device directories (then-empty dirs are dropped) and legacy flat files.
 func (st *agentSessionStore) cleanup() {
+	// Serialize with rewrite/append: deleting an empty device directory
+	// between MkdirAll and WriteFile can otherwise discard a new history.
+	st.mu.Lock()
+	defer st.mu.Unlock()
 	if st.ttl <= 0 {
 		return
 	}

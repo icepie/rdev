@@ -152,6 +152,7 @@ type clientSession struct {
 
 	// Non-PTY exec mode
 	stdinPipe io.WriteCloser
+	stdinOnce sync.Once
 	cmdWaitFn func() (int, error)
 
 	// SFTP mode
@@ -167,13 +168,20 @@ func (s *clientSession) close() {
 		if s.ptyProc != nil {
 			s.ptyProc.Close()
 		}
+		s.closeInput()
+		close(s.done)
+	})
+}
+
+// Keep input handles immutable after publication; EOF and process exit may race.
+func (s *clientSession) closeInput() {
+	s.stdinOnce.Do(func() {
 		if s.stdinPipe != nil {
 			s.stdinPipe.Close()
 		}
 		if s.sftpInput != nil {
 			s.sftpInput.Close()
 		}
-		close(s.done)
 	})
 }
 
@@ -920,6 +928,8 @@ func (c *Client) handleMessage(msg *protocol.Message) {
 		c.handleTCPListen(msg)
 	case protocol.MsgTCPClose:
 		c.handleTCPClose(msg)
+	case protocol.MsgFileMkdir:
+		go c.handleFileMkdir(msg)
 	case protocol.MsgFileListRequest:
 		go c.handleFileListRequest(msg)
 	case protocol.MsgFileUploadStart:
@@ -977,9 +987,35 @@ func fileParent(path string) string {
 	return parent
 }
 
+func (c *Client) handleFileMkdir(msg *protocol.Message) {
+	c.send(createFileDirectory(msg))
+}
+
+func createFileDirectory(msg *protocol.Message) *protocol.Message {
+	response := &protocol.Message{Type: protocol.MsgFileMkdirResult, RequestID: msg.RequestID, Path: msg.Path}
+	if strings.TrimSpace(msg.Path) == "" {
+		response.Error = "missing directory path"
+		return response
+	}
+	if err := os.MkdirAll(msg.Path, 0755); err != nil {
+		response.Error = err.Error()
+	} else {
+		response.Success = true
+	}
+	return response
+}
+
 func (c *Client) handleFileListRequest(msg *protocol.Message) {
 	path := defaultFilePath(msg.Path)
-	entries, truncated, err := listFileEntries(path, 2000)
+	limit := msg.Size
+	if limit <= 0 {
+		limit = 200
+	}
+	if limit > 2000 {
+		limit = 2000
+	}
+	offset := max(msg.Offset, 0)
+	entries, total, err := listFileEntries(path, offset, int(limit))
 	if err != nil {
 		c.send(&protocol.Message{Type: protocol.MsgFileListResult, RequestID: msg.RequestID, Path: path, Error: err.Error()})
 		return
@@ -992,26 +1028,28 @@ func (c *Client) handleFileListRequest(msg *protocol.Message) {
 		ParentPath:  fileParent(path),
 		HomePath:    home,
 		FileEntries: entries,
-		Truncated:   truncated,
+		Truncated:   offset+int64(len(entries)) < int64(total),
+		Offset:      offset,
+		Size:        limit,
+		FileMode:    int32(total),
 	})
 }
 
-func listFileEntries(path string, limit int) ([]protocol.FileEntry, bool, error) {
+func listFileEntries(path string, offset int64, limit int) ([]protocol.FileEntry, int, error) {
 	infos, err := os.ReadDir(path)
 	if err != nil {
-		return nil, false, err
+		return nil, 0, err
 	}
 	sort.Slice(infos, func(i, j int) bool {
 		if infos[i].IsDir() != infos[j].IsDir() {
 			return infos[i].IsDir()
 		}
-		return strings.ToLower(infos[i].Name()) < strings.ToLower(infos[j].Name())
+		a, b := strings.ToLower(infos[i].Name()), strings.ToLower(infos[j].Name())
+		if a == b {
+			return infos[i].Name() < infos[j].Name()
+		}
+		return a < b
 	})
-	truncated := false
-	if limit > 0 && len(infos) > limit {
-		infos = infos[:limit]
-		truncated = true
-	}
 	entries := make([]protocol.FileEntry, 0, len(infos))
 	for _, ent := range infos {
 		info, err := ent.Info()
@@ -1026,7 +1064,13 @@ func listFileEntries(path string, limit int) ([]protocol.FileEntry, bool, error)
 			ModTime: info.ModTime().Format(time.RFC3339),
 		})
 	}
-	return entries, truncated, nil
+	total := len(entries)
+	start := int(min(max(offset, 0), int64(total)))
+	end := total
+	if limit > 0 && limit < total-start {
+		end = start + limit
+	}
+	return entries[start:end], total, nil
 }
 
 func safeJoinFile(dir, name string) string {
@@ -1616,13 +1660,7 @@ func (c *Client) handleStdinClose(msg *protocol.Message) {
 	if !ok {
 		return
 	}
-	if sess.stdinPipe != nil {
-		sess.stdinPipe.Close()
-		sess.stdinPipe = nil
-	}
-	if sess.sftpInput != nil {
-		sess.sftpInput.Close()
-	}
+	sess.closeInput()
 }
 
 func (c *Client) handleResize(msg *protocol.Message) {
