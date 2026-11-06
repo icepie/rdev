@@ -714,6 +714,7 @@ export function NewTabPage({
   t: Translator;
 }) {
   const resultsId = useId();
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<string[] | null>(null);
   const [searching, setSearching] = useState(false);
@@ -752,6 +753,11 @@ export function NewTabPage({
     };
   }, [query, onSearchFiles, retry]);
 
+  useEffect(() => {
+    if (!results?.length) return;
+    document.getElementById(`${resultsId}-${activeIdx}`)?.scrollIntoView?.({ block: "nearest" });
+  }, [activeIdx, results, resultsId]);
+
   const pick = (path: string) => {
     seqRef.current++;
     setQuery("");
@@ -761,6 +767,14 @@ export function NewTabPage({
 
   const onSearchKeyDown = (e: React.KeyboardEvent) => {
     if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
+    if (e.key === "Escape") {
+      e.preventDefault();
+      seqRef.current++;
+      setQuery("");
+      setResults(null);
+      setSearchFailed(false);
+      return;
+    }
     if (!results || results.length === 0 || searching) return;
     if (e.key === "ArrowDown") {
       e.preventDefault();
@@ -782,6 +796,7 @@ export function NewTabPage({
           className="pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2 text-muted-foreground"
         />
         <input
+          ref={searchInputRef}
           type="text"
           value={query}
           autoFocus
@@ -806,7 +821,10 @@ export function NewTabPage({
           {searchFailed ? (
             <div className="flex items-center gap-2 px-1 py-1.5 text-xs">
               <span role="alert" className="text-destructive-text">{t("agent.searchFailed")}</span>
-              <Button size="sm" variant="outline" onClick={() => setRetry(value => value + 1)}>{t("agent.retry")}</Button>
+              <Button size="sm" variant="outline" onClick={() => {
+                setRetry(value => value + 1);
+                searchInputRef.current?.focus();
+              }}>{t("agent.retry")}</Button>
             </div>
           ) : searching && results === null ? (
             <div className="flex items-center gap-2 px-1 py-1.5 text-xs text-muted-foreground">
@@ -827,6 +845,7 @@ export function NewTabPage({
                   type="button"
                   id={`${resultsId}-${i}`}
                   role="option"
+                  tabIndex={-1}
                   aria-selected={i === activeIdx}
                   title={p}
                   className={cn(

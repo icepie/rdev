@@ -61,12 +61,15 @@ it("exposes search results as an accessible combobox and keeps the active result
   document.body.append(host);
   const root = createRoot(host);
   const search = vi.fn().mockResolvedValue(["one.ts", "two.ts", "three.ts"]);
+  const originalScroll = Element.prototype.scrollIntoView;
   try {
     await act(async () => root.render(createElement(NewTabPage, {
       recent: [], onOpenChanges: () => {}, onOpenInfo: () => {}, onOpenTerminal: () => {},
       onOpenFiles: () => {}, onOpenDesktop: () => {}, onOpenFile: () => {}, onSearchFiles: search, t: key => key,
     })));
     const input = host.querySelector("input");
+    const scroll = vi.fn();
+    Element.prototype.scrollIntoView = scroll;
     expect(input.getAttribute("role")).toBe("combobox");
     await act(async () => {
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(input, "file");
@@ -78,11 +81,18 @@ it("exposes search results as an accessible combobox and keeps the active result
     expect(input.getAttribute("aria-activedescendant")).toBe(`${input.getAttribute("aria-controls")}-0`);
     await act(async () => input.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true })));
     expect(input.getAttribute("aria-activedescendant")).toBe(`${input.getAttribute("aria-controls")}-1`);
+    expect(scroll).toHaveBeenLastCalledWith({ block: "nearest" });
+    expect(scroll.mock.instances.at(-1).id).toBe(input.getAttribute("aria-activedescendant"));
+    expect(host.querySelectorAll('[role="option"][tabindex="-1"]')).toHaveLength(3);
     await act(async () => input.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true })));
-    expect(input.getAttribute("aria-activedescendant")).toBe(`${input.getAttribute("aria-controls")}-0`);
+    await act(async () => input.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    expect(input.value).toBe("");
+    expect(host.querySelector("[role=\"listbox\"]")).toBeNull();
   } finally {
     await act(async () => root.unmount());
     host.remove();
+    if (originalScroll) Element.prototype.scrollIntoView = originalScroll;
+    else delete Element.prototype.scrollIntoView;
     vi.useRealTimers();
     delete globalThis.IS_REACT_ACT_ENVIRONMENT;
   }
