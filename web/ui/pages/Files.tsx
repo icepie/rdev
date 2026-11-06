@@ -1,3 +1,4 @@
+import { isImeComposing } from "../lib/keyboard";
 import { createKeyedRequest } from "../lib/keyed-request";
 import { createTransferAttempts } from "../lib/file-transfer-attempts";
 import { RecursiveTransferError, walkTransferFiles, type TransferDestination } from "../lib/file-transfer-route";
@@ -1306,7 +1307,7 @@ export function FilesBrowser({
           className="h-9 min-w-40 flex-1"
           onChange={(e) => setPathInput(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === "Enter") void list(pathInput.trim());
+            if (e.key === "Enter" && !isImeComposing(e.nativeEvent)) void list(pathInput.trim());
           }}
         />
         <Button

@@ -1,3 +1,4 @@
+import { isImeComposing } from "../../lib/keyboard";
 /* PanelFiles: one device's file manager inside an agent right-panel tab
  * (scoped port of the standalone Files page). Self-contained /files WS
  * client with the same wire protocol (list paging, upload with per-chunk
@@ -851,7 +852,7 @@ export function PanelFiles({
           className="h-8 min-w-0 flex-1 text-xs"
           onChange={(e) => setPathInput(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === "Enter") list(pathInput.trim());
+            if (e.key === "Enter" && !isImeComposing(e.nativeEvent)) list(pathInput.trim());
           }}
         />
         <Button

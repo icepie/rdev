@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { JSDOM } from "jsdom";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
@@ -119,6 +120,18 @@ it.each([false, true])("isolates reconnect attempts and waits for device authent
     expect(document.querySelector("table").textContent).toContain("first.txt");
     expect(loadMore()).toBeUndefined();
 
+    const pathField = document.querySelector('input[aria-label="files.path"]');
+    const beforeIme = second.sent.length;
+    for (const flags of [{ isComposing: true }, { keyCode: 229 }]) {
+      await act(async () => pathField.dispatchEvent(new dom.window.KeyboardEvent("keydown", { bubbles: true, key: "Enter", ...flags })));
+    }
+    expect(second.sent).toHaveLength(beforeIme);
+    await act(async () => pathField.dispatchEvent(new dom.window.KeyboardEvent("keydown", { bubbles: true, key: "Enter" })));
+    if (protectedDevice) await act(async () => second.message({ op: "auth_ok", deviceId: "device-a" }));
+    const confirmedPath = second.sent.filter(m => m.op === "list").at(-1);
+    expect(confirmedPath.path).toBe("/current");
+    expect(confirmedPath.requestId).not.toBe(retryPage.requestId);
+    await act(async () => second.message({ op: "list_result", requestId: confirmedPath.requestId, path: "/current", entries: [] }));
     const delayedPicker = document.querySelector('input[type="file"]');
     await act(async () => delayedPicker.click());
     const up = document.querySelector('button[aria-label="files.up"]');

@@ -1,3 +1,4 @@
+import { isImeComposing } from "../lib/keyboard";
 import { writeOwnedClipboard } from "../lib/clipboard-write";
 import { paintDesktopImage } from "../lib/desktop-frame";
 import { DisclosureBody } from "../components/disclosure-body";
@@ -2270,7 +2271,7 @@ function DesktopSession({
             setPassword(e.target.value);
           }}
           onKeyDown={(e) => {
-            if (e.key === "Enter") connect();
+            if (e.key === "Enter" && !isImeComposing(e.nativeEvent)) connect();
           }}
           placeholder={t("terminal.passwordPlaceholder")}
           className="h-8 min-w-24 w-36 flex-1 sm:flex-none text-xs"

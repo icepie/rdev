@@ -1,3 +1,4 @@
+import { isImeComposing } from "../lib/keyboard";
 import { useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { MobileNavContext } from "../shell/AppShell";
 import { useI18n } from "../lib/i18n";
@@ -675,7 +676,7 @@ export function BatchPage() {
                     value={cmd}
                     onChange={(e) => setCmd(e.target.value)}
                     onKeyDown={(e) => {
-                      if (e.key === "Enter") runBatchExec();
+                      if (e.key === "Enter" && !isImeComposing(e.nativeEvent)) runBatchExec();
                     }}
                     placeholder={t("batch.commandPlaceholder")}
                     aria-label={t("batch.commandPlaceholder")}
