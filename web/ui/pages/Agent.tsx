@@ -1115,6 +1115,15 @@ export function AgentPage() {
       setReconnecting(false);
     }
     clearPing();
+    // Replacing a socket disables its onclose handler, so settle its pending
+    // operations here as well as on an unexpected disconnect.
+    rejectPendingPanelRequests("connection replaced");
+    if (pendingDeleteRef.current || pendingRenameRef.current.size > 0) {
+      setManagementError(t("common.disconnected"));
+    }
+    pendingDeleteRef.current = null;
+    pendingRenameRef.current.clear();
+    setDeleteBusy(false);
     if (wsRef.current) {
       wsRef.current.onclose = null;
       wsRef.current.close();
