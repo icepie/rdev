@@ -274,13 +274,16 @@ export function PanelTerminal({
   }, [visible]);
 
   const submitAuth = (password: string) => {
-    if (!password) return;
-    pendingPwRef.current = password;
+    if (!password) return false;
     const ws = wsRef.current;
     if (ws && ws.readyState === WebSocket.OPEN) {
       setAuthError("");
       ws.send(JSON.stringify({ op: "auth", password }));
+      pendingPwRef.current = password;
+      return true;
     }
+    setAuthError(t("common.disconnected"));
+    return false;
   };
 
   return (

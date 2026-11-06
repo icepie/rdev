@@ -221,6 +221,7 @@ export function AgentPage() {
   const [model, setModel] = useState("");
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [authError, setAuthError] = useState("");
+  const pendingPasswordRef = useRef<{ device: string; password: string } | null>(null);
   const [threads, setThreads] = useState<ThreadInfo[]>([]);
   /* Cross-device thread list (all_threads op); null until the first frame
    * arrives — older servers never send it and the sidebar falls back to
@@ -761,6 +762,10 @@ export function AgentPage() {
         setAuthError("");
         break;
       case "auth_ok": {
+        if (pendingPasswordRef.current) {
+          rememberDevicePassword(pendingPasswordRef.current.device, pendingPasswordRef.current.password);
+          pendingPasswordRef.current = null;
+        }
         setAuthed(true);
         setStatus("connected");
         primaryOps.resetTransient();
@@ -879,6 +884,7 @@ export function AgentPage() {
         break;
       }
       case "auth_fail":
+        pendingPasswordRef.current = null;
         forgetDevicePassword(device);
         setAuthError(asString(msg.message) || t("common.passwordWrong"));
         break;
@@ -1114,6 +1120,7 @@ export function AgentPage() {
       wsRef.current.close();
       wsRef.current = null;
     }
+    pendingPasswordRef.current = null;
     setAuthed(false);
     setStatus("connecting");
     setAuthError("");
@@ -1385,13 +1392,16 @@ export function AgentPage() {
     localStorage.setItem(MODEL_KEY, id);
   }, []);
 
-  const submitPassword = (pw: string) => {
-    if (!pw) return;
-    rememberDevicePassword(device, pw);
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
-      setAuthError("");
-      wsRef.current.send(JSON.stringify({ op: "auth", password: pw }));
+  const submitPassword = (pw: string): boolean => {
+    const ws = wsRef.current;
+    if (!pw || ws?.readyState !== WebSocket.OPEN) {
+      setAuthError(t("common.disconnected"));
+      return false;
     }
+    setAuthError("");
+    ws.send(JSON.stringify({ op: "auth", password: pw }));
+    pendingPasswordRef.current = { device, password: pw };
+    return true;
   };
 
   const currentThreadTitle =
@@ -2911,7 +2921,7 @@ function PasswordDialog({
   open: boolean;
   device: string;
   error: string;
-  onSubmit: (pw: string) => void;
+  onSubmit: (pw: string) => boolean | void;
   t: (k: string, v?: Record<string, string | number>) => string;
 }) {
   const { value, setValue, busy, submit } = useDevicePassword({

@@ -6,7 +6,7 @@ export function useDevicePassword({ device, open = true, error, onSubmit, clearO
   device: string;
   open?: boolean;
   error: string;
-  onSubmit: (password: string) => void;
+  onSubmit: (password: string) => boolean | void;
   clearOnError?: boolean;
 }) {
   const [value, setValue] = useState("");
@@ -21,6 +21,15 @@ export function useDevicePassword({ device, open = true, error, onSubmit, clearO
     timerRef.current = undefined;
   };
 
+  const send = (password: string) => {
+    busyRef.current = true;
+    setBusy(true);
+    if (onSubmitRef.current(password) === false) {
+      busyRef.current = false;
+      setBusy(false);
+    }
+  };
+
   useEffect(() => {
     cancelAutomatic();
     busyRef.current = false;
@@ -30,9 +39,7 @@ export function useDevicePassword({ device, open = true, error, onSubmit, clearO
     if (remembered) {
       timerRef.current = setTimeout(() => {
         timerRef.current = undefined;
-        busyRef.current = true;
-        setBusy(true);
-        onSubmitRef.current(remembered);
+        send(remembered);
       }, 50);
     }
     return cancelAutomatic;
@@ -56,9 +63,7 @@ export function useDevicePassword({ device, open = true, error, onSubmit, clearO
     submit() {
       if (!open || !value || busyRef.current) return;
       cancelAutomatic();
-      busyRef.current = true;
-      setBusy(true);
-      onSubmitRef.current(value);
+      send(value);
     },
   };
 }

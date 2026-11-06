@@ -782,12 +782,15 @@ export function TerminalPage() {
 
   const submitAuth = (tabId: number, password: string) => {
     const tab = tabsRef.current.get(tabId);
-    if (!tab || !password) return;
-    tab.pendingPassword = password;
+    if (!tab || !password) return false;
     if (tab.ws && tab.ws.readyState === WebSocket.OPEN) {
       patchMeta(tab.id, { authError: "" });
       tab.ws.send(JSON.stringify({ op: "auth", password }));
+      tab.pendingPassword = password;
+      return true;
     }
+    patchMeta(tab.id, { authError: t("common.disconnected") });
+    return false;
   };
 
   return (
@@ -1026,7 +1029,7 @@ export function TabAuthOverlay({
 }: {
   deviceId: string;
   error: string;
-  onSubmit: (pw: string) => void;
+  onSubmit: (pw: string) => boolean | void;
   t: (k: string, v?: Record<string, string | number>) => string;
 }) {
   const { value, setValue, busy, submit } = useDevicePassword({
