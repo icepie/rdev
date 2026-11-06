@@ -1,3 +1,5 @@
+import { shouldTogglePanel } from "../components/agent/panel-shortcut";
+import { isImeComposing } from "../lib/keyboard";
 import { ThreadRenameDialog, type RenameTarget } from "../components/agent/thread-rename-dialog";
 import { ThreadRenameInput } from "../components/agent/thread-rename-input";
 import { takePendingResponse } from "../components/agent/pending-response";
@@ -532,14 +534,7 @@ export function AgentPage() {
   /* mod+j toggles the right panel; skipped while typing. */
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
-      if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== "j") return;
-      const target = e.target as HTMLElement | null;
-      if (
-        target &&
-        (target.tagName === "INPUT" || target.tagName === "TEXTAREA")
-      ) {
-        return;
-      }
+      if (!shouldTogglePanel(e)) return;
       e.preventDefault();
       togglePanel();
     };
@@ -2450,7 +2445,8 @@ export function AgentPage() {
                   value={threadQuery}
                   onChange={(e) => setThreadQuery(e.target.value)}
                   onKeyDown={(e) => {
-                    if (e.key === "Escape") {
+                    if (e.key === "Escape" && !isImeComposing(e.nativeEvent)) {
+                      e.stopPropagation();
                       setThreadQuery("");
                       setThreadSearchOpen(false);
                     }
