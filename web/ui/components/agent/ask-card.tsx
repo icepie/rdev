@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { isImeComposing } from "../../lib/keyboard";
 import { cn } from "../../lib/utils";
 import { Button } from "../button";
 import { Icon } from "../icon";
@@ -80,6 +81,7 @@ export function AskCard({
   const pending = item.answer === null;
   const dismissed = item.answer === "";
   const otherSelected = selected === OTHER_VALUE;
+  const acceptsFreeText = otherSelected || item.options.length === 0;
 
   /* bb auto-grow free-text area. */
   useEffect(() => {
@@ -90,7 +92,7 @@ export function AskCard({
   }, [freeText, otherSelected]);
 
   const submit = () => {
-    if (otherSelected) {
+    if (acceptsFreeText) {
       const value = freeText.trim();
       if (value) onAnswer(item.id, value);
       return;
@@ -101,7 +103,7 @@ export function AskCard({
   /* bb numeric shortcuts: 1..9 pick the option, 0/"o"-style rows are not
    * part of the ask op. Only when focus is inside the card. */
   const handleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
-    if (!pending || e.nativeEvent.isComposing) return;
+    if (!pending || isImeComposing(e.nativeEvent)) return;
     const target = e.target as HTMLElement;
     if (target.tagName === "TEXTAREA" || target.tagName === "INPUT") return;
     const n = Number(e.key);
@@ -156,7 +158,7 @@ export function AskCard({
               }}
             />
           </div>
-          {otherSelected || item.options.length === 0 ? (
+          {acceptsFreeText ? (
             <textarea
               ref={textRef}
               value={freeText}
@@ -165,7 +167,7 @@ export function AskCard({
                 if (
                   e.key === "Enter" &&
                   !e.shiftKey &&
-                  !e.nativeEvent.isComposing
+                  !isImeComposing(e.nativeEvent)
                 ) {
                   e.preventDefault();
                   submit();
@@ -192,7 +194,7 @@ export function AskCard({
               type="button"
               size="sm"
               disabled={
-                selected === null || (otherSelected && !freeText.trim())
+                acceptsFreeText ? !freeText.trim() : selected === null
               }
               onClick={submit}
             >
