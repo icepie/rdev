@@ -97,3 +97,27 @@ it("exposes search results as an accessible combobox and keeps the active result
     delete globalThis.IS_REACT_ACT_ENVIRONMENT;
   }
 });
+
+it("resets the search page when its thread key changes", async () => {
+  globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  const props = { recent: [], onOpenChanges: () => {}, onOpenInfo: () => {}, onOpenTerminal: () => {}, onOpenFiles: () => {}, onOpenDesktop: () => {}, onOpenFile: () => {}, onSearchFiles: vi.fn().mockResolvedValue([]), t: key => key };
+  try {
+    await act(async () => root.render(createElement(NewTabPage, { ...props, key: "thread-a" })));
+    const input = host.querySelector("input");
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(input, "old-thread");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    expect(input.value).toBe("old-thread");
+    await act(async () => root.render(createElement(NewTabPage, { ...props, key: "thread-b" })));
+    expect(host.querySelector("input").value).toBe("");
+    expect(host.querySelector('[role="listbox"]')).toBeNull();
+  } finally {
+    await act(async () => root.unmount());
+    host.remove();
+    delete globalThis.IS_REACT_ACT_ENVIRONMENT;
+  }
+});

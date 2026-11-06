@@ -1470,6 +1470,7 @@ export function AgentRightPanel({
         </div>
       ) : active === "new" ? (
         <NewTabPage
+          key={threadKey}
           recent={recent}
           onOpenChanges={() => setActive("diff")}
           onOpenInfo={() => setActive("info")}
