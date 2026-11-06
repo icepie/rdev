@@ -1031,7 +1031,8 @@ export function TabAuthOverlay({
   const [value, setValue] = useState(() => getDevicePassword(deviceId));
   const [busy, setBusy] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
-  const autoSubmitted = useRef(false);
+  const autoSubmitted = useRef("");
+  const rememberedPassword = useRef("");
 
   const submit = () => {
     if (!value) return;
@@ -1039,15 +1040,25 @@ export function TabAuthOverlay({
     onSubmit(value);
   };
 
-  // Auto-submit a remembered password once per overlay, like the vanilla page.
+  // A tab can be retargeted without unmounting the overlay; reset device state.
   useEffect(() => {
-    if (!autoSubmitted.current && value) {
-      autoSubmitted.current = true;
-      const timer = setTimeout(submit, 50);
-      return () => clearTimeout(timer);
-    }
+    const password = getDevicePassword(deviceId);
+    autoSubmitted.current = deviceId;
+    rememberedPassword.current = password;
+    setValue(password);
+    setBusy(false);
+    inputRef.current?.focus();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [deviceId]);
+
+  // Auto-submit a remembered password once per device and overlay.
+  useEffect(() => {
+    if (!value || value !== rememberedPassword.current || autoSubmitted.current.endsWith(":submitted")) return;
+    autoSubmitted.current = `${deviceId}:submitted`;
+    const timer = setTimeout(submit, 50);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [deviceId, value]);
 
   useEffect(() => {
     if (error) {
