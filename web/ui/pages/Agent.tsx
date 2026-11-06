@@ -1389,6 +1389,7 @@ export function AgentPage() {
     if (!pw) return;
     rememberDevicePassword(device, pw);
     if (wsRef.current?.readyState === WebSocket.OPEN) {
+      setAuthError("");
       wsRef.current.send(JSON.stringify({ op: "auth", password: pw }));
     }
   };

@@ -31,6 +31,13 @@ it.each([false, true])("scopes authentication to the open device and never auto-
     expect(onSubmit).toHaveBeenCalledTimes(1);
     await act(async () => { form.submit(); form.submit(); });
     expect(onSubmit.mock.calls).toEqual([["saved-b"], ["manual"]]);
+    // The caller clears the previous error on send; an identical rejection
+    // must release the form again, rather than leaving it busy forever.
+    props.error = "";
+    await render();
+    props.error = "wrong";
+    await render();
+    expect(form.busy).toBe(false);
     props.error = "";
     props.device = "same";
     await render(); await tick();

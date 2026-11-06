@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vitest";
 
 const terminals = vi.hoisted(() => []);
+const auth = vi.hoisted(() => ({ current: null }));
 vi.mock("@xterm/xterm", () => ({ Terminal: class {
   options = {}; focus = vi.fn(); write = vi.fn(); reset = vi.fn(); dispose = vi.fn();
   constructor() { terminals.push(this); }
@@ -15,7 +16,7 @@ vi.mock("@xterm/addon-image", () => ({ ImageAddon: class {} }));
 vi.mock("../ui/lib/api", () => ({ wsURL: path => path, rememberDevicePassword() {}, forgetDevicePassword() {} }));
 vi.mock("../ui/lib/xterm-theme", () => ({ readXtermTheme: () => ({}) }));
 vi.mock("../ui/lib/terminal-images", () => ({ createKittyImageWriter: () => ({}), hasTerminalImageSequence: () => false }));
-vi.mock("../ui/pages/Terminal", () => ({ TabAuthOverlay: () => null }));
+vi.mock("../ui/pages/Terminal", () => ({ TabAuthOverlay: props => { auth.current = props; return null; } }));
 vi.mock("../ui/components/icon", () => ({ Icon: () => null }));
 import { PanelTerminal } from "../ui/components/agent/panel-terminal";
 
@@ -43,6 +44,14 @@ it("keeps hidden shells connected without stealing focus and ignores replaced so
   try {
     await render();
     const terminal = terminals.at(-1), first = sockets[0];
+    await act(async () => first.message({ op: "auth" }));
+    for (let attempt = 0; attempt < 3; attempt++) {
+      await act(async () => auth.current.onSubmit("incorrect"));
+      expect(auth.current.error).toBe("");
+      await act(async () => first.message({ op: "auth_fail", message: "same rejection" }));
+      expect(auth.current.error).toBe("same rejection");
+    }
+
     await act(async () => first.message({ op: "auth_ok" }));
     expect(terminal.focus).not.toHaveBeenCalled();
     props.visible = true;

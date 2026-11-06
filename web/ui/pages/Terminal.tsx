@@ -785,6 +785,7 @@ export function TerminalPage() {
     if (!tab || !password) return;
     tab.pendingPassword = password;
     if (tab.ws && tab.ws.readyState === WebSocket.OPEN) {
+      patchMeta(tab.id, { authError: "" });
       tab.ws.send(JSON.stringify({ op: "auth", password }));
     }
   };

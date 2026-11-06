@@ -278,6 +278,7 @@ export function PanelTerminal({
     pendingPwRef.current = password;
     const ws = wsRef.current;
     if (ws && ws.readyState === WebSocket.OPEN) {
+      setAuthError("");
       ws.send(JSON.stringify({ op: "auth", password }));
     }
   };
