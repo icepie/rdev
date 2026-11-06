@@ -197,7 +197,7 @@ export function RemotePathBrowser({
             type="button"
             aria-label={t("agent.newFolder")}
             title={t("agent.newFolder")}
-            disabled={uiDisabled}
+            disabled={disabled || status !== "ready" || folderBusy}
             onClick={() => {
               setCreating(true);
               setFolderName("");
