@@ -695,7 +695,7 @@ export function AgentPage() {
     };
   }, []);
 
-  const handleMessage = useCallback((msg: Record<string, unknown>) => {
+  const handleMessage = useCallback((msg: Record<string, unknown>, sourceDevice: string) => {
     /* Thread routing: turn frames (delta/tool/done/…), approvals, queue
      * and changes/diff/thread_meta are tagged with their thread id. Frames
      * for a thread that is not the conn current go to the split pane
@@ -871,7 +871,7 @@ export function AgentPage() {
           try {
             for (const raw of msg.live) {
               if (raw && typeof raw === "object") {
-                handleMessage(raw as Record<string, unknown>);
+                handleMessage(raw as Record<string, unknown>, sourceDevice);
               }
             }
           } finally {
@@ -885,7 +885,7 @@ export function AgentPage() {
       }
       case "auth_fail":
         pendingPasswordRef.current = null;
-        forgetDevicePassword(device);
+        forgetDevicePassword(sourceDevice);
         setAuthError(asString(msg.message) || t("common.passwordWrong"));
         break;
       case "thread_peeked":
@@ -1080,7 +1080,7 @@ export function AgentPage() {
           try {
             for (const raw of msg.live) {
               if (raw && typeof raw === "object") {
-                handleMessage(raw as Record<string, unknown>);
+                handleMessage(raw as Record<string, unknown>, sourceDevice);
               }
             }
           } finally {
@@ -1090,7 +1090,7 @@ export function AgentPage() {
         break;
       }
     }
-  }, [device, primaryOps, rejectPendingPanelRequests, setSearchParams, startPing, t]);
+  }, [primaryOps, rejectPendingPanelRequests, setSearchParams, startPing, t]);
 
   /* Auto-reconnect with exponential backoff: 1s → 2s → 4s → 8s … cap 30s.
    * Reset on successful auth_ok (see handleMessage) or manual connect.
@@ -1155,7 +1155,7 @@ export function AgentPage() {
         ws.close();
         return;
       }
-      handleMessage(msg);
+      handleMessage(msg, deviceId);
     };
     ws.onclose = (event) => {
       if (wsRef.current !== ws) return;
