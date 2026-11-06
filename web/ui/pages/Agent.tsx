@@ -2930,13 +2930,20 @@ function PasswordDialog({
   };
 
   // Auto-submit a remembered password once per dialog open, like the vanilla page.
-  const autoSubmitted = useRef(false);
+  const autoSubmitted = useRef("");
   useEffect(() => {
-    if (open && !autoSubmitted.current && value) {
-      autoSubmitted.current = true;
+    const key = `${open ? "open" : "closed"}:${device}`;
+    if (!open) {
+      autoSubmitted.current = key;
+      return;
+    }
+    if (autoSubmitted.current !== key) autoSubmitted.current = key;
+  }, [open, device]);
+  useEffect(() => {
+    if (open && value && !autoSubmitted.current.endsWith(":submitted")) {
+      autoSubmitted.current += ":submitted";
       submit();
     }
-    if (!open) autoSubmitted.current = false;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, value]);
 
