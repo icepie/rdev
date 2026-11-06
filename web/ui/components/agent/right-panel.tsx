@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type CSSProperties } from "react";
 import { File as PierreFile } from "@pierre/diffs/react";
 import type { FileContents, FileOptions } from "@pierre/diffs/react";
 import {
@@ -713,6 +713,7 @@ export function NewTabPage({
   onSearchFiles: (q: string) => Promise<string[]>;
   t: Translator;
 }) {
+  const resultsId = useId();
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<string[] | null>(null);
   const [searching, setSearching] = useState(false);
@@ -786,6 +787,12 @@ export function NewTabPage({
           autoFocus
           placeholder={t("agent.searchFilesPlaceholder")}
           className="h-7 w-full rounded-md border border-border bg-background pr-2 pl-7 text-xs outline-none placeholder:text-muted-foreground/70 focus:border-timeline-accent"
+          role="combobox"
+          aria-autocomplete="list"
+          aria-controls={resultsId}
+          aria-label={t("agent.searchFilesPlaceholder")}
+          aria-expanded={results !== null && results.length > 0}
+          aria-activedescendant={results?.[activeIdx] ? `${resultsId}-${activeIdx}` : undefined}
           onChange={(e) => {
             seqRef.current++;
             setResults(null);
@@ -811,12 +818,16 @@ export function NewTabPage({
               {t("agent.noSearchResults")}
             </div>
           ) : (
-            results?.map((p, i) => {
+            <div id={resultsId} role="listbox" aria-label={t("agent.searchFilesPlaceholder")} >
+            {results?.map((p, i) => {
               const { dir, base } = splitPath(p);
               return (
                 <button
                   key={p}
                   type="button"
+                  id={`${resultsId}-${i}`}
+                  role="option"
+                  aria-selected={i === activeIdx}
                   title={p}
                   className={cn(
                     "flex w-full min-w-0 cursor-pointer items-center gap-1.5 rounded px-2 py-1.5 text-left text-xs transition-colors hover:bg-state-hover",
@@ -832,7 +843,8 @@ export function NewTabPage({
                   </span>
                 </button>
               );
-            })
+            })}
+            </div>
           )}
         </div>
       )}

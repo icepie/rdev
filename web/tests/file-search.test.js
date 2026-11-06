@@ -53,3 +53,37 @@ it("clears obsolete search results, ignores stale replies, and recovers after fa
     delete globalThis.IS_REACT_ACT_ENVIRONMENT;
   }
 });
+
+it("exposes search results as an accessible combobox and keeps the active result valid", async () => {
+  globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  vi.useFakeTimers();
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  const search = vi.fn().mockResolvedValue(["one.ts", "two.ts", "three.ts"]);
+  try {
+    await act(async () => root.render(createElement(NewTabPage, {
+      recent: [], onOpenChanges: () => {}, onOpenInfo: () => {}, onOpenTerminal: () => {},
+      onOpenFiles: () => {}, onOpenDesktop: () => {}, onOpenFile: () => {}, onSearchFiles: search, t: key => key,
+    })));
+    const input = host.querySelector("input");
+    expect(input.getAttribute("role")).toBe("combobox");
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(input, "file");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      await vi.advanceTimersByTimeAsync(250);
+    });
+    expect(host.querySelector('[role="listbox"]')).not.toBeNull();
+    expect(host.querySelectorAll('[role="option"]')).toHaveLength(3);
+    expect(input.getAttribute("aria-activedescendant")).toBe(`${input.getAttribute("aria-controls")}-0`);
+    await act(async () => input.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true })));
+    expect(input.getAttribute("aria-activedescendant")).toBe(`${input.getAttribute("aria-controls")}-1`);
+    await act(async () => input.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true })));
+    expect(input.getAttribute("aria-activedescendant")).toBe(`${input.getAttribute("aria-controls")}-0`);
+  } finally {
+    await act(async () => root.unmount());
+    host.remove();
+    vi.useRealTimers();
+    delete globalThis.IS_REACT_ACT_ENVIRONMENT;
+  }
+});
