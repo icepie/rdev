@@ -382,6 +382,7 @@ type agentConn struct {
 	// Management views share the original connection write lock.
 	responseTo     *agentConn
 	responseThread string
+	responseID     string
 	socket         *gws.Conn
 	deviceID       string
 	client         *ClientConn
@@ -427,6 +428,7 @@ func (ac *agentConn) writeJSON(msg agentMsg) {
 			msg.Thread = ac.responseThread
 		}
 		msg.Device = ac.deviceID
+		msg.ID = ac.responseID
 		ac.responseTo.writeJSON(msg)
 		return
 	}

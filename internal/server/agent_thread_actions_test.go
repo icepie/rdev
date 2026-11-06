@@ -42,10 +42,13 @@ func TestDeleteRunningConversationCancelsWorkAndCannotResurrectHistory(t *testin
 	defer socket.WriteClose(1000, nil)
 	go socket.ReadLoop()
 	waitAgentMsg(t, rec.msgs, "auth", func(m agentMsg) bool { return m.Op == "auth_ok" })
-	if err := socket.WriteMessage(gws.OpcodeText, []byte(`{"op":"delete_thread","thread":"`+th.id+`"}`)); err != nil {
+	if err := socket.WriteMessage(gws.OpcodeText, []byte(`{"op":"delete_thread","id":"delete-running","thread":"`+th.id+`"}`)); err != nil {
 		t.Fatal(err)
 	}
-	waitAgentMsg(t, rec.msgs, "deleted", func(m agentMsg) bool { return m.Op == "thread_deleted" && m.Thread == th.id })
+	deleted := waitAgentMsg(t, rec.msgs, "deleted", func(m agentMsg) bool { return m.Op == "thread_deleted" && m.Thread == th.id })
+	if deleted.ID != "delete-running" {
+		t.Fatalf("delete ID = %q", deleted.ID)
+	}
 	switched := waitAgentMsg(t, rec.msgs, "replacement thread", func(m agentMsg) bool { return m.Op == "thread_switched" })
 	if switched.Thread == th.id || switched.Thread == "" {
 		t.Fatal("deleted selection retained")
@@ -111,6 +114,9 @@ func TestManagementErrorsIdentifyTarget(t *testing.T) {
 		{Op: "get_jobs", Thread: auth.Thread, ID: "expired-job"},
 		{Op: "cancel_job", Thread: auth.Thread, ID: "expired-job"},
 	} {
+		if tc.Op == "rename_thread" || tc.Op == "delete_thread" {
+			tc.ID = "action-" + tc.Thread
+		}
 		payload, err := json.Marshal(tc)
 		if err != nil {
 			t.Fatal(err)
@@ -123,8 +129,20 @@ func TestManagementErrorsIdentifyTarget(t *testing.T) {
 			expectedOp = "job_error"
 		}
 		got := waitAgentMsg(t, rec.msgs, "management failure", func(m agentMsg) bool { return m.Op == expectedOp })
+		if expectedOp == "thread_action_error" && got.ID != tc.ID {
+			t.Fatalf("response ID = %q, want %q", got.ID, tc.ID)
+		}
 		if got.Device != tc.Device || got.Thread != tc.Thread || got.Message == "" {
 			t.Fatalf("unattributable failure for %+v: %+v", tc, got)
 		}
 	}
+	for _, id := range []string{"rename-1", "rename-2", ""} {
+		payload, _ := json.Marshal(agentMsg{Op: "rename_thread", ID: id, Thread: auth.Thread, Title: "updated"})
+		sendAgentOp(t, socket, string(payload))
+		got := waitAgentMsg(t, rec.msgs, "renamed", func(m agentMsg) bool { return m.Op == "thread_renamed" })
+		if got.ID != id || got.Thread != auth.Thread || got.Device != agentServerDeviceID {
+			t.Fatalf("unattributable rename success: %+v", got)
+		}
+	}
+
 }

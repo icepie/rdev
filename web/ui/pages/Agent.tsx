@@ -250,8 +250,8 @@ export function AgentPage() {
   const [renameTarget, setRenameTarget] = useState<RenameTarget | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; device: string; title: string; running?: boolean } | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
-  const pendingDeleteRef = useRef<{ id: string; device: string } | null>(null);
-  const pendingRenameRef = useRef<{ id: string; device: string } | null>(null);
+  const pendingDeleteRef = useRef<{ id: string; device: string; requestID: string } | null>(null);
+  const pendingRenameRef = useRef(new Map<string, { id: string }>());
   const [managementError, setManagementError] = useState("");
   /* bb-style inline rename: id of the sidebar row currently being edited. */
   const [renamingId, setRenamingId] = useState<string | null>(null);
@@ -732,7 +732,9 @@ export function AgentPage() {
     }
     switch (msg.op) {
       case "thread_deleted":
-        if (pendingDeleteRef.current?.id !== frameThread ||
+        if (!pendingDeleteRef.current ||
+            (asString(msg.id) && pendingDeleteRef.current.requestID !== asString(msg.id)) ||
+            pendingDeleteRef.current.id !== frameThread ||
             pendingDeleteRef.current.device !== asString(msg.device)) break;
         pendingDeleteRef.current = null;
         setDeleteBusy(false);
@@ -742,25 +744,20 @@ export function AgentPage() {
         setManagementError("");
         break;
       case "thread_renamed":
-        if (!pendingRenameRef.current ||
-            pendingRenameRef.current.id !== frameThread ||
-            pendingRenameRef.current.device !== asString(msg.device)) break;
-        pendingRenameRef.current = null;
-        setManagementError("");
+        takePendingResponse(pendingRenameRef.current, asString(msg.id), JSON.stringify([asString(msg.device), frameThread]));
         break;
       case "thread_action_error":
         if (pendingDeleteRef.current &&
-            (pendingDeleteRef.current.id === frameThread &&
-             pendingDeleteRef.current.device === asString(msg.device))) {
+            (!asString(msg.id) || pendingDeleteRef.current.requestID === asString(msg.id)) &&
+            pendingDeleteRef.current.id === frameThread &&
+            pendingDeleteRef.current.device === asString(msg.device)) {
           pendingDeleteRef.current = null;
           setDeleteBusy(false);
-          setManagementError(asString(msg.message));
+          setManagementError(asString(msg.message) || t("common.error"));
           break;
         }
-        if (pendingRenameRef.current?.id === frameThread &&
-            pendingRenameRef.current.device === asString(msg.device)) {
-          pendingRenameRef.current = null;
-          setManagementError(asString(msg.message));
+        if (takePendingResponse(pendingRenameRef.current, asString(msg.id), JSON.stringify([asString(msg.device), frameThread]))) {
+          setManagementError(asString(msg.message) || t("common.error"));
         }
         break;
       case "auth":
@@ -1168,7 +1165,7 @@ export function AgentPage() {
       }
       setStatus("disconnected");
       pendingDeleteRef.current = null;
-      pendingRenameRef.current = null;
+      pendingRenameRef.current.clear();
       setDeleteBusy(false);
       if (rejected) return;
       // A clean 1000 close with a reason is the server rejecting the
@@ -1195,7 +1192,7 @@ export function AgentPage() {
     setDeviceState(id);
     rejectPendingPanelRequests("device changed");
     pendingDeleteRef.current = null;
-    pendingRenameRef.current = null;
+    pendingRenameRef.current.clear();
     setDeleteBusy(false);
     setManagementError("");
     setSearchParams(
@@ -1342,8 +1339,9 @@ export function AgentPage() {
   const renameThread = (id: string, title: string, targetDevice = device): boolean => {
     if (!title || !id) return false;
     setManagementError("");
-    const sent = sendRaw({ op: "rename_thread", thread: id, device: targetDevice, title });
-    if (sent) pendingRenameRef.current = { id, device: targetDevice };
+    const requestID = `rename_${++requestSeqRef.current}`;
+    const sent = sendRaw({ op: "rename_thread", id: requestID, thread: id, device: targetDevice, title });
+    if (sent) pendingRenameRef.current.set(JSON.stringify([targetDevice, id]), { id: requestID });
     else setManagementError(t("common.disconnected"));
     return sent;
   };
@@ -1356,8 +1354,9 @@ export function AgentPage() {
   const confirmDeleteThread = () => {
     if (!deleteTarget || deleteBusy) return;
     setManagementError("");
-    if (sendRaw({ op: "delete_thread", thread: deleteTarget.id, device: deleteTarget.device })) {
-      pendingDeleteRef.current = { id: deleteTarget.id, device: deleteTarget.device };
+    const requestID = `delete_${++requestSeqRef.current}`;
+    if (sendRaw({ op: "delete_thread", id: requestID, thread: deleteTarget.id, device: deleteTarget.device })) {
+      pendingDeleteRef.current = { id: deleteTarget.id, device: deleteTarget.device, requestID };
       setDeleteBusy(true);
     }
   };

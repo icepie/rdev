@@ -25,10 +25,10 @@ func (h *agentWSHandler) handleThreadAction(ac *agentConn, msg agentMsg) {
 	}
 	entry, err := h.threadActionEntry(ac, device)
 	if err != nil {
-		ac.writeJSON(agentMsg{Op: "thread_action_error", Device: device, Thread: msg.Thread, Message: err.Error()})
+		ac.writeJSON(agentMsg{Op: "thread_action_error", ID: msg.ID, Device: device, Thread: msg.Thread, Message: err.Error()})
 		return
 	}
-	scoped := &agentConn{responseTo: ac, deviceID: device, entry: entry, responseThread: msg.Thread}
+	scoped := &agentConn{responseTo: ac, deviceID: device, entry: entry, responseThread: msg.Thread, responseID: msg.ID}
 	if msg.Op == "delete_thread" {
 		h.handleDeleteThread(scoped, msg.Thread)
 	} else {

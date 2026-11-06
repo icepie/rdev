@@ -43,3 +43,16 @@ it("supports legacy responses, including empty-path errors", () => {
   expect(takePendingResponse(pending, "", "")).toBe(request);
   expect(pending.size).toBe(0);
 });
+
+it("keeps concurrent rename replies independent across devices and ignores superseded replies", () => {
+  const key = (device, thread) => JSON.stringify([device, thread]);
+  const first = { id: "rename-1" }, second = { id: "rename-2" }, latest = { id: "rename-3" };
+  const pending = new Map([[key("one", "same-thread"), first], [key("two", "same-thread"), second]]);
+  pending.set(key("one", "same-thread"), latest);
+  expect(takePendingResponse(pending, first.id, key("one", "same-thread"))).toBeUndefined();
+  expect(takePendingResponse(pending, "delete-1", key("one", "same-thread"))).toBeUndefined();
+  expect(takePendingResponse(pending, second.id, key("two", "same-thread"))).toBe(second);
+  expect(pending.get(key("one", "same-thread"))).toBe(latest);
+  expect(takePendingResponse(pending, latest.id, key("one", "same-thread"))).toBe(latest);
+  expect(pending.size).toBe(0);
+});
