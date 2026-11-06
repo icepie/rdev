@@ -295,9 +295,13 @@ export function FilesBrowser({
   const directoryWaiters = useRef(new Map<string, { resolve(): void; reject(error: Error): void }>());
   const fileInputRef = useRef<HTMLInputElement>(null);
   const reselectTaskRef = useRef<string | null>(null);
+  const uploadDestinationRef = useRef<{ device: string; path: string } | null>(null);
   useEffect(() => {
     const input = fileInputRef.current;
-    const canceled = () => { reselectTaskRef.current = null; };
+    const canceled = () => {
+      reselectTaskRef.current = null;
+      uploadDestinationRef.current = null;
+    };
     input?.addEventListener("cancel", canceled);
     return () => input?.removeEventListener("cancel", canceled);
   }, []);
@@ -1207,7 +1211,9 @@ export function FilesBrowser({
   const onFilesPicked = (e: ChangeEvent<HTMLInputElement>) => {
     const files = [...(e.target.files || [])];
     const taskId = reselectTaskRef.current;
+    const destination = uploadDestinationRef.current;
     reselectTaskRef.current = null;
+    uploadDestinationRef.current = null;
     e.target.value = "";
     if (taskId) {
       const task = tasksRef.current!.get(taskId);
@@ -1225,7 +1231,7 @@ export function FilesBrowser({
       startTransfer(task, request);
       return;
     }
-    files.forEach((file) => startUpload(file));
+    if (destination) files.forEach((file) => startUpload(file, destination.path, destination.device));
   };
 
   const onDrop = (e: DragEvent) => {
@@ -1341,7 +1347,12 @@ export function FilesBrowser({
         <Icon name="Upload" />
         {t("files.dropHint")}
       </div>
-      <input ref={fileInputRef} type="file" multiple className="hidden" onChange={onFilesPicked} />
+      <input ref={fileInputRef} type="file" multiple className="hidden" onChange={onFilesPicked}
+        onClick={() => {
+          uploadDestinationRef.current = reselectTaskRef.current ? null : {
+            device: activeDeviceRef.current, path: currentPathRef.current,
+          };
+        }} />
 
       <div className="file-workspace-grid min-h-0 flex-1 overflow-hidden" data-tasks-open={tasksOpen}>
         {/* Browser (also a cross-pane transfer drop target) */}

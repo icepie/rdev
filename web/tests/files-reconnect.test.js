@@ -59,6 +59,7 @@ it.each([false, true])("isolates reconnect attempts and waits for device authent
     await act(async () => first.close());
     expect(document.body.textContent).toContain("files.connectionLost");
     const offlinePicker = document.querySelector('input[type="file"]');
+    await act(async () => offlinePicker.click());
     Object.defineProperty(offlinePicker, "files", { configurable: true, value: [new dom.window.File(["offline"], "offline.txt")] });
     await act(async () => offlinePicker.dispatchEvent(new dom.window.Event("change", { bubbles: true })));
     expect(JSON.parse(localStorage.getItem("rdevFileTasks")).find(task => task.name === "offline.txt"))
@@ -69,6 +70,7 @@ it.each([false, true])("isolates reconnect attempts and waits for device authent
     await act(async () => second.open());
     if (protectedDevice) {
       const picker = document.querySelector('input[type="file"]');
+      await act(async () => picker.click());
       Object.defineProperty(picker, "files", { configurable: true, value: [new dom.window.File(["upload"], "upload.txt")] });
       await act(async () => picker.dispatchEvent(new dom.window.Event("change", { bubbles: true })));
       await act(async () => vi.advanceTimersByTimeAsync(6000));
@@ -116,6 +118,28 @@ it.each([false, true])("isolates reconnect attempts and waits for device authent
     expect(document.querySelector("table").textContent.match(/second\.txt/g)).toHaveLength(1);
     expect(document.querySelector("table").textContent).toContain("first.txt");
     expect(loadMore()).toBeUndefined();
+
+    const delayedPicker = document.querySelector('input[type="file"]');
+    await act(async () => delayedPicker.click());
+    const up = document.querySelector('button[aria-label="files.up"]');
+    await act(async () => up.click());
+    if (protectedDevice) await act(async () => second.message({ op: "auth_ok", deviceId: "device-a" }));
+    const movedList = second.sent.filter(m => m.op === "list").at(-1);
+    await act(async () => second.message({ op: "list_result", requestId: movedList.requestId, path: "/elsewhere", entries: [] }));
+    await act(async () => fixtures.shell.onDevicePick("device-b"));
+    Object.defineProperty(delayedPicker, "files", { configurable: true, value: [new dom.window.File(["captured"], "captured.txt")] });
+    await act(async () => delayedPicker.dispatchEvent(new dom.window.Event("change", { bubbles: true })));
+    if (protectedDevice) await act(async () => second.message({ op: "auth_ok", deviceId: "device-a" }));
+    expect(second.sent.find(m => m.op === "upload_start" && m.name === "captured.txt"))
+      .toMatchObject({ deviceId: "device-a", parentPath: "/current" });
+    await act(async () => fixtures.shell.onDevicePick("device-a"));
+    if (protectedDevice) await act(async () => second.message({ op: "auth_ok", deviceId: "device-a" }));
+    // A canceled picker cannot later submit files with a stale destination.
+    await act(async () => delayedPicker.click());
+    await act(async () => delayedPicker.dispatchEvent(new dom.window.Event("cancel")));
+    Object.defineProperty(delayedPicker, "files", { configurable: true, value: [new dom.window.File(["canceled"], "canceled.txt")] });
+    await act(async () => delayedPicker.dispatchEvent(new dom.window.Event("change", { bubbles: true })));
+    expect(second.sent.some(m => m.op === "upload_start" && m.name === "canceled.txt")).toBe(false);
 
     // The actual page exposes a second pane without replacing the first browser.
     const toggle = [...document.querySelectorAll("button")].find(b => b.textContent === "files.showSecondPane");
