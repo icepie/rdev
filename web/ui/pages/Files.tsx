@@ -1,6 +1,6 @@
 import { createKeyedRequest } from "../lib/keyed-request";
 import { createTransferAttempts } from "../lib/file-transfer-attempts";
-import { walkTransferFiles, type TransferDestination } from "../lib/file-transfer-route";
+import { RecursiveTransferError, walkTransferFiles, type TransferDestination } from "../lib/file-transfer-route";
 import { encodeFrame, decodeFrame } from "../lib/file-transfer-frame";
 import { uploadChunks } from "../lib/upload-chunks";
 import { canResumeUpload, createListingGuard, readListingPage, restoreFileTask, uploadResumeRequest } from "../lib/file-request-state";
@@ -1099,7 +1099,9 @@ export function FilesBrowser({
           },
         });
       } catch (error) {
-        setAlertMsg(error instanceof Error ? error.message : String(error));
+        setAlertMsg(error instanceof RecursiveTransferError
+          ? tRef.current("files.transferIntoSelf")
+          : error instanceof Error ? error.message : String(error));
       }
     },
     [panesRef, startDownload, listDirAll],
