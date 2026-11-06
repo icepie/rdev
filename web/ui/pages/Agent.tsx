@@ -1,3 +1,4 @@
+import { ThreadRenameDialog, type RenameTarget } from "../components/agent/thread-rename-dialog";
 import { ThreadRenameInput } from "../components/agent/thread-rename-input";
 import { takePendingResponse } from "../components/agent/pending-response";
 import { consumeChangesReply } from "../components/agent/changes-request";
@@ -44,14 +45,6 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "../components/alert-dialog";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "../components/dialog";
 import {
   Tooltip,
   TooltipContent,
@@ -254,7 +247,7 @@ export function AgentPage() {
   const [createProjectOpen, setCreateProjectOpen] = useState(false);
   /* In-app rename/delete dialogs (bb: no native prompt/confirm). */
   const [renameOpen, setRenameOpen] = useState(false);
-  const [renameValue, setRenameValue] = useState("");
+  const [renameTarget, setRenameTarget] = useState<RenameTarget | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; device: string; title: string; running?: boolean } | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
   const pendingDeleteRef = useRef<{ id: string; device: string } | null>(null);
@@ -1356,7 +1349,7 @@ export function AgentPage() {
   };
 
   const openRenameDialog = () => {
-    setRenameValue(currentThreadTitle);
+    setRenameTarget({ id: thread, device, title: currentThreadTitle });
     setRenameOpen(true);
   };
 
@@ -2773,40 +2766,16 @@ export function AgentPage() {
       />
 
       {/* bb-style in-app rename dialog (no native prompt). */}
-      <Dialog open={renameOpen} onOpenChange={setRenameOpen}>
-        <DialogContent className="max-w-sm">
-          <DialogHeader>
-            <DialogTitle>{t("agent.renamePrompt")}</DialogTitle>
-            <DialogDescription className="sr-only">
-              {t("agent.renamePrompt")}
-            </DialogDescription>
-          </DialogHeader>
-          <Input
-            value={renameValue}
-            autoFocus
-            onChange={(e) => setRenameValue(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.nativeEvent.isComposing) {
-                e.preventDefault();
-                if (renameThread(thread, renameValue.trim())) setRenameOpen(false);
-              }
-            }}
-          />
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setRenameOpen(false)}>
-              {t("common.cancel")}
-            </Button>
-            <Button
-              disabled={!renameValue.trim()}
-              onClick={() => {
-                if (renameThread(thread, renameValue.trim())) setRenameOpen(false);
-              }}
-            >
-              {t("common.save")}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {renameTarget && (
+        <ThreadRenameDialog
+          target={renameTarget}
+          open={renameOpen}
+          disabled={!ready}
+          onCommit={renameThread}
+          onClose={() => setRenameOpen(false)}
+          t={t}
+        />
+      )}
 
       {/* Delete confirmation (no native confirm); the target is the current
        * thread from the header menu or any sidebar row. */}
