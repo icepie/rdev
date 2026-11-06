@@ -89,6 +89,7 @@ export function RemotePathBrowser({
 
   useEffect(() => {
     navigateRef.current(initialPath);
+    return () => { seqRef.current++; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialPath]);
 
@@ -112,11 +113,19 @@ export function RemotePathBrowser({
       return;
     }
     const path = joinPath(current, name);
+    const navigationSeq = seqRef.current;
     folderSubmitting.current = true;
     setFolderBusy(true);
     setFolderErr("");
     mkdir(path)
       .then(() => {
+        // The user may have navigated while mkdir was in flight. Do not
+        // unexpectedly pull the browser back to the old directory.
+        if (seqRef.current !== navigationSeq) {
+          setCreating(false);
+          setFolderName("");
+          return;
+        }
         setCreating(false);
         setFolderName("");
         navigate(path);
