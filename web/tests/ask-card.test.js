@@ -42,3 +42,41 @@ it.each([["click", false], ["Enter", false], ["click", true], ["Enter", true]])(
     delete globalThis.IS_REACT_ACT_ENVIRONMENT;
   }
 });
+
+it("keeps option identity separate from labels and focuses Other only after selection", async () => {
+  globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  const onAnswer = vi.fn();
+  try {
+    await act(async () => root.render(createElement(AskCard, {
+      item: { kind: "ask", id: "question", question: "Choose", options: [{ label: "__other__" }, { label: "__other__" }], answer: null },
+      onAnswer, t: key => key,
+    })));
+    const options = host.querySelectorAll('[role="radiogroup"] button');
+    const submit = [...host.querySelectorAll("button")].find(button => button.textContent === "agent.askSubmit");
+    expect(host.querySelector("textarea")).toBeNull();
+    await act(async () => options[1].click());
+    expect(options[0].getAttribute("aria-pressed")).toBe("false");
+    expect(options[1].getAttribute("aria-pressed")).toBe("true");
+    expect(host.querySelector("textarea")).toBeNull();
+    await act(async () => submit.click());
+    expect(onAnswer).toHaveBeenCalledExactlyOnceWith("question", "__other__");
+    await act(async () => options[2].click());
+    const input = host.querySelector("textarea");
+    expect(document.activeElement).toBe(input);
+    expect(submit.disabled).toBe(true);
+    for (const flags of [{ ctrlKey: true }, { metaKey: true }, { altKey: true }, { keyCode: 229 }]) {
+      await act(async () => options[2].dispatchEvent(new KeyboardEvent("keydown", { key: "1", bubbles: true, ...flags })));
+      expect(options[2].getAttribute("aria-pressed")).toBe("true");
+    }
+    await act(async () => options[2].dispatchEvent(new KeyboardEvent("keydown", { key: "1", bubbles: true })));
+    expect(options[0].getAttribute("aria-pressed")).toBe("true");
+    expect(host.querySelector("textarea")).toBeNull();
+  } finally {
+    await act(async () => root.unmount());
+    host.remove();
+    delete globalThis.IS_REACT_ACT_ENVIRONMENT;
+  }
+});

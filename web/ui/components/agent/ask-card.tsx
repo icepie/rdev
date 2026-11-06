@@ -11,7 +11,7 @@ import type { AskItem, Translator } from "./types";
  * Cancel / Submit footer. rdev answers are single-select only. */
 const FREE_TEXT_MIN_HEIGHT = 84;
 const FREE_TEXT_MAX_HEIGHT = 158;
-const OTHER_VALUE = "__other__";
+const OTHER_VALUE = "other";
 
 function AskOptionRow({
   checked,
@@ -75,7 +75,7 @@ export function AskCard({
   t: Translator;
   onAnswer: (id: string, answer: string) => void;
 }) {
-  const [selected, setSelected] = useState<string | null>(null);
+  const [selected, setSelected] = useState<number | typeof OTHER_VALUE | null>(null);
   const [freeText, setFreeText] = useState("");
   const textRef = useRef<HTMLTextAreaElement>(null);
   const pending = item.answer === null;
@@ -91,25 +91,29 @@ export function AskCard({
     el.style.height = `${Math.min(Math.max(el.scrollHeight, FREE_TEXT_MIN_HEIGHT), FREE_TEXT_MAX_HEIGHT)}px`;
   }, [freeText, otherSelected]);
 
+  useEffect(() => {
+    if (otherSelected) textRef.current?.focus();
+  }, [otherSelected]);
+
   const submit = () => {
     if (acceptsFreeText) {
       const value = freeText.trim();
       if (value) onAnswer(item.id, value);
       return;
     }
-    if (selected !== null) onAnswer(item.id, selected);
+    if (typeof selected === "number") onAnswer(item.id, item.options[selected].label);
   };
 
   /* bb numeric shortcuts: 1..9 pick the option, 0/"o"-style rows are not
    * part of the ask op. Only when focus is inside the card. */
   const handleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
-    if (!pending || isImeComposing(e.nativeEvent)) return;
+    if (!pending || e.ctrlKey || e.metaKey || e.altKey || isImeComposing(e.nativeEvent)) return;
     const target = e.target as HTMLElement;
     if (target.tagName === "TEXTAREA" || target.tagName === "INPUT") return;
     const n = Number(e.key);
     if (Number.isInteger(n) && n >= 1 && n <= item.options.length) {
       e.preventDefault();
-      setSelected(item.options[n - 1].label);
+      setSelected(n - 1);
     }
   };
 
@@ -141,12 +145,12 @@ export function AskCard({
           <div className="space-y-0.5" role="radiogroup">
             {item.options.map((o, i) => (
               <AskOptionRow
-                key={o.label}
-                checked={selected === o.label}
+                key={i}
+                checked={selected === i}
                 label={o.label}
                 description={o.description}
                 shortcut={i < 9 ? String(i + 1) : undefined}
-                onSelect={() => setSelected(o.label)}
+                onSelect={() => setSelected(i)}
               />
             ))}
             <AskOptionRow
