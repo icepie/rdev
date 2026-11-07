@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { JSDOM } from "jsdom";
-import { act, createElement } from "react";
+import { act, createElement, Profiler } from "react";
 import { createRoot } from "react-dom/client";
 import { MemoryRouter } from "react-router-dom";
 import { expect, it, vi } from "vitest";
@@ -17,6 +17,7 @@ vi.mock("../ui/components/os-icon", () => ({ OsIcon: () => null }));
 vi.mock("../ui/components/split-layout", () => ({ SplitPageShell: ({ children, ...props }) => { fixtures.shell = props; return children; } }));
 vi.mock("../ui/components/device-rail", () => ({ DEVICE_DRAG_MIME: "device", DeviceDropTarget: ({ children }) => { fixtures.panes = children.props.panesRef; return children; } }));
 import { FilesPage, FilesBrowser } from "../ui/pages/Files";
+import { encodeFrame } from "../ui/lib/file-transfer-frame";
 
 it.each([false, true])("isolates reconnect attempts and waits for device authentication (protected=%s)", async (protectedDevice) => {
   fixtures.devices[0].hasPassword = protectedDevice;
@@ -273,5 +274,74 @@ it.each([false, true])("isolates reconnect attempts and waits for device authent
       if (descriptor) Object.defineProperty(globalThis, key, descriptor);
       else delete globalThis[key];
     }
+  }
+});
+
+
+it("batches concurrent file progress, flushes on page exit, and leaves idle panes quiet", async () => {
+  fixtures.devices.forEach(device => { device.hasPassword = false; });
+  const originalSocket = globalThis.WebSocket;
+  const sockets = [];
+  class Socket {
+    static OPEN = 1;
+    readyState = 0;
+    sent = [];
+    constructor() { sockets.push(this); }
+    send(raw) { this.sent.push(JSON.parse(raw)); }
+    close() { this.readyState = 3; }
+    open() { this.readyState = 1; this.onopen?.(); }
+    message(frame) { this.onmessage?.({ data: JSON.stringify(frame) }); }
+    chunk(id, offset) { this.onmessage?.({ data: encodeFrame(0x22, id, offset, new Uint8Array([offset % 256]).buffer) }); }
+  }
+  globalThis.WebSocket = Socket;
+  globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  vi.useFakeTimers();
+  localStorage.setItem("rdevFileTasks", JSON.stringify(["a", "b"].map(id => ({
+    id, dir: "download", device: `device-${id}`, path: `/${id}.bin`,
+    name: `${id}.bin`, size: 1000, done: 0, status: "running", created: Date.now(),
+  }))));
+  const writes = vi.spyOn(Storage.prototype, "setItem");
+  const commits = vi.fn();
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  const saved = () => JSON.parse(localStorage.getItem("rdevFileTasks"));
+  try {
+    await act(async () => root.render(createElement(MemoryRouter, null,
+      createElement(Profiler, { id: "files", onRender: commits }, createElement(FilesBrowser, {
+        primary: true, leafId: 0, panesRef: { current: new Map() },
+      })))));
+    const socket = sockets[0];
+    await act(async () => socket.open());
+    const downloads = socket.sent.filter(message => message.op === "download_start");
+    expect(downloads).toHaveLength(2);
+    writes.mockClear();
+    commits.mockClear();
+    for (let offset = 0; offset < 100; offset++) {
+      await act(async () => downloads.forEach(task => socket.chunk(task.taskId, offset)));
+    }
+    expect(writes).not.toHaveBeenCalled();
+    expect(commits).not.toHaveBeenCalled();
+    await act(async () => vi.advanceTimersByTimeAsync(500));
+    expect(writes).toHaveBeenCalledTimes(1);
+    expect(saved().map(task => task.done)).toEqual([100, 100]);
+    await act(async () => socket.chunk(downloads[0].taskId, 100));
+    window.dispatchEvent(new Event("pagehide"));
+    expect(saved().map(task => task.done)).toEqual([101, 100]);
+    await act(async () => downloads.forEach(task => socket.message({ op: "transfer_error", taskId: task.taskId, message: "fixture failure" })));
+    expect(saved().every(task => task.status === "failed")).toBe(true);
+    commits.mockClear();
+    writes.mockClear();
+    await act(async () => vi.advanceTimersByTimeAsync(5000));
+    expect(commits).not.toHaveBeenCalled();
+    expect(writes).not.toHaveBeenCalled();
+  } finally {
+    await act(async () => root.unmount());
+    host.remove();
+    writes.mockRestore();
+    localStorage.clear();
+    vi.useRealTimers();
+    globalThis.WebSocket = originalSocket;
+    delete globalThis.IS_REACT_ACT_ENVIRONMENT;
   }
 });

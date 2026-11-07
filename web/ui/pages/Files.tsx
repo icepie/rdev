@@ -311,9 +311,11 @@ export function FilesBrowser({
     () => Promise.resolve(),
   );
 
+  const progressDirty = useRef(false);
   const bump = useCallback(() => setTasksTick((n) => n + 1), []);
   const saveTasks = useCallback(() => {
     if (primary) persistTasks(tasksRef.current!);
+    progressDirty.current = false;
   }, [primary]);
 
   /* ── WS plumbing ── */
@@ -807,8 +809,7 @@ export function FilesBrowser({
       if (f.typ === FRAME_UPLOAD_ACK) {
         if (task.dir !== "upload" || task.status !== "running") return;
         task.done = f.offset;
-        updateSpeed(task);
-        saveTasks();
+        progressDirty.current = true;
         if (task.waitAck) {
           const r = task.waitAck;
           task.waitAck = null;
@@ -822,8 +823,7 @@ export function FilesBrowser({
           task.done = f.offset + f.payload.byteLength;
           task.lastProgress = Date.now();
           task.message = "";
-          updateSpeed(task);
-          saveTasks();
+          progressDirty.current = true;
         } else if (f.offset < (task.done || 0)) {
           // Duplicate chunk from a resumed request; ignore it.
         } else if (Date.now() - (task.lastRequested || 0) > 1000) {
@@ -831,10 +831,10 @@ export function FilesBrowser({
         }
       } else if (f.typ === FRAME_DOWNLOAD_END) {
         completeDownload(task, f.offset || task.done || 0);
+        bump();
       }
-      bump();
     },
-    [saveTasks, resumeDownload, completeDownload, bump],
+    [resumeDownload, completeDownload, bump],
   );
 
   /* Single shared /files socket with exponential-backoff reconnect. */
@@ -932,12 +932,17 @@ export function FilesBrowser({
     };
   }, [onBinary, onText, resumeDownload, stopUpload, saveTasks, bump, ensureAuth]);
 
-  /* Speed sampling + stalled-download watchdog + task re-render, every 500ms. */
+  /* Keep acknowledgments on the hot path; sample progress and persist at most
+   * twice a second. Idle panes do not re-render. Terminal states save directly. */
   useEffect(() => {
     const timer = window.setInterval(() => {
       const now = Date.now();
+      let running = false;
       tasksRef.current!.forEach((task) => {
-        if (task.status === "running") updateSpeed(task);
+        if (task.status === "running") {
+          running = true;
+          updateSpeed(task);
+        }
         if (
           wsRef.current?.readyState === WebSocket.OPEN &&
           !transferAuth.current.has(task.id) &&
@@ -950,10 +955,17 @@ export function FilesBrowser({
           resumeDownload(task, task.done || 0, tRef.current("files.resuming"));
         }
       });
-      bump();
+      if (progressDirty.current) saveTasks();
+      if (running) bump();
     }, 500);
-    return () => window.clearInterval(timer);
-  }, [resumeDownload, bump]);
+    const flush = () => { if (progressDirty.current) saveTasks(); };
+    window.addEventListener("pagehide", flush);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("pagehide", flush);
+      flush();
+    };
+  }, [resumeDownload, bump, saveTasks]);
 
   /* ── Directory listing ── */
 

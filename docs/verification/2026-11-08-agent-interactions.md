@@ -97,3 +97,10 @@ Local fixture only (`@server` on port 19440); no real user history was deleted.
 - Rebuilt local browser at 390×844: root scroll width 390px, visible pane 342px and composer 308px (previous side-by-side composers were around 136px). Both distinct text drafts remain present; hidden pane has zero rendered width and is inert.
 - 140 Web tests, TypeScript, production frontend build and embedded server build passed.
 - Native mobile tab click after closing the existing Info panel selected the left pane at 342px, retained `left-refresh-draft`, and hid the right pane while retaining `右侧草稿`. At 1440px both panes were visible with equal original fractions and both drafts preserved. Screenshot capture stalled, so this follow-up uses DOM geometry/state and native interaction evidence, not a new visual screenshot sign-off.
+
+## Follow-up: file transfer rendering and persistence
+
+- File binary frames previously serialized the full task list and triggered a file-pane render for each chunk/ack. Progress now stays in mutable task state and is sampled/persisted every 500ms; upload acknowledgments still resolve immediately. Completion, failure, pause/cancel and disconnect retain immediate persistence. Pagehide/unmount flush pending progress. Idle panes no longer render on each timer tick.
+- Actual FilesBrowser regression uses two devices and 200 interleaved binary frames: zero per-frame storage writes/React commits, one sampling write with both exact offsets, pagehide flush with an extra byte, immediate failure persistence and no writes/commits for five idle seconds. Existing reconnect/auth/offset-isolation tests still pass.
+- Rebuilt local service, native mobile path navigation and download of a generated 2MiB fixture: persisted completed/saved state with done=size=2097152. Task panel displays completed/100%; screenshot inspected at 390×844 light, no horizontal overflow (root 390px/table 342px).
+- 141 Web tests, TypeScript, frontend production build and embedded server build passed. These checks demonstrate functional batching and completion; they are not a throughput benchmark.
