@@ -17,6 +17,8 @@ func (s *Server) emitAgentTurnEvent(entry *agentSessionEntry, th *agentThread, e
 	}
 	msg := agentMsg{Thread: th.id}
 	switch event.Type {
+	case agent.EventUserInput:
+		msg.Op, msg.Text, msg.Display = "steering", event.Text, event.Display
 	case agent.EventTextDelta:
 		msg.Op, msg.Text = "delta", event.Text
 	case agent.EventReasoning:

@@ -16,8 +16,10 @@ import (
 
 // TestAgentQueueSteerOrdering drives the full server-side turn pipeline with
 // a fake SSE provider: a chat that blocks mid-turn, a queued follow-up, and
-// a steer that must cancel the running turn and jump the queue.
+// steering messages that preserve the running response and jump the queue FIFO.
 func TestAgentQueueSteerOrdering(t *testing.T) {
+	release := make(chan struct{})
+	var releaseOnce sync.Once
 	var mu sync.Mutex
 	var seen []string // last user message of every provider request
 	var hits atomic.Int32
@@ -42,16 +44,18 @@ func TestAgentQueueSteerOrdering(t *testing.T) {
 		mu.Unlock()
 
 		if hits.Add(1) == 1 {
-			// First turn: hang until the client cancels (steer/stop), then
-			// return nothing.
-			<-r.Context().Done()
-			return
+			select {
+			case <-release:
+			case <-r.Context().Done():
+				t.Error("steering canceled the in-flight model request")
+				return
+			}
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
 		fmt.Fprint(w, `data: {"choices":[{"index":0,"delta":{"content":"ok"}}]}`+"\n\n")
 		fmt.Fprint(w, "data: [DONE]\n\n")
 	}))
-	defer prov.Close()
+	defer func() { releaseOnce.Do(func() { close(release) }); prov.Close() }()
 
 	srv := &Server{
 		Agent: &AgentConfig{Providers: []AgentProvider{{
@@ -75,19 +79,27 @@ func TestAgentQueueSteerOrdering(t *testing.T) {
 	waitFor(t, "first provider request", func() bool { return hits.Load() == 1 })
 
 	h.handleChat(ac, "one", "", "", nil) // queued behind the running turn
-	h.handleSteer(ac, "two", "")         // cancels the turn, jumps the queue
+	h.handleSteer(ac, "two", "")
+	h.handleSteer(ac, "three", "")
+	srv.agentSessionsMu.Lock()
+	ctx := entry.threads[entry.current].turnCtx
+	srv.agentSessionsMu.Unlock()
+	if ctx.Err() != nil {
+		t.Fatal("steering canceled the active turn")
+	}
+	releaseOnce.Do(func() { close(release) })
 
-	// Wait for all three turns to settle.
+	// Two steering messages continue the first run, before the normal follow-up.
 	waitFor(t, "turns to finish", func() bool {
 		srv.agentSessionsMu.Lock()
 		defer srv.agentSessionsMu.Unlock()
 		th := entry.threads[entry.current]
-		return !th.running && len(th.queue) == 0 && hits.Load() == 3
+		return !th.running && len(th.queue) == 0 && hits.Load() == 4
 	})
 
 	mu.Lock()
 	defer mu.Unlock()
-	want := []string{"zero", "two", "one"}
+	want := []string{"zero", "two", "three", "one"}
 	if !slices.Equal(seen, want) {
 		t.Fatalf("provider saw user messages %v, want %v", seen, want)
 	}

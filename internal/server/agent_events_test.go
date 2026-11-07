@@ -20,6 +20,7 @@ func TestResetRejectsLateTurnEvents(t *testing.T) {
 	defer turn.cancel()
 	(&agentWSHandler{srv: srv}).handleReset(&agentConn{entry: entry, current: th.id, deviceID: entry.deviceID}, th.id)
 	for _, event := range []agent.Event{
+		{Type: agent.EventUserInput, Text: "late steering"},
 		{Type: agent.EventTextDelta, Text: "late text"},
 		{Type: agent.EventReasoning, Reasoning: "late reasoning"},
 		{Type: agent.EventToolStart, ToolName: "edit", ToolID: "tool", ToolArgs: json.RawMessage(`{"path":"/file"}`)},

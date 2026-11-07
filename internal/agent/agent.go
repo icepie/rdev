@@ -20,6 +20,7 @@ import (
 type EventType string
 
 const (
+	EventUserInput EventType = "user_input" // queued steering accepted at a settled boundary
 	EventTextDelta EventType = "text_delta" // Text holds an assistant text chunk
 	EventReasoning EventType = "reasoning"  // Text holds a reasoning (thinking) chunk
 	EventToolStart EventType = "tool_start" // ToolID/ToolName/ToolArgs/Summary set
@@ -30,6 +31,7 @@ const (
 
 // Event is one streamed unit of agent progress.
 type Event struct {
+	Display    json.RawMessage // user_input: presentation metadata
 	Type       EventType
 	Text       string          // delta (text_delta/reasoning) or full final text (done)
 	Reasoning  string          // done: full reasoning text accumulated over the turn

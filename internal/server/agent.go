@@ -263,10 +263,11 @@ const agentApprovalTimeout = 5 * time.Minute
 
 // agentQueuedChat is one chat message waiting behind a running turn.
 type agentQueuedChat struct {
-	display json.RawMessage
-	text    string
-	images  []agent.MessageImage
-	model   string // requested model ("" = keep the thread's)
+	steering bool // inject at the next settled model/tool boundary
+	display  json.RawMessage
+	text     string
+	images   []agent.MessageImage
+	model    string // requested model ("" = keep the thread's)
 }
 
 // queueTexts reduces a pending queue to its texts for the queue broadcast.
@@ -1538,9 +1539,13 @@ func (h *agentWSHandler) handleChat(ac *agentConn, text, modelRef, threadRef str
 	srv.goAgent(func() { srv.runAgentTurn(entry, th, turn, text, images) })
 }
 
-// handleSteer cancels the running turn and puts the text at the front of
-// the queue, so it runs next. When idle it behaves like a normal chat.
+// handleSteer prioritizes input at the next settled model/tool boundary.
+// When idle it behaves like a normal chat; commands stay in the turn queue.
 func (h *agentWSHandler) handleSteer(ac *agentConn, text, threadRef string) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return
+	}
 	entry := ac.entry
 	if entry == nil {
 		ac.sendError("agent session not ready")
@@ -1558,12 +1563,16 @@ func (h *agentWSHandler) handleSteer(ac *agentConn, text, threadRef string) {
 		h.handleChat(ac, text, "", threadRef, nil)
 		return
 	}
-	th.queue = append([]agentQueuedChat{{text: text, display: json.RawMessage(`{"steering":true}`)}}, th.queue...)
-	cancel := th.cancel
-	srv.agentSessionsMu.Unlock()
-	if cancel != nil {
-		cancel()
+	// Keep multiple steering messages FIFO, ahead of normal follow-ups.
+	index := 0
+	for index < len(th.queue) && th.queue[index].steering {
+		index++
 	}
+	queued := agentQueuedChat{text: text, steering: true, display: json.RawMessage(`{"steering":true}`)}
+	th.queue = append(th.queue, agentQueuedChat{})
+	copy(th.queue[index+1:], th.queue[index:])
+	th.queue[index] = queued
+	srv.agentSessionsMu.Unlock()
 	srv.broadcastQueue(entry, th)
 }
 
@@ -2464,7 +2473,25 @@ func (s *Server) runAgentTurn(entry *agentSessionEntry, th *agentThread, turn ag
 		return
 	}
 
-	historyReplaced, runErr := runAgentConversation(ctx, sess, text, images, emit)
+	takeSteering := func() *agent.Message {
+		s.agentSessionsMu.Lock()
+		if ctx.Err() != nil || th.epoch != startEpoch || entry.threads[th.id] != th || len(th.queue) == 0 || !th.queue[0].steering {
+			s.agentSessionsMu.Unlock()
+			return nil
+		}
+		next := th.queue[0]
+		// Slash commands need their own dispatcher/turn lifecycle.
+		if strings.HasPrefix(next.text, "/") {
+			s.agentSessionsMu.Unlock()
+			return nil
+		}
+		th.queue = th.queue[1:]
+		s.agentSessionsMu.Unlock()
+		s.broadcastQueue(entry, th)
+		display, _ := json.Marshal(map[string]any{"steering": true, "time": time.Now().UnixMilli()})
+		return &agent.Message{Role: "user", Content: next.text, Display: display}
+	}
+	historyReplaced, runErr := runAgentConversation(ctx, sess, text, images, emit, takeSteering)
 	outcomeAt := time.Now().UTC().Format(time.RFC3339Nano)
 	outcome := "done"
 	if runErr != nil {

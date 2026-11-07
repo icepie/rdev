@@ -13,7 +13,7 @@ import (
 // runAgentConversation keeps command dispatch separate from turn lifecycle
 // management. historyReplaced tells persistence to replace, rather than append,
 // even when a summary happens to contain the same number of messages.
-func runAgentConversation(ctx context.Context, sess *agent.Session, text string, images []agent.MessageImage, emit func(agent.Event)) (historyReplaced bool, err error) {
+func runAgentConversation(ctx context.Context, sess *agent.Session, text string, images []agent.MessageImage, emit func(agent.Event), steering ...func() *agent.Message) (historyReplaced bool, err error) {
 	command, argument := splitAgentCommand(text)
 	if command == "/bg" || command == "/subagent" {
 		name, args, err := agentCommandTool(command, argument)
@@ -23,7 +23,11 @@ func runAgentConversation(ctx context.Context, sess *agent.Session, text string,
 		return false, sess.RunToolCommand(ctx, text, name, args, emit)
 	}
 	if command != "/compact" {
-		_, err = sess.RunTurn(ctx, text, images, magicTurnEffort(text), emit)
+		var takeSteering func() *agent.Message
+		if len(steering) > 0 {
+			takeSteering = steering[0]
+		}
+		_, err = sess.RunTurnWithSteering(ctx, text, images, magicTurnEffort(text), emit, takeSteering)
 		return false, err
 	}
 	usage, err := sess.Compact(ctx, argument)

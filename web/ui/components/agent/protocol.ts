@@ -159,6 +159,7 @@ export function parseAllThreads(v: unknown): AllThreadsDevice[] {
 export const THREAD_SCOPED_OPS: Record<string, true> = {
   thread_peeked: true,
   turn_start: true,
+  steering: true,
   delta: true,
   reasoning: true,
   tool_start: true,
@@ -189,6 +190,7 @@ export const THREAD_SCOPED_OPS: Record<string, true> = {
 export const TRANSCRIPT_OPS: Record<string, true> = {
   thread_peeked: true,
   turn_start: true,
+  steering: true,
   delta: true,
   reasoning: true,
   tool_start: true,

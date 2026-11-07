@@ -39,6 +39,14 @@ func (s *Session) RunWithImages(ctx context.Context, userText string, images []M
 // effortOverride replaces cfg.ReasoningEffort for this run only ("" keeps the
 // configured level). Used for magic keywords like "ultrathink".
 func (s *Session) RunTurn(ctx context.Context, userText string, images []MessageImage, effortOverride string, emit func(Event)) (string, error) {
+	return s.RunTurnWithSteering(ctx, userText, images, effortOverride, emit, nil)
+}
+
+// RunTurnWithSteering drains queued user input only at settled response/tool
+// boundaries. The caller owns the queue, so input arriving after the last
+// boundary or after cancellation remains available for a subsequent run.
+// takeSteering must return at most one user message, or nil when none is ready.
+func (s *Session) RunTurnWithSteering(ctx context.Context, userText string, images []MessageImage, effortOverride string, emit func(Event), takeSteering func() *Message) (string, error) {
 	if emit == nil {
 		emit = func(Event) {}
 	}
@@ -48,6 +56,18 @@ func (s *Session) RunTurn(ctx context.Context, userText string, images []Message
 	}
 	s.appendHistory(Message{Role: "user", Content: userText, Images: images})
 
+	injectSteering := func() bool {
+		if takeSteering == nil || ctx.Err() != nil {
+			return false
+		}
+		message := takeSteering()
+		if message == nil {
+			return false
+		}
+		s.appendHistory(*message)
+		emit(Event{Type: EventUserInput, Text: message.Content, Display: message.Display})
+		return true
+	}
 	var total Usage
 	for round := range cfg.MaxTurns {
 		s.compactToolOutputs()
@@ -81,6 +101,9 @@ func (s *Session) RunTurn(ctx context.Context, userText string, images []Message
 
 		if len(assistant.ToolCalls) == 0 {
 			s.appendHistory(assistant)
+			if round+1 < cfg.MaxTurns && injectSteering() {
+				continue
+			}
 			emit(Event{Type: EventDone, Text: assistant.Content, Reasoning: assistant.Reasoning, Usage: total})
 			return assistant.Content, nil
 		}
@@ -110,6 +133,9 @@ func (s *Session) RunTurn(ctx context.Context, userText string, images []Message
 		// Append the assistant message together with all its tool results so
 		// an aborted round never leaves dangling tool_calls in the history.
 		s.appendHistory(append([]Message{assistant}, toolMsgs...)...)
+		if round+1 < cfg.MaxTurns {
+			injectSteering()
+		}
 	}
 	return "", fmt.Errorf("agent: model did not finish within MaxTurns limit (%d)", s.cfg.MaxTurns)
 }

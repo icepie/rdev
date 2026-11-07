@@ -442,12 +442,16 @@ export function applyScopedMessage(
       }
       return;
     }
+    case "steering":
     case "turn_start":
+      if (msg.op === "steering" && ops.turnOpen.current) {
+        ops.mutateOpenTurn(turn => ({ ...turn, streaming: false, streamingReasoning: false }));
+      }
       ops.pushBubble("user", asString(msg.text), parseStringArray(msg.images), parseStringArray(msg.imagePreviews), msg.display);
       ops.setRunning(true);
       /* Replayed live frames (reattach mid-turn) must not restart the
        * elapsed timer: working.since from the server already set it. */
-      if (!liveReplay) ops.setWorkingSince(parseDisplay(msg.display).time ?? Date.now());
+      if (!liveReplay && msg.op === "turn_start") ops.setWorkingSince(parseDisplay(msg.display).time ?? Date.now());
       ops.setCurrentTool(/^\/compact(?:\s|$)/i.test(asString(msg.text)) ? "/compact" : "");
       ops.openToolIds.current.clear();
       return;

@@ -132,3 +132,20 @@ it('restores structured notifications, steering and server timing from history',
   expect(sink.state.items[0]).toMatchObject({job,steering:true,time:1000});
   expect(sink.state.items[1]).toMatchObject({time:1000,endedAt:9000});
 });
+
+it('renders boundary steering as a new user message without interrupting the run or its clock', async () => {
+  await frame({ op: 'turn_start', text: 'original', display: { time: 1000 } });
+  await frame({ op: 'delta', text: 'before steering' });
+  await frame({ op: 'reasoning', text: 'thinking before steering' });
+  await frame({ op: 'tool_start', id: 'read', name: 'read_file' });
+  await frame({ op: 'tool_end', id: 'read', name: 'read_file', result: 'finished' });
+  await frame({ op: 'steering', text: 'new direction', display: { time: 2000, steering: true } });
+  await frame({ op: 'delta', text: 'adjusted response' });
+  expect(sink.state.running).toBe(true);
+  expect(sink.state.workingSince).toBe(1000);
+  expect(sink.state.items.map(item => item.kind)).toEqual(['user', 'turn', 'user', 'turn']);
+  expect(sink.state.items[1]).toMatchObject({ streaming: false, streamingReasoning: false });
+  expect(sink.state.items[1].tools[0]).toMatchObject({ done: true, result: 'finished' });
+  expect(sink.state.items[2]).toMatchObject({ text: 'new direction', steering: true, time: 2000 });
+  expect(sink.state.items[3].text).toBe('adjusted response');
+});
