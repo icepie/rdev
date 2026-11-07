@@ -510,7 +510,8 @@ func (h *agentWSHandler) OnOpen(socket *gws.Conn) {
 		ok = true
 	}
 	if !ok {
-		socket.WriteClose(1000, []byte("device '"+deviceID+"' is not connected"))
+		// 1013 signals a temporary service condition, allowing clients to retry.
+		socket.WriteClose(1013, []byte("device is temporarily offline"))
 		return
 	}
 

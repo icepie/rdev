@@ -181,6 +181,9 @@ export const MobileTrigger = React.forwardRef<
       if (!e.defaultPrevented) {
         if (!open) {
           blurActiveKeyboardInputBeforeOverlayOpen();
+          // Pointer activation can leave focus on body after suppressing
+          // selection. Give the drawer a concrete focus restoration target.
+          e.currentTarget.focus({ preventScroll: true });
         }
         onOpenChange(!open);
       }
@@ -349,8 +352,12 @@ export function ResponsiveDrawerShell({
   children,
 }: ResponsiveDrawerShellProps) {
   const { isContentRealized } = useResponsiveDrawerRealization({ open });
+  const hasOpened = React.useRef(false);
+  if (open) hasOpened.current = true;
 
-  if (!open && !isContentRealized) {
+  // Keep the shell mounted even when closed before deferred content renders,
+  // so its close transition and focus restoration still run.
+  if (!hasOpened.current) {
     return null;
   }
 

@@ -1187,8 +1187,8 @@ export function AgentPage() {
       setDeleteBusy(false);
       if (rejected) return;
       // A clean 1000 close with a reason is the server rejecting the
-      // session at open time (unknown/offline device, agent not
-      // configured): reconnecting would loop forever, so surface the
+      // session at open time (invalid configuration). Offline devices use
+      // the retryable 1013 close code; for permanent failures surface the
       // reason and stop.
       if (event.code === 1000 && event.reason) {
         setReconnecting(false);
@@ -1256,15 +1256,15 @@ export function AgentPage() {
     if (id) connect(id);
   }, [clearPing, clearReconnectTimer, connect, primaryOps, rejectPendingPanelRequests, setSearchParams]);
 
-  /* A bare /agent opens the server workspace immediately. Explicit device
-   * links wait for discovery rather than being overwritten by the default. */
+  /* Preserve explicit device links even while discovery reports them offline.
+   * The socket shows retry state and recovers when the device returns. */
   useEffect(() => {
     if (!devices.length) return;
     const preselect = searchParams.get("device") || "";
     // Discovery can briefly lose a device during reconnect. Keep the
     // selected workspace and its URL; the socket owns connection recovery.
     if (device) return;
-    if (preselect && devices.some((d) => d.id === preselect)) {
+    if (preselect) {
       setDevice(preselect);
     } else if (!preselect) {
       setDevice(SERVER_AGENT_ID);

@@ -2,6 +2,7 @@
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it } from "vitest";
+import { parseAllThreads } from "../ui/components/agent/protocol";
 import { threadIdentity, useThreadUnread } from "../ui/hooks/use-thread-unread";
 
 it("tracks completion across devices and background work, clearing only visible conversations", async () => {
@@ -54,7 +55,12 @@ it("restores unread and observes a completion across reload without marking old 
   const openIds = new Set();
   let rows = [{ device: "a", id: "job", running: true }];
   let unread;
-  function Harness() { unread = useThreadUnread(rows, "a", openIds); return null; }
+  function Harness() {
+    const decoded = rows.flatMap(row => parseAllThreads([{ device: row.device, threads: [row] }])
+      .flatMap(group => group.threads.map(thread => ({ ...thread, device: group.device }))));
+    unread = useThreadUnread(decoded, "a", openIds);
+    return null;
+  }
   let root = createRoot(document.createElement("div"));
   try {
     await act(async () => root.render(createElement(Harness)));
@@ -83,7 +89,12 @@ it("detects unseen turns across reload without treating renames or initial histo
   ];
   let openIds = new Set();
   let unread;
-  function Harness() { unread = useThreadUnread(rows, "a", openIds); return null; }
+  function Harness() {
+    const decoded = rows.flatMap(row => parseAllThreads([{ device: row.device, threads: [row] }])
+      .flatMap(group => group.threads.map(thread => ({ ...thread, device: group.device }))));
+    unread = useThreadUnread(decoded, "a", openIds);
+    return null;
+  }
   let root = createRoot(document.createElement("div"));
   const render = () => act(async () => root.render(createElement(Harness)));
   try {
