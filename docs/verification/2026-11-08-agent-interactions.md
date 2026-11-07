@@ -63,3 +63,12 @@ No production deployment occurred. The original full-resolution sent image is no
 - Found that generic head/tail truncation could remove the stdout/stderr boundary and old-history head-only compaction always removed closing tags. Shell-shaped results now shorten each stream independently and retain the status/envelope. Tests cover noisy stdout alone, noisy stdout plus stderr, UTF-8, size budgets and repeated compaction.
 - Legacy head-compacted stdout results render retained text and the explicit truncation marker without exposing wrapper tags. Arbitrary malformed output retains the generic fallback.
 - 137 Web tests, TypeScript and production build passed; full Go tests and Agent race tests passed. Legacy tests cover both stdout-only and partial-stderr compacted history.
+
+## Follow-up: session management browser acceptance
+
+Local fixture only (`@server` on port 19440); no real user history was deleted.
+
+- 1440×1000 dark: native New Conversation created a second server thread. Native header menu → Rename opened a focused text field; Enter saved `session-management-local-review` and updated the header/sidebar.
+- 390×844 touch/light: native conversation menu → Delete opened an alert dialog naming that exact thread and explaining cancellation of its work. Initial focus was Cancel. Cancel preserved the thread.
+- Reopened the confirmation and deleted the test thread. The app returned to `BB interaction review`, retained `@server`, and kept the composer enabled. Reload confirmed the deleted name remained absent, the original transcript remained, the dialog was gone, and root width equaled 390px.
+- Alert-dialog styles were compared directly with BB's packages/shared-ui implementation and match. Initial entry animation positions are transitional; the settled dialog fits the viewport. This exercise covers idle-thread UI management; running-work deletion isolation is covered separately by TestDeleteRunningConversationCancelsWorkAndCannotResurrectHistory.
