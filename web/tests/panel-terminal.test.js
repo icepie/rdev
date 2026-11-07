@@ -14,7 +14,7 @@ vi.mock("@xterm/addon-fit", () => ({ FitAddon: class { fit() {} } }));
 vi.mock("@xterm/addon-web-links", () => ({ WebLinksAddon: class {} }));
 vi.mock("@xterm/addon-image", () => ({ ImageAddon: class {} }));
 vi.mock("../ui/lib/api", () => ({ wsURL: path => path, rememberDevicePassword() {}, forgetDevicePassword() {} }));
-vi.mock("../ui/lib/xterm-theme", () => ({ readXtermTheme: () => ({}) }));
+vi.mock("../ui/lib/xterm-theme", () => ({ readXtermTheme: () => ({}), readTerminalFontFamily: () => "monospace" }));
 vi.mock("../ui/lib/terminal-images", () => ({ createKittyImageWriter: () => ({}), hasTerminalImageSequence: () => false }));
 vi.mock("../ui/pages/Terminal", () => ({ TabAuthOverlay: props => { auth.current = props; return null; } }));
 vi.mock("../ui/components/icon", () => ({ Icon: () => null }));

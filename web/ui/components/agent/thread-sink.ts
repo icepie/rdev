@@ -37,6 +37,8 @@ export interface AgentJob {
   kind: string;
   label: string;
   state: "running" | "completed" | "failed" | "canceled";
+  started?: string;
+  finished?: string;
   output?: string;
   result?: string;
   error?: string;
@@ -46,7 +48,7 @@ function parseJob(value: unknown): AgentJob | null {
   if (!value || typeof value !== "object") return null;
   const job = value as Record<string, unknown>;
   if (typeof job.id !== "string" || !["running", "completed", "failed", "canceled"].includes(String(job.state))) return null;
-  return { id: job.id, kind: asString(job.kind), label: asString(job.label), state: job.state as AgentJob["state"], output: asString(job.output), result: asString(job.result), error: asString(job.error) };
+  return { started: asString(job.started), finished: asString(job.finished), id: job.id, kind: asString(job.kind), label: asString(job.label), state: job.state as AgentJob["state"], output: asString(job.output), result: asString(job.result), error: asString(job.error) };
 }
 
 export interface ThreadSinkState {

@@ -235,6 +235,7 @@ type agentWorking struct {
 
 // agentThreadInfo is one thread in a thread_list / auth_ok broadcast.
 type agentThreadInfo struct {
+	Outcome        string `json:"outcome,omitempty"`
 	BackgroundJobs int    `json:"backgroundJobs,omitempty"`
 	ID             string `json:"id"`
 	Title          string `json:"title"`
@@ -304,6 +305,7 @@ type agentThread struct {
 	toolPaths    map[string]string      // in-flight tool call id -> path arg (edit/write_file)
 	turnFiles    []string               // files changed by edit/write_file this turn
 	workingSince time.Time              // current turn start
+	lastOutcome  string                 // latest foreground turn: done, error, stopped
 	workingTool  string                 // currently executing tool name
 	updatedAt    time.Time
 	// lastUsage is the token accounting of the most recent completed turn,
@@ -841,6 +843,7 @@ func agentThreadListLocked(entry *agentSessionEntry) []agentThreadInfo {
 			Title:     title,
 			UpdatedAt: th.updatedAt.UTC().Format(time.RFC3339),
 			Running:   th.running,
+			Outcome:   th.lastOutcome,
 			Model:     th.model,
 		}
 		if th.jobs != nil {
@@ -1617,6 +1620,7 @@ func (h *agentWSHandler) handleReset(ac *agentConn, threadRef string) {
 	th.turnFiles = nil
 	th.queue = nil
 	th.lastUsage = nil
+	th.lastOutcome = ""
 	th.alwaysAllow = make(map[string]bool)
 	th.branch = ""
 	th.live = nil
@@ -2334,6 +2338,7 @@ func (h *agentWSHandler) handleDirMkdir(ac *agentConn, path, requestID string) {
 // must hold agentSessionsMu.
 func (s *Server) startAgentTurnLocked(entry *agentSessionEntry, th *agentThread, text string, images []agent.MessageImage) agentMsg {
 	th.running = true
+	th.lastOutcome = ""
 	th.turnFiles = nil
 	th.toolPaths = make(map[string]string)
 	th.workingSince = time.Now()
@@ -2449,6 +2454,7 @@ func (s *Server) runAgentTurn(entry *agentSessionEntry, th *agentThread, turn ag
 	}
 	var terminalData []byte
 	if epochOK {
+		th.lastOutcome = terminal.Op
 		if data, err := json.Marshal(terminal); err == nil {
 			terminalData = data
 			th.live = append(th.live, json.RawMessage(data))

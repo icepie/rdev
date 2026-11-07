@@ -339,10 +339,14 @@ export function ChatPaneView({
         desc: t("agent.cmd.compactDesc"),
         icon: "Minimize2",
         run: (arg) => {
+          if (!ready || running) return false;
           const payload: Record<string, unknown> = { op: "chat", text: `/compact${arg ? ` ${arg}` : ""}` };
           if (threadId) payload.thread = threadId;
           if (model) payload.model = model;
-          return sendRaw(payload);
+          if (!sendRaw(payload)) return false;
+          ops.setRunning(true);
+          ops.setWorkingSince(Date.now());
+          return true;
         },
       },
       {
@@ -1078,6 +1082,8 @@ export function ChatPaneView({
               <ContextWindowIndicator
                 used={turnUsage.inputTokens}
                 contextWindow={contextWindow}
+                busy={!ready || running}
+                onCompact={() => slashCommands.find(command => command.name === "compact")?.run("")}
                 t={t}
               />
             )}

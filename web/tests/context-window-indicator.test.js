@@ -19,7 +19,8 @@ it("opens context details from a ring without a visible token count", async () =
     expect(button.getAttribute("aria-label")).toContain("25");
     await act(async () => button.click());
     const details = document.querySelector('[role="dialog"]');
-    expect(details.textContent).toContain("32k / 128k");
+    expect(details.textContent).not.toContain("32k");
+    expect(details.textContent).not.toContain("128k");
     expect(details.textContent).toContain("agent.usageLeft 75");
   } finally {
     await act(async () => root.unmount());

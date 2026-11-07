@@ -98,6 +98,7 @@ export function parseThreads(v: unknown): ThreadInfo[] {
       updatedAt?: unknown;
       running?: unknown;
       waiting?: unknown;
+      outcome?: unknown;
       backgroundJobs?: unknown;
       tool?: unknown;
     };
@@ -109,6 +110,7 @@ export function parseThreads(v: unknown): ThreadInfo[] {
         title: asString(o.title),
         updatedAt: asString(o.updatedAt),
         running: !!o.running,
+        outcome: o.outcome === "done" || o.outcome === "error" || o.outcome === "stopped" ? o.outcome : undefined,
         backgroundJobs: typeof o.backgroundJobs === "number" && Number.isSafeInteger(o.backgroundJobs) && o.backgroundJobs > 0 ? o.backgroundJobs : 0,
         waiting: o.running && (o.waiting === "approval" || o.waiting === "answer") ? o.waiting : undefined,
         tool: asString(o.tool),

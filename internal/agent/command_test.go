@@ -16,7 +16,7 @@ func TestToolCommandRespectsApprovalWithoutProvider(t *testing.T) {
 		}})
 		var events []Event
 		err := sess.RunToolCommand(context.Background(), "/bg echo hi", "bg", json.RawMessage(`{"command":"echo hi"}`), func(e Event) { events = append(events, e) })
-		if err != nil || tool.ran != allow || approvals != 1 {
+		if (err == nil) != allow || tool.ran != allow || approvals != 1 {
 			t.Fatalf("allow=%v ran=%v approvals=%d err=%v", allow, tool.ran, approvals, err)
 		}
 		history := sess.History()

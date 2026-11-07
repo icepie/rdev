@@ -25,7 +25,7 @@ import {
   hasTerminalImageSequence,
   type KittyImageWriter,
 } from "../lib/terminal-images";
-import { readXtermTheme } from "../lib/xterm-theme";
+import { readXtermTheme, readTerminalFontFamily } from "../lib/xterm-theme";
 import { cn } from "../lib/utils";
 import { Button } from "../components/button";
 import { Input } from "../components/input";
@@ -402,11 +402,9 @@ export function TerminalPage() {
         "absolute inset-0 touch-manipulation p-2 max-md:p-1 [&>.xterm]:h-full [&>.xterm]:w-full [&_.xterm-screen]:box-content [&_.xterm-viewport]:box-content [&_.xterm-screen_canvas]:block invisible pointer-events-none";
       const term = new XTerm({
         cursorBlink: true,
-        fontSize: 14,
+        fontSize: 12,
         convertEol: true,
-        fontFamily:
-          "'SF Mono','Fira Code','Cascadia Code',Menlo,Monaco,monospace",
-        lineHeight: 1.12,
+        fontFamily: readTerminalFontFamily(),
         letterSpacing: 0,
         theme: readXtermTheme(),
         allowProposedApi: true,
@@ -746,6 +744,7 @@ export function TerminalPage() {
       const theme = readXtermTheme();
       for (const tab of tabsRef.current.values()) {
         tab.term.options.theme = theme;
+        tab.term.options.fontFamily = readTerminalFontFamily();
         refreshTerminalLayout(tab);
       }
     });

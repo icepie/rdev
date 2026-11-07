@@ -115,6 +115,10 @@
   #root {
     height: 100dvh;
   }
+  html {
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+  }
   body {
     background: var(--background);
     color: var(--foreground);

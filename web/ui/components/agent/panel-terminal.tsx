@@ -21,7 +21,7 @@ import {
   hasTerminalImageSequence,
   type KittyImageWriter,
 } from "../../lib/terminal-images";
-import { readXtermTheme } from "../../lib/xterm-theme";
+import { readXtermTheme, readTerminalFontFamily } from "../../lib/xterm-theme";
 import { TabAuthOverlay } from "../../pages/Terminal";
 import { Button } from "../button";
 import { Icon } from "../icon";
@@ -186,8 +186,7 @@ export function PanelTerminal({
       cursorBlink: true,
       fontSize: 12,
       convertEol: true,
-      fontFamily:
-        "'SF Mono','Fira Code','Cascadia Code',Menlo,Monaco,monospace",
+      fontFamily: readTerminalFontFamily(),
       letterSpacing: 0,
       theme: readXtermTheme(),
       allowProposedApi: true,
@@ -227,6 +226,8 @@ export function PanelTerminal({
     /* Re-read xterm colors when the app theme flips (.dark on <html>). */
     const themeObserver = new MutationObserver(() => {
       term.options.theme = readXtermTheme();
+      term.options.fontFamily = readTerminalFontFamily();
+      fitAddon.fit();
     });
     themeObserver.observe(document.documentElement, {
       attributes: true,

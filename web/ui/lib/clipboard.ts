@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 export async function copyText(text: string): Promise<void> {
   if (navigator.clipboard && window.isSecureContext)
@@ -33,6 +33,7 @@ export async function copyText(text: string): Promise<void> {
 export function useCopy(): [string | null, (id: string, text: string) => void] {
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const timer = useRef<number | undefined>(undefined);
+  useEffect(() => () => window.clearTimeout(timer.current), []);
   const copy = useCallback((id: string, text: string) => {
     copyText(text)
       .then(() => {

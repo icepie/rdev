@@ -2,6 +2,7 @@ package client
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
@@ -83,47 +84,41 @@ func newCoalescingWriterWithInterval(client *Client, sessionID string, typ byte,
 }
 
 func (w *coalescingWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	if len(p) >= 4096 {
-		// Large write: send immediately
-		w.flush() // drain any pending buffer
+		w.flushLocked()
 		w.client.sendBinary(w.typ, w.sessionID, p)
 		return len(p), nil
 	}
-
-	w.mu.Lock()
 	w.buf.Write(p)
 	if w.buf.Len() >= 4096 {
-		data := make([]byte, w.buf.Len())
-		copy(data, w.buf.Bytes())
-		w.buf.Reset()
-		if w.timer != nil {
-			w.timer.Stop()
-			w.timer = nil
-		}
-		w.mu.Unlock()
-		w.client.sendBinary(w.typ, w.sessionID, data)
+		w.flushLocked()
 	} else if w.timer == nil {
 		w.timer = time.AfterFunc(w.interval, w.flush)
-		w.mu.Unlock()
-	} else {
-		w.mu.Unlock()
 	}
 	return len(p), nil
 }
 
 func (w *coalescingWriter) flush() {
 	w.mu.Lock()
-	if w.buf.Len() == 0 {
+	defer w.mu.Unlock()
+	w.flushLocked()
+}
+
+// Serialize draining with writes so a timer cannot send older bytes after a
+// newer chunk or after the final flush. sendBinary copies into its frame before
+// returning, so the buffer can be reused without another allocation here.
+func (w *coalescingWriter) flushLocked() {
+	if w.timer != nil {
+		w.timer.Stop()
 		w.timer = nil
-		w.mu.Unlock()
+	}
+	if w.buf.Len() == 0 {
 		return
 	}
-	data := make([]byte, w.buf.Len())
-	copy(data, w.buf.Bytes())
+	w.client.sendBinary(w.typ, w.sessionID, w.buf.Bytes())
 	w.buf.Reset()
-	w.timer = nil
-	w.mu.Unlock()
-	w.client.sendBinary(w.typ, w.sessionID, data)
 }
 
 // sftpRWC bridges SFTP server over WebSocket
@@ -151,9 +146,10 @@ type clientSession struct {
 	ptyProc *ptyutil.Process
 
 	// Non-PTY exec mode
-	stdinPipe io.WriteCloser
-	stdinOnce sync.Once
-	cmdWaitFn func() (int, error)
+	stdinPipe  io.WriteCloser
+	stdinOnce  sync.Once
+	cmdWaitFn  func() (int, error)
+	cancelExec func()
 
 	// SFTP mode
 	sftpInput  *io.PipeWriter
@@ -167,6 +163,9 @@ func (s *clientSession) close() {
 	s.once.Do(func() {
 		if s.ptyProc != nil {
 			s.ptyProc.Close()
+		}
+		if s.cancelExec != nil {
+			s.cancelExec()
 		}
 		s.closeInput()
 		close(s.done)
@@ -1521,12 +1520,20 @@ func (c *Client) startShellExecSession(msg *protocol.Message) (*clientSession, e
 		flag = "/c"
 	}
 
+	ctx, cancel := context.WithCancel(context.Background())
+	started := false
+	defer func() {
+		if !started {
+			cancel()
+		}
+	}()
 	var cmd *exec.Cmd
 	if msg.Command != "" {
-		cmd = exec.Command(shell, flag, msg.Command)
+		cmd = exec.CommandContext(ctx, shell, flag, msg.Command)
 	} else {
-		cmd = exec.Command(shell)
+		cmd = exec.CommandContext(ctx, shell)
 	}
+	configureExecCancellation(cmd)
 	cmd.Env = append(os.Environ(), msg.Env...)
 
 	stdinR, stdinW, err := os.Pipe()
@@ -1535,10 +1542,16 @@ func (c *Client) startShellExecSession(msg *protocol.Message) (*clientSession, e
 	}
 	stdoutR, stdoutW, err := os.Pipe()
 	if err != nil {
+		stdinR.Close()
+		stdinW.Close()
 		return nil, err
 	}
 	stderrR, stderrW, err := os.Pipe()
 	if err != nil {
+		stdinR.Close()
+		stdinW.Close()
+		stdoutR.Close()
+		stdoutW.Close()
 		return nil, err
 	}
 
@@ -1560,6 +1573,12 @@ func (c *Client) startShellExecSession(msg *protocol.Message) (*clientSession, e
 	stdoutW.Close()
 	stderrW.Close()
 
+	started = true
+	sess.cancelExec = func() {
+		cancel()
+		stdoutR.Close()
+		stderrR.Close()
+	}
 	sess.stdinPipe = wincompat.EncodeInput(stdinW)
 	sess.cmdWaitFn = func() (int, error) {
 		err := cmd.Wait()
@@ -1593,8 +1612,8 @@ func (c *Client) startShellExecSession(msg *protocol.Message) (*clientSession, e
 	}()
 
 	go func() {
-		ioWg.Wait()
 		exitCode, _ := sess.cmdWaitFn()
+		ioWg.Wait()
 		c.sendExitCode(msg.SessionID, exitCode)
 		c.sendClose(msg.SessionID)
 		sess.close()

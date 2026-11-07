@@ -4,15 +4,6 @@ import type { Translator } from "./types";
 
 /* Context-window ring with details from the latest input snapshot. */
 
-const compactTokens = new Intl.NumberFormat("en-US", {
-  notation: "compact",
-  maximumFractionDigits: 0,
-});
-
-function formatTokens(n: number): string {
-  return compactTokens.format(n).toLowerCase();
-}
-
 function toneFor(pct: number): string {
   if (pct >= 90) return "text-destructive-text";
   if (pct >= 75) return "text-warning-text";
@@ -26,12 +17,16 @@ export function ContextWindowIndicator({
   used,
   contextWindow,
   t,
+  onCompact,
+  busy = false,
 }: {
   /* usage.inputTokens of the thread's latest completed turn. */
   used: number;
   /* Current model's context window (> 0). */
   contextWindow: number;
   t: Translator;
+  onCompact?: () => void;
+  busy?: boolean;
 }) {
   const pct = Math.round(Math.min(1, Math.max(0, used / contextWindow)) * 100);
   const left = Math.max(0, 100 - pct);
@@ -91,14 +86,12 @@ export function ContextWindowIndicator({
               />
             </div>
             <div className="flex items-baseline justify-between gap-2 text-xs tabular-nums text-muted-foreground">
-              <span>
-                {t("agent.usageTokens", {
-                  used: formatTokens(used),
-                  window: formatTokens(contextWindow),
-                })}
-              </span>
               <span>{t("agent.usageLeft", { pct: left })}</span>
             </div>
+            {onCompact && <button type="button" disabled={busy} onClick={onCompact}
+              className="rounded-md border border-border px-2 py-1.5 text-xs hover:bg-state-hover disabled:cursor-not-allowed disabled:opacity-50">
+              {t("agent.cmd.compact")}
+            </button>}
           </div>
         </div>
       </PopoverContent>

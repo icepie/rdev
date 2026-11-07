@@ -17,3 +17,9 @@ it("accepts only nonnegative integral background task counts", () => {
   expect(parseThreads(values.map((backgroundJobs, i) => ({ id: String(i), backgroundJobs })))
     .map(row => row.backgroundJobs)).toEqual([2, 0, 0, 0, 0, 0, 0]);
 });
+
+it("preserves known turn outcomes without treating unknown outcomes as success", () => {
+  expect(parseThreads(["done", "error", "stopped", "unknown", undefined].map((outcome, i) => ({
+    id: String(i), outcome,
+  }))).map(row => row.outcome)).toEqual(["done", "error", "stopped", undefined, undefined]);
+});

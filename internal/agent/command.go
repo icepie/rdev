@@ -41,5 +41,11 @@ func (s *Session) RunToolCommand(ctx context.Context, text, name string, args js
 		Message{Role: "tool", ToolCallID: tc.ID, Content: result},
 	)
 	emit(Event{Type: EventToolEnd, ToolID: tc.ID, ToolName: name, ToolResult: result, IsError: failed})
-	return ctx.Err()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if failed {
+		return fmt.Errorf("%s command failed: %s", name, result)
+	}
+	return nil
 }

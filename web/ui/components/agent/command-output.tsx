@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { renderAnsiOutput } from "../../lib/ansi-output";
 import { SyntaxCode } from "../syntax-code";
 import { cn } from "../../lib/utils";
@@ -57,6 +57,16 @@ export function CommandOutputBody({
   tool: ToolItem;
   t: Translator;
 }) {
+  const outputRef = useRef<HTMLDivElement>(null);
+  const following = useRef(true);
+  useEffect(() => {
+    const node = outputRef.current;
+    if (node && following.current) node.scrollTop = node.scrollHeight;
+  }, [tool.result]);
+  const trackScroll = () => {
+    const node = outputRef.current;
+    if (node) following.current = node.scrollHeight - node.clientHeight - node.scrollTop < 24;
+  };
   const command = commandOf(tool);
   const parsed = useMemo(() => parseShellResult(tool.result), [tool.result]);
   const cap = (s: string) =>
@@ -87,7 +97,7 @@ export function CommandOutputBody({
           tool.isError ? "border-destructive" : "border-border",
         )}
       >
-        <div className="max-h-72 overflow-auto px-4 py-3 font-mono text-xs leading-tight break-words whitespace-pre-wrap text-foreground select-text">
+        <div ref={outputRef} onScroll={trackScroll} className="max-h-72 overflow-auto px-4 py-3 font-mono text-xs leading-tight break-words whitespace-pre-wrap text-foreground select-text">
           {command && (
             <div className="text-muted-foreground">
               $ <SyntaxCode code={command} language="shell" />
@@ -112,7 +122,7 @@ export function CommandOutputBody({
         failed ? "border-destructive" : "border-border",
       )}
     >
-      <div className="max-h-72 overflow-auto px-4 py-3 font-mono text-xs leading-tight break-words whitespace-pre-wrap text-foreground select-text">
+      <div ref={outputRef} onScroll={trackScroll} className="max-h-72 overflow-auto px-4 py-3 font-mono text-xs leading-tight break-words whitespace-pre-wrap text-foreground select-text">
         {command && (
           <div className="text-muted-foreground">
             $ <SyntaxCode code={command} language="shell" />

@@ -1,4 +1,6 @@
 import { CommandOutputBody } from "./command-output";
+import { useCopy } from "../../lib/clipboard";
+import { formatDuration } from "./transcript-rows";
 import { Markdown } from "../markdown";
 import { DisclosureBody } from "../disclosure-body";
 import { useEffect, useState } from "react";
@@ -26,6 +28,7 @@ export function JobsPanel({
   sendRaw: (payload: Record<string, unknown>) => boolean;
   t: Translator;
 }) {
+  const [copiedId, copy] = useCopy();
   const [selection, setSelection] = useState<{
     thread: string;
     id: string;
@@ -64,6 +67,10 @@ export function JobsPanel({
   }, [ready, threadId, sendRaw, open, selected]);
   const jobs = sink.state.jobs;
   const job = jobs.find((item) => item.id === selected);
+  const started = Date.parse(job?.started || "");
+  const finished = Date.parse(job?.finished || "");
+  const duration = Number.isFinite(started)
+    ? Math.max(0, (Number.isFinite(finished) ? finished : Date.now()) - started) : null;
   const running = jobs.filter((item) => item.state === "running").length;
   if (!jobs.length && !open && !sink.state.jobsError) return null;
   return (
@@ -128,14 +135,20 @@ export function JobsPanel({
             </div>
           ))}
           {job && (
-            <p className="mt-2 break-all font-mono text-2xs text-muted-foreground">
-              {job.id}
-            </p>
+            <div className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
+              <span className="min-w-0 flex-1 truncate" title={job.id}>{job.label}</span>
+              {duration !== null && <span className="shrink-0 tabular-nums">{formatDuration(duration)}</span>}
+              <Button size="sm" variant="ghost" disabled={!job.result && !job.output}
+                onClick={() => copy(job.id, job.result || job.output || "")}>
+                {t(copiedId === job.id ? "common.copied" : "common.copy")}
+              </Button>
+            </div>
           )}
           {job && (
             <div className="mt-2">
               {job.kind === "shell" ? (
                 <CommandOutputBody
+                  key={job.id}
                   tool={{
                     id: job.id, name: "shell", args: "{}", summary: job.label,
                     result: job.result || job.output || t("agent.jobs.waiting"),

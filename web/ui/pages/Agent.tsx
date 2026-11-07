@@ -2190,8 +2190,8 @@ export function AgentPage() {
       )}
       <span className="flex h-4 w-4 shrink-0 items-center justify-center">
         {!th.running && !(th.backgroundJobs ?? 0) && unreadThreads.has(threadIdentity(th.device, th.id)) && (
-          <span role="img" aria-label={t("agent.completedUnread")} title={t("agent.completedUnread")}
-            className="size-2 rounded-full bg-timeline-accent" />
+          <span role="img" aria-label={t(th.outcome === "error" ? "agent.failedUnread" : th.outcome === "stopped" ? "agent.stoppedUnread" : th.outcome === "done" ? "agent.completedUnread" : "agent.updatedUnread")} title={t(th.outcome === "error" ? "agent.failedUnread" : th.outcome === "stopped" ? "agent.stoppedUnread" : th.outcome === "done" ? "agent.completedUnread" : "agent.updatedUnread")}
+            className={cn("size-2 rounded-full", th.outcome === "error" ? "bg-destructive" : th.outcome === "stopped" ? "bg-muted-foreground" : "bg-timeline-accent")} />
         )}
         {th.running && (
           <span role="img" aria-label={t(th.waiting === "approval" ? "agent.waitingApproval" : th.waiting === "answer" ? "agent.waitingAnswer" : "agent.filterRunning")}

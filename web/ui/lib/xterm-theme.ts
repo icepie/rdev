@@ -37,21 +37,24 @@ function cssVar(name: string): string {
     .trim();
 }
 
+export function readTerminalFontFamily(): string {
+  return cssVar("--font-terminal") ||
+    '"JetBrainsMono Nerd Font Mono", "MesloLGS NF", "Symbols Nerd Font Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace';
+}
+
 export function readXtermTheme(): ITheme {
-  const background = resolveColor(cssVar("--background"), "#0f1117");
+  const background = resolveColor(cssVar("--sidebar"), "#0f1117");
   const foreground = resolveColor(cssVar("--foreground"), "#e4e4e7");
-  const accent = resolveColor(cssVar("--timeline-accent"), "#22d3ee");
+  const selection = resolveColor(cssVar("--muted"), "rgba(128,128,128,0.25)");
   const ansi = (i: number, fallback: string) =>
     resolveColor(cssVar(`--ansi-${i}`), fallback);
   return {
     background,
     foreground,
-    cursor: accent,
+    cursor: foreground,
     cursorAccent: background,
-    selectionBackground: resolveColor(
-      `color-mix(in srgb, ${accent} 25%, transparent)`,
-      "rgba(34,211,238,0.25)",
-    ),
+    selectionBackground: selection,
+    selectionInactiveBackground: selection,
     black: ansi(0, "#1a1d27"),
     red: ansi(1, "#f87171"),
     green: ansi(2, "#4ade80"),

@@ -47,3 +47,29 @@ it("tracks completion across devices and background work, clearing only visible 
     delete globalThis.IS_REACT_ACT_ENVIRONMENT;
   }
 });
+
+it("restores unread and observes a completion across reload without marking old history", async () => {
+  globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  sessionStorage.clear();
+  const openIds = new Set();
+  let rows = [{ device: "a", id: "job", running: true }];
+  let unread;
+  function Harness() { unread = useThreadUnread(rows, "a", openIds); return null; }
+  let root = createRoot(document.createElement("div"));
+  try {
+    await act(async () => root.render(createElement(Harness)));
+    await act(async () => root.unmount());
+    rows = [{ device: "a", id: "job", running: false }, { device: "a", id: "old", running: false }];
+    root = createRoot(document.createElement("div"));
+    await act(async () => root.render(createElement(Harness)));
+    expect([...unread]).toEqual([threadIdentity("a", "job")]);
+    await act(async () => root.unmount());
+    root = createRoot(document.createElement("div"));
+    await act(async () => root.render(createElement(Harness)));
+    expect([...unread]).toEqual([threadIdentity("a", "job")]);
+  } finally {
+    await act(async () => root.unmount());
+    sessionStorage.clear();
+    delete globalThis.IS_REACT_ACT_ENVIRONMENT;
+  }
+});

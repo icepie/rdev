@@ -536,6 +536,16 @@ func TestAgentStopSingleStoppedFrame(t *testing.T) {
 	if stopped.Thread != auth.Thread {
 		t.Fatalf("stopped thread = %q, want %q", stopped.Thread, auth.Thread)
 	}
+	srv.agentSessionsMu.Lock()
+	entry := srv.agentSessions["dev1"]
+	var outcome string
+	if entry != nil && entry.threads[auth.Thread] != nil {
+		outcome = entry.threads[auth.Thread].lastOutcome
+	}
+	srv.agentSessionsMu.Unlock()
+	if outcome != "stopped" {
+		t.Fatalf("stopped turn outcome=%q", outcome)
+	}
 	// Exactly one terminal frame: no done/error/second stopped afterwards.
 	for _, m := range drainAgentOps(rec.msgs, 300*time.Millisecond) {
 		if m.Op == "stopped" || m.Op == "done" || m.Op == "error" {
@@ -659,8 +669,18 @@ func TestAgentReattachWorkingSinceStable(t *testing.T) {
 	if sw.Working == nil || sw.Working.Since != auth2.Working.Since {
 		t.Fatalf("working.since mismatch: auth2 %v vs switched %+v", auth2.Working.Since, sw.Working)
 	}
-	// The reattached tab replays the live backlog (turn_start + delta).
+	// The snapshot includes frames produced before attachment; later frames
+	// arrive separately. Both delivery paths satisfy the replay contract.
 	var sawLive bool
+	for _, raw := range auth2.Live {
+		var m agentMsg
+		if err := json.Unmarshal(raw, &m); err != nil {
+			t.Fatal(err)
+		}
+		if m.Op == "delta" {
+			sawLive = true
+		}
+	}
 	for _, m := range drainAgentOps(rec2.msgs, 300*time.Millisecond) {
 		if m.Op == "delta" {
 			sawLive = true
