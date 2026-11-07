@@ -6,8 +6,7 @@ import { isImeComposing } from "../../lib/keyboard";
  * client with the same wire protocol (list paging, upload with per-chunk
  * acks, download resume, cancel/pause/clear). The tab strip keeps the panel
  * mounted while hidden, so the socket and in-flight transfers survive tab
- * switches; only the speed-sampling/stall-watchdog ticker is gated on
- * visibility. Tasks persist per device under `rdevFileTasks.<device>` so the
+ * switches; progress rendering is gated on visibility. Tasks persist per device under `rdevFileTasks.<device>` so the
  * panel never clobbers the standalone page's `rdevFileTasks`. */
 import {
   useCallback,
@@ -173,8 +172,7 @@ export function PanelFiles({
 }: {
   device: string;
   /* false while another panel tab is active: the panel stays mounted but is
-   * display:none — the socket and transfers keep running, only the speed /
-   * stall ticker is paused. */
+   * display:none — transfers/watchdog continue, progress rendering pauses. */
   visible: boolean;
   t: Translator;
   onOpenFile: (path: string) => void;
@@ -214,9 +212,10 @@ export function PanelFiles({
   const authOpenRef = useRef(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  const progressDirty = useRef(false);
   const bump = useCallback(() => setTasksTick((n) => n + 1), []);
   const saveTasks = useCallback(
-    () => persistTasks(deviceRef.current, tasksRef.current!),
+    () => { persistTasks(deviceRef.current, tasksRef.current!); progressDirty.current = false; },
     [],
   );
 
@@ -323,6 +322,7 @@ export function PanelFiles({
         a.remove();
       }, 1000);
       task.saved = true;
+      task.blobParts = undefined;
       saveTasks();
     },
     [resumeDownload, saveTasks],
@@ -331,6 +331,7 @@ export function PanelFiles({
   const completeDownload = useCallback(
     (task: FileTask, offset: number) => {
       if (!task || task.dir !== "download" || task.saved) return;
+      if (task.status !== "running") return;
       const finalOffset = Number(offset || task.done || 0);
       if (task.size && finalOffset < task.size) {
         task.done = Math.max(task.done || 0, finalOffset);
@@ -563,12 +564,14 @@ export function PanelFiles({
       const taskId = typeof msg.taskId === "string" ? msg.taskId : "";
       const task = tasksRef.current!.get(taskId);
       if (msg.op === "upload_ready" && task) {
+        if (task.status !== "running" && task.status !== "queued") return;
         task.path = typeof msg.path === "string" ? msg.path : task.path;
         task.done = Number(msg.offset || 0);
         task.status = "running";
         saveTasks();
         void uploadLoop(task);
       } else if (msg.op === "download_start" && task) {
+        if (task.status !== "running" || task.saved) return;
         task.size = Number(msg.size || 0) || task.size;
         task.name =
           typeof msg.name === "string" && msg.name ? msg.name : task.name;
@@ -621,40 +624,42 @@ export function PanelFiles({
       const task = tasksRef.current!.get(f.taskId);
       if (!task) return;
       if (f.typ === FRAME_UPLOAD_ACK) {
+        if (task.dir !== "upload" || task.status !== "running") return;
         task.done = f.offset;
-        updateSpeed(task);
-        saveTasks();
+        progressDirty.current = true;
         if (task.waitAck) {
           const r = task.waitAck;
           task.waitAck = null;
           r();
         }
       } else if (f.typ === FRAME_DOWNLOAD_CHUNK) {
+        if (task.dir !== "download" || task.status !== "running" || task.saved) return;
         if (f.offset === (task.done || 0)) {
           task.blobParts = task.blobParts || [];
           task.blobParts.push(f.payload);
           task.done = f.offset + f.payload.byteLength;
           task.lastProgress = Date.now();
           task.message = "";
-          updateSpeed(task);
-          saveTasks();
+          progressDirty.current = true;
         } else if (f.offset < (task.done || 0)) {
           // Duplicate chunk from a resumed request; ignore it.
         } else if (Date.now() - (task.lastRequested || 0) > 1000) {
           resumeDownload(task, task.done || 0, tRef.current("files.resuming"));
         }
       } else if (f.typ === FRAME_DOWNLOAD_END) {
+        if (task.dir !== "download" || task.status !== "running" || task.saved) return;
         completeDownload(task, f.offset || task.done || 0);
+        bump();
       }
-      bump();
     },
-    [saveTasks, resumeDownload, completeDownload, bump],
+    [resumeDownload, completeDownload, bump],
   );
 
   /* Single /files socket per device with exponential-backoff reconnect.
    * Re-runs when the device prop changes: clears per-device state, drops the
    * old socket, reconnects, and lists the home directory. */
   useEffect(() => {
+    progressDirty.current = false;
     tasksRef.current = loadPersistedTasks(device);
     listingGuard.current.invalidate();
     filesByTaskRef.current.clear();
@@ -733,6 +738,8 @@ export function PanelFiles({
     connect();
     return () => {
       disposed = true;
+      if (progressDirty.current) persistTasks(device, tasksRef.current!);
+      progressDirty.current = false;
       listingGuard.current.invalidate();
       window.clearTimeout(reconnectTimerRef.current);
       const ws = wsRef.current;
@@ -745,9 +752,8 @@ export function PanelFiles({
   }, [device, onBinary, onText, resumeActive, closeAuth, bump]);
 
   /* Speed sampling + stalled-download watchdog + task re-render, every 500ms.
-   * Paused while the tab is hidden; transfers themselves keep running. */
+   * Hidden panes persist progress and keep the watchdog, but do not render. */
   useEffect(() => {
-    if (!visible) return;
     const timer = window.setInterval(() => {
       const now = Date.now();
       tasksRef.current!.forEach((task) => {
@@ -762,10 +768,13 @@ export function PanelFiles({
           resumeDownload(task, task.done || 0, tRef.current("files.resuming"));
         }
       });
-      bump();
+      if (progressDirty.current) {
+        saveTasks();
+        if (visible) bump();
+      }
     }, 500);
     return () => window.clearInterval(timer);
-  }, [visible, resumeDownload, bump]);
+  }, [visible, resumeDownload, saveTasks, bump]);
 
   /* ── Task actions ── */
 
