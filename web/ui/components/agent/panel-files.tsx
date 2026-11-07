@@ -1,3 +1,5 @@
+import { createTransferAttempts } from "../../lib/file-transfer-attempts";
+import { uploadChunks } from "../../lib/upload-chunks";
 import { encodeFrame, decodeFrame } from "../../lib/file-transfer-frame";
 import { createListingGuard, readListingPage } from "../../lib/file-request-state";
 import { isImeComposing } from "../../lib/keyboard";
@@ -203,6 +205,8 @@ export function PanelFiles({
   const listOffsetRef = useRef(0);
   const listTotalRef = useRef(0);
   const listTruncatedRef = useRef(false);
+  const transferAttempts = useRef(createTransferAttempts(makeId));
+  const uploadRunsRef = useRef(new Map<string, AbortController>());
   const listingGuard = useRef(createListingGuard());
   const deviceRef = useRef(device);
   deviceRef.current = device;
@@ -295,7 +299,7 @@ export function PanelFiles({
       send({
         op: "download_start",
         deviceId: task.device,
-        taskId: task.id,
+        taskId: transferAttempts.current.begin(task.id),
         path: task.path,
         offset: resumeOffset,
       });
@@ -323,6 +327,7 @@ export function PanelFiles({
       }, 1000);
       task.saved = true;
       task.blobParts = undefined;
+      transferAttempts.current.remove(task.id);
       saveTasks();
     },
     [resumeDownload, saveTasks],
@@ -372,7 +377,7 @@ export function PanelFiles({
       send({
         op: "download_start",
         deviceId: activeDevice,
-        taskId: task.id,
+        taskId: transferAttempts.current.begin(task.id),
         path,
         offset: 0,
       });
@@ -382,49 +387,65 @@ export function PanelFiles({
 
   /* ── Uploads ── */
 
+  const stopUpload = useCallback((task: FileTask) => {
+    uploadRunsRef.current.get(task.id)?.abort();
+    uploadRunsRef.current.delete(task.id);
+    task.waitAck = null;
+  }, []);
+
   const uploadLoop = useCallback(
     async (task: FileTask) => {
-      const file = filesByTaskRef.current.get(task.id);
-      if (!file) {
-        task.status = "failed";
-        task.message = tRef.current("files.reselect");
-        saveTasks();
-        bump();
-        return;
+      stopUpload(task);
+      const wireId = transferAttempts.current.current(task.id);
+      if (!wireId) return;
+      const controller = new AbortController();
+      uploadRunsRef.current.set(task.id, controller);
+      try {
+        const file = filesByTaskRef.current.get(task.id);
+        if (!file) throw new Error(tRef.current("files.reselect"));
+        const complete = await uploadChunks({
+          file, chunkSize: CHUNK, offset: () => task.done || 0, signal: controller.signal,
+          write: (chunk, offset) => {
+            const ws = wsRef.current;
+            if (!ws || ws.readyState !== WebSocket.OPEN) throw new Error(tRef.current("files.disconnected"));
+            const ack = Promise.withResolvers<void>();
+            task.waitAck = ack.resolve;
+            ws.send(encodeFrame(FRAME_UPLOAD_CHUNK, wireId, offset, chunk));
+            return ack.promise;
+          },
+        });
+        if (complete && !controller.signal.aborted && transferAttempts.current.current(task.id) === wireId && task.status === "running") send({ op: "upload_end", taskId: wireId, path: task.path, size: file.size });
+      } catch (error) {
+        if (!controller.signal.aborted) {
+          task.status = "failed";
+          task.message = error instanceof Error ? error.message : String(error);
+          saveTasks();
+          bump();
+        }
+      } finally {
+        if (uploadRunsRef.current.get(task.id) === controller) {
+          uploadRunsRef.current.delete(task.id);
+          task.waitAck = null;
+        }
       }
-      for (let off = task.done || 0; off < file.size; off = task.done) {
-        if (task.status !== "running") return;
-        const chunk = await file.slice(off, off + CHUNK).arrayBuffer();
-        const ws = wsRef.current;
-        if (!ws || ws.readyState !== WebSocket.OPEN) return;
-        ws.send(encodeFrame(FRAME_UPLOAD_CHUNK, task.id, off, chunk));
-        const ack = Promise.withResolvers<void>();
-        task.waitAck = ack.resolve;
-        await ack.promise;
-      }
-      send({
-        op: "upload_end",
-        taskId: task.id,
-        path: task.path,
-        size: file.size,
-      });
     },
-    [saveTasks, send, bump],
+    [saveTasks, send, bump, stopUpload],
   );
 
   const sendUploadStart = useCallback(
     (task: FileTask, modTime?: string) => {
+      stopUpload(task);
       send({
         op: "upload_start",
         deviceId: task.device,
-        taskId: task.id,
+        taskId: transferAttempts.current.begin(task.id),
         parentPath: task.parentPath,
         name: task.name,
         size: task.size,
         ...(modTime ? { modTime } : {}),
       });
     },
-    [send],
+    [send, stopUpload],
   );
 
   const startUpload = useCallback(
@@ -475,7 +496,7 @@ export function PanelFiles({
     tasksRef.current!.forEach((task) => {
       if (task.dir === "download" && task.status === "running" && !task.saved) {
         resumeDownload(task, task.done || 0, tRef.current("files.resuming"));
-      } else if (task.dir === "upload" && task.status === "queued") {
+      } else if (task.dir === "upload" && (task.status === "queued" || task.status === "running")) {
         sendUploadStart(task);
       }
     });
@@ -562,7 +583,7 @@ export function PanelFiles({
         return;
       }
       const taskId = typeof msg.taskId === "string" ? msg.taskId : "";
-      const task = tasksRef.current!.get(taskId);
+      const task = tasksRef.current!.get(transferAttempts.current.resolve(taskId) || "");
       if (msg.op === "upload_ready" && task) {
         if (task.status !== "running" && task.status !== "queued") return;
         task.path = typeof msg.path === "string" ? msg.path : task.path;
@@ -582,8 +603,21 @@ export function PanelFiles({
           task.blobParts = [];
         saveTasks();
       } else if (msg.op === "transfer_end" && task) {
-        completeDownload(task, Number(msg.offset || task.done || 0));
+        if (task.status !== "running") return;
+        if (task.dir === "download") completeDownload(task, Number(msg.offset || task.done || 0));
+        else {
+          stopUpload(task);
+          transferAttempts.current.remove(task.id);
+          task.status = "completed";
+          task.done = task.size;
+          task.message = "";
+          filesByTaskRef.current.delete(task.id);
+          saveTasks();
+          if (task.parentPath === currentPathRef.current) list(currentPathRef.current);
+        }
       } else if ((msg.op === "transfer_error" || msg.op === "error") && task) {
+        stopUpload(task);
+        transferAttempts.current.remove(task.id);
         task.status = "failed";
         task.message =
           (typeof msg.message === "string" && msg.message) ||
@@ -591,9 +625,11 @@ export function PanelFiles({
           tRef.current("common.error");
         saveTasks();
       } else if (msg.op === "canceled" && task) {
+        stopUpload(task);
+        transferAttempts.current.remove(task.id);
         task.status = "canceled";
         saveTasks();
-      } else if (msg.op === "error" && !task) {
+      } else if (msg.op === "error" && !task && !taskId) {
         /* Socket-level error with no task (e.g. device not connected). */
         setListView((v) => ({
           ...v,
@@ -609,6 +645,8 @@ export function PanelFiles({
     [
       saveTasks,
       uploadLoop,
+      stopUpload,
+      list,
       completeDownload,
       resumeActive,
       openAuth,
@@ -621,7 +659,7 @@ export function PanelFiles({
     (buf: ArrayBuffer) => {
       const f = decodeFrame(buf);
       if (!f) return;
-      const task = tasksRef.current!.get(f.taskId);
+      const task = tasksRef.current!.get(transferAttempts.current.resolve(f.taskId) || "");
       if (!task) return;
       if (f.typ === FRAME_UPLOAD_ACK) {
         if (task.dir !== "upload" || task.status !== "running") return;
@@ -729,7 +767,9 @@ export function PanelFiles({
         }
       };
       ws.onclose = () => {
-        if (wsRef.current === ws) wsRef.current = null;
+        if (wsRef.current !== ws) return;
+        tasksRef.current!.forEach(stopUpload);
+        wsRef.current = null;
         if (disposed) return;
         window.clearTimeout(reconnectTimerRef.current);
         reconnectTimerRef.current = window.setTimeout(connect, nextDelay());
@@ -738,6 +778,7 @@ export function PanelFiles({
     connect();
     return () => {
       disposed = true;
+      tasksRef.current!.forEach(task => { stopUpload(task); transferAttempts.current.remove(task.id); });
       if (progressDirty.current) persistTasks(device, tasksRef.current!);
       progressDirty.current = false;
       listingGuard.current.invalidate();
@@ -749,7 +790,7 @@ export function PanelFiles({
         wsRef.current = null;
       }
     };
-  }, [device, onBinary, onText, resumeActive, closeAuth, bump]);
+  }, [device, onBinary, onText, resumeActive, closeAuth, bump, stopUpload]);
 
   /* Speed sampling + stalled-download watchdog + task re-render, every 500ms.
    * Hidden panes persist progress and keep the watchdog, but do not render. */
@@ -782,7 +823,10 @@ export function PanelFiles({
     (task: FileTask, act: "pause" | "resume" | "cancel" | "clear") => {
       if (act === "pause") {
         task.status = "paused";
-        send({ op: "cancel", taskId: task.id, offset: task.done || 0 });
+        const wire = transferAttempts.current.current(task.id);
+        if (wire) send({ op: "cancel", taskId: wire, offset: task.done || 0 });
+        stopUpload(task);
+        transferAttempts.current.remove(task.id);
       }
       if (act === "resume") {
         task.status = "running";
@@ -803,13 +847,21 @@ export function PanelFiles({
       }
       if (act === "cancel") {
         task.status = "canceled";
-        send({ op: "cancel", taskId: task.id, offset: task.done || 0 });
+        const wire = transferAttempts.current.current(task.id);
+        if (wire) send({ op: "cancel", taskId: wire, offset: task.done || 0 });
+        stopUpload(task);
+        transferAttempts.current.remove(task.id);
       }
-      if (act === "clear") tasksRef.current!.delete(task.id);
+      if (act === "clear") {
+        stopUpload(task);
+        transferAttempts.current.remove(task.id);
+        filesByTaskRef.current.delete(task.id);
+        tasksRef.current!.delete(task.id);
+      }
       saveTasks();
       bump();
     },
-    [resumeDownload, saveTasks, send, sendUploadStart, bump],
+    [resumeDownload, saveTasks, send, sendUploadStart, bump, stopUpload],
   );
 
   /* ── UI handlers ── */
@@ -1061,6 +1113,7 @@ export function PanelFiles({
                       size="icon"
                       className="size-7"
                       disabled={task.status !== "running"}
+                      aria-label={t("files.pause") + " " + task.name}
                       onClick={() => taskAction(task, "pause")}
                     >
                       <Icon name="Pause" className="size-3.5" />
@@ -1074,6 +1127,7 @@ export function PanelFiles({
                         task.status === "completed" ||
                         task.status === "canceled"
                       }
+                      aria-label={t("files.resume") + " " + task.name}
                       onClick={() => taskAction(task, "resume")}
                     >
                       <Icon name="Play" className="size-3.5" />
@@ -1086,6 +1140,7 @@ export function PanelFiles({
                         task.status === "completed" ||
                         task.status === "canceled"
                       }
+                      aria-label={t("files.cancel") + " " + task.name}
                       onClick={() => taskAction(task, "cancel")}
                     >
                       <Icon name="X" className="size-3.5" />

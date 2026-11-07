@@ -19,7 +19,7 @@ beforeEach(async () => {
     readyState = 1;
     sent = [];
     constructor() { sockets.push(this); }
-    send(raw) { this.sent.push(JSON.parse(raw)); }
+    send(raw) { this.sent.push(typeof raw === "string" ? JSON.parse(raw) : raw); }
     close() {}
   });
   vi.useFakeTimers();
@@ -113,4 +113,65 @@ it('flushes unsampled progress to the original device when changing devices', as
   await render('two');
   expect(JSON.parse(localStorage.getItem('rdevFileTasks.one'))[0].done).toBe(3);
   expect(localStorage.getItem('rdevFileTasks.two')).toBeNull();
+});
+
+async function pickFile(name='upload.txt') {
+  const input=document.querySelector('input[type=file]');
+  Object.defineProperty(input,'files',{configurable:true,value:[new File(['abc'],name,{lastModified:1000})]});
+  await act(async()=>input.dispatchEvent(new window.Event('change',{bubbles:true})));
+}
+
+it('settles an uploaded file, refreshes the directory and ignores late old-attempt errors', async()=>{
+  const socket=sockets[0];
+  await deliver(socket,reply(socket.sent[0],'existing.txt'));
+  await pickFile();
+  const start=socket.sent.at(-1);
+  expect(start.op).toBe('upload_start');
+  await deliver(socket,{op:'upload_ready',taskId:start.taskId,path:'/tmp/upload.txt',offset:0});
+  expect(socket.sent.at(-1)).toBeInstanceOf(ArrayBuffer);
+  await act(async()=>socket.onmessage({data:encodeFrame(0x21,start.taskId,3)}));
+  expect(socket.sent.at(-1)).toMatchObject({op:'upload_end',taskId:start.taskId});
+  await deliver(socket,{op:'transfer_end',taskId:start.taskId});
+  expect(JSON.parse(localStorage.getItem('rdevFileTasks.one'))[0]).toMatchObject({status:'completed',done:3});
+  expect(socket.sent.at(-1).op).toBe('list');
+  await deliver(socket,{op:'transfer_error',taskId:start.taskId,message:'late old failure'});
+  expect(JSON.parse(localStorage.getItem('rdevFileTasks.one'))[0].status).toBe('completed');
+});
+
+it('cancels the old upload wait and isolates acknowledgments after resume', async()=>{
+  const socket=sockets[0];
+  await pickFile();
+  const first=socket.sent.at(-1);
+  await deliver(socket,{op:'upload_ready',taskId:first.taskId,path:'/tmp/upload.txt',offset:0});
+  await act(async()=>document.querySelector('[aria-label="files.pause upload.txt"]').click());
+  expect(socket.sent.at(-1)).toMatchObject({op:'cancel',taskId:first.taskId});
+  await act(async()=>document.querySelector('[aria-label="files.resume upload.txt"]').click());
+  const second=socket.sent.at(-1);
+  expect(second.taskId).not.toBe(first.taskId);
+  await deliver(socket,{op:'upload_ready',taskId:second.taskId,path:'/tmp/upload.txt',offset:0});
+  const sent=socket.sent.length;
+  await act(async()=>socket.onmessage({data:encodeFrame(0x21,first.taskId,3)}));
+  await deliver(socket,{op:'canceled',taskId:first.taskId});
+  expect(socket.sent).toHaveLength(sent);
+  expect(JSON.parse(localStorage.getItem('rdevFileTasks.one'))[0].status).toBe('running');
+  await act(async()=>socket.onmessage({data:encodeFrame(0x21,second.taskId,3)}));
+  expect(socket.sent.at(-1)).toMatchObject({op:'upload_end',taskId:second.taskId});
+  expect(socket.sent.filter(x=>x.op==='upload_end')).toHaveLength(1);
+});
+
+it('resumes a running upload with a new attempt after socket reconnect', async()=>{
+  const old=sockets[0];
+  await pickFile();
+  const first=old.sent.at(-1);
+  await deliver(old,{op:'upload_ready',taskId:first.taskId,path:'/tmp/upload.txt',offset:0});
+  await act(async()=>{ old.onclose(); vi.advanceTimersByTime(2000); });
+  const current=sockets.at(-1);
+  expect(current).not.toBe(old);
+  await act(async()=>current.onopen());
+  const next=current.sent.find(x=>x.op==='upload_start');
+  expect(next.taskId).not.toBe(first.taskId);
+  await deliver(current,{op:'upload_ready',taskId:next.taskId,path:'/tmp/upload.txt',offset:3});
+  expect(current.sent.at(-1)).toMatchObject({op:'upload_end',taskId:next.taskId});
+  await deliver(current,{op:'transfer_end',taskId:next.taskId});
+  expect(JSON.parse(localStorage.getItem('rdevFileTasks.one'))[0].status).toBe('completed');
 });
