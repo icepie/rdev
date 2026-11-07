@@ -1,4 +1,5 @@
 import { settledAskCardKeys } from "./transcript-rows";
+import { observeTranscriptResize } from "./transcript-resize";
 import { clearQueueReturns, requestQueueRemoval } from "./queue-actions";
 import { ThreadNavigation } from "./thread-navigation";
 import { ImagePreview } from "./image-preview";
@@ -18,6 +19,7 @@ import {
   useCallback,
   useEffect,
   useId,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -494,17 +496,17 @@ export function ChatPaneView({
   /* BB's back-to-bottom cue: visible while scrolled up, shimmering only
    * while the conversation is actively running. */
   const transcriptRef = useRef<HTMLDivElement>(null);
+  const transcriptContentRef = useRef<HTMLDivElement>(null);
   const registerTranscript = useCallback((node: HTMLDivElement | null) => {
     transcriptRef.current = node;
     ops.registerScrollEl(node);
   }, [ops.registerScrollEl]);
   const [atBottom, setAtBottom] = useState(true);
-  const handleTranscriptScroll = (e: React.UIEvent<HTMLDivElement>) => {
-    const el = e.currentTarget;
-    const near = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
-    setAtBottom(near);
-  };
-  useEffect(() => { setAtBottom(true); }, [device, threadId]);
+  useLayoutEffect(() => {
+    const viewport = transcriptRef.current;
+    const content = transcriptContentRef.current;
+    if (viewport && content) return observeTranscriptResize(viewport, content, setAtBottom);
+  }, [device, threadId]);
 
   return (
     <>
@@ -513,10 +515,9 @@ export function ChatPaneView({
       <ThreadNavigation items={items} scrollRef={transcriptRef} t={t} />
       <div
         ref={registerTranscript}
-        onScroll={handleTranscriptScroll}
         className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto"
       >
-        <div className="mx-auto flex w-full max-w-[760px] min-w-0 flex-col gap-1 px-4 pt-3 pb-3">
+        <div ref={transcriptContentRef} className="mx-auto flex w-full max-w-[760px] min-w-0 flex-col gap-1 px-4 pt-3 pb-3">
           {items.length === 0 && (
             <div className="px-4 py-12 text-center text-sm whitespace-pre-wrap text-muted-foreground">
               {emptyHint}

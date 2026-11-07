@@ -1,4 +1,5 @@
 import { acceptQueueRemoval, clearQueueReturns, type QueueReturns } from "./queue-actions";
+import { TRANSCRIPT_BOTTOM_THRESHOLD } from "./transcript-resize";
 /* Per-thread transcript state ("sink"): one instance backs the connection's
  * current thread, and every secondary split-screen pane owns one for the
  * thread it shows. The WS handler routes tagged frames to the right sink,
@@ -168,7 +169,7 @@ export function useThreadSink(): ThreadSink {
     if (el && !scrollAnchor.current) {
       scrollAnchor.current = {
         element: el, top: el.scrollTop,
-        follow: el.scrollHeight - el.scrollTop - el.clientHeight < 120,
+        follow: el.scrollHeight - el.scrollTop - el.clientHeight < TRANSCRIPT_BOTTOM_THRESHOLD,
       };
     }
     requestedForce.current ||= !!force;
@@ -189,7 +190,7 @@ export function useThreadSink(): ThreadSink {
       const anchor = scrollAnchor.current;
       scrollAnchor.current = null;
       if (!el) return;
-      const near = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+      const near = el.scrollHeight - el.scrollTop - el.clientHeight < TRANSCRIPT_BOTTOM_THRESHOLD;
       // An upward scroll while the frame was pending cancels automatic
       // following. Never apply another pane's captured attachment.
       const followed = anchor?.element === el && anchor.follow && el.scrollTop >= anchor.top;
