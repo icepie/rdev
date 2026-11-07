@@ -1681,7 +1681,7 @@ export function AgentPage() {
   const filteredRows: SidebarRow[] = useMemo(() => {
     let rows =
       !sidebarView.showAll && sidebarView.showRunning
-        ? sidebarRows.filter((r) => r.running)
+        ? sidebarRows.filter((r) => r.running || (r.backgroundJobs ?? 0) > 0)
         : sidebarRows;
     if (sidebarView.deviceFilter) {
       rows = rows.filter((r) => r.device === sidebarView.deviceFilter);
@@ -2177,6 +2177,13 @@ export function AgentPage() {
         >
           {th.title || th.id}
         </button>
+      )}
+      {(th.backgroundJobs ?? 0) > 0 && (
+        <span className="shrink-0 rounded bg-state-hover px-1 text-2xs tabular-nums text-muted-foreground"
+          aria-label={t("agent.backgroundJobs", { count: th.backgroundJobs! })}
+          title={t("agent.backgroundJobs", { count: th.backgroundJobs! })}>
+          {th.backgroundJobs}
+        </span>
       )}
       <span className="flex h-4 w-4 shrink-0 items-center justify-center">
         {th.running && (

@@ -11,3 +11,9 @@ it("restores supported waiting states only for running threads", () => {
   ]);
   expect(rows.map(row => row.waiting)).toEqual(["approval", "answer", undefined, undefined, undefined]);
 });
+
+it("accepts only nonnegative integral background task counts", () => {
+  const values = [2, 0, -1, 1.5, "3", Infinity, undefined];
+  expect(parseThreads(values.map((backgroundJobs, i) => ({ id: String(i), backgroundJobs })))
+    .map(row => row.backgroundJobs)).toEqual([2, 0, 0, 0, 0, 0, 0]);
+});

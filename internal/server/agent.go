@@ -235,11 +235,12 @@ type agentWorking struct {
 
 // agentThreadInfo is one thread in a thread_list / auth_ok broadcast.
 type agentThreadInfo struct {
-	ID        string `json:"id"`
-	Title     string `json:"title"`
-	UpdatedAt string `json:"updatedAt"`
-	Running   bool   `json:"running"`
-	Waiting   string `json:"waiting,omitempty"`
+	BackgroundJobs int    `json:"backgroundJobs,omitempty"`
+	ID             string `json:"id"`
+	Title          string `json:"title"`
+	UpdatedAt      string `json:"updatedAt"`
+	Running        bool   `json:"running"`
+	Waiting        string `json:"waiting,omitempty"`
 	// Model is the thread's canonical "provider/model".
 	Model string `json:"model,omitempty"`
 	// Tool is the currently executing tool name; only set while running.
@@ -522,6 +523,7 @@ func (h *agentWSHandler) OnOpen(socket *gws.Conn) {
 func (s *Server) buildAgentSession(entry *agentSessionEntry, th *agentThread, client *ClientConn, provider *AgentProvider, model *AgentModelConfig) *agent.Session {
 	if th.jobs == nil {
 		jobs := newAgentJobs(nil)
+		jobs.onChange = func() { s.broadcastThreadList(entry) }
 		jobs.onComplete = func(job agentJobSnapshot) { s.deliverAgentJob(entry, th, jobs, job) }
 		th.jobs = jobs
 	}
@@ -836,6 +838,9 @@ func agentThreadListLocked(entry *agentSessionEntry) []agentThreadInfo {
 			UpdatedAt: th.updatedAt.UTC().Format(time.RFC3339),
 			Running:   th.running,
 			Model:     th.model,
+		}
+		if th.jobs != nil {
+			info.BackgroundJobs = th.jobs.RunningCount()
 		}
 		if th.running {
 			info.Tool = th.workingTool

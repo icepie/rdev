@@ -276,3 +276,29 @@ func TestCancelAllIsThreadLocalAndAllowsLaterJobs(t *testing.T) {
 		t.Fatal("cancel all closed the job manager", err)
 	}
 }
+
+func TestJobCountChangesOutsideLock(t *testing.T) {
+	changed := make(chan int, 2)
+	manager := newAgentJobs(nil)
+	manager.onChange = func() { changed <- manager.RunningCount() }
+	release := make(chan struct{})
+	_, err := manager.Start("shell", "test", func(context.Context, func(string)) (string, error) {
+		<-release
+		return "done", nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count := <-changed; count != 1 {
+		t.Fatalf("started count=%d", count)
+	}
+	close(release)
+	select {
+	case count := <-changed:
+		if count != 0 {
+			t.Fatalf("finished count=%d", count)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("completion did not publish count")
+	}
+}

@@ -40,6 +40,7 @@ type agentJobs struct {
 	mu         sync.Mutex
 	jobs       map[string]*agentJob
 	closed     bool
+	onChange   func()
 	onComplete func(agentJobSnapshot)
 }
 
@@ -74,6 +75,9 @@ func (m *agentJobs) Start(kind, label string, run func(context.Context, func(str
 	m.jobs[job.snapshot.ID] = job
 	initial := job.snapshot
 	m.mu.Unlock()
+	if m.onChange != nil {
+		m.onChange()
+	}
 	go m.run(ctx, job, run)
 	return initial, nil
 }
@@ -104,6 +108,9 @@ func (m *agentJobs) run(ctx context.Context, job *agentJob, run func(context.Con
 		close(job.done)
 		m.mu.Unlock()
 		job.cancel()
+		if notify && m.onChange != nil {
+			m.onChange()
+		}
 		if notify && m.onComplete != nil {
 			m.onComplete(snapshot)
 		}
@@ -198,13 +205,16 @@ func (m *agentJobs) Close() {
 	}
 }
 
-func (m *agentJobs) Running() bool {
+func (m *agentJobs) RunningCount() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	count := 0
 	for _, job := range m.jobs {
 		if job.snapshot.State == "running" {
-			return true
+			count++
 		}
 	}
-	return false
+	return count
 }
+
+func (m *agentJobs) Running() bool { return m.RunningCount() > 0 }
