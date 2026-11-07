@@ -1,3 +1,4 @@
+import { JobNotification, parseJobNotification } from "./job-notification";
 import { useComposerDraft } from "./use-composer-draft";
 import { dispatchSlashCommand } from "./slash-command";
 import { parseJobsCommand } from "./jobs-command";
@@ -511,6 +512,8 @@ export function ChatPaneView({
           )}
           {items.map((item) => {
             if (item.kind === "user") {
+              const job = !item.images?.length ? parseJobNotification(item.text) : null;
+              if (job) return <JobNotification key={item.key} job={job} t={t} />;
               return (
                 <div
                   key={item.key}
