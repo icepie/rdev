@@ -1,3 +1,4 @@
+import { FilesPaneLayout } from "../components/files-pane-layout";
 import { isImeComposing } from "../lib/keyboard";
 import { createKeyedRequest } from "../lib/keyed-request";
 import { createTransferAttempts } from "../lib/file-transfer-attempts";
@@ -1695,46 +1696,25 @@ export function FilesPage() {
       selectedDevice={paneDevices[focusedPane] || ""}
       onDevicePick={(id) => requestDevice(focusedPane, id)}
     >
-      <div className="flex h-full min-h-0 flex-col @container/file-workspace">
-        <div className="page-toolbar shrink-0">
-          <Button variant={focusedPane === 0 ? "secondary" : "ghost"} size="sm"
-            aria-pressed={focusedPane === 0} onClick={() => setFocusedPane(0)}>
-            {t("files.pane", { number: 1 })}
-          </Button>
-          {secondOpen && <Button variant={focusedPane === 1 ? "secondary" : "ghost"} size="sm"
-            aria-pressed={focusedPane === 1} onClick={() => setFocusedPane(1)}>
-            {t("files.pane", { number: 2 })}
-          </Button>}
-          <Button variant="ghost" size="sm" className="ml-auto" aria-expanded={secondOpen}
-            onClick={() => {
-              setSecondMounted(true);
-              setSecondOpen(!secondOpen);
-              setFocusedPane(secondOpen ? 0 : 1);
-            }}>
-            <Icon name="PanelRight" />
-            {t(secondOpen ? "files.hideSecondPane" : "files.showSecondPane")}
-          </Button>
-        </div>
-        <div className="flex min-h-0 flex-1 flex-col @[900px]/file-workspace:flex-row">
-          {[0, ...(secondMounted ? [1] : [])].map(leafId => (
-            <section key={leafId} hidden={leafId === 1 && !secondOpen}
-              aria-label={t("files.pane", { number: leafId + 1 })}
-              className={cn("min-h-0 min-w-0 flex-1 overflow-hidden", leafId === 1 && secondOpen && "border-t border-border-seam @[900px]/file-workspace:border-l @[900px]/file-workspace:border-t-0")}
-              onPointerDownCapture={() => setFocusedPane(leafId)}
-              onFocusCapture={() => setFocusedPane(leafId)}>
-              <DeviceDropTarget className="h-full min-h-0" onDropDevice={(id) => requestDevice(leafId, id)}>
-                <FilesBrowser
-                  onDeviceChange={leafId === 0 ? reportFirstDevice : reportSecondDevice}
-                  primary={leafId === 0}
-                  deviceRequest={requests.get(leafId)}
-                  leafId={leafId}
-                  panesRef={panesRef}
-                />
-              </DeviceDropTarget>
-            </section>
-          ))}
-        </div>
-      </div>
+      <FilesPaneLayout focusedPane={focusedPane} onFocus={setFocusedPane} dragMime={FILE_DRAG_MIME}
+        secondMounted={secondMounted} secondOpen={secondOpen}
+        label={t("files.title")} paneLabel={id => t("files.pane", { number: id + 1 })}
+        toggleLabel={t(secondOpen ? "files.hideSecondPane" : "files.showSecondPane")}
+        onToggleSecond={() => {
+          setSecondMounted(true);
+          setSecondOpen(!secondOpen);
+          setFocusedPane(secondOpen ? 0 : 1);
+        }}
+        renderPane={leafId => <DeviceDropTarget className="h-full min-h-0" onDropDevice={id => requestDevice(leafId, id)}>
+          <FilesBrowser
+            onDeviceChange={leafId === 0 ? reportFirstDevice : reportSecondDevice}
+            primary={leafId === 0}
+            deviceRequest={requests.get(leafId)}
+            leafId={leafId}
+            panesRef={panesRef}
+          />
+        </DeviceDropTarget>}
+      />
     </SplitPageShell>
   );
 }
