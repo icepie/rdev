@@ -22,7 +22,7 @@ func (s *Server) emitAgentTurnEvent(entry *agentSessionEntry, th *agentThread, e
 	case agent.EventTextDelta:
 		msg.Op, msg.Text = "delta", event.Text
 	case agent.EventReasoning:
-		msg.Op, msg.Text = "reasoning", event.Reasoning
+		msg.Op, msg.Text = "reasoning", event.Text
 	case agent.EventToolStart:
 		th.workingTool = event.ToolName
 		if event.ToolName == "edit" || event.ToolName == "write_file" {

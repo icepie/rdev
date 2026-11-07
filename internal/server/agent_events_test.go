@@ -22,7 +22,7 @@ func TestResetRejectsLateTurnEvents(t *testing.T) {
 	for _, event := range []agent.Event{
 		{Type: agent.EventUserInput, Text: "late steering"},
 		{Type: agent.EventTextDelta, Text: "late text"},
-		{Type: agent.EventReasoning, Reasoning: "late reasoning"},
+		{Type: agent.EventReasoning, Text: "late reasoning"},
 		{Type: agent.EventToolStart, ToolName: "edit", ToolID: "tool", ToolArgs: json.RawMessage(`{"path":"/file"}`)},
 		{Type: agent.EventToolEnd, ToolName: "edit", ToolID: "tool"},
 		{Type: agent.EventTodo, ToolResult: `[{"text":"stale","status":"pending"}]`},

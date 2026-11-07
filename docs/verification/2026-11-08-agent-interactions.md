@@ -230,3 +230,10 @@ Local fixture only (`@server` on port 19440); no real user history was deleted.
 - Compared directly with OMP 75e7801 openai-completions mapStopReason: completion aliases are case-insensitive, MAX_TOKENS maps to truncation, and content_filter/network_error/error/unknown finish reasons fail rather than allowing incomplete tool execution. This aligns finish classification, not OMP's full retry policy.
 - HTTP regressions cover cancellation, EOF, length, content_filter and inline provider errors with partial reasoning/text and pending tool arguments. They verify preserved history, no tool execution or Done event, no automatic replay after output, and a successful next provider request without dangling calls. A separate classification matrix covers success aliases and failure reasons.
 - Agent race tests, the full Go suite and the embedded server build passed. No frontend assets changed.
+
+## Live reasoning event transport
+
+- Found a producer/consumer mismatch: Session emits EventReasoning chunks in Text (the documented event contract), while the server read Reasoning, which is reserved for the final EventDone aggregate. Live thinking frames and reconnect replay therefore contained empty strings even though final history retained the thinking text.
+- The server now forwards Text for reasoning events. The stale-event test fixture uses the actual producer contract.
+- A real HTTP SSE → Agent Session → WebSocket regression gates provider completion until two Chinese reasoning chunks have arrived, reconnects a browser socket, verifies complete live replay before releasing the provider, then checks answer delivery and the final reasoning aggregate. It passed three consecutive runs under race detection.
+- The frontend thread-sink regression verifies reasoning becomes visible before Done, accumulates successive chunks, and finalizes without duplication. All 11 focused thread-sink tests, the full server race suite and the embedded server build passed. This is automated transport/state verification, not a new browser visual inspection.

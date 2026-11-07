@@ -149,3 +149,17 @@ it('renders boundary steering as a new user message without interrupting the run
   expect(sink.state.items[2]).toMatchObject({ text: 'new direction', steering: true, time: 2000 });
   expect(sink.state.items[3].text).toBe('adjusted response');
 });
+
+it('shows reasoning before completion and finalizes it without duplication', async () => {
+  await frame({ op: 'turn_start', text: 'inspect' });
+  await frame({ op: 'reasoning', text: '检查设备' });
+  expect(sink.state.items[1]).toMatchObject({ reasoning: '检查设备', streamingReasoning: true });
+  await frame({ op: 'reasoning', text: '，再执行。' });
+  await frame({ op: 'delta', text: 'ready' });
+  expect(sink.state.items[1]).toMatchObject({ reasoning: '检查设备，再执行。', text: 'ready' });
+  await frame({ op: 'done', reasoning: '检查设备，再执行。' });
+  expect(sink.state.items[1]).toMatchObject({
+    reasoning: '检查设备，再执行。', text: 'ready', streamingReasoning: false, streaming: false,
+  });
+  expect(sink.state.running).toBe(false);
+});
