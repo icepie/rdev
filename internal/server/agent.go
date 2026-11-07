@@ -1861,6 +1861,9 @@ func (h *agentWSHandler) handleDeleteThread(ac *agentConn, threadID string) {
 		store.dropExtras(ac.deviceID, threadID)
 	}
 	ac.writeJSON(agentMsg{Op: "thread_deleted", Thread: threadID, Device: ac.deviceID})
+	// The request acknowledgment carries its correlation ID. The separate
+	// notification also lets other attached browsers discard local drafts.
+	srv.agentBroadcast(entry, agentMsg{Op: "thread_deleted", Thread: threadID, Device: ac.deviceID})
 	srv.broadcastThreadList(entry)
 	if switchedTo != "" {
 		srv.writeAgentPrefs(entry)

@@ -42,12 +42,28 @@ func TestDeleteRunningConversationCancelsWorkAndCannotResurrectHistory(t *testin
 	defer socket.WriteClose(1000, nil)
 	go socket.ReadLoop()
 	waitAgentMsg(t, rec.msgs, "auth", func(m agentMsg) bool { return m.Op == "auth_ok" })
+	peer := &agentWSRecorder{msgs: make(chan agentMsg, 64)}
+	peerSocket, _, err := gws.NewClient(peer, &gws.ClientOption{Addr: "ws" + strings.TrimPrefix(server.URL, "http") + "/agent?device=%40server", HandshakeTimeout: time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer peerSocket.WriteClose(1000, nil)
+	go peerSocket.ReadLoop()
+	waitAgentMsg(t, peer.msgs, "peer auth", func(m agentMsg) bool { return m.Op == "auth_ok" })
 	if err := socket.WriteMessage(gws.OpcodeText, []byte(`{"op":"delete_thread","id":"delete-running","thread":"`+th.id+`"}`)); err != nil {
 		t.Fatal(err)
 	}
 	deleted := waitAgentMsg(t, rec.msgs, "deleted", func(m agentMsg) bool { return m.Op == "thread_deleted" && m.Thread == th.id })
 	if deleted.ID != "delete-running" {
 		t.Fatalf("delete ID = %q", deleted.ID)
+	}
+	notification := waitAgentMsg(t, peer.msgs, "peer deletion", func(m agentMsg) bool { return m.Op == "thread_deleted" })
+	if notification.Thread != th.id || notification.Device != agentServerDeviceID || notification.ID != "" {
+		t.Fatalf("incorrect peer notification: %+v", notification)
+	}
+	peerSwitch := waitAgentMsg(t, peer.msgs, "peer replacement", func(m agentMsg) bool { return m.Op == "thread_switched" })
+	if peerSwitch.Thread == th.id || peerSwitch.Thread == "" {
+		t.Fatal("peer retained deleted selection")
 	}
 	switched := waitAgentMsg(t, rec.msgs, "replacement thread", func(m agentMsg) bool { return m.Op == "thread_switched" })
 	if switched.Thread == th.id || switched.Thread == "" {

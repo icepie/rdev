@@ -127,7 +127,14 @@ Local fixture only (`@server` on port 19440); no real user history was deleted.
 
 ## Follow-up: deleted conversation drafts
 
-- The matching successful thread_deleted response now clears the device/thread text draft from the shared live store and tab sessionStorage. Canceled or failed delete attempts do not clear it. This cleanup applies to the requesting browser; other browser tabs retain their own tab-scoped storage until separately reconciled.
+- The matching successful thread_deleted response now clears the device/thread text draft from the shared live store and tab sessionStorage. Canceled or failed delete attempts do not clear it. The initial cleanup covered the requesting browser; the follow-up below extends it to other connected browsers for the same device.
 - Hook regression verifies mirrored consumers clear, another device with the same thread ID retains its draft, and module reload does not resurrect the deleted draft.
 - Native browser created a disposable empty @server conversation and typed a draft. Canceling the delete dialog retained the exact saved value; reopening and confirming deletion removed its storage key and cleared the visible composer.
 - 141 Web tests, TypeScript, frontend build and embedded server build passed.
+
+## Follow-up: cross-browser deletion notification
+
+- Successful deletion now emits a device/thread-tagged notification to every browser attached to that device, in addition to the requester's correlated acknowledgment. The UI discards matching text drafts on either confirmed event, while pending dialog/error state still uses request correlation.
+- Extended the actual WebSocket deletion race regression to two browsers. It checks the requester receives its request ID, the peer receives an uncorrelated notification with the exact device/thread, both are switched away from the deleted thread, active work is canceled, and late completion cannot resurrect persisted history.
+- Targeted server race tests, 141 Web tests, TypeScript and frontend/server builds passed. Browsers disconnected throughout deletion do not receive this live notification; their tab-scoped stale drafts are not claimed to be pruned by this change.
+- Full server race suite also passed after the deletion broadcast change.

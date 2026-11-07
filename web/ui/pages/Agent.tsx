@@ -722,11 +722,13 @@ export function AgentPage() {
     }
     switch (msg.op) {
       case "thread_deleted":
+        if (frameThread && asString(msg.device)) {
+          discardComposerTextDraft(JSON.stringify([asString(msg.device), frameThread]));
+        }
         if (!pendingDeleteRef.current ||
             (asString(msg.id) && pendingDeleteRef.current.requestID !== asString(msg.id)) ||
             pendingDeleteRef.current.id !== frameThread ||
             pendingDeleteRef.current.device !== asString(msg.device)) break;
-        discardComposerTextDraft(JSON.stringify([asString(msg.device), frameThread]));
         pendingDeleteRef.current = null;
         setDeleteBusy(false);
         setDeleteTarget((target) =>
