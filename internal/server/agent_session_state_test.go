@@ -696,7 +696,9 @@ func TestAgentReattachWorkingSinceStable(t *testing.T) {
 // and queue the other (A3 race regression).
 func TestAgentConcurrentChatStartsOneTurn(t *testing.T) {
 	release := make(chan struct{})
+	var releaseOnce sync.Once
 	srv := newTurnTestServer(t, blockingLLM(t, release).URL)
+	t.Cleanup(func() { releaseOnce.Do(func() { close(release) }) })
 	httpSrv := httptest.NewServer(http.HandlerFunc(srv.HandleAgentWS))
 	defer httpSrv.Close()
 
@@ -712,8 +714,22 @@ func TestAgentConcurrentChatStartsOneTurn(t *testing.T) {
 	wg.Wait()
 
 	// Exactly one turn starts; the losing chat lands in the queue.
-	waitAgentMsg(t, rec1.msgs, "turn_start", func(m agentMsg) bool { return m.Op == "turn_start" })
-	queued := waitAgentMsg(t, rec1.msgs, "queue", func(m agentMsg) bool { return m.Op == "queue" })
+	// Broadcasts from the two connections may reach the socket in either
+	// order. Collect both instead of discarding queue while awaiting start.
+	starts := 0
+	var queued agentMsg
+	waitAgentMsg(t, rec1.msgs, "one start and one queued chat", func(m agentMsg) bool {
+		if m.Op == "turn_start" {
+			starts++
+		}
+		if m.Op == "queue" {
+			queued = m
+		}
+		return starts > 0 && queued.Op != ""
+	})
+	if starts != 1 {
+		t.Fatalf("started %d turns before release", starts)
+	}
 	var items []string
 	if err := json.Unmarshal(queued.Items, &items); err != nil || len(items) != 1 {
 		t.Fatalf("queue items = %s (%v), want exactly one queued chat", queued.Items, err)
@@ -725,7 +741,7 @@ func TestAgentConcurrentChatStartsOneTurn(t *testing.T) {
 	}
 
 	// After the first turn unblocks, the queued chat runs as turn two.
-	close(release)
+	releaseOnce.Do(func() { close(release) })
 	waitAgentMsg(t, rec1.msgs, "first done", func(m agentMsg) bool { return m.Op == "done" })
 	waitAgentMsg(t, rec1.msgs, "second turn_start", func(m agentMsg) bool { return m.Op == "turn_start" })
 	waitAgentMsg(t, rec1.msgs, "second done", func(m agentMsg) bool { return m.Op == "done" })

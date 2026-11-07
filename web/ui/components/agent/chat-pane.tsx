@@ -1,4 +1,4 @@
-import { requestQueueRemoval } from "./queue-actions";
+import { clearQueueReturns, requestQueueRemoval } from "./queue-actions";
 import { ThreadNavigation } from "./thread-navigation";
 import { ImagePreview } from "./image-preview";
 import { JobNotification, parseJobNotification, parseJobNotificationData } from "./job-notification";
@@ -149,8 +149,10 @@ export function ChatPaneView({
   const { state, ops } = sink;
   const { items, todos, queue, queueIds, running, stopping, turnUsage, currentTool, workingSince } = state;
 
+  const [returningQueue, setReturningQueue] = useState(false);
+  const returningQueueRef = useRef(false);
   const draftKey = JSON.stringify([device, threadId]);
-  useEffect(() => () => ops.queueReturns.current.clear(), [draftKey, ops.queueReturns]);
+  useEffect(() => () => clearQueueReturns(ops.queueReturns.current), [draftKey, ops.queueReturns]);
   const [input, setInput] = useComposerTextDraft(draftKey);
   const [pendingImages, setPendingImages] = useComposerDraft(draftKey, EMPTY_COMPOSER_IMAGES);
   const imageReaders = useRef(new Set<FileReader>());
@@ -216,6 +218,7 @@ export function ChatPaneView({
    * file as a data URL: full URL for the chip thumbnail, base64 payload for
    * the chat message. */
   const addImageFiles = (filesIn: File[]) => {
+    if (returningQueueRef.current) return;
     const files = filesIn.filter((f) => f.type.startsWith("image/"));
     if (!files.length) return;
     let room = MAX_IMAGES - pendingImages.length - imageReaders.current.size;
@@ -259,6 +262,7 @@ export function ChatPaneView({
 
   const sendChat = () => {
     const text = input.trim();
+    if (returningQueueRef.current) return;
     if ((!text && pendingImages.length === 0) || !ready || imageReaders.current.size > 0) return;
     if (text.startsWith("/") && pendingImages.length === 0 && runSlashLine(text)) {
       return;
@@ -681,14 +685,21 @@ export function ChatPaneView({
                 </span>
                 <button
                   type="button"
-                  title={t("agent.queueEditHint")}
-                  disabled={!ready || !queueIds[i]}
+                  title={t(pendingImages.length > 0 || readingImages > 0 ? "agent.queueEditImagesHint" : "agent.queueEditHint")}
+                  disabled={!ready || !queueIds[i] || returningQueue || pendingImages.length > 0 || readingImages > 0}
                   className="min-w-0 flex-1 cursor-pointer truncate text-left transition-colors hover:text-foreground"
                   onClick={() => {
-                    requestQueueRemoval(ops.queueReturns.current, sendRaw, threadId, queueIds[i], addToChat);
+                    if (returningQueueRef.current || pendingImages.length || imageReaders.current.size) return;
+                    returningQueueRef.current = true;
+                    setReturningQueue(true);
+                    const settled = () => { returningQueueRef.current = false; setReturningQueue(false); };
+                    if (!requestQueueRemoval(ops.queueReturns.current, sendRaw, threadId, queueIds[i], (text, images) => {
+                      if (text) addToChat(text);
+                      setPendingImages(images);
+                    }, settled)) settled();
                   }}
                 >
-                  {q}
+                  {q || t("agent.queuedImages")}
                 </button>
                 <button
                   type="button"
@@ -753,6 +764,7 @@ export function ChatPaneView({
               ))}
             </div>
           )}
+          {returningQueue && <p role="status" className="px-4 pt-2 text-xs text-muted-foreground">{t("agent.queueReturning")}</p>}
           {readingImages > 0 && (
             <p role="status" className="px-4 pt-2 text-xs text-muted-foreground">
               {t("agent.readingImages", { count: readingImages })}
@@ -892,7 +904,7 @@ export function ChatPaneView({
                     variant="ghost"
                     size="icon"
                     aria-label={t("agent.attachImages")}
-                    disabled={!ready}
+                    disabled={!ready || returningQueue}
                     className={cn(COARSE_POINTER_PROMPT_ICON_ACTION_BUTTON_CLASS, "shrink-0 text-subtle-foreground/75 hover:text-muted-foreground")}
                     onClick={() => fileInputRef.current?.click()}
                   >
@@ -955,7 +967,7 @@ export function ChatPaneView({
                     <Button
                       size="sm"
                       aria-label={t("agent.queued")}
-                      disabled={!ready || readingImages > 0 || (!input.trim() && pendingImages.length === 0)}
+                      disabled={!ready || returningQueue || readingImages > 0 || (!input.trim() && pendingImages.length === 0)}
                       className={cn(COARSE_POINTER_PROMPT_ACTION_BUTTON_CLASS, "gap-1.5 px-2.5")}
                       onClick={sendChat}
                     >
@@ -970,7 +982,7 @@ export function ChatPaneView({
                   <TooltipTrigger asChild>
                     <Button
                       aria-label={t("agent.send")}
-                      disabled={!ready || readingImages > 0 || (!input.trim() && pendingImages.length === 0)}
+                      disabled={!ready || returningQueue || readingImages > 0 || (!input.trim() && pendingImages.length === 0)}
                       className={cn(COARSE_POINTER_PROMPT_ACTION_BUTTON_CLASS, "ml-1")}
                       onClick={sendChat}
                     >

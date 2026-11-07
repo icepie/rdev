@@ -1,3 +1,4 @@
+import { clearQueueReturns } from "../components/agent/queue-actions";
 import { discardComposerTextDraft, reconcileComposerTextDrafts } from "../components/agent/use-composer-text-draft";
 import { AgentConnectionError } from "../components/agent/connection-error";
 import { threadIdentity, useThreadUnread } from "../hooks/use-thread-unread";
@@ -846,7 +847,7 @@ export function AgentPage() {
         }
         primaryOps.setQueue(parseStringArray(msg.queue));
         primaryOps.setQueueIds(parseStringArray(msg.queueIds));
-        primaryOps.queueReturns.current.clear();
+        clearQueueReturns(primaryOps.queueReturns.current);
         primaryOps.setTodos(parseTodos(msg.todos));
         primaryOps.openToolIds.current.clear();
         const working = parseWorking(msg.working, !!msg.running);
@@ -1047,7 +1048,7 @@ export function AgentPage() {
         primaryOps.setTodos(parseTodos(msg.todos));
         primaryOps.setQueue(parseStringArray(msg.queue));
         primaryOps.setQueueIds(parseStringArray(msg.queueIds));
-        primaryOps.queueReturns.current.clear();
+        clearQueueReturns(primaryOps.queueReturns.current);
         primaryOps.setRunning(!!msg.running);
         const switchWorking = parseWorking(msg.working, !!msg.running);
         primaryOps.setWorkingSince(switchWorking.since);

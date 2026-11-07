@@ -103,6 +103,7 @@ type agentMsg struct {
 	// Index is the dequeue payload: position of the queued follow-up to drop.
 	Index   int    `json:"index,omitempty"`
 	QueueID string `json:"queueId,omitempty"`
+	Restore bool   `json:"restore,omitempty"`
 	Removed bool   `json:"removed,omitempty"`
 	// Canceled marks stopped frames: true when a running turn was canceled,
 	// false for the idle-stop ack.
@@ -273,6 +274,22 @@ type agentQueuedChat struct {
 	text     string
 	images   []agent.MessageImage
 	model    string // requested model ("" = keep the thread's)
+}
+
+// takeQueuedChat releases the removed slot, including original image data.
+// Caller holds agentSessionsMu and supplies an in-range index.
+func takeQueuedChat(queue *[]agentQueuedChat, index int) agentQueuedChat {
+	items := *queue
+	item := items[index]
+	if index == 0 {
+		items[0] = agentQueuedChat{}
+		*queue = items[1:]
+	} else {
+		copy(items[index:], items[index+1:])
+		items[len(items)-1] = agentQueuedChat{}
+		*queue = items[:len(items)-1]
+	}
+	return item
 }
 
 // queueIDs assigns identity once under agentSessionsMu, including entries
@@ -1328,7 +1345,7 @@ func (h *agentWSHandler) OnMessage(socket *gws.Conn, message *gws.Message) {
 	case "steer":
 		h.handleSteer(ac, msg.Text, msg.Thread)
 	case "dequeue":
-		h.handleDequeueItem(ac, msg.Thread, msg.Index, msg.QueueID, msg.ID)
+		h.handleDequeueItem(ac, msg.Thread, msg.Index, msg.QueueID, msg.ID, msg.Restore)
 	case "stop":
 		if ac.entry == nil {
 			return
@@ -1606,10 +1623,10 @@ func (h *agentWSHandler) handleSteer(ac *agentConn, text, threadRef string) {
 // handleDequeue retains the legacy index operation for older callers.
 // Current browsers use queue identity plus a correlated acknowledgement.
 func (h *agentWSHandler) handleDequeue(ac *agentConn, threadRef string, index int) {
-	h.handleDequeueItem(ac, threadRef, index, "", "")
+	h.handleDequeueItem(ac, threadRef, index, "", "", false)
 }
 
-func (h *agentWSHandler) handleDequeueItem(ac *agentConn, threadRef string, index int, queueID, requestID string) {
+func (h *agentWSHandler) handleDequeueItem(ac *agentConn, threadRef string, index int, queueID, requestID string, restore bool) {
 	entry := ac.entry
 	if entry == nil {
 		return
@@ -1633,9 +1650,8 @@ func (h *agentWSHandler) handleDequeueItem(ac *agentConn, threadRef string, inde
 			}
 		}
 		if index >= 0 && index < len(th.queue) {
-			item := th.queue[index]
+			item := takeQueuedChat(&th.queue, index)
 			removed = &item
-			th.queue = append(th.queue[:index], th.queue[index+1:]...)
 			entry.lastActive = time.Now()
 		}
 	}
@@ -1644,6 +1660,9 @@ func (h *agentWSHandler) handleDequeueItem(ac *agentConn, threadRef string, inde
 		reply := agentMsg{Op: "dequeued", Thread: threadID, ID: requestID, QueueID: queueID, Removed: removed != nil}
 		if removed != nil {
 			reply.Text = removed.text
+			if restore && len(removed.images) > 0 {
+				reply.Images, _ = json.Marshal(removed.images)
+			}
 		}
 		ac.writeJSON(reply)
 	}
@@ -2538,7 +2557,7 @@ func (s *Server) runAgentTurn(entry *agentSessionEntry, th *agentThread, turn ag
 			s.agentSessionsMu.Unlock()
 			return nil
 		}
-		th.queue = th.queue[1:]
+		takeQueuedChat(&th.queue, 0)
 		s.agentSessionsMu.Unlock()
 		s.broadcastQueue(entry, th)
 		display, _ := json.Marshal(map[string]any{"steering": true, "time": time.Now().UnixMilli()})
@@ -2627,8 +2646,7 @@ func (s *Server) runAgentTurn(entry *agentSessionEntry, th *agentThread, turn ag
 	hasNext := len(th.queue) > 0
 	prefsDirty := false
 	if hasNext {
-		next = th.queue[0]
-		th.queue = th.queue[1:]
+		next = takeQueuedChat(&th.queue, 0)
 		// A queued chat may carry a model switch; apply it before starting.
 		if next.model != "" && next.model != th.model {
 			if provider, model, canonical, err := s.Agent.Resolve(next.model); err == nil {

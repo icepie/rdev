@@ -1,3 +1,4 @@
+import { acceptQueueRemoval } from "../ui/components/agent/queue-actions";
 // @vitest-environment jsdom
 import { JSDOM } from "jsdom";
 import { act, createElement } from "react";
@@ -129,6 +130,24 @@ it("preserves composer intent across modified keys, image loading and thread swi
     await act(async () => sendButton().click());
     expect(sent).toEqual([{ op: "chat", text: "", thread: "thread-b", model: "model", images: [{ name: "second.png", mime: "image/png", data: "bmV3" }] }]);
     expect(document.querySelectorAll("img")).toHaveLength(0);
+    props.sink.state.queue = [""];
+    props.sink.state.queueIds = ["image-row"];
+    await render();
+    expect(document.querySelector('button[title="agent.queueEditHint"]').textContent).toBe("agent.queuedImages");
+    await act(async () => document.querySelector('button[title="agent.queueEditHint"]').click());
+    const removal = sent.at(-1);
+    expect(removal).toMatchObject({ op: "dequeue", queueId: "image-row", restore: true });
+    expect(sendButton().disabled).toBe(true);
+    await attach("blocked-during-return.png");
+    expect(readers).toHaveLength(2);
+    await act(async () => acceptQueueRemoval(props.sink.ops.queueReturns.current, {
+      id: removal.id, removed: true, text: "queued image",
+      images: [{ name: "original.png", mime: "image/png", data: "b3JpZ2luYWw=" }],
+    }));
+    expect(document.querySelector('img').getAttribute('src')).toBe("data:image/png;base64,b3JpZ2luYWw=");
+    expect(document.querySelector('button[title="agent.queueEditImagesHint"]').disabled).toBe(true);
+    await act(async () => sendButton().click());
+    expect(sent.at(-1)).toMatchObject({ op: "chat", text: "queued image", images: [{ name: "original.png", mime: "image/png", data: "b3JpZ2luYWw=" }] });
     await attach("unreadable.png");
     await act(async () => readers[2].onerror());
     expect(props.sink.ops.pushBubble).toHaveBeenCalledWith("error", "agent.imageReadFailed");

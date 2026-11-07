@@ -1,4 +1,4 @@
-import { acceptQueueRemoval, type QueueReturns } from "./queue-actions";
+import { acceptQueueRemoval, clearQueueReturns, type QueueReturns } from "./queue-actions";
 /* Per-thread transcript state ("sink"): one instance backs the connection's
  * current thread, and every secondary split-screen pane owns one for the
  * thread it shows. The WS handler routes tagged frames to the right sink,
@@ -299,7 +299,7 @@ export function useThreadSink(): ThreadSink {
     setTodos([]);
     setQueue([]);
     setQueueIds([]);
-    queueReturns.current.clear();
+    clearQueueReturns(queueReturns.current);
     setRunning(false);
     setTurnUsage(null);
   }, [resetTransient]);
@@ -428,7 +428,7 @@ export function applyScopedMessage(
        * without switching the connection's current thread. */
       ops.resetTransient();
       ops.setTodos(parseTodos(msg.todos));
-      ops.queueReturns.current.clear();
+      clearQueueReturns(ops.queueReturns.current);
       ops.setQueue(parseStringArray(msg.queue));
       ops.setQueueIds(parseStringArray(msg.queueIds));
       const running = !!msg.running;
