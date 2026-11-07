@@ -35,3 +35,23 @@ it("shows a compact completion row and expands parsed output without internal in
     delete globalThis.IS_REACT_ACT_ENVIRONMENT;
   }
 });
+
+it("renders subagent markdown and highlighted code when expanded", async () => {
+  globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  const host = document.createElement("div");
+  const root = createRoot(host);
+  try {
+    const result = "**Result**\n\n```typescript\nconst value = 42;\n```";
+    await act(async () => root.render(createElement(JobNotification, {
+      job: { ...job, kind: "subagent", result }, t: key => key,
+    })));
+    await act(async () => host.querySelector("button").click());
+    expect(host.querySelector("strong").textContent).toBe("Result");
+    expect(host.querySelector(".code-highlight")).not.toBeNull();
+    expect(host.textContent).toContain("const value = 42;");
+    expect(host.textContent).not.toContain("```");
+  } finally {
+    await act(async () => root.unmount());
+    delete globalThis.IS_REACT_ACT_ENVIRONMENT;
+  }
+});

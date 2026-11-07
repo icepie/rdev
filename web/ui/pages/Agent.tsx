@@ -1261,11 +1261,11 @@ export function AgentPage() {
   useEffect(() => {
     if (!devices.length) return;
     const preselect = searchParams.get("device") || "";
-    if (device && devices.some((d) => d.id === device)) return;
+    // Discovery can briefly lose a device during reconnect. Keep the
+    // selected workspace and its URL; the socket owns connection recovery.
+    if (device) return;
     if (preselect && devices.some((d) => d.id === preselect)) {
       setDevice(preselect);
-    } else if (device) {
-      setDevice("");
     } else if (!preselect) {
       setDevice(SERVER_AGENT_ID);
     }
