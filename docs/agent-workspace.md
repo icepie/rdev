@@ -41,3 +41,5 @@ Agent 的 write_file/edit 使用按设备与路径隔离、可取消的写入锁
 ### Slash shortcuts and execution
 
 `/compact` uses server-side context compaction. `/jobs` and `/jobs kill <id|all>` use the thread-scoped job protocol. `/bg <command>` and `/subagent <task>` deterministically invoke their tools through the conversation queue without asking the model to select them. They retain the same approval, cancellation, history, and thread isolation rules as model tool calls. In server mode use `/bg --device <id> <command>` to select the remote device. Server mode still requires a remote device for shell work. These chat-based commands carry the selected model and thread, preserve multiline arguments, and keep the draft if sending fails.
+
+侧栏区分运行中、等待审批、等待回答，并显示运行中的后台任务数。当前页面观察到会话从运行转为空闲时，未查看的会话显示完成未读圆点；在可见页面打开该会话后清除。分屏内可见的会话视为已读，后台浏览器标签页不自动清除。未读标记目前仅在当前页面生命周期保存，刷新后不会恢复。

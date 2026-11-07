@@ -1,3 +1,4 @@
+import { threadIdentity, useThreadUnread } from "../hooks/use-thread-unread";
 import { useDevicePassword } from "../hooks/use-device-password";
 import { shouldTogglePanel } from "../components/agent/panel-shortcut";
 import { isImeComposing } from "../lib/keyboard";
@@ -1799,6 +1800,7 @@ export function AgentPage() {
     for (const p of listPanes(layout.root)) ids.add(p.threadId ?? thread);
     return ids;
   }, [layout, thread]);
+  const unreadThreads = useThreadUnread(sidebarRows, device, openThreadIds);
 
   /* One pane of the split layout: slim pane chrome (title, running dot,
    * close) when several panes are open + the chat surface. The pane whose
@@ -2186,6 +2188,10 @@ export function AgentPage() {
         </span>
       )}
       <span className="flex h-4 w-4 shrink-0 items-center justify-center">
+        {!th.running && !(th.backgroundJobs ?? 0) && unreadThreads.has(threadIdentity(th.device, th.id)) && (
+          <span role="img" aria-label={t("agent.completedUnread")} title={t("agent.completedUnread")}
+            className="size-2 rounded-full bg-timeline-accent" />
+        )}
         {th.running && (
           <span role="img" aria-label={t(th.waiting === "approval" ? "agent.waitingApproval" : th.waiting === "answer" ? "agent.waitingAnswer" : "agent.filterRunning")}
             title={t(th.waiting === "approval" ? "agent.waitingApproval" : th.waiting === "answer" ? "agent.waitingAnswer" : "agent.filterRunning")}>
