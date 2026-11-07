@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { AnsiText } from "../ansi-text";
+import { Markdown } from "../markdown";
 import { DisclosureBody } from "../disclosure-body";
 import { Icon } from "../icon";
 import { CommandOutputBody } from "./command-output";
@@ -40,9 +40,9 @@ export function JobNotification({ job, t }: { job: AgentJob; t: Translator }) {
           <CommandOutputBody tool={{ id: job.id, name: "shell", args: "{}", summary: job.label,
             result: job.result || job.output || "", diff: "", done: true, isError: job.state === "failed" }} t={t} />
         ) : (
-          <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-border bg-card p-3 text-xs">
-            <AnsiText text={job.result || job.output || ""} />
-          </pre>
+          <div className="max-h-72 min-w-0 overflow-auto rounded-lg border border-border bg-card p-3 text-sm">
+            <Markdown text={job.result || job.output || ""} />
+          </div>
         )}
         {job.error && <p className="mt-1 whitespace-pre-wrap break-words text-xs text-destructive-text">{job.error}</p>}
       </DisclosureBody>

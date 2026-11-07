@@ -1,5 +1,5 @@
 import { CommandOutputBody } from "./command-output";
-import { AnsiText } from "../ansi-text";
+import { Markdown } from "../markdown";
 import { DisclosureBody } from "../disclosure-body";
 import { useEffect, useState } from "react";
 import type { ThreadSink } from "./thread-sink";
@@ -144,9 +144,9 @@ export function JobsPanel({
                   t={t}
                 />
               ) : (
-                <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words rounded bg-muted p-2">
-                  <AnsiText text={job.result || job.output || t("agent.jobs.waiting")} />
-                </pre>
+                <div className="max-h-40 min-w-0 overflow-auto rounded bg-card p-2 text-sm">
+                  <Markdown text={job.result || job.output || t("agent.jobs.waiting")} />
+                </div>
               )}
               {job.error && <p role="alert" className="mt-2 whitespace-pre-wrap break-words text-destructive-text">{job.error}</p>}
             </div>
