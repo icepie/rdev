@@ -5,20 +5,24 @@ import (
 	"fmt"
 	"os"
 	"strings"
+
+	"rdev/internal/agent"
 )
 
 // AgentModelConfig is one model offered by a provider.
 type AgentModelConfig struct {
-	API       string `json:"api,omitempty"`
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	Reasoning bool   `json:"reasoning,omitempty"`
+	MaxTokens int                           `json:"maxTokens,omitempty"`
+	Thinking  agent.AnthropicThinkingConfig `json:"thinking,omitempty"`
+	API       string                        `json:"api,omitempty"`
+	ID        string                        `json:"id"`
+	Name      string                        `json:"name"`
+	Reasoning bool                          `json:"reasoning,omitempty"`
 	// ContextWindow is the model's max context tokens, used by the
 	// composer context-usage indicator. 0 = unknown (indicator hidden).
 	ContextWindow int `json:"contextWindow,omitempty"`
 }
 
-// AgentProvider is one OpenAI-compatible LLM provider.
+// AgentProvider is one configured LLM provider.
 type AgentProvider struct {
 	API     string             `json:"api,omitempty"`
 	ID      string             `json:"id"`
@@ -85,6 +89,14 @@ func (c *AgentConfig) validate() error {
 		for _, m := range p.Models {
 			if !validAgentAPI(m.API) {
 				return fmt.Errorf("model %q: unsupported api %q", m.ID, m.API)
+			}
+			if p.modelAPI(&m) == "anthropic-messages" {
+				if err := m.Thinking.Validate(m.MaxTokens); err != nil {
+					return fmt.Errorf("model %q: %w", m.ID, err)
+				}
+				if m.Reasoning && m.Thinking.Mode == "" {
+					return fmt.Errorf("model %q: Anthropic reasoning requires explicit thinking.mode", m.ID)
+				}
 			}
 			if m.ID == "" {
 				return fmt.Errorf("provider %q: model with empty id", p.ID)
@@ -168,6 +180,9 @@ func (c *AgentConfig) Models() []map[string]any {
 			if m.Reasoning {
 				entry["reasoning"] = true
 			}
+			if p.modelAPI(&m) == "anthropic-messages" && m.Thinking.Mode == "anthropic-adaptive" {
+				entry["reasoningLevels"] = []string{"low", "medium", "high"}
+			}
 			if m.ContextWindow > 0 {
 				entry["contextWindow"] = m.ContextWindow
 			}
@@ -212,7 +227,7 @@ func (c *AgentConfig) Enabled() bool {
 }
 
 func validAgentAPI(api string) bool {
-	return api == "" || api == "openai-completions" || api == "openai-responses"
+	return api == "" || api == "openai-completions" || api == "openai-responses" || api == "anthropic-messages"
 }
 func (p *AgentProvider) modelAPI(model *AgentModelConfig) string {
 	if model.API != "" {

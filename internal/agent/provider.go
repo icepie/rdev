@@ -110,6 +110,8 @@ func streamChat(ctx context.Context, cfg Config, history []Message, onDelta, onR
 		payload, err = marshalChatRequest(cfg, history)
 	case "openai-responses":
 		payload, err = marshalResponsesRequest(cfg, history)
+	case "anthropic-messages":
+		payload, err = marshalAnthropicRequest(cfg, history)
 	default:
 		return Message{}, Usage{}, fmt.Errorf("agent: unsupported provider API %q", cfg.API)
 	}
@@ -177,6 +179,8 @@ func streamChatOnce(ctx context.Context, cfg Config, payload []byte, onDelta, on
 	endpoint := "/chat/completions"
 	if cfg.API == "openai-responses" {
 		endpoint = "/responses"
+	} else if cfg.API == "anthropic-messages" {
+		endpoint = "/messages"
 	}
 	url := strings.TrimRight(cfg.BaseURL, "/") + endpoint
 	req, err := http.NewRequestWithContext(streamCtx, http.MethodPost, url, bytes.NewReader(payload))
@@ -185,7 +189,15 @@ func streamChatOnce(ctx context.Context, cfg Config, payload []byte, onDelta, on
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
-	req.Header.Set("Authorization", "Bearer "+cfg.APIKey)
+	if cfg.API == "anthropic-messages" {
+		req.Header.Set("x-api-key", cfg.APIKey)
+		req.Header.Set("anthropic-version", "2023-06-01")
+		if cfg.Thinking.Mode == "anthropic-adaptive" && cfg.ReasoningEffort != "" {
+			req.Header.Set("anthropic-beta", "effort-2025-11-24")
+		}
+	} else {
+		req.Header.Set("Authorization", "Bearer "+cfg.APIKey)
+	}
 
 	resp, err := cfg.HTTPClient.Do(req)
 	if err != nil {
@@ -198,11 +210,13 @@ func streamChatOnce(ctx context.Context, cfg Config, payload []byte, onDelta, on
 	}
 
 	if cfg.API == "openai-responses" {
-		assistant, usage, err = readResponsesStream(resp.Body, responseScope(cfg), onDelta, onReasoning, func() { watchdog.Reset(streamIdleTimeout) })
+		assistant, usage, err = readResponsesStream(resp.Body, providerReplayScope(cfg), onDelta, onReasoning, func() { watchdog.Reset(streamIdleTimeout) })
+	} else if cfg.API == "anthropic-messages" {
+		assistant, usage, err = readAnthropicStream(resp.Body, providerReplayScope(cfg), onDelta, onReasoning, func() { watchdog.Reset(streamIdleTimeout) })
 	} else {
 		assistant, usage, err = readStream(resp.Body, onDelta, onReasoning, func() { watchdog.Reset(streamIdleTimeout) })
 	}
-	progress = assistant.Responses != nil || assistant.Content != "" || assistant.Reasoning != "" || len(assistant.ToolCalls) > 0
+	progress = assistant.Anthropic != nil || assistant.Responses != nil || assistant.Content != "" || assistant.Reasoning != "" || len(assistant.ToolCalls) > 0
 	return assistant, usage, progress, err
 }
 

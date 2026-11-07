@@ -86,10 +86,12 @@ type Differ interface {
 
 // Config configures a Session.
 type Config struct {
-	API        string // empty/openai-completions or openai-responses
-	ProviderID string // scopes opaque provider replay state
+	API             string                  // empty/openai-completions, openai-responses, anthropic-messages
+	ProviderID      string                  // scopes opaque provider replay state
+	MaxOutputTokens int                     // Anthropic output ceiling; 0 defaults to 8192
+	Thinking        AnthropicThinkingConfig // explicit model capability; never inferred from its name
 
-	BaseURL      string // OpenAI-compatible endpoint root, e.g. "https://api.openai.com/v1"
+	BaseURL      string // provider API root, e.g. "https://api.anthropic.com/v1"
 	APIKey       string
 	Model        string
 	SystemPrompt string
@@ -97,9 +99,9 @@ type Config struct {
 	// MaxTurns caps model round-trips per Run (each round may include tool
 	// calls). 0 means DefaultMaxTurns.
 	MaxTurns int
-	// ReasoningEffort is the model thinking level sent as the
-	// reasoning_effort request field ("low" | "medium" | "high"). "" and
-	// "off" omit the field entirely.
+	// ReasoningEffort selects low/medium/high through the chosen adapter.
+	// Empty/off omits the request setting, except adaptive-only Anthropic
+	// models map off to low effort because they cannot disable thinking.
 	ReasoningEffort string
 	// Approve is called before executing any tool that implements
 	// DangerousTool and reports true. allow=false feeds "error: denied by
@@ -121,6 +123,7 @@ const DefaultMaxTurns = 25
 // Message is one conversation entry in OpenAI chat-completions wire shape.
 type Message struct {
 	Responses *ResponseReplay `json:"-"`
+	Anthropic *ProviderReplay `json:"-"`
 
 	Display    json.RawMessage `json:"-"`    // UI metadata, never sent to the provider
 	Role       string          `json:"role"` // "system" | "user" | "assistant" | "tool"
@@ -128,8 +131,8 @@ type Message struct {
 	ToolCalls  []ToolCall      `json:"tool_calls,omitempty"`
 	ToolCallID string          `json:"tool_call_id,omitempty"` // role == "tool"
 	// Reasoning holds the model's thinking text for assistant messages. It
-	// is never sent back to the provider (DeepSeek rejects it); it exists
-	// only for display and history persistence.
+	// is only for display and history persistence. Protocol-specific replay
+	// fields separately retain signed/encrypted reasoning for continuation.
 	Reasoning string `json:"-"`
 	// Images are user-message attachments (screenshots, photos). When
 	// non-empty, MarshalJSON emits content as a text+image_url parts array.
@@ -202,8 +205,8 @@ type ToolCall struct {
 	ID        string `json:"id"`
 	Name      string `json:"name"`
 	Arguments string `json:"arguments"` // raw JSON text as produced by the model
-	// Summary, Diff and IsError are display metadata filled in by the session while
-	// executing the call; they never go back to the provider.
+	// Summary and Diff are display metadata filled in while executing tools.
+	// IsError also informs native tool-result adapters; none are call arguments.
 	IsError bool   `json:"-"`
 	Summary string `json:"-"`
 	Diff    string `json:"-"`
@@ -272,14 +275,8 @@ func cloneMessages(messages []Message) []Message {
 		cloned[i].ToolCalls = slices.Clone(message.ToolCalls)
 		cloned[i].Images = slices.Clone(message.Images)
 		cloned[i].Display = slices.Clone(message.Display)
-		if message.Responses != nil {
-			replay := *message.Responses
-			replay.Items = make([]json.RawMessage, len(message.Responses.Items))
-			for j, item := range message.Responses.Items {
-				replay.Items[j] = slices.Clone(item)
-			}
-			cloned[i].Responses = &replay
-		}
+		cloned[i].Responses = cloneProviderReplay(message.Responses)
+		cloned[i].Anthropic = cloneProviderReplay(message.Anthropic)
 	}
 	return cloned
 }

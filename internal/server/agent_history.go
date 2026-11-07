@@ -40,6 +40,7 @@ type agentHistoryToolCall struct {
 
 // agentHistoryLine is one JSONL record: meta (t=="meta") or message (t=="msg").
 type agentHistoryLine struct {
+	Anthropic     *agent.ProviderReplay  `json:"anthropic,omitempty"`
 	Responses     *agent.ResponseReplay  `json:"responses,omitempty"`
 	OutcomeAt     string                 `json:"outcomeAt,omitempty"`
 	Outcome       string                 `json:"outcome,omitempty"`
@@ -301,7 +302,7 @@ func (st *agentSessionStore) loadLocked(deviceID, threadID string) (msgs []agent
 			default:
 				continue
 			}
-			msg := agent.Message{Responses: line.Responses, Display: line.Display, Role: line.Role, Content: line.Content, ToolCallID: line.ToolCallID, Reasoning: line.Reasoning}
+			msg := agent.Message{Anthropic: line.Anthropic, Responses: line.Responses, Display: line.Display, Role: line.Role, Content: line.Content, ToolCallID: line.ToolCallID, Reasoning: line.Reasoning}
 			for i, name := range line.Images {
 				var preview string
 				if i < len(line.ImagePreviews) {
@@ -491,6 +492,7 @@ func (st *agentSessionStore) setExtra(deviceID, threadID string, update func(*ag
 func marshalAgentHistoryMsg(m agent.Message) []byte {
 	line := agentHistoryLine{
 		Responses: m.Responses,
+		Anthropic: m.Anthropic,
 		Display:   m.Display, ImagePreviews: agentImagePreviews(m.Images),
 		T: "msg", Role: m.Role, Content: m.Content, ToolCallID: m.ToolCallID, Reasoning: m.Reasoning,
 	}

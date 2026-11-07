@@ -1,3 +1,4 @@
+import { parseModelCatalog } from "../ui/components/agent/protocol";
 import { acceptQueueRemoval } from "../ui/components/agent/queue-actions";
 // @vitest-environment jsdom
 import { JSDOM } from "jsdom";
@@ -49,6 +50,21 @@ it("preserves composer intent across modified keys, image loading and thread swi
   };
   const sendButton = () => document.querySelector('button[aria-label="agent.send"]');
   try {
+    await render();
+    props.models = parseModelCatalog([null, { name: "invalid" }, { id: "model", reasoningLevels: ["low", "medium", "high", "invalid", null] }]);
+    expect(props.models).toHaveLength(1);
+    props.reasoning = "off"; // legacy preference under an adaptive-only model
+    await render();
+    const reasoningButton = document.querySelector('button[aria-label="agent.reasoning"]');
+    expect(reasoningButton.textContent).toBe("agent.reasoningLow");
+    await act(async () => reasoningButton.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true })));
+    expect([...document.querySelectorAll('[role="menuitem"]')].map(item => item.textContent)).toEqual(["agent.reasoningLow", "agent.reasoningMedium", "agent.reasoningHigh"]);
+    await act(async () => document.querySelector('[role="menu"]').dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    props.models = parseModelCatalog([{ id: "model" }]); // old catalogs retain all four choices
+    await render();
+    expect(document.querySelector('button[aria-label="agent.reasoning"]').textContent).toBe("agent.reasoningOff");
+    props.models = [];
+    props.reasoning = "medium";
     await render();
     await act(async () => insertDraft("/reset"));
     const composer = document.querySelector("textarea");

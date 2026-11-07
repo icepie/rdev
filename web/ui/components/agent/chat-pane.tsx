@@ -149,6 +149,10 @@ export function ChatPaneView({
   onOpenFile,
   onOpenDiff,
 }: ChatPaneViewProps) {
+  const modelReasoningLevels = models.find((item) => item.id === model)?.reasoningLevels;
+  const supportedReasoning = REASONING_LEVELS.filter((item) => !modelReasoningLevels || modelReasoningLevels.includes(item.level));
+  const reasoningOptions = supportedReasoning.length ? supportedReasoning : REASONING_LEVELS;
+  const selectedReasoning = reasoningOptions.find((item) => item.level === reasoning) ?? reasoningOptions[0];
   const { state, ops } = sink;
   const { items, todos, queue, queueIds, running, stopping, turnUsage, currentTool, workingSince } = state;
 
@@ -886,15 +890,15 @@ export function ChatPaneView({
                     className="flex h-8 shrink-0 cursor-pointer items-center gap-1 rounded-md px-1 text-xs font-normal text-muted-foreground transition-colors hover:text-foreground disabled:pointer-events-none disabled:opacity-50 max-md:pointer-coarse:h-10"
                   >
                     <Icon name="AiBrain01" className="size-3.5" />
-                    {t(REASONING_LEVELS.find((r) => r.level === reasoning)?.label ?? "agent.reasoningMedium")}
+                    {t(selectedReasoning.label)}
                     <Icon name="ChevronDown" className="size-3.5 text-subtle-foreground/75" />
                   </button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="start">
-                  {REASONING_LEVELS.map((r) => (
+                  {reasoningOptions.map((r) => (
                     <DropdownMenuItem key={r.level} onSelect={() => onReasoningChange(r.level)}>
                       <span className="flex-1">{t(r.label)}</span>
-                      {reasoning === r.level && (
+                      {selectedReasoning.level === r.level && (
                         <Icon name="Check" className="size-4 shrink-0" />
                       )}
                     </DropdownMenuItem>

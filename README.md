@@ -95,7 +95,17 @@
 
 提供方或单个模型可设置 `"api": "openai-responses"` 使用 `/responses`，模型级设置优先。省略 `api` 或设置 `"openai-completions"` 沿用 `/chat/completions`；未知值会报配置错误。`base_url` 填接口根路径（通常以 `/v1` 结尾），不包含 `/responses`。保持供应商实际支持的模型 ID 不变。
 
-Responses 使用 SSE 和 `store: false`，支持函数工具、图片输入、推理摘要及 usage；同一提供方/地址/模型的原始输出条目随历史保存，用于加密推理与助手 phase 的续轮。切换提供方或模型后退回普通消息/工具历史，不复用原始条目。当前不包含 Responses WebSocket、供应商托管工具、Anthropic API 或完整 OMP RPC。
+Responses 使用 SSE 和 `store: false`，支持函数工具、图片输入、推理摘要及 usage；同一提供方/地址/模型的原始输出条目随历史保存，用于加密推理与助手 phase 的续轮。切换提供方或模型后退回普通消息/工具历史，不复用原始条目。当前不包含 Responses WebSocket、供应商托管工具或完整 OMP RPC。
+
+Anthropic 原生 Messages 可设置 `"api": "anthropic-messages"`，使用 `/messages`、`x-api-key` 和 `anthropic-version: 2023-06-01`。`base_url` 同样填含 `/v1` 的接口根路径；不使用 Claude 登录/OAuth 凭证。支持流式文本、工具调用/结果、发送图片与工具返回图片、思考签名和 usage（包含缓存输入）。
+
+模型级 `maxTokens` 是输出上限，默认 8192；应按所用模型能力配置。开启可调思考时，同时配置 `"reasoning": true` 和明确的 `thinking.mode`，不根据模型名推测：
+
+- `"thinking": {"mode": "anthropic-adaptive"}`：使用 adaptive 与 low/medium/high effort；界面只提供低、中、高三档；旧客户端或旧偏好的 off 映射为 low，因为此类模型不能关闭思考。
+- `"thinking": {"mode": "anthropic-budget"}`：low/medium/high 默认预算为 1024/4096/8192，最多占用 `maxTokens - 1024`，为回答留出空间。可在 thinking 中显式设置 `budgetTokens`；预算需至少 1024 且低于输出上限 1024。off 不发送 thinking 设置。
+- 只有确认模型支持 `thinking.display` 时，才设置 `"supportsDisplay": true`，请求可见的 summarized 思考；默认不发送该字段。未配置 thinking 时不主动开启思考参数。
+
+完整的签名/隐藏思考块随本地历史持久化，仅同提供方/地址/模型续轮使用；浏览器只收到可读思考文本。切换模型、失败或取消不会回放无效的签名块。该适配不包含 Anthropic 托管工具、Bedrock/Vertex、OAuth 或服务端压缩 API；`/compact` 仍使用 rdev 的会话摘要实现。
 
 ### 启动客户端
 

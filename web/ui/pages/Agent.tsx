@@ -98,6 +98,7 @@ import {
   parseThreads,
   parseTodos,
   parseUsage,
+  parseModelCatalog,
   parseWorking,
   replayHistory,
   threadCreatedMs,
@@ -775,29 +776,7 @@ export function AgentPage() {
         fileRequestEpochRef.current.clear();
         changesRequestRef.current = null;
         primaryOps.setRunning(!!msg.running);
-        const list = (Array.isArray(msg.models) ? msg.models : []).flatMap(
-          (x): ModelInfo[] => {
-            if (!x || typeof x !== "object" || !("id" in x)) return [];
-            const id = asString(x.id);
-            if (!id) return [];
-            const cw =
-              "contextWindow" in x &&
-              typeof x.contextWindow === "number" &&
-              x.contextWindow > 0
-                ? x.contextWindow
-                : undefined;
-            return [
-              {
-                id,
-                name: "name" in x ? asString(x.name) || undefined : undefined,
-                provider:
-                  "provider" in x ? asString(x.provider) || undefined : undefined,
-                contextWindow: cw,
-              },
-            ];
-          },
-        );
-        setModels(list);
+        setModels(parseModelCatalog(msg.models));
         primaryOps.setTurnUsage(parseUsage(msg.usage));
         /* Server-persisted model wins; localStorage is a display cache only. */
         const m = asString(msg.model);

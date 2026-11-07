@@ -1,8 +1,6 @@
 package agent
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,22 +8,9 @@ import (
 	"strings"
 )
 
-// ResponseReplay retains opaque reasoning and assistant phase metadata for
-// stateless continuation. It is persisted, but never exposed as UI/model text.
-type ResponseReplay struct {
-	Scope string            `json:"scope"`
-	Items []json.RawMessage `json:"items"`
-}
-
-func responseScope(cfg Config) string {
-	scope, _ := json.Marshal([]string{cfg.ProviderID, strings.TrimRight(cfg.BaseURL, "/"), cfg.Model})
-	digest := sha256.Sum256(scope)
-	return hex.EncodeToString(digest[:])
-}
-
 func marshalResponsesRequest(cfg Config, history []Message) ([]byte, error) {
 	input := make([]any, 0, len(history))
-	scope := responseScope(cfg)
+	scope := providerReplayScope(cfg)
 	for _, m := range providerMessages(history) {
 		if m.Role == "assistant" && m.Responses != nil && m.Responses.Scope == scope && len(m.Responses.Items) > 0 {
 			for _, item := range m.Responses.Items {

@@ -351,3 +351,21 @@ func TestAgentHistoryPersistsOpaqueResponsesWithoutUIExposure(t *testing.T) {
 		t.Fatal("opaque model state leaked into UI")
 	}
 }
+
+func TestAgentHistoryPersistsAnthropicReplayWithoutUIExposure(t *testing.T) {
+	store := newTestStore(t)
+	replay := &agent.ProviderReplay{Scope: "fixture-scope", Items: []json.RawMessage{json.RawMessage(`{"type":"thinking","thinking":"plan","signature":"private-signature"}`), json.RawMessage(`{"type":"redacted_thinking","data":"private-redacted"}`), json.RawMessage(`{"type":"text","text":"answer"}`)}}
+	messages := []agent.Message{{Role: "user", Content: "question"}, {Role: "assistant", Content: "answer", Reasoning: "plan", Anthropic: replay}}
+	store.save("device", "thread", "provider/model", messages)
+	restored, _, _, _ := newAgentSessionStore(store.dir, time.Hour).load("device", "thread")
+	if len(restored) != 2 || !reflect.DeepEqual(restored[1].Anthropic, replay) {
+		t.Fatalf("lost Anthropic continuation: %+v", restored)
+	}
+	raw, err := json.Marshal(renderAgentHistory(restored))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "private-") || strings.Contains(string(raw), "signature") || strings.Contains(string(raw), "redacted_thinking") {
+		t.Fatal("opaque state leaked into UI")
+	}
+}

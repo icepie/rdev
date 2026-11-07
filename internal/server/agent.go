@@ -598,6 +598,8 @@ func (s *Server) buildAgentSession(entry *agentSessionEntry, th *agentThread, cl
 	cfg := agent.Config{
 		API:             provider.modelAPI(model),
 		ProviderID:      provider.ID,
+		MaxOutputTokens: model.MaxTokens,
+		Thinking:        model.Thinking,
 		BaseURL:         provider.BaseURL,
 		APIKey:          provider.APIKey,
 		Model:           model.ID,

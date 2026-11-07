@@ -15,6 +15,28 @@ export interface ModelInfo {
   name?: string;
   provider?: string;
   contextWindow?: number;
+  reasoningLevels?: ReasoningLevel[];
+}
+
+export function parseModelCatalog(value: unknown): ModelInfo[] {
+  return (Array.isArray(value) ? value : []).flatMap((item): ModelInfo[] => {
+    if (!item || typeof item !== "object") return [];
+    const id = asString(item.id);
+    if (!id) return [];
+    const levels = Array.isArray(item.reasoningLevels)
+      ? item.reasoningLevels.flatMap((value: unknown) => {
+          const level = parseReasoningLevel(value);
+          return level ? [level] : [];
+        })
+      : undefined;
+    return [{
+      id,
+      name: asString(item.name) || undefined,
+      provider: asString(item.provider) || undefined,
+      contextWindow: typeof item.contextWindow === "number" && item.contextWindow > 0 ? item.contextWindow : undefined,
+      reasoningLevels: levels?.length ? levels : undefined,
+    }];
+  });
 }
 
 export interface TurnUsage {

@@ -186,7 +186,7 @@ func TestResponsesCompactionRetainsRecentOpaqueState(t *testing.T) {
 	cfg := testConfig(server.URL, nil)
 	cfg.API = "openai-responses"
 	session := New(cfg)
-	recent := Message{Role: "assistant", Content: "recent", Responses: &ResponseReplay{Scope: responseScope(cfg), Items: []json.RawMessage{json.RawMessage(`{"type":"message","phase":"final_answer","role":"assistant","content":[{"type":"output_text","text":"recent"}]}`)}}}
+	recent := Message{Role: "assistant", Content: "recent", Responses: &ResponseReplay{Scope: providerReplayScope(cfg), Items: []json.RawMessage{json.RawMessage(`{"type":"message","phase":"final_answer","role":"assistant","content":[{"type":"output_text","text":"recent"}]}`)}}}
 	session.SetHistory([]Message{{Role: "user", Content: "old"}, {Role: "assistant", Content: "old answer"}, {Role: "user", Content: "new"}, recent})
 	if _, err := session.Compact(context.Background(), ""); err != nil {
 		t.Fatal(err)
