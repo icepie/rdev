@@ -71,6 +71,15 @@ export interface ThreadSinkState {
   workingSince: number | null;
 }
 
+interface TurnCompletion {
+  usage?: { inputTokens?: number; outputTokens?: number };
+  reasoning?: string;
+  files?: string[];
+  text?: string;
+  display?: unknown;
+  unfinishedToolResult?: string;
+}
+
 export interface ThreadSinkOps {
   setJobsError: Dispatch<SetStateAction<string>>;
   setJobs: Dispatch<SetStateAction<AgentJob[]>>;
@@ -97,13 +106,7 @@ export interface ThreadSinkOps {
   mutateOpenTurn: (fn: (turn: TurnItem) => TurnItem) => void;
   appendDelta: (text: string) => void;
   appendReasoning: (text: string) => void;
-  finishTurn: (
-    usage?: { inputTokens?: number; outputTokens?: number },
-    reasoning?: string,
-    files?: string[],
-    text?: string,
-    display?: unknown,
-  ) => void;
+  finishTurn: (completion?: TurnCompletion) => void;
   /* Scroll container of the pane showing this sink (ChatPaneView registers
    * it); mutators keep the view pinned to the bottom like bb. */
   registerScrollEl: (el: HTMLDivElement | null) => void;
@@ -277,13 +280,8 @@ export function useThreadSink(): ThreadSink {
   );
 
   const finishTurn = useCallback(
-    (
-      usage?: { inputTokens?: number; outputTokens?: number },
-      reasoning?: string,
-      files?: string[],
-      text?: string,
-      display?: unknown,
-    ) => {
+    ({ usage, reasoning, files, text, display, unfinishedToolResult }: TurnCompletion = {}) => {
+      const endedAt = Date.now();
       mutateOpenTurn((turn) => ({
         ...turn,
         text: turn.text ? turn.text : (text ?? turn.text),
@@ -292,7 +290,11 @@ export function useThreadSink(): ThreadSink {
         usage: usage ?? turn.usage,
         reasoning: reasoning ? reasoning : turn.reasoning,
         files: files ?? turn.files,
-        endedAt: Date.now(),
+        tools: unfinishedToolResult === undefined ? turn.tools : turn.tools.map(tool => tool.done ? tool : {
+          ...tool, done: true, isError: true, doneAt: endedAt,
+          result: tool.result ? tool.result + "\n\n" + unfinishedToolResult : unfinishedToolResult,
+        }),
+        endedAt,
         ...parseDisplay(display),
       }));
       turnOpen.current = false;
@@ -631,24 +633,14 @@ export function applyScopedMessage(
         ops.scrollDown(true);
         return;
       }
-      ops.finishTurn(
-        usage && typeof usage === "object"
-          ? {
-              inputTokens:
-                "inputTokens" in usage && typeof usage.inputTokens === "number"
-                  ? usage.inputTokens
-                  : undefined,
-              outputTokens:
-                "outputTokens" in usage && typeof usage.outputTokens === "number"
-                  ? usage.outputTokens
-                  : undefined,
-            }
-          : undefined,
-        asString(msg.reasoning) || undefined,
-        Array.isArray(msg.files) ? parseStringArray(msg.files) : undefined,
-        asString(msg.text) || undefined,
-        msg.display,
-      );
+      ops.finishTurn({
+        usage: doneUsage ?? undefined,
+        reasoning: asString(msg.reasoning) || undefined,
+        files: Array.isArray(msg.files) ? parseStringArray(msg.files) : undefined,
+        text: asString(msg.text) || undefined,
+        display: msg.display,
+        unfinishedToolResult: t("agent.toolResultMissing"),
+      });
       ops.setRunning(false);
       ops.resetTransient();
       return;
@@ -664,7 +656,7 @@ export function applyScopedMessage(
         ops.scrollDown(true);
         return;
       } else {
-        if (ops.turnOpen.current) ops.finishTurn(undefined, undefined, undefined, undefined, msg.display);
+        if (ops.turnOpen.current) ops.finishTurn({ display: msg.display, unfinishedToolResult: message });
         ops.pushBubble("error", t("agent.toolError") + ": " + message);
         if (/api[-_ ]?key/i.test(message)) {
           ops.pushBubble("setup", t("agent.notConfiguredHint"));
@@ -680,7 +672,7 @@ export function applyScopedMessage(
        * finishTurn unconditionally would append a phantom empty turn. */
       const wasOpen = ops.turnOpen.current;
       if (wasOpen) {
-        ops.finishTurn(undefined, undefined, undefined, undefined, msg.display);
+        ops.finishTurn({ display: msg.display, unfinishedToolResult: t("agent.stopped") });
         ops.pushBubble("system", t("agent.stopped"));
       }
       ops.setRunning(false);

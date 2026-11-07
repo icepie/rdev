@@ -288,3 +288,9 @@ Local fixture only (`@server` on port 19440); no real user history was deleted.
 - A compaction that already replaced history records that fact before emitting UI events, preserving replacement persistence even if event delivery unexpectedly fails.
 - Model-loop regression verifies a panicking tool emits ToolEnd with IsError, preserves its call/result pair and lets the model respond to the failure. Queue regressions simulate a failing explicit tool command and a panicking provider RoundTripper; each admits and persists the queued command afterward. Focused regressions, including reset ownership, passed five consecutive race runs.
 - Final validation: full Go suite, complete Agent/server race suites and embedded server build passed.
+
+## Terminal frames settle unfinished tool cards
+
+- A terminal error/stopped frame previously closed the assistant text flags but left tools without tool_end marked running. The completion reducer now settles those cards with the terminal reason, keeps any partial output, and leaves already-completed results/timestamps unchanged. A successful turn with a missing tool result uses an explicit localized result-unavailable message instead of implying success.
+- Completion arguments now use a named options object; the done path reuses parsed usage instead of duplicating its field validation. Browser disconnect still leaves unknown remote tool outcomes unresolved for reattach, because disconnection is not proof the server stopped execution.
+- Parameterized regressions cover error, stopped and done-with-missing-result, completed-result preservation, partial output, done timing and open-tool cleanup; a separate regression preserves unknown outcomes on disconnect. All 171 Web tests, TypeScript, frontend and embedded server builds passed. No new browser visual check was performed.

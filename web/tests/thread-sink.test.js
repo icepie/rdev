@@ -235,3 +235,29 @@ it('ignores empty streaming fragments without creating a turn or switching phase
   await frame({ op: 'reasoning', text: '' });
   expect(sink.state.items[0]).toMatchObject({ streaming: true, streamingReasoning: false });
 });
+
+it.each([
+  [{ op: 'error', message: 'provider failed' }, 'provider failed'],
+  [{ op: 'stopped', canceled: true }, 'agent.stopped'],
+  [{ op: 'done' }, 'agent.toolResultMissing'],
+])('settles unfinished tools on terminal frame %j without changing completed results', async (terminal, reason) => {
+  await frame({ op: 'turn_start', text: 'check' });
+  await frame({ op: 'tool_start', id: 'complete', name: 'read_file' });
+  await frame({ op: 'tool_end', id: 'complete', name: 'read_file', result: 'original output' });
+  const completed = sink.state.items[1].tools[0];
+  await frame({ op: 'tool_start', id: 'pending', name: 'shell' });
+  await act(async () => sink.ops.mutateOpenTurn(turn => ({ ...turn, tools: turn.tools.map(tool => tool.id === 'pending' ? { ...tool, result: 'partial output' } : tool) })));
+  await frame(terminal);
+  const tools = sink.state.items[1].tools;
+  expect(tools[0]).toEqual(completed);
+  expect(tools[1]).toMatchObject({ done: true, isError: true, result: 'partial output\n\n' + reason });
+  expect(tools[1].doneAt).toBeTypeOf('number');
+  expect(sink.state.running).toBe(false);
+  expect(sink.ops.openToolIds.current.size).toBe(0);
+});
+
+it('keeps an in-flight tool unresolved when only the browser connection closes', async () => {
+  await frame({ op: 'tool_start', id: 'pending', name: 'shell' });
+  await act(async () => sink.ops.finishTurn());
+  expect(sink.state.items[0].tools[0]).toMatchObject({ done: false, isError: false });
+});
