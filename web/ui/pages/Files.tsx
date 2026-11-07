@@ -1362,13 +1362,13 @@ export function FilesBrowser({
           onDragOver={onPaneDragOver}
           onDrop={onDrop}
         >
-          <Table>
+          <Table className="table-fixed">
             <TableHeader className="sticky top-0 z-10 bg-background">
               <TableRow>
                 <TableHead>{t("files.name")}</TableHead>
-                <TableHead>{t("files.size")}</TableHead>
-                <TableHead className="hidden @min-[800px]/files:table-cell">{t("files.modified")}</TableHead>
-                <TableHead>{t("files.actions")}</TableHead>
+                <TableHead className="w-20 whitespace-nowrap">{t("files.size")}</TableHead>
+                <TableHead className="hidden w-48 @min-[800px]/files:table-cell">{t("files.modified")}</TableHead>
+                <TableHead className="w-28 @min-[480px]/files:w-40">{t("files.actions")}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -1433,7 +1433,7 @@ export function FilesBrowser({
                           <button
                             type="button"
                             className={cn(
-                              "inline-flex max-w-64 cursor-pointer items-center gap-1.5 rounded-sm text-sm text-foreground hover:text-timeline-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                              "inline-flex max-w-full min-w-0 cursor-pointer items-center gap-1.5 rounded-sm text-sm text-foreground hover:text-timeline-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                             )}
                             title={entry.name}
                             onClick={() => {
@@ -1448,7 +1448,7 @@ export function FilesBrowser({
                             <span className="truncate">{entry.name}</span>
                           </button>
                         </TableCell>
-                        <TableCell>{entry.isDir ? "--" : fmtBytes(entry.size)}</TableCell>
+                        <TableCell className="whitespace-nowrap tabular-nums">{entry.isDir ? "--" : fmtBytes(entry.size)}</TableCell>
                         <TableCell className="hidden text-muted-foreground @min-[800px]/files:table-cell">
                           {entry.modTime ? new Date(entry.modTime).toLocaleString() : ""}
                         </TableCell>
@@ -1458,10 +1458,11 @@ export function FilesBrowser({
                               <Button
                                 variant="outline"
                                 size="sm"
+                                aria-label={t("files.download")}
                                 onClick={() => startDownload(entry.path, entry.name, entry.size)}
                               >
                                 <Icon name="Download" />
-                                {t("files.download")}
+                                <span className="hidden @min-[480px]/files:inline">{t("files.download")}</span>
                               </Button>
                             )}
                             {/* Cross-pane transfer menu (split view). */}
