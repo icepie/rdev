@@ -546,7 +546,7 @@ export function ChatPaneView({
                   {item.images && item.images.length > 0 && (
                     <div className="mb-1 flex max-w-full flex-wrap justify-end gap-1">
                       {item.images.map((name, i) => item.imagePreviews?.[i] ? (
-                        <ImagePreview key={i} src={item.imagePreviews[i]} name={name} className="h-24 w-32" />
+                        <ImagePreview key={i} src={item.imagePreviews[i]} name={name} gallery={item.images?.map((name, index) => ({ name, src: item.imagePreviews?.[index] ?? "" }))} className="h-24 w-32" />
                       ) : (
                         <span
                           key={i}
@@ -777,7 +777,7 @@ export function ChatPaneView({
                   key={i}
                   className="flex items-center gap-1.5 rounded-md border border-border bg-surface-recessed py-1 pr-1.5 pl-1 text-xs text-muted-foreground"
                 >
-                  <ImagePreview src={img.preview} name={img.name} className="h-16 w-24 object-cover" />
+                  <ImagePreview src={img.preview} name={img.name} gallery={pendingImages.map(image => ({ name: image.name, src: image.preview }))} className="h-16 w-24 object-cover" />
                   <span className="max-w-32 truncate">{img.name}</span>
                   <button
                     type="button"

@@ -1,25 +1,28 @@
 import { useState } from "react";
-import { Dialog, DialogContent, DialogTitle, DialogTrigger } from "../dialog";
+import { ImageLightbox } from "../image-lightbox";
+import { getWrappedImageIndex, IMAGE_TRANSPARENCY_CHECKER_STYLE } from "../../lib/image-preview";
 import { cn } from "../../lib/utils";
 
+type PreviewImage = { src: string; name: string };
+const isPreviewSource = (src: string) => /^data:image\/(?:png|jpeg|jpg|gif|webp|avif|bmp);base64,/.test(src);
+
 // Shared by composer attachments, sent messages and remote read_file results.
-export function ImagePreview({ src, name, className }: { src: string; name: string; className?: string }) {
-  const [actualSize, setActualSize] = useState(false);
-  if (!/^data:image\/(?:png|jpeg|jpg|gif|webp|avif|bmp);base64,/.test(src)) return null;
-  return <Dialog onOpenChange={() => setActualSize(false)}>
-    <DialogTrigger asChild>
-      <button type="button" aria-label={name} className="block max-w-full cursor-zoom-in overflow-hidden rounded-md border border-border bg-surface-recessed focus-visible:ring-2 focus-visible:ring-ring">
-        <img src={src} alt={name} loading="lazy" decoding="async" className={cn("max-h-64 max-w-full object-contain", className)} />
-      </button>
-    </DialogTrigger>
-    <DialogContent aria-describedby={undefined} className="max-w-[min(90vw,80rem)]">
-      <DialogTitle className="truncate pr-6 text-sm" title={name}>{name}</DialogTitle>
-      <div className="max-h-[75dvh] overflow-auto rounded bg-surface-recessed">
-        <button type="button" aria-label={name} aria-pressed={actualSize} onClick={() => setActualSize(value => !value)}
-          className={cn("block min-w-full", actualSize ? "cursor-zoom-out" : "cursor-zoom-in")}>
-          <img src={src} alt={name} className={cn("mx-auto", actualSize ? "max-w-none" : "max-h-[70dvh] max-w-full object-contain")} />
-        </button>
-      </div>
-    </DialogContent>
-  </Dialog>;
+export function ImagePreview({ src, name, className, gallery }: PreviewImage & { className?: string; gallery?: PreviewImage[] }) {
+  const [open, setOpen] = useState(false);
+  const [index, setIndex] = useState(0);
+  if (!isPreviewSource(src)) return null;
+  const images = gallery?.filter(image => isPreviewSource(image.src)) ?? [{ src, name }];
+  const current = images[index] ?? { src, name };
+  const move = (direction: "next" | "previous") => setIndex(value => getWrappedImageIndex({ currentIndex: value, direction, itemCount: images.length }));
+  return <>
+    <button type="button" aria-label={name} onClick={() => {
+      setIndex(Math.max(0, images.findIndex(image => image.src === src && image.name === name)));
+      setOpen(true);
+    }} className="block max-w-full cursor-zoom-in overflow-hidden rounded-md border border-border bg-surface-recessed focus-visible:ring-2 focus-visible:ring-ring">
+      <img src={src} alt={name} loading="lazy" decoding="async" style={IMAGE_TRANSPARENCY_CHECKER_STYLE} className={cn("max-h-64 max-w-full object-contain", className)} />
+    </button>
+    <ImageLightbox isOpen={open} imageSrc={current.src} imageAlt={current.name} title={current.name}
+      hasMultipleImages={images.length > 1} navigationStatus={images.length > 1 ? `${index + 1} / ${images.length}` : undefined}
+      onPrevious={() => move("previous")} onNext={() => move("next")} onClose={() => setOpen(false)} />
+  </>;
 }
