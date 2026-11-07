@@ -80,9 +80,10 @@ func (s *Session) RunTurnWithSteering(ctx context.Context, userText string, imag
 			})
 		if err != nil {
 			switch {
-			case ctx.Err() != nil && (assistant.Content != "" || assistant.Reasoning != ""):
-				// Stopped mid-stream: keep what was generated so the
-				// persisted transcript shows the partial answer.
+			case assistant.Content != "" || assistant.Reasoning != "":
+				// Preserve already-visible output on any stream failure, but
+				// never persist unexecuted calls without matching tool results.
+				assistant.ToolCalls = nil
 				s.appendHistory(assistant)
 			case round == 0 && assistant.Content == "" && assistant.Reasoning == "" && len(assistant.ToolCalls) == 0:
 				// The first round failed with no output at all (both

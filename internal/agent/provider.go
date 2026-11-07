@@ -294,11 +294,16 @@ func readStream(body io.Reader, onDelta, onReasoning func(string), poke func()) 
 	}
 
 	assistant := assemble()
-	switch {
-	case finish == "length":
-		// The model hit its output cap: the answer is incomplete and the
-		// agent must not treat it as final.
+	// Match OMP's case-insensitive completion aliases and reject provider
+	// failure reasons before an incomplete tool call can reach execution.
+	switch strings.ToLower(finish) {
+	case "", "stop", "end", "tool_calls", "function_call":
+	case "length", "max_tokens":
 		return assistant, usage, errors.New("agent: response truncated (length limit)")
+	default:
+		return assistant, usage, fmt.Errorf("agent: provider finish_reason: %s", finish)
+	}
+	switch {
 	case !sawDone && finish == "":
 		// Connection dropped mid-stream with no terminal signal at all.
 		return assistant, usage, errors.New("agent: stream truncated (EOF without [DONE])")
