@@ -108,5 +108,5 @@ Local fixture only (`@server` on port 19440); no real user history was deleted.
 ## Follow-up: file task action boundaries
 
 - Task UI and handler now share state-based action eligibility. Queued requests expose cancel, not resume/clear; completed/canceled tasks expose only clear. The handler rechecks live task identity/state so stale controls cannot apply an invalid transition.
-- Extended FilesBrowser regression starts a queued upload, checks its sole cancel action, cancels, delivers late upload_ready, verifies it stays canceled, then clears it. Existing pause/resume/reconnect tests remain green.
+- Extended FilesBrowser regression starts a queued upload, checks its sole cancel action, cancels, delivers late upload_ready, verifies it stays canceled, then clears it. Existing reconnect/authentication and upload-resumption tests remain green.
 - Rebuilt mobile browser, restored completed 2MiB download: task has exactly one enabled button, Clear, with root width 390px. 141 Web tests, TypeScript and both frontend/server builds passed.
