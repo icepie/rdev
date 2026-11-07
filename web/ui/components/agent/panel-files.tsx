@@ -1,7 +1,7 @@
 import { createTransferAttempts } from "../../lib/file-transfer-attempts";
 import { uploadChunks } from "../../lib/upload-chunks";
 import { encodeFrame, decodeFrame } from "../../lib/file-transfer-frame";
-import { createListingGuard, readListingPage } from "../../lib/file-request-state";
+import { createListingGuard, readListingPage, canResumeUpload, restoreFileTask, uploadResumeRequest } from "../../lib/file-request-state";
 import { isImeComposing } from "../../lib/keyboard";
 /* PanelFiles: one device's file manager inside an agent right-panel tab
  * (scoped port of the standalone Files page). Self-contained /files WS
@@ -124,12 +124,12 @@ function updateSpeed(task: FileTask) {
       : 0;
 }
 
-function loadPersistedTasks(device: string): Map<string, FileTask> {
+function loadPersistedTasks(device: string, reselectMessage: string): Map<string, FileTask> {
   try {
     const raw = JSON.parse(
       localStorage.getItem(TASKS_KEY_PREFIX + device) || "[]",
     ) as FileTask[];
-    return new Map(raw.map((task) => [task.id, task]));
+    return new Map(raw.map((task) => [task.id, restoreFileTask(task, reselectMessage)]));
   } catch {
     return new Map();
   }
@@ -198,7 +198,7 @@ export function PanelFiles({
   const reconnectDelayRef = useRef(1000);
   const reconnectTimerRef = useRef(0);
   const tasksRef = useRef<Map<string, FileTask> | null>(null);
-  if (!tasksRef.current) tasksRef.current = loadPersistedTasks(device);
+  if (!tasksRef.current) tasksRef.current = loadPersistedTasks(device, t("files.reselect"));
   const filesByTaskRef = useRef(new Map<string, File>());
   const currentPathRef = useRef("");
   const parentPathRef = useRef("");
@@ -214,6 +214,7 @@ export function PanelFiles({
   tRef.current = t;
   const pendingPwRef = useRef("");
   const authOpenRef = useRef(false);
+  const reselectTaskRef = useRef<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const progressDirty = useRef(false);
@@ -454,10 +455,7 @@ export function PanelFiles({
       if (!activeDevice || !file) return;
       const pending = [...tasksRef.current!.values()].find(
         (task) =>
-          task.dir === "upload" &&
-          task.status === "failed" &&
-          task.name === file.name &&
-          task.size === file.size &&
+          canResumeUpload(task, { device: activeDevice, path: currentPathRef.current, name: file.name, size: file.size }) &&
           !filesByTaskRef.current.has(task.id),
       );
       if (pending) {
@@ -698,8 +696,9 @@ export function PanelFiles({
    * old socket, reconnects, and lists the home directory. */
   useEffect(() => {
     progressDirty.current = false;
-    tasksRef.current = loadPersistedTasks(device);
+    tasksRef.current = loadPersistedTasks(device, tRef.current("files.reselect"));
     listingGuard.current.invalidate();
+    reselectTaskRef.current = null;
     filesByTaskRef.current.clear();
     currentPathRef.current = "";
     parentPathRef.current = "";
@@ -834,9 +833,10 @@ export function PanelFiles({
         if (task.dir === "upload") {
           const file = filesByTaskRef.current.get(task.id);
           if (!file) {
-            fileInputRef.current?.click();
             task.status = "failed";
             task.message = tRef.current("files.reselect");
+            reselectTaskRef.current = task.id;
+            fileInputRef.current?.click();
           } else {
             sendUploadStart(task);
           }
@@ -867,8 +867,23 @@ export function PanelFiles({
   /* ── UI handlers ── */
 
   const onFilesPicked = (e: ChangeEvent<HTMLInputElement>) => {
-    [...(e.target.files || [])].forEach(startUpload);
+    const files = [...(e.target.files || [])];
+    const taskId = reselectTaskRef.current;
+    reselectTaskRef.current = null;
     e.target.value = "";
+    if (!taskId) { files.forEach(startUpload); return; }
+    const task = tasksRef.current!.get(taskId);
+    if (!task || task.status !== "failed") return;
+    if (files.length !== 1 || !uploadResumeRequest(task, files[0])) {
+      task.message = tRef.current("files.reselectMismatch");
+      saveTasks(); bump();
+      return;
+    }
+    filesByTaskRef.current.set(task.id, files[0]);
+    task.status = "queued";
+    task.message = "";
+    saveTasks(); bump();
+    sendUploadStart(task, new Date(files[0].lastModified).toISOString());
   };
 
   const onDrop = (e: DragEvent) => {
@@ -929,7 +944,7 @@ export function PanelFiles({
           size="icon"
           className="size-8 shrink-0"
           aria-label={t("files.upload")}
-          onClick={() => fileInputRef.current?.click()}
+          onClick={() => { reselectTaskRef.current = null; fileInputRef.current?.click(); }}
         >
           <Icon name="Upload" className="size-4" />
         </Button>

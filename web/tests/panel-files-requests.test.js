@@ -175,3 +175,37 @@ it('resumes a running upload with a new attempt after socket reconnect', async()
   await deliver(current,{op:'transfer_end',taskId:next.taskId});
   expect(JSON.parse(localStorage.getItem('rdevFileTasks.one'))[0].status).toBe('completed');
 });
+
+async function restoreUpload(status='running') {
+  localStorage.setItem('rdevFileTasks.two',JSON.stringify([{id:'old-upload',dir:'upload',device:'two',name:'upload.txt',parentPath:'/original',size:3,done:1,status,created:1}]));
+  await render('two');
+  const socket=sockets.at(-1);
+  await act(async()=>socket.onopen());
+  await deliver(socket,reply(socket.sent.find(x=>x.op==='list'),'current.txt',{path:'/current'}));
+  return socket;
+}
+
+it('restores uploads as requiring a file and does not match a new upload in another directory', async()=>{
+  const socket=await restoreUpload();
+  expect(document.body.textContent).toContain('files.reselect');
+  expect(socket.sent.some(x=>x.op==='upload_start')).toBe(false);
+  await pickFile();
+  expect(socket.sent.at(-1)).toMatchObject({op:'upload_start',deviceId:'two',parentPath:'/current',name:'upload.txt'});
+  const saved=JSON.parse(localStorage.getItem('rdevFileTasks.two'));
+  expect(saved).toHaveLength(2);
+  expect(saved.find(x=>x.id==='old-upload')).toMatchObject({status:'failed',parentPath:'/original'});
+});
+
+it('binds explicit reselect to its original task and rejects a mismatched file', async()=>{
+  const socket=await restoreUpload('queued');
+  await act(async()=>document.querySelector('[aria-label="files.resume upload.txt"]').click());
+  await pickFile('wrong.txt');
+  expect(document.body.textContent).toContain('files.reselectMismatch');
+  expect(socket.sent.some(x=>x.op==='upload_start')).toBe(false);
+  await act(async()=>document.querySelector('[aria-label="files.resume upload.txt"]').click());
+  await pickFile();
+  expect(socket.sent.at(-1)).toMatchObject({op:'upload_start',deviceId:'two',parentPath:'/original',name:'upload.txt'});
+  const saved=JSON.parse(localStorage.getItem('rdevFileTasks.two'));
+  expect(saved).toHaveLength(1);
+  expect(saved[0]).toMatchObject({id:'old-upload',status:'queued'});
+});
