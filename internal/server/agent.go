@@ -759,6 +759,10 @@ func (s *Server) agentBroadcastTurn(entry *agentSessionEntry, th *agentThread, m
 	th.live = append(th.live, json.RawMessage(data))
 	s.agentSessionsMu.Unlock()
 	s.agentBroadcastData(entry, data)
+	if msg.Op == "turn_start" {
+		// Cross-device snapshots include disk history; never delay turn admission.
+		s.goAgent(func() { s.broadcastThreadList(entry) })
+	}
 }
 
 // agentBroadcastData broadcasts a pre-marshaled frame; used by the

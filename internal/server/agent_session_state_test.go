@@ -794,3 +794,29 @@ func TestThreadSnapshotRestoresWaitingState(t *testing.T) {
 		t.Fatalf("idle snapshot retained waiting: %q", got)
 	}
 }
+
+func TestTurnStartBroadcastsRunningSidebarSnapshot(t *testing.T) {
+	release := make(chan struct{})
+	defer close(release)
+	srv := newTurnTestServer(t, blockingLLM(t, release).URL)
+	httpSrv := httptest.NewServer(http.HandlerFunc(srv.HandleAgentWS))
+	defer httpSrv.Close()
+	socket, rec := dialAgentWS(t, httpSrv)
+	auth := waitAgentMsg(t, rec.msgs, "auth", func(m agentMsg) bool { return m.Op == "auth_ok" })
+	sendAgentOp(t, socket, `{"op":"chat","text":"show running"}`)
+	waitAgentMsg(t, rec.msgs, "running sidebar", func(m agentMsg) bool {
+		if m.Op != "all_threads" {
+			return false
+		}
+		for _, device := range m.Devices {
+			for _, thread := range device.Threads {
+				if thread.ID == auth.Thread && thread.Running {
+					return true
+				}
+			}
+		}
+		return false
+	})
+	sendAgentOp(t, socket, `{"op":"stop"}`)
+	waitAgentMsg(t, rec.msgs, "stopped", func(m agentMsg) bool { return m.Op == "stopped" })
+}
