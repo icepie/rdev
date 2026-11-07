@@ -54,6 +54,9 @@ export interface BubbleItem {
   text: string;
   /* Attachment file names on user bubbles (turn_start.images / history). */
   images?: string[];
+  imagePreviews?: string[];
+  steering?: boolean;
+  job?: unknown;
   /* Client-side wall clock for the ⋯ menu timestamp; absent for history. */
   time?: number;
 }

@@ -47,6 +47,12 @@ function parseShellResult(result: string): ShellResult | null {
   };
 }
 
+export function commandOutputText(result: string): string {
+  const parsed = parseShellResult(result);
+  if (!parsed) return result;
+  return [parsed.stdout, parsed.stderr, parsed.status].filter(Boolean).join("\n");
+}
+
 /* Shell tool body (bb TerminalOutputBlock): `$ <command>` header, ANSI
  * stdout (muted), danger-tinted stderr block, `exit code N` footer. The
  * args JSON block is redundant — the $ line already states what ran. */

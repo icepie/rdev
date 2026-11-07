@@ -1,4 +1,6 @@
-import { JobNotification, parseJobNotification } from "./job-notification";
+import { ThreadNavigation } from "./thread-navigation";
+import { ImagePreview } from "./image-preview";
+import { JobNotification, parseJobNotification, parseJobNotificationData } from "./job-notification";
 import { useComposerDraft } from "./use-composer-draft";
 import { dispatchSlashCommand } from "./slash-command";
 import { parseJobsCommand } from "./jobs-command";
@@ -178,7 +180,9 @@ export function ChatPaneView({
       ? Math.max(0, Math.floor(((nowTick || Date.now()) - workingSince) / 1000))
       : 0;
 
-  const workingLabel = currentTool
+  const workingLabel = currentTool === "/compact"
+    ? t("agent.compacting")
+    : currentTool
     ? t("agent.workingWithTool", { seconds: elapsedSeconds, tool: currentTool })
     : t("agent.working", { seconds: elapsedSeconds });
 
@@ -417,7 +421,7 @@ export function ChatPaneView({
         },
       },
     ],
-    [t, sendRaw, threadId, model, sendStop, ops],
+    [t, sendRaw, threadId, model, sendStop, ops, ready, running],
   );
 
   const slashQuery = (() => {
@@ -478,6 +482,11 @@ export function ChatPaneView({
 
   /* ScrollToBottomButton state: hidden while pinned to the bottom;
   `unreadBelow` (tinted icon) when new items landed while scrolled up. */
+  const transcriptRef = useRef<HTMLDivElement>(null);
+  const registerTranscript = useCallback((node: HTMLDivElement | null) => {
+    transcriptRef.current = node;
+    ops.registerScrollEl(node);
+  }, [ops.registerScrollEl]);
   const [atBottom, setAtBottom] = useState(true);
   const [unreadBelow, setUnreadBelow] = useState(false);
   const handleTranscriptScroll = (e: React.UIEvent<HTMLDivElement>) => {
@@ -493,8 +502,10 @@ export function ChatPaneView({
   return (
     <>
       {/* Transcript */}
+      <div className="relative flex min-h-0 flex-1 flex-col">
+      <ThreadNavigation items={items} scrollRef={transcriptRef} t={t} />
       <div
-        ref={ops.registerScrollEl}
+        ref={registerTranscript}
         onScroll={handleTranscriptScroll}
         className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto"
       >
@@ -516,16 +527,20 @@ export function ChatPaneView({
           )}
           {items.map((item) => {
             if (item.kind === "user") {
-              const job = !item.images?.length ? parseJobNotification(item.text) : null;
+              const job = parseJobNotificationData(item.job) || (!item.images?.length ? parseJobNotification(item.text) : null);
               if (job) return <JobNotification key={item.key} job={job} t={t} />;
               return (
                 <div
                   key={item.key}
+                  data-thread-message={item.key}
                   className="group/message ml-auto flex w-fit max-w-[70%] flex-col items-end"
                 >
+                  {item.steering && <span className="mb-1 flex items-center gap-1 text-xs text-muted-foreground"><Icon name="CornerUpLeft" className="size-3" />Steer</span>}
                   {item.images && item.images.length > 0 && (
                     <div className="mb-1 flex max-w-full flex-wrap justify-end gap-1">
-                      {item.images.map((name, i) => (
+                      {item.images.map((name, i) => item.imagePreviews?.[i] ? (
+                        <ImagePreview key={i} src={item.imagePreviews[i]} name={name} className="h-24 w-32" />
+                      ) : (
                         <span
                           key={i}
                           className="inline-flex max-w-full items-center gap-1 rounded-full border border-border-seam px-2 py-0.5 text-xs text-muted-foreground"
@@ -607,8 +622,8 @@ export function ChatPaneView({
             }
             if (item.kind !== "turn") return null;
             return (
+              <div key={item.key} data-thread-message={item.key}>
               <TurnView
-                key={item.key}
                 turn={item}
                 t={t}
                 copied={copiedId === "t" + item.key}
@@ -619,6 +634,7 @@ export function ChatPaneView({
                 onOpenDiff={onOpenDiff}
                 onOpenLocalFile={handleOpenLocalFile}
               />
+              </div>
             );
           })}
           {running && (
@@ -630,6 +646,7 @@ export function ChatPaneView({
         </div>
       </div>
 
+      </div>
       {/* Floating back-to-bottom button over the transcript. */}
       <ScrollToBottomButton
         visible={!atBottom}
@@ -755,11 +772,7 @@ export function ChatPaneView({
                   key={i}
                   className="flex items-center gap-1.5 rounded-md border border-border bg-surface-recessed py-1 pr-1.5 pl-1 text-xs text-muted-foreground"
                 >
-                  <img
-                    src={img.preview}
-                    alt={img.name}
-                    className="h-16 w-24 shrink-0 rounded object-cover"
-                  />
+                  <ImagePreview src={img.preview} name={img.name} className="h-16 w-24 object-cover" />
                   <span className="max-w-32 truncate">{img.name}</span>
                   <button
                     type="button"

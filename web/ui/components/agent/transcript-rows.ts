@@ -227,11 +227,13 @@ const BINARY_RESULT_PREFIX = /^\[binary file, \d+ bytes, base64-encoded\]\n/;
 
 export function toolImageDataUrl(tool: ToolItem): string | null {
   if (workKindOf(tool.name) !== "file-read") return null;
+  const preview = /^\[image preview\]\n(data:image\/jpeg;base64,[A-Za-z0-9+/]+={0,2})$/.exec(tool.result);
+  if (preview) return preview[1];
   const mime = imageMimeOf(rowTarget(tool));
   if (!mime) return null;
   const match = BINARY_RESULT_PREFIX.exec(tool.result);
   if (!match) return null;
   const body = tool.result.slice(match[0].length).trim();
-  if (!body) return null;
+  if (!body || !/^[A-Za-z0-9+/]+={0,2}$/.test(body)) return null;
   return `data:${mime};base64,${body}`;
 }

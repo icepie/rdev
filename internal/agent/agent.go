@@ -114,10 +114,11 @@ const DefaultMaxTurns = 25
 
 // Message is one conversation entry in OpenAI chat-completions wire shape.
 type Message struct {
-	Role       string     `json:"role"` // "system" | "user" | "assistant" | "tool"
-	Content    string     `json:"content"`
-	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
-	ToolCallID string     `json:"tool_call_id,omitempty"` // role == "tool"
+	Display    json.RawMessage `json:"-"`    // UI metadata, never sent to the provider
+	Role       string          `json:"role"` // "system" | "user" | "assistant" | "tool"
+	Content    string          `json:"content"`
+	ToolCalls  []ToolCall      `json:"tool_calls,omitempty"`
+	ToolCallID string          `json:"tool_call_id,omitempty"` // role == "tool"
 	// Reasoning holds the model's thinking text for assistant messages. It
 	// is never sent back to the provider (DeepSeek rejects it); it exists
 	// only for display and history persistence.
@@ -130,9 +131,10 @@ type Message struct {
 
 // MessageImage is one image attached to a user message.
 type MessageImage struct {
-	Name string `json:"name,omitempty"`
-	Mime string `json:"mime,omitempty"`
-	Data string `json:"data,omitempty"` // base64
+	Preview string `json:"-"` // bounded UI preview, not provider input
+	Name    string `json:"name,omitempty"`
+	Mime    string `json:"mime,omitempty"`
+	Data    string `json:"data,omitempty"` // base64
 }
 
 // messageContentPart is one element of the multi-modal content array.
@@ -260,6 +262,25 @@ func cloneMessages(messages []Message) []Message {
 		cloned[i] = message
 		cloned[i].ToolCalls = slices.Clone(message.ToolCalls)
 		cloned[i].Images = slices.Clone(message.Images)
+		cloned[i].Display = slices.Clone(message.Display)
 	}
 	return cloned
+}
+
+// AnnotateTurn records presentation metadata without changing model input.
+func (s *Session) AnnotateTurn(start int, user, assistant json.RawMessage) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := max(0, start); i < len(s.history); i++ {
+		if s.history[i].Role == "user" {
+			s.history[i].Display = slices.Clone(user)
+			break
+		}
+	}
+	for i := len(s.history) - 1; i >= max(0, start); i-- {
+		if s.history[i].Role == "assistant" {
+			s.history[i].Display = slices.Clone(assistant)
+			break
+		}
+	}
 }

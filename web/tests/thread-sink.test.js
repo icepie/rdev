@@ -78,7 +78,7 @@ it('replaces the live transcript with the authoritative compacted history', asyn
   await frame({ op: 'done', compacted: true, history: [{ role: 'user', text: 'Summary with task state' }, { role: 'assistant', text: 'Latest preserved answer' }] });
   expect(sink.state.running).toBe(false);
   expect(sink.ops.turnOpen.current).toBe(false);
-  expect(sink.state.items.map(item => item.text)).toEqual(['Summary with task state', 'Latest preserved answer']);
+  expect(sink.state.items.map(item => item.text)).toEqual(['Summary with task state', 'Latest preserved answer', 'agent.compacted']);
 });
 
 it('keeps task list order when refreshing an inspected task', async () => {
@@ -100,4 +100,31 @@ it('keeps foreground streaming intact after a background job operation fails', a
   expect(sink.state.items.filter(x => x.kind === 'turn').map(x => x.text)).toEqual(['before after']);
   await frame({ op: 'reset_ok' });
   expect(sink.state.jobsError).toBe('');
+});
+
+it('coalesces streaming scroll requests without losing a forced jump', async () => {
+  const callbacks = [];
+  window.requestAnimationFrame = callback => { callbacks.push(callback); return callbacks.length; };
+  const el = { scrollHeight: 1000, scrollTop: 0, clientHeight: 200 };
+  sink.ops.registerScrollEl(el);
+  sink.ops.scrollDown(false);
+  sink.ops.scrollDown(true);
+  for (let i = 0; i < 100; i++) sink.ops.scrollDown(false);
+  expect(callbacks.length).toBe(1);
+  callbacks[0]();
+  expect(el.scrollTop).toBe(1000);
+  el.scrollTop = 0;
+  sink.ops.scrollDown(false);
+  callbacks[1]();
+  expect(el.scrollTop).toBe(0);
+});
+
+it('restores structured notifications, steering and server timing from history', async () => {
+  const job = {id:'job',kind:'shell',state:'completed',label:'Check'};
+  await frame({op:'thread_peeked',history:[
+    {role:'user',text:'internal data',display:{job,steering:true,time:1000}},
+    {role:'assistant',text:'Complete',display:{time:1000,endedAt:9000}},
+  ]});
+  expect(sink.state.items[0]).toMatchObject({job,steering:true,time:1000});
+  expect(sink.state.items[1]).toMatchObject({time:1000,endedAt:9000});
 });

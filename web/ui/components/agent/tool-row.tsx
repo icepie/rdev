@@ -1,3 +1,5 @@
+import { CanvasPreview } from "./canvas-preview";
+import { ImagePreview } from "./image-preview";
 import { DisclosureBody } from "../disclosure-body";
 import { SyntaxCode } from "../syntax-code";
 import { Fragment, useState } from "react";
@@ -11,6 +13,7 @@ import {
   bundleSegment,
   diffStatsOf,
   formatDuration,
+  imageMimeOf,
   rowTarget,
   rowVerb,
   toolDurationMs,
@@ -204,29 +207,22 @@ function ToolRowBody({
 }) {
   const kind = workKindOf(tool.name);
   const result = tool.result.trim();
+  if (tool.name === "canvas") return <CanvasPreview tool={tool} t={t} />;
   if (kind === "command") return <CommandOutputBody tool={tool} t={t} />;
   if (kind === "question") return <QuestionRowBody tool={tool} t={t} />;
   /* Image read: the base64 tool result renders as an <img> (click opens the
    * full preview tab) instead of the raw blob. */
   const imageUrl = toolImageDataUrl(tool);
   if (imageUrl) {
-    return (
-      <button
-        type="button"
-        onClick={(e) => {
-          e.stopPropagation();
-          onOpenFile?.(rowTarget(tool));
-        }}
-        className="block cursor-zoom-in overflow-hidden rounded-lg border border-border bg-[repeating-conic-gradient(var(--surface-recessed)_0%_25%,transparent_0%_50%)] bg-[length:12px_12px] p-2"
-        title={rowTarget(tool)}
-      >
-        <img
-          src={imageUrl}
-          alt={rowTarget(tool)}
-          className="max-h-64 max-w-full rounded object-contain"
-        />
-      </button>
-    );
+    return <ImagePreview src={imageUrl} name={rowTarget(tool)} />;
+  }
+
+  if (kind === "file-read" && imageMimeOf(pathArgOf(tool) || "") &&
+      /^(\[image preview\]|\[binary file,)/.test(result)) {
+    return <button type="button" disabled={!onOpenFile} onClick={() => onOpenFile?.(pathArgOf(tool) || rowTarget(tool))}
+      className="rounded-md border border-border p-3 text-left text-xs text-muted-foreground hover:bg-state-hover disabled:cursor-default">
+      {t("agent.imagePreviewReload")}
+    </button>;
   }
   if (kind === "file-change") {
     /* bb TimelineFileDiffBlock; write_file without a diff falls back to the
@@ -287,7 +283,7 @@ export function ToolRow({ tool: originalTool, t, dimmed, onOpenFile, onOpenDiff 
       : null;
   const runningTool = !tool.done;
   return (
-    <div className={cn("w-full", dimmed && PAST_ROW_DIM_CLASS)}>
+    <div className={cn("w-full", dimmed && !open && PAST_ROW_DIM_CLASS)}>
       <button
         type="button"
         onClick={() => setUserOpen(!open)}
@@ -393,7 +389,7 @@ export function ToolBundleRow({
 }) {
   const [open, setOpen] = useState(false);
   return (
-    <div className={cn("w-full", dimmed && PAST_ROW_DIM_CLASS)}>
+    <div className={cn("w-full", dimmed && !open && PAST_ROW_DIM_CLASS)}>
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}

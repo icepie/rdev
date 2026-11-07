@@ -58,6 +58,12 @@ export function TurnView({
           t={t}
         />
       )}
+      {workedMs !== null && workedMs > 1000 && (
+        /* bb turn summary: "Worked for 2m 5s". */
+        <div className="px-2 py-2 text-xs tabular-nums text-subtle-foreground">
+          {t("agent.workedFor", { duration: formatDuration(workedMs) })}
+        </div>
+      )}
       {turn.text && (
         <div
           className={cn(
@@ -98,12 +104,6 @@ export function TurnView({
               />
             ),
           )}
-        </div>
-      )}
-      {workedMs !== null && workedMs > 1000 && (
-        /* bb turn summary: "Worked for 2m 5s". */
-        <div className="px-2 text-sm tabular-nums text-subtle-foreground">
-          {t("agent.workedFor", { duration: formatDuration(workedMs) })}
         </div>
       )}
       {turn.files && turn.files.length > 0 && (

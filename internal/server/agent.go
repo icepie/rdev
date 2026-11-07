@@ -39,30 +39,32 @@ import (
 // device, not by a browser connection: events are broadcast to every
 // attached socket and a reopened tab reattaches mid-run (auth_ok.running).
 type agentMsg struct {
-	Compacted bool                `json:"compacted,omitempty"`
-	Op        string              `json:"op"`
-	Password  string              `json:"password,omitempty"`
-	Text      string              `json:"text,omitempty"`
-	Device    string              `json:"device,omitempty"`
-	Model     string              `json:"model,omitempty"`
-	ModelName string              `json:"modelName,omitempty"`
-	Models    []map[string]any    `json:"models,omitempty"`
-	Message   string              `json:"message,omitempty"`
-	History   []agentHistoryEntry `json:"history,omitempty"`
-	Running   bool                `json:"running,omitempty"`
-	ID        string              `json:"id,omitempty"`
-	Name      string              `json:"name,omitempty"`
-	Args      string              `json:"args,omitempty"`
-	Result    string              `json:"result,omitempty"`
-	IsError   bool                `json:"isError,omitempty"`
-	Usage     *agentUsage         `json:"usage,omitempty"`
-	Summary   string              `json:"summary,omitempty"`
-	Diff      string              `json:"diff,omitempty"`
-	Reasoning string              `json:"reasoning,omitempty"`
-	Thread    string              `json:"thread,omitempty"`
-	Threads   []agentThreadInfo   `json:"threads,omitempty"`
-	Todos     []todoItem          `json:"todos,omitempty"`
-	Queue     []string            `json:"queue,omitempty"`
+	Display       json.RawMessage     `json:"display,omitempty"`
+	ImagePreviews []string            `json:"imagePreviews,omitempty"`
+	Compacted     bool                `json:"compacted,omitempty"`
+	Op            string              `json:"op"`
+	Password      string              `json:"password,omitempty"`
+	Text          string              `json:"text,omitempty"`
+	Device        string              `json:"device,omitempty"`
+	Model         string              `json:"model,omitempty"`
+	ModelName     string              `json:"modelName,omitempty"`
+	Models        []map[string]any    `json:"models,omitempty"`
+	Message       string              `json:"message,omitempty"`
+	History       []agentHistoryEntry `json:"history,omitempty"`
+	Running       bool                `json:"running,omitempty"`
+	ID            string              `json:"id,omitempty"`
+	Name          string              `json:"name,omitempty"`
+	Args          string              `json:"args,omitempty"`
+	Result        string              `json:"result,omitempty"`
+	IsError       bool                `json:"isError,omitempty"`
+	Usage         *agentUsage         `json:"usage,omitempty"`
+	Summary       string              `json:"summary,omitempty"`
+	Diff          string              `json:"diff,omitempty"`
+	Reasoning     string              `json:"reasoning,omitempty"`
+	Thread        string              `json:"thread,omitempty"`
+	Threads       []agentThreadInfo   `json:"threads,omitempty"`
+	Todos         []todoItem          `json:"todos,omitempty"`
+	Queue         []string            `json:"queue,omitempty"`
 	// Live carries the marshaled frames of the in-flight turn in auth_ok and
 	// thread_switched so the browser replays mid-turn UI state; each element
 	// is a complete tagged frame (turn_start/delta/tool_*/approval_request…).
@@ -203,7 +205,7 @@ func parseAgentImages(raw json.RawMessage) ([]agent.MessageImage, error) {
 		if len(decoded) > agentMaxImageBytes {
 			return nil, fmt.Errorf("image %q is %d bytes, max %d", img.Name, len(decoded), agentMaxImageBytes)
 		}
-		out = append(out, agent.MessageImage{Name: img.Name, Mime: img.Mime, Data: img.Data})
+		out = append(out, agent.MessageImage{Name: img.Name, Mime: img.Mime, Data: img.Data, Preview: agentImagePreview(decoded)})
 	}
 	return out, nil
 }
@@ -260,9 +262,10 @@ const agentApprovalTimeout = 5 * time.Minute
 
 // agentQueuedChat is one chat message waiting behind a running turn.
 type agentQueuedChat struct {
-	text   string
-	images []agent.MessageImage
-	model  string // requested model ("" = keep the thread's)
+	display json.RawMessage
+	text    string
+	images  []agent.MessageImage
+	model   string // requested model ("" = keep the thread's)
 }
 
 // queueTexts reduces a pending queue to its texts for the queue broadcast.
@@ -270,6 +273,12 @@ func queueTexts(q []agentQueuedChat) []string {
 	texts := make([]string, len(q))
 	for i, c := range q {
 		texts[i] = c.text
+		var display struct {
+			Job *agentJobSnapshot `json:"job"`
+		}
+		if json.Unmarshal(c.display, &display) == nil && display.Job != nil {
+			texts[i] = fmt.Sprintf("Background task: %s (%s)", display.Job.Label, display.Job.State)
+		}
 	}
 	return texts
 }
@@ -278,6 +287,7 @@ func queueTexts(q []agentQueuedChat) []string {
 // history, todo list, message queue and (at most one) in-flight turn.
 // Guarded by Server.agentSessionsMu.
 type agentThread struct {
+	turnDisplay json.RawMessage
 	// Acquire before agentSessionsMu; disk I/O never holds the global lock.
 	persistMu     sync.Mutex
 	jobs          *agentJobs
@@ -541,7 +551,7 @@ func (s *Server) buildAgentSession(entry *agentSessionEntry, th *agentThread, cl
 			return tool.(*shellTool), nil
 		}})
 	}
-	tools = append(tools, &jobsTool{jobs: th.jobs})
+	tools = append(tools, &jobsTool{jobs: th.jobs}, &canvasTool{})
 	tools = append(tools, &askTool{ask: func(_ context.Context, question string, options []askOption) string {
 		return s.requestQuestion(entry, th, question, marshalAskOptions(options))
 	}})
@@ -1545,7 +1555,7 @@ func (h *agentWSHandler) handleSteer(ac *agentConn, text, threadRef string) {
 		h.handleChat(ac, text, "", threadRef, nil)
 		return
 	}
-	th.queue = append([]agentQueuedChat{{text: text}}, th.queue...)
+	th.queue = append([]agentQueuedChat{{text: text, display: json.RawMessage(`{"steering":true}`)}}, th.queue...)
 	cancel := th.cancel
 	srv.agentSessionsMu.Unlock()
 	if cancel != nil {
@@ -2336,13 +2346,16 @@ func (h *agentWSHandler) handleDirMkdir(ac *agentConn, path, requestID string) {
 // startAgentTurnLocked performs the running-state transition of a new turn
 // and returns the turn_start frame to broadcast after unlocking. Caller
 // must hold agentSessionsMu.
-func (s *Server) startAgentTurnLocked(entry *agentSessionEntry, th *agentThread, text string, images []agent.MessageImage) agentMsg {
+func (s *Server) startAgentTurnLocked(entry *agentSessionEntry, th *agentThread, text string, images []agent.MessageImage, display ...json.RawMessage) agentMsg {
 	th.running = true
 	th.lastOutcome = ""
 	th.turnFiles = nil
 	th.toolPaths = make(map[string]string)
 	th.workingSince = time.Now()
 	th.workingTool = ""
+	if command, _ := splitAgentCommand(text); command == "/compact" {
+		th.workingTool = "/compact"
+	}
 	th.updatedAt = th.workingSince
 	th.live = nil
 	th.turnHistIdx = len(th.session.History())
@@ -2351,7 +2364,13 @@ func (s *Server) startAgentTurnLocked(entry *agentSessionEntry, th *agentThread,
 	th.turnCtx = ctx
 	th.cancel = cancel
 
-	start := agentMsg{Op: "turn_start", Text: text}
+	metadata := map[string]any{}
+	if len(display) > 0 && len(display[0]) > 0 {
+		_ = json.Unmarshal(display[0], &metadata)
+	}
+	metadata["time"] = th.workingSince.UnixMilli()
+	th.turnDisplay, _ = json.Marshal(metadata)
+	start := agentMsg{Display: th.turnDisplay, Op: "turn_start", Text: text, ImagePreviews: agentImagePreviews(images)}
 	if names := agentImageNames(images); len(names) > 0 {
 		if raw, err := json.Marshal(names); err == nil {
 			start.Images = raw
@@ -2408,6 +2427,10 @@ func (s *Server) runAgentTurn(entry *agentSessionEntry, th *agentThread, turn ag
 	}
 
 	historyReplaced, runErr := runAgentConversation(ctx, sess, text, images, emit)
+	timing, _ := json.Marshal(map[string]int64{"time": turn.started, "endedAt": time.Now().UnixMilli()})
+	if !historyReplaced {
+		sess.AnnotateTurn(turn.historyIndex, turn.display, timing)
+	}
 
 	// Serialize history with reset/delete for this thread, leaving other
 	// conversations and streaming/control messages free during slow storage.
@@ -2452,6 +2475,7 @@ func (s *Server) runAgentTurn(entry *agentSessionEntry, th *agentThread, turn ag
 	default:
 		terminal = agentMsg{Op: "error", Thread: th.id, Message: runErr.Error()}
 	}
+	terminal.Display = timing
 	var terminalData []byte
 	if epochOK {
 		th.lastOutcome = terminal.Op
@@ -2488,7 +2512,7 @@ func (s *Server) runAgentTurn(entry *agentSessionEntry, th *agentThread, turn ag
 				prefsDirty = true
 			}
 		}
-		nextFrame = s.startAgentTurnLocked(entry, th, next.text, next.images)
+		nextFrame = s.startAgentTurnLocked(entry, th, next.text, next.images, next.display)
 		nextTurn = snapshotAgentTurnLocked(th)
 	}
 	s.agentSessionsMu.Unlock()

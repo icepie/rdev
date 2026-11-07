@@ -42,4 +42,17 @@ Agent 的 write_file/edit 使用按设备与路径隔离、可取消的写入锁
 
 `/compact` uses server-side context compaction. `/jobs` and `/jobs kill <id|all>` use the thread-scoped job protocol. `/bg <command>` and `/subagent <task>` deterministically invoke their tools through the conversation queue without asking the model to select them. They retain the same approval, cancellation, history, and thread isolation rules as model tool calls. In server mode use `/bg --device <id> <command>` to select the remote device. Server mode still requires a remote device for shell work. These chat-based commands carry the selected model and thread, preserve multiline arguments, and keep the draft if sending fails.
 
-侧栏区分运行中、等待审批、等待回答，并显示运行中的后台任务数。当前页面观察到会话从运行转为空闲时，未查看的会话显示完成未读圆点；在可见页面打开该会话后清除。分屏内可见的会话视为已读，后台浏览器标签页不自动清除。未读标记目前仅在当前页面生命周期保存，刷新后不会恢复。
+侧栏区分运行中、等待审批、等待回答，并显示运行中的后台任务数。当前页面观察到会话从运行转为空闲时，未查看的会话显示完成未读圆点；在可见页面打开该会话后清除。分屏内可见的会话视为已读，后台浏览器标签页不自动清除。未读标记在当前标签页内保存，刷新后恢复；具体边界见下方更新。
+
+## 2026-11-08 交互与协议更新
+
+- `turn_start`、终态和历史条目增加可选 `display` 元数据：服务端时间、Steer 来源、结构化任务通知。元数据持久化但不进入 provider 请求；旧文本通知仍兼容。队列中的后台通知显示任务摘要。
+- 新会话轮次显示服务端计时的耗时，重连后保留；旧历史没有时间数据时不猜测。Steer 仍遵循 rdev 的“取消当前轮次并优先执行插入消息”语义，不宣称与 OMP 的运行中 steering 完全等价。
+- 消息导航参考 BB `ThreadTableOfContents`，支持 Agent／用户消息索引、当前位置和会话内跳转；分屏按各自滚动容器定位。
+- 未读使用标签页内的 `sessionStorage`，刷新保留未读及已观察到的运行状态；初次访问不把旧历史全部标为未读。尚未观察到的离线变化和服务端重启后的任务恢复不在此机制内。
+- 发送前图片、发送后的缩略图和 `read_file` 图片共用放大预览。发送图片保留最长边 640px 的有界 JPEG 预览，原图仍仅用于模型请求，不写入历史；旧历史只有文件名时不伪造预览。GIF 为静态首帧；无法解码或超过 1600 万像素的图片仍显示附件名。工具图片预览控制在 8KiB 编码前大小内，避免被通用工具输出上限截断；较旧输出被压缩后可重新打开远端文件。
+- `canvas` 工具接受 `title`、`format`（`markdown` / `html`）及 `content`（最多 64KiB）。每次调用保留一份完整修订；可切换预览／源码并复制。HTML 仅允许沙盒内联脚本和样式，不具有宿主、设备、网络访问能力；使用 `ask` 单独获取需要返回模型的用户决定。这是会话内画布预览，不是 Hope 完整的项目、导出和快照平台。
+- 上下文圆环详情支持压缩入口，运行期间禁用重复操作；显示压缩中／完成反馈，不显示 token 数字。后台面板增加耗时和复制，命令输出跟随底部，向上翻阅后保留位置。
+- client 非 PTY 取消现在终止进程；Linux/macOS/BSD 使用独立进程组覆盖同组子进程，其他平台目前终止直接进程。定时输出与最终 flush 串行，缓冲区复用，避免尾部消息越过退出消息；流式 UI 滚动每动画帧合并一次。
+
+参考：本地 BB `f51e6b0` 的主题、TerminalOutputBlock、ThreadTableOfContents；OMP `rpc-types.ts` 的独立图片／事件和会话命令边界；Hope `docs/architecture/infra/canvas.md` 的隔离预览设计。rdev 使用向后兼容的增量协议，不宣称可直接替换 OMP RPC 客户端。

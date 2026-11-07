@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"rdev/internal/agent"
 )
 
@@ -26,13 +27,16 @@ func (s *Server) lockAgentThreadPersistence(entry *agentSessionEntry, id string)
 
 // Captured while starting a turn, before reset can replace its session.
 type agentTurnSnapshot struct {
-	ctx     context.Context
-	cancel  context.CancelFunc
-	session *agent.Session
-	epoch   int
-	model   string
+	display      json.RawMessage
+	historyIndex int
+	started      int64
+	ctx          context.Context
+	cancel       context.CancelFunc
+	session      *agent.Session
+	epoch        int
+	model        string
 }
 
 func snapshotAgentTurnLocked(th *agentThread) agentTurnSnapshot {
-	return agentTurnSnapshot{th.turnCtx, th.cancel, th.session, th.epoch, th.model}
+	return agentTurnSnapshot{display: th.turnDisplay, historyIndex: th.turnHistIdx, started: th.workingSince.UnixMilli(), ctx: th.turnCtx, cancel: th.cancel, session: th.session, epoch: th.epoch, model: th.model}
 }

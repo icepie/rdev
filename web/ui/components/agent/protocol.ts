@@ -217,14 +217,17 @@ export function replayHistory(history: unknown[]): TranscriptItem[] {
       reasoning?: unknown;
       tools?: unknown;
       images?: unknown;
+      imagePreviews?: unknown;
+      display?: unknown;
     };
     if (entry.role === "user") {
       const images = parseStringArray(entry.images);
       restored.push({
+        ...parseDisplay(entry.display),
         kind: "user",
         key: nextKey(),
         text: asString(entry.text),
-        ...(images.length ? { images } : {}),
+        ...(images.length ? { images, imagePreviews: parseStringArray(entry.imagePreviews) } : {}),
       });
       continue;
     }
@@ -233,6 +236,7 @@ export function replayHistory(history: unknown[]): TranscriptItem[] {
     const reasoning = asString(entry.reasoning);
     if (!tools.length && !text && !reasoning) continue;
     restored.push({
+      ...parseDisplay(entry.display),
       kind: "turn",
       key: nextKey(),
       text,
@@ -309,4 +313,16 @@ export function parseWorking(
 export function threadCreatedMs(id: string): number {
   const m = /^t_(\d{13})/.exec(id);
   return m ? Number(m[1]) : 0;
+}
+
+// Additive UI metadata is not model text; older servers/history omit it.
+export function parseDisplay(value: unknown): { time?: number; endedAt?: number; steering?: boolean; job?: unknown } {
+  if (!value || typeof value !== "object") return {};
+  const data = value as Record<string, unknown>;
+  return {
+    ...(typeof data.time === "number" && Number.isFinite(data.time) && data.time > 0 ? { time: data.time } : {}),
+    ...(typeof data.endedAt === "number" && Number.isFinite(data.endedAt) && data.endedAt > 0 ? { endedAt: data.endedAt } : {}),
+    ...(data.steering === true ? { steering: true } : {}),
+    ...(data.job && typeof data.job === "object" ? { job: data.job } : {}),
+  };
 }

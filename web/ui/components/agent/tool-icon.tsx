@@ -1,6 +1,7 @@
 import { Icon } from "../icon";
 
 const TOOL_ICON_NAMES: Record<string, string> = {
+  canvas: "Layout",
   shell: "ComputerTerminal01",
   read_file: "File",
   write_file: "EditFile",

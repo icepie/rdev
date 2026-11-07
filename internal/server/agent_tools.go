@@ -490,7 +490,7 @@ func (t *readFileTool) resolve(path string) string {
 func (t *readFileTool) Name() string { return "read_file" }
 
 func (t *readFileTool) Description() string {
-	return "Read a file from the remote device. Long files are truncated by lines (default 2000); use offset/limit to page through. Set anchors=true to prefix every line with an N#hash anchor for the edit tool's line_edits mode. Files larger than max_bytes are refused; binary content is returned base64-encoded."
+	return "Read a file from the remote device. Long files are truncated by lines (default 2000); use offset/limit to page through. Set anchors=true to prefix every line with an N#hash anchor for the edit tool's line_edits mode. Files larger than max_bytes are refused; recognized raster images return a bounded JPEG preview; other binary content is returned base64-encoded."
 }
 
 func (t *readFileTool) Schema() json.RawMessage {
@@ -552,6 +552,9 @@ func (t *readFileTool) Execute(ctx context.Context, raw json.RawMessage) (string
 		return "", err
 	}
 	if !utf8.Valid(data) || bytes.IndexByte(sampleBytes(data), 0) >= 0 {
+		if preview := boundedAgentImagePreview(data, 8*1024); preview != "" {
+			return "[image preview]\n" + preview, nil
+		}
 		return fmt.Sprintf("[binary file, %d bytes, base64-encoded]\n%s", len(data), base64.StdEncoding.EncodeToString(data)), nil
 	}
 	return formatReadLines(string(data), args.Offset, args.Limit, args.Anchors), nil

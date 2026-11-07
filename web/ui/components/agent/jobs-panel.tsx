@@ -1,4 +1,4 @@
-import { CommandOutputBody } from "./command-output";
+import { CommandOutputBody, commandOutputText } from "./command-output";
 import { useCopy } from "../../lib/clipboard";
 import { formatDuration } from "./transcript-rows";
 import { Markdown } from "../markdown";
@@ -38,6 +38,8 @@ export function JobsPanel({
     sink.state.jobs.some((job) => job.id === selection.id)
       ? selection.id
       : "";
+  const selectedJob = sink.state.jobs.find(job => job.id === selected);
+  const detailLoaded = selectedJob?.state !== "running" && selectedJob?.result !== undefined;
   useEffect(() => {
     sink.ops.setJobs([]);
     sink.ops.setJobsError("");
@@ -47,7 +49,7 @@ export function JobsPanel({
     const refresh = () => {
       if (document.hidden) return;
       sendRaw({ op: "get_jobs", thread: threadId });
-      if (open && selected)
+      if (open && selected && !detailLoaded)
         sendRaw({ op: "get_jobs", thread: threadId, id: selected });
     };
     let timer: number | undefined;
@@ -64,7 +66,7 @@ export function JobsPanel({
       window.clearInterval(timer);
       document.removeEventListener("visibilitychange", syncVisibility);
     };
-  }, [ready, threadId, sendRaw, open, selected]);
+  }, [ready, threadId, sendRaw, open, selected, detailLoaded]);
   const jobs = sink.state.jobs;
   const job = jobs.find((item) => item.id === selected);
   const started = Date.parse(job?.started || "");
@@ -139,7 +141,7 @@ export function JobsPanel({
               <span className="min-w-0 flex-1 truncate" title={job.id}>{job.label}</span>
               {duration !== null && <span className="shrink-0 tabular-nums">{formatDuration(duration)}</span>}
               <Button size="sm" variant="ghost" disabled={!job.result && !job.output}
-                onClick={() => copy(job.id, job.result || job.output || "")}>
+                onClick={() => copy(job.id, job.kind === "shell" ? commandOutputText(job.result || job.output || "") : job.result || job.output || "")}>
                 {t(copiedId === job.id ? "common.copied" : "common.copy")}
               </Button>
             </div>

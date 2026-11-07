@@ -8,6 +8,7 @@
  * re-registering on every render. */
 import {
   useCallback,
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -17,6 +18,7 @@ import {
 } from "react";
 import {
   asString,
+  parseDisplay,
   nextKey,
   parseStringArray,
   parseTodos,
@@ -84,6 +86,8 @@ export interface ThreadSinkOps {
     kind: "user" | "error" | "system" | "setup",
     text: string,
     images?: string[],
+    imagePreviews?: string[],
+    display?: unknown,
   ) => void;
   mutateOpenTurn: (fn: (turn: TurnItem) => TurnItem) => void;
   appendDelta: (text: string) => void;
@@ -93,6 +97,7 @@ export interface ThreadSinkOps {
     reasoning?: string,
     files?: string[],
     text?: string,
+    display?: unknown,
   ) => void;
   /* Scroll container of the pane showing this sink (ChatPaneView registers
    * it); mutators keep the view pinned to the bottom like bb. */
@@ -137,17 +142,27 @@ export function useThreadSink(): ThreadSink {
     scrollEl.current = el;
   }, []);
 
+  const scrollFrame = useRef<number | null>(null);
+  const forceScroll = useRef(false);
+  useEffect(() => () => {
+    if (scrollFrame.current !== null) window.cancelAnimationFrame(scrollFrame.current);
+  }, []);
   const scrollDown = useCallback((force?: boolean) => {
-    requestAnimationFrame(() => {
+    forceScroll.current ||= !!force;
+    if (scrollFrame.current !== null) return;
+    scrollFrame.current = window.requestAnimationFrame(() => {
+      scrollFrame.current = null;
+      const forced = forceScroll.current;
+      forceScroll.current = false;
       const el = scrollEl.current;
       if (!el) return;
       const near = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
-      if (force || near) el.scrollTop = el.scrollHeight;
+      if (forced || near) el.scrollTop = el.scrollHeight;
     });
   }, []);
 
   const pushBubble = useCallback(
-    (kind: "user" | "error" | "system" | "setup", text: string, images?: string[]) => {
+    (kind: "user" | "error" | "system" | "setup", text: string, images?: string[], imagePreviews?: string[], display?: unknown) => {
       turnOpen.current = false;
       setItems((prev) => [
         ...prev,
@@ -155,9 +170,10 @@ export function useThreadSink(): ThreadSink {
           kind,
           key: nextKey(),
           text,
-          ...(images?.length ? { images } : {}),
+          ...(images?.length ? { images, imagePreviews } : {}),
           /* bb ⋯ menu timestamp: live bubbles only (history has none). */
           time: Date.now(),
+          ...parseDisplay(display),
         },
       ]);
       scrollDown(true);
@@ -230,6 +246,7 @@ export function useThreadSink(): ThreadSink {
       reasoning?: string,
       files?: string[],
       text?: string,
+      display?: unknown,
     ) => {
       mutateOpenTurn((turn) => ({
         ...turn,
@@ -240,6 +257,7 @@ export function useThreadSink(): ThreadSink {
         reasoning: reasoning ? reasoning : turn.reasoning,
         files: files ?? turn.files,
         endedAt: Date.now(),
+        ...parseDisplay(display),
       }));
       turnOpen.current = false;
     },
@@ -414,12 +432,12 @@ export function applyScopedMessage(
       return;
     }
     case "turn_start":
-      ops.pushBubble("user", asString(msg.text), parseStringArray(msg.images));
+      ops.pushBubble("user", asString(msg.text), parseStringArray(msg.images), parseStringArray(msg.imagePreviews), msg.display);
       ops.setRunning(true);
       /* Replayed live frames (reattach mid-turn) must not restart the
        * elapsed timer: working.since from the server already set it. */
-      if (!liveReplay) ops.setWorkingSince(Date.now());
-      ops.setCurrentTool("");
+      if (!liveReplay) ops.setWorkingSince(parseDisplay(msg.display).time ?? Date.now());
+      ops.setCurrentTool(/^\/compact(?:\s|$)/i.test(asString(msg.text)) ? "/compact" : "");
       ops.openToolIds.current.clear();
       return;
     case "reasoning":
@@ -555,6 +573,7 @@ export function applyScopedMessage(
       if (doneUsage) ops.setTurnUsage(doneUsage);
       if (msg.compacted === true && Array.isArray(msg.history)) {
         ops.setItems(replayHistory(msg.history));
+        ops.pushBubble("system", t("agent.compacted"));
         ops.setRunning(false);
         ops.resetTransient();
         ops.scrollDown(true);
@@ -576,6 +595,7 @@ export function applyScopedMessage(
         asString(msg.reasoning) || undefined,
         Array.isArray(msg.files) ? parseStringArray(msg.files) : undefined,
         asString(msg.text) || undefined,
+        msg.display,
       );
       ops.setRunning(false);
       ops.resetTransient();
@@ -592,7 +612,7 @@ export function applyScopedMessage(
         ops.scrollDown(true);
         return;
       } else {
-        if (ops.turnOpen.current) ops.finishTurn();
+        if (ops.turnOpen.current) ops.finishTurn(undefined, undefined, undefined, undefined, msg.display);
         ops.pushBubble("error", t("agent.toolError") + ": " + message);
         if (/api[-_ ]?key/i.test(message)) {
           ops.pushBubble("setup", t("agent.notConfiguredHint"));
@@ -608,7 +628,7 @@ export function applyScopedMessage(
        * finishTurn unconditionally would append a phantom empty turn. */
       const wasOpen = ops.turnOpen.current;
       if (wasOpen) {
-        ops.finishTurn();
+        ops.finishTurn(undefined, undefined, undefined, undefined, msg.display);
         ops.pushBubble("system", t("agent.stopped"));
       }
       ops.setRunning(false);

@@ -39,19 +39,21 @@ type agentHistoryToolCall struct {
 
 // agentHistoryLine is one JSONL record: meta (t=="meta") or message (t=="msg").
 type agentHistoryLine struct {
-	T          string                 `json:"t"`
-	V          int                    `json:"v,omitempty"`
-	Device     string                 `json:"device,omitempty"`
-	Thread     string                 `json:"thread,omitempty"`
-	Model      string                 `json:"model,omitempty"`
-	Cwd        string                 `json:"cwd,omitempty"`
-	Title      string                 `json:"title,omitempty"`
-	Updated    string                 `json:"updated,omitempty"`
-	Role       string                 `json:"role,omitempty"`
-	Content    string                 `json:"content,omitempty"`
-	Reasoning  string                 `json:"reasoning,omitempty"`
-	ToolCalls  []agentHistoryToolCall `json:"tool_calls,omitempty"`
-	ToolCallID string                 `json:"tool_call_id,omitempty"`
+	Display       json.RawMessage        `json:"display,omitempty"`
+	ImagePreviews []string               `json:"imagePreviews,omitempty"`
+	T             string                 `json:"t"`
+	V             int                    `json:"v,omitempty"`
+	Device        string                 `json:"device,omitempty"`
+	Thread        string                 `json:"thread,omitempty"`
+	Model         string                 `json:"model,omitempty"`
+	Cwd           string                 `json:"cwd,omitempty"`
+	Title         string                 `json:"title,omitempty"`
+	Updated       string                 `json:"updated,omitempty"`
+	Role          string                 `json:"role,omitempty"`
+	Content       string                 `json:"content,omitempty"`
+	Reasoning     string                 `json:"reasoning,omitempty"`
+	ToolCalls     []agentHistoryToolCall `json:"tool_calls,omitempty"`
+	ToolCallID    string                 `json:"tool_call_id,omitempty"`
 	// Images holds the file names of a user message's image attachments;
 	// the image data itself is never persisted.
 	Images []string `json:"images,omitempty"`
@@ -59,11 +61,13 @@ type agentHistoryLine struct {
 
 // agentHistoryEntry is one rendered conversation entry sent in auth_ok.
 type agentHistoryEntry struct {
-	Role      string             `json:"role"` // "user" | "assistant"
-	Text      string             `json:"text,omitempty"`
-	Reasoning string             `json:"reasoning,omitempty"`
-	Tools     []agentHistoryTool `json:"tools,omitempty"`
-	Images    []string           `json:"images,omitempty"`
+	Display       json.RawMessage    `json:"display,omitempty"`
+	ImagePreviews []string           `json:"imagePreviews,omitempty"`
+	Role          string             `json:"role"` // "user" | "assistant"
+	Text          string             `json:"text,omitempty"`
+	Reasoning     string             `json:"reasoning,omitempty"`
+	Tools         []agentHistoryTool `json:"tools,omitempty"`
+	Images        []string           `json:"images,omitempty"`
 }
 
 type agentHistoryTool struct {
@@ -278,9 +282,13 @@ func (st *agentSessionStore) loadLocked(deviceID, threadID string) (msgs []agent
 			default:
 				continue
 			}
-			msg := agent.Message{Role: line.Role, Content: line.Content, ToolCallID: line.ToolCallID, Reasoning: line.Reasoning}
-			for _, name := range line.Images {
-				msg.Images = append(msg.Images, agent.MessageImage{Name: name})
+			msg := agent.Message{Display: line.Display, Role: line.Role, Content: line.Content, ToolCallID: line.ToolCallID, Reasoning: line.Reasoning}
+			for i, name := range line.Images {
+				var preview string
+				if i < len(line.ImagePreviews) {
+					preview = line.ImagePreviews[i]
+				}
+				msg.Images = append(msg.Images, agent.MessageImage{Name: name, Preview: preview})
 			}
 			for _, tc := range line.ToolCalls {
 				msg.ToolCalls = append(msg.ToolCalls, agent.ToolCall{ID: tc.ID, Name: tc.Name, Arguments: tc.Arguments, Summary: tc.Summary, Diff: tc.Diff})
@@ -463,6 +471,7 @@ func (st *agentSessionStore) setExtra(deviceID, threadID string, update func(*ag
 // strings are marshaled, so an error is practically unreachable.
 func marshalAgentHistoryMsg(m agent.Message) []byte {
 	line := agentHistoryLine{
+		Display: m.Display, ImagePreviews: agentImagePreviews(m.Images),
 		T: "msg", Role: m.Role, Content: m.Content, ToolCallID: m.ToolCallID, Reasoning: m.Reasoning,
 	}
 	for _, img := range m.Images {
@@ -604,9 +613,9 @@ func renderAgentHistory(msgs []agent.Message) []agentHistoryEntry {
 			if m.Content == "" && len(m.Images) == 0 {
 				continue
 			}
-			entries = append(entries, agentHistoryEntry{Role: "user", Text: m.Content, Images: agentImageNames(m.Images)})
+			entries = append(entries, agentHistoryEntry{Display: m.Display, Role: "user", Text: m.Content, Images: agentImageNames(m.Images), ImagePreviews: agentImagePreviews(m.Images)})
 		case "assistant":
-			e := agentHistoryEntry{Role: "assistant", Text: m.Content, Reasoning: m.Reasoning}
+			e := agentHistoryEntry{Display: m.Display, Role: "assistant", Text: m.Content, Reasoning: m.Reasoning}
 			for _, tc := range m.ToolCalls {
 				t := agentHistoryTool{Name: tc.Name, Args: tc.Arguments, Summary: tc.Summary, Diff: tc.Diff}
 				if res, ok := toolResults[tc.ID]; ok {
