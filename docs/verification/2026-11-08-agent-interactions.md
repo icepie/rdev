@@ -159,3 +159,10 @@ Local fixture only (`@server` on port 19440); no real user history was deleted.
 - Replaced per-delta tail-string concatenation with bounded ring-buffer storage. Reads/finalization produce immutable snapshots; finalization releases the live buffer. Truncated result/error strings are cloned so they do not retain arbitrarily large original allocations.
 - At 32B deltas over 256KiB with periodic snapshots, three-run median cumulative allocation fell from 311,276,068 to 1,159,810 B/op and time from 29,164,617 to 137,614 ns/op. This is a local retention-path microbenchmark, not end-to-end throughput.
 - UTF-8/chunk-boundary and snapshot regression, full server/client race suites and server build passed.
+
+## Follow-up: drafts after missed offline deletion
+
+- Confirmed agentSessionFor hydrates all persisted device threads and agentThreadListLocked returns the entire unpaginated list. Text drafts now reconcile only on auth_ok using that full list, before adopting its thread state; live/filtered sidebar snapshots are not used for pruning.
+- Reconciliation requires a valid device/current thread, a well-formed thread array and presence of the current thread. Missing/malformed legacy responses cannot delete drafts. It checks both live cache and sessionStorage keys, retains other devices, existing threads, unassigned drafts and unrelated/malformed storage keys.
+- Hook regression checks mounted stale draft clearing, storage-only stale entries, device isolation and malformed/missing snapshot cases. Rebuilt browser seeded a missing-thread draft in @server and a same-name draft on another fixture device, then performed native reload/authentication: missing-thread key was removed, other-device value and the current typed draft remained intact. This browser check uses seeded stale storage, not a simulated network outage.
+- 142 Web tests, TypeScript, frontend and embedded server builds passed. Reconciliation occurs when that device authenticates again; merely remaining offline cannot trigger cleanup.

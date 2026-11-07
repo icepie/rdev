@@ -28,6 +28,33 @@ export function discardComposerTextDraft(key: string) {
   writeDraft(key, "");
 }
 
+/** Reconcile only an auth_ok full list, never a live or filtered sidebar list.
+ * Missing/malformed legacy snapshots must not erase recoverable drafts. */
+export function reconcileComposerTextDrafts(device: string, currentThread: string, threads: unknown) {
+  if (!device || !currentThread || !Array.isArray(threads)) return;
+  const present = new Set<string>();
+  for (const thread of threads) {
+    if (!thread || typeof thread !== "object" || typeof thread.id !== "string" || !thread.id) return;
+    present.add(thread.id);
+  }
+  if (!present.has(currentThread)) return;
+  const keys = new Set(drafts.keys());
+  try {
+    for (let index = 0; index < window.sessionStorage.length; index++) {
+      const key = window.sessionStorage.key(index);
+      if (key?.startsWith(PREFIX)) keys.add(key.slice(PREFIX.length));
+    }
+  } catch { /* Still reconcile live drafts when storage is unavailable. */ }
+  for (const key of keys) {
+    let identity: unknown;
+    try { identity = JSON.parse(key); } catch { continue; }
+    if (Array.isArray(identity) && identity.length === 2 && identity[0] === device &&
+        typeof identity[1] === "string" && identity[1] && !present.has(identity[1])) {
+      discardComposerTextDraft(key);
+    }
+  }
+}
+
 /** Text follows its conversation across pane remounts and tab reloads. */
 export function useComposerTextDraft(key: string): [string, Dispatch<SetStateAction<string>>] {
   const subscribe = useCallback((listener: () => void) => {

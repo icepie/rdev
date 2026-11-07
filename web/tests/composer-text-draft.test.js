@@ -48,3 +48,42 @@ it("keeps drafts isolated, synchronizes matching panes, and restores after modul
     delete globalThis.IS_REACT_ACT_ENVIRONMENT;
   }
 });
+
+it("reconciles missed deletions only against a complete authenticated device list", async () => {
+  vi.resetModules();
+  sessionStorage.clear();
+  globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  const { useComposerTextDraft, reconcileComposerTextDrafts } = await import("../ui/components/agent/use-composer-text-draft");
+  const prefix = "rdev-composer-text:";
+  const key = (device, thread) => JSON.stringify([device, thread]);
+  const initial = new Map([
+    [key("a", "gone"), "deleted while offline"], [key("a", "unopened"), "storage only"],
+    [key("a", "keep"), "keep draft"], [key("b", "gone"), "other device"],
+    [key("a", ""), "not yet assigned"], ["bad-json", "legacy"],
+  ]);
+  for (const [identity, value] of initial) sessionStorage.setItem(prefix + identity, value);
+  sessionStorage.setItem("unrelated", "keep");
+  let current;
+  function Pane() { current = useComposerTextDraft(key("a", "gone")); return null; }
+  const root = createRoot(document.createElement("div"));
+  try {
+    await act(async () => root.render(createElement(Pane)));
+    for (const threads of [undefined, null, [], [{ id: "other" }], [{ id: "keep" }, {}], [{ id: "keep" }, { id: 12 }]]) {
+      await act(async () => reconcileComposerTextDrafts("a", "keep", threads));
+      expect(current[0]).toBe("deleted while offline");
+      expect(sessionStorage.getItem(prefix + key("a", "unopened"))).toBe("storage only");
+    }
+    await act(async () => reconcileComposerTextDrafts("a", "keep", [{ id: "keep" }]));
+    expect(current[0]).toBe("");
+    expect(sessionStorage.getItem(prefix + key("a", "gone"))).toBeNull();
+    expect(sessionStorage.getItem(prefix + key("a", "unopened"))).toBeNull();
+    for (const identity of [key("a", "keep"), key("b", "gone"), key("a", ""), "bad-json"]) {
+      expect(sessionStorage.getItem(prefix + identity)).toBe(initial.get(identity));
+    }
+    expect(sessionStorage.getItem("unrelated")).toBe("keep");
+  } finally {
+    await act(async () => root.unmount());
+    sessionStorage.clear();
+    delete globalThis.IS_REACT_ACT_ENVIRONMENT;
+  }
+});

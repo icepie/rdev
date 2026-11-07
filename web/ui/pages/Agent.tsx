@@ -1,4 +1,4 @@
-import { discardComposerTextDraft } from "../components/agent/use-composer-text-draft";
+import { discardComposerTextDraft, reconcileComposerTextDrafts } from "../components/agent/use-composer-text-draft";
 import { AgentConnectionError } from "../components/agent/connection-error";
 import { threadIdentity, useThreadUnread } from "../hooks/use-thread-unread";
 import { useDevicePassword } from "../hooks/use-device-password";
@@ -819,6 +819,7 @@ export function AgentPage() {
         const authThread = asString(msg.thread);
         setThread(authThread);
         threadRef.current = authThread;
+        reconcileComposerTextDrafts(sourceDevice, authThread, msg.threads);
         const authThreads = parseThreads(msg.threads);
         setThreads(authThreads);
         /* Deep link /agent?device=X&thread=Y: adopt Y when it lives on this
