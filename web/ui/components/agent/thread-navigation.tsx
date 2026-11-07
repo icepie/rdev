@@ -20,24 +20,44 @@ export function ThreadNavigation({ items, scrollRef, t }: {
   }), [items]);
   const users = messages.filter(item => item.kind === "user");
   const signature = messages.map(item => item.key).join(",");
+  const [wide, setWide] = useState(typeof ResizeObserver === "undefined");
   useEffect(() => {
     const root = scrollRef.current;
-    if (!root || typeof IntersectionObserver === "undefined") return;
-    const visible = new Map<number, number>();
-    const observer = new IntersectionObserver(entries => {
-      for (const entry of entries) {
-        const key = Number((entry.target as HTMLElement).dataset.threadMessage);
-        if (entry.isIntersecting) visible.set(key, entry.boundingClientRect.top);
-        else visible.delete(key);
+    if (!root) return;
+    let frame: number | null = null;
+    const nodes = [...root.querySelectorAll<HTMLElement>("[data-thread-message]")];
+    const update = () => {
+      frame = null;
+      setWide(root.clientWidth >= 896);
+      const top = root.getBoundingClientRect().top;
+      const atBottom = root.scrollHeight - root.clientHeight - root.scrollTop <= 4;
+      // Transcript rows are in document order. Binary search avoids measuring
+      // every message on each scroll frame in long conversations.
+      let low = 0;
+      let high = nodes.length;
+      while (!atBottom && low < high) {
+        const middle = Math.floor((low + high) / 2);
+        if (nodes[middle].getBoundingClientRect().top <= top + 4) low = middle + 1;
+        else high = middle;
       }
-      const first = [...visible].sort((a, b) => a[1] - b[1])[0];
-      if (first) setActive(first[0]);
-    }, { root });
-    root.querySelectorAll("[data-thread-message]").forEach(node => observer.observe(node));
-    return () => observer.disconnect();
+      const current = atBottom ? nodes.at(-1) : nodes[Math.max(0, low - 1)];
+      if (current) setActive(Number(current.dataset.threadMessage));
+    };
+    const schedule = () => { if (frame === null) frame = requestAnimationFrame(update); };
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(schedule);
+    observer?.observe(root);
+    root.addEventListener("scroll", schedule, { passive: true });
+    schedule();
+    return () => {
+      observer?.disconnect();
+      root.removeEventListener("scroll", schedule);
+      if (frame !== null) cancelAnimationFrame(frame);
+    };
   }, [signature, scrollRef]);
-  if (users.length < 3) return null;
-  const rail = users.filter((_, index) => index % Math.max(1, Math.ceil(users.length / 40)) === 0);
+  useEffect(() => { if (!wide) setOpen(false); }, [wide]);
+  if (users.length < 3 || !wide) return null;
+  const rail = users.length <= 20 ? users : Array.from({ length: 20 }, (_, index) =>
+    users[Math.round(index * (users.length - 1) / 19)]);
   const activeUser = users.filter(item => active === null || item.key <= active).at(-1)?.key;
   return <div className="group/toc absolute right-0 top-4 z-10 w-8"
     onMouseEnter={() => setOpen(true)} onMouseLeave={event => {
@@ -60,7 +80,11 @@ export function ThreadNavigation({ items, scrollRef, t }: {
         <ul className="max-h-64 overflow-y-auto overflow-x-hidden">
           {messages.filter(item => item.kind === tab).map(item => <li key={item.key}>
             <button type="button" aria-current={active === item.key ? "true" : undefined}
-              onClick={() => { scrollRef.current?.querySelector(`[data-thread-message="${item.key}"]`)?.scrollIntoView({ block: "start", behavior: window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" }); setActive(item.key); }}
+              onClick={() => { const root = scrollRef.current;
+                const target = root?.querySelector<HTMLElement>(`[data-thread-message="${item.key}"]`);
+                if (root && target) root.scrollTo({ top: root.scrollTop + target.getBoundingClientRect().top - root.getBoundingClientRect().top,
+                  behavior: window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+                setActive(item.key); }}
               className={cn("w-full cursor-pointer rounded-md px-2 py-1.5 text-left text-xs leading-snug break-words hover:bg-state-hover", active === item.key ? "bg-state-hover text-foreground" : "text-muted-foreground")}>{item.text}</button>
           </li>)}
         </ul>
