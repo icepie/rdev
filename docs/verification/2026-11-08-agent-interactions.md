@@ -104,3 +104,9 @@ Local fixture only (`@server` on port 19440); no real user history was deleted.
 - Actual FilesBrowser regression uses two devices and 200 interleaved binary frames: zero per-frame storage writes/React commits, one sampling write with both exact offsets, pagehide flush with an extra byte, immediate failure persistence and no writes/commits for five idle seconds. Existing reconnect/auth/offset-isolation tests still pass.
 - Rebuilt local service, native mobile path navigation and download of a generated 2MiB fixture: persisted completed/saved state with done=size=2097152. Task panel displays completed/100%; screenshot inspected at 390×844 light, no horizontal overflow (root 390px/table 342px).
 - 141 Web tests, TypeScript, frontend production build and embedded server build passed. These checks demonstrate functional batching and completion; they are not a throughput benchmark.
+
+## Follow-up: file task action boundaries
+
+- Task UI and handler now share state-based action eligibility. Queued requests expose cancel, not resume/clear; completed/canceled tasks expose only clear. The handler rechecks live task identity/state so stale controls cannot apply an invalid transition.
+- Extended FilesBrowser regression starts a queued upload, checks its sole cancel action, cancels, delivers late upload_ready, verifies it stays canceled, then clears it. Existing pause/resume/reconnect tests remain green.
+- Rebuilt mobile browser, restored completed 2MiB download: task has exactly one enabled button, Clear, with root width 390px. 141 Web tests, TypeScript and both frontend/server builds passed.

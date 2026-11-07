@@ -1,3 +1,15 @@
+export type FileTaskStatus = "queued" | "running" | "paused" | "completed" | "failed" | "canceled";
+
+/** An active request must be canceled before its task can be removed. */
+export function availableFileTaskActions(status: FileTaskStatus) {
+  return {
+    pause: status === "running",
+    resume: status === "paused" || status === "failed",
+    cancel: status === "queued" || status === "running" || status === "paused",
+    clear: status === "paused" || status === "failed" || status === "completed" || status === "canceled",
+  };
+}
+
 /** Keep a failed upload tied to its original remote destination. */
 export function canResumeUpload(
   task: {

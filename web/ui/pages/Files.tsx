@@ -4,7 +4,7 @@ import { createTransferAttempts } from "../lib/file-transfer-attempts";
 import { RecursiveTransferError, walkTransferFiles, type TransferDestination } from "../lib/file-transfer-route";
 import { encodeFrame, decodeFrame } from "../lib/file-transfer-frame";
 import { uploadChunks } from "../lib/upload-chunks";
-import { canResumeUpload, createListingGuard, readListingPage, restoreFileTask, uploadResumeRequest } from "../lib/file-request-state";
+import { availableFileTaskActions, type FileTaskStatus, canResumeUpload, createListingGuard, readListingPage, restoreFileTask, uploadResumeRequest } from "../lib/file-request-state";
 import {
   useCallback,
   useEffect,
@@ -82,13 +82,7 @@ interface FileEntry {
   modTime: string;
 }
 
-type TaskStatus =
-  | "queued"
-  | "running"
-  | "paused"
-  | "completed"
-  | "failed"
-  | "canceled";
+type TaskStatus = FileTaskStatus;
 
 interface FileTask {
   id: string;
@@ -1171,6 +1165,7 @@ export function FilesBrowser({
 
   const taskAction = useCallback(
     (task: FileTask, act: "pause" | "resume" | "cancel" | "clear") => {
+      if (tasksRef.current!.get(task.id) !== task || !availableFileTaskActions(task.status)[act]) return;
       if (act === "pause") {
         stopUpload(task);
         task.status = "paused";
@@ -1547,6 +1542,7 @@ export function FilesBrowser({
               <div className="text-sm text-muted-foreground">{t("files.noTasks")}</div>
             )}
             {sortedTasks.map((task) => {
+              const actions = availableFileTaskActions(task.status);
               const pct = task.size
                 ? Math.min(100, Math.floor(((task.done || 0) * 1000) / task.size) / 10)
                 : task.status === "completed"
@@ -1593,49 +1589,26 @@ export function FilesBrowser({
                     </div>
                   </div>
                   <div className="flex flex-wrap gap-1.5">
-                    <Button
-                      variant="outline"
-                      size="icon"
-                      className="size-8"
-                      aria-label={t("files.pause")}
-                      disabled={task.status !== "running"}
-                      onClick={() => taskAction(task, "pause")}
-                    >
-                      <Icon name="Pause" />
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="icon"
-                      className="size-8"
-                      aria-label={t("files.resume")}
-                      disabled={
-                        task.status === "running" ||
-                        task.status === "completed" ||
-                        task.status === "canceled"
-                      }
-                      onClick={() => taskAction(task, "resume")}
-                    >
-                      <Icon name="Play" />
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="icon"
-                      className="size-8"
-                      aria-label={t("files.cancel")}
-                      disabled={task.status === "completed" || task.status === "canceled"}
-                      onClick={() => taskAction(task, "cancel")}
-                    >
-                      <Icon name="X" />
-                    </Button>
-                    <Button
+                    {(["pause", "resume", "cancel"] as const).map(action => actions[action] && (
+                      <Button
+                        key={action}
+                        variant="outline"
+                        size="icon"
+                        className="size-8"
+                        aria-label={t(`files.${action}`)}
+                        onClick={() => taskAction(task, action)}
+                      >
+                        <Icon name={action === "pause" ? "Pause" : action === "resume" ? "Play" : "X"} />
+                      </Button>
+                    ))}
+                    {actions.clear && <Button
                       variant="outline"
                       size="sm"
                       className="h-8"
-                      disabled={task.status === "running"}
                       onClick={() => taskAction(task, "clear")}
                     >
                       {t("files.clear")}
-                    </Button>
+                    </Button>}
                   </div>
                 </div>
               );

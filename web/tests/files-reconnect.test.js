@@ -302,6 +302,7 @@ it("batches concurrent file progress, flushes on page exit, and leaves idle pane
   }))));
   const writes = vi.spyOn(Storage.prototype, "setItem");
   const commits = vi.fn();
+  const panesRef = { current: new Map() };
   const host = document.createElement("div");
   document.body.append(host);
   const root = createRoot(host);
@@ -309,7 +310,7 @@ it("batches concurrent file progress, flushes on page exit, and leaves idle pane
   try {
     await act(async () => root.render(createElement(MemoryRouter, null,
       createElement(Profiler, { id: "files", onRender: commits }, createElement(FilesBrowser, {
-        primary: true, leafId: 0, panesRef: { current: new Map() },
+        primary: true, leafId: 0, panesRef,
       })))));
     const socket = sockets[0];
     await act(async () => socket.open());
@@ -335,6 +336,22 @@ it("batches concurrent file progress, flushes on page exit, and leaves idle pane
     await act(async () => vi.advanceTimersByTimeAsync(5000));
     expect(commits).not.toHaveBeenCalled();
     expect(writes).not.toHaveBeenCalled();
+
+    await act(async () => panesRef.current.get(0).receiveUpload(new File(["fixture"], "queued.txt"), "/target", "device-a"));
+    const upload = socket.sent.find(message => message.op === "upload_start");
+    expect(upload).toBeDefined();
+    const card = [...host.querySelectorAll("strong")].find(element => element.textContent === "queued.txt").parentElement.parentElement.parentElement;
+    expect(card.querySelectorAll("button")).toHaveLength(1);
+    const cancel = card.querySelector('button[aria-label="files.cancel"]');
+    expect(cancel).not.toBeNull();
+    await act(async () => cancel.click());
+    expect(socket.sent.at(-1)).toMatchObject({ op: "cancel", taskId: upload.taskId });
+    await act(async () => socket.message({ op: "upload_ready", taskId: upload.taskId, path: "/target/queued.txt", offset: 0 }));
+    expect(saved().find(task => task.name === "queued.txt").status).toBe("canceled");
+    expect(card.querySelectorAll("button")).toHaveLength(1);
+    expect(card.querySelector("button").textContent).toBe("files.clear");
+    await act(async () => card.querySelector("button").click());
+    expect(saved().some(task => task.name === "queued.txt")).toBe(false);
   } finally {
     await act(async () => root.unmount());
     host.remove();
