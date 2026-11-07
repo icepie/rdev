@@ -1,7 +1,5 @@
-// provider.go is the OpenAI-compatible streaming chat-completions client,
-// distilled from pigo's internal/provider/openai.go + transport.go down to the
-// single wire format rdev needs: POST {BaseURL}/chat/completions with
-// server-sent events, tool calls, and usage reporting.
+// provider.go contains the shared HTTP transport and chat-completions adapter.
+// Responses serialization/stream events live in provider_responses.go.
 package agent
 
 import (
@@ -105,7 +103,16 @@ type pendingToolCall struct {
 // content, reasoning, or tool-call delta): such failures are almost always
 // transient connection/setup errors and nothing was emitted downstream yet.
 func streamChat(ctx context.Context, cfg Config, history []Message, onDelta, onReasoning func(string)) (Message, Usage, error) {
-	payload, err := marshalChatRequest(cfg, history)
+	var payload []byte
+	var err error
+	switch cfg.API {
+	case "", "openai-completions":
+		payload, err = marshalChatRequest(cfg, history)
+	case "openai-responses":
+		payload, err = marshalResponsesRequest(cfg, history)
+	default:
+		return Message{}, Usage{}, fmt.Errorf("agent: unsupported provider API %q", cfg.API)
+	}
 	if err != nil {
 		return Message{}, Usage{}, err
 	}
@@ -167,7 +174,11 @@ func streamChatOnce(ctx context.Context, cfg Config, payload []byte, onDelta, on
 	watchdog := time.AfterFunc(streamIdleTimeout, cancelStream)
 	defer watchdog.Stop()
 
-	url := strings.TrimRight(cfg.BaseURL, "/") + "/chat/completions"
+	endpoint := "/chat/completions"
+	if cfg.API == "openai-responses" {
+		endpoint = "/responses"
+	}
+	url := strings.TrimRight(cfg.BaseURL, "/") + endpoint
 	req, err := http.NewRequestWithContext(streamCtx, http.MethodPost, url, bytes.NewReader(payload))
 	if err != nil {
 		return Message{}, Usage{}, false, fmt.Errorf("agent: build chat request: %w", err)
@@ -186,8 +197,12 @@ func streamChatOnce(ctx context.Context, cfg Config, payload []byte, onDelta, on
 		return Message{}, Usage{}, false, fmt.Errorf("agent: chat request failed: %s: %s", resp.Status, strings.TrimSpace(string(body)))
 	}
 
-	assistant, usage, err = readStream(resp.Body, onDelta, onReasoning, func() { watchdog.Reset(streamIdleTimeout) })
-	progress = assistant.Content != "" || assistant.Reasoning != "" || len(assistant.ToolCalls) > 0
+	if cfg.API == "openai-responses" {
+		assistant, usage, err = readResponsesStream(resp.Body, responseScope(cfg), onDelta, onReasoning, func() { watchdog.Reset(streamIdleTimeout) })
+	} else {
+		assistant, usage, err = readStream(resp.Body, onDelta, onReasoning, func() { watchdog.Reset(streamIdleTimeout) })
+	}
+	progress = assistant.Responses != nil || assistant.Content != "" || assistant.Reasoning != "" || len(assistant.ToolCalls) > 0
 	return assistant, usage, progress, err
 }
 

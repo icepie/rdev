@@ -46,6 +46,8 @@ Agent 的 write_file/edit 使用按设备与路径隔离、可取消的写入锁
 
 ## 2026-11-08 交互与协议更新
 
+- 提供方/模型配置的 `api` 支持 `openai-completions`（默认）和 `openai-responses`。Responses SSE 保留文本、推理摘要、函数调用、usage 和图片输入；使用 `store:false` 并持久化原始输出条目，限定同提供方/地址/模型回放。失败或取消后不保留可执行的未完成调用或原始回放条目；压缩与 subagent 继承所选协议。原始加密推理不会发送给浏览器，也不写入 chat-completions 请求。协议范围不包括 Anthropic、Responses WebSocket 或 OMP RPC 全量兼容。
+
 - 独立 Files 页与 Agent 共用文件预览：点击文件名预览文本、Markdown 或图片，下载使用独立按钮；窄屏使用抽屉，提供刷新、下载和关闭。`/files` 的 `read` 请求携带 `deviceId`、`requestId`、`path`，返回 `file_content`，包含 `content`、`truncated`、可选 `encoding`/`mime` 或 `message`。沿用设备鉴权，不依赖 Agent 模型配置；过期响应不会替换当前预览。
 
 - 工具失败状态作为展示元数据保存并恢复，不发送给模型；旧记录未保存该状态时不根据结果文字猜测。历史结果按所属助手响应匹配，避免调用 ID 跨轮复用串结果；仅含思考内容的消息也保留。

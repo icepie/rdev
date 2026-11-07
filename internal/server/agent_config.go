@@ -9,6 +9,7 @@ import (
 
 // AgentModelConfig is one model offered by a provider.
 type AgentModelConfig struct {
+	API       string `json:"api,omitempty"`
 	ID        string `json:"id"`
 	Name      string `json:"name"`
 	Reasoning bool   `json:"reasoning,omitempty"`
@@ -19,6 +20,7 @@ type AgentModelConfig struct {
 
 // AgentProvider is one OpenAI-compatible LLM provider.
 type AgentProvider struct {
+	API     string             `json:"api,omitempty"`
 	ID      string             `json:"id"`
 	Name    string             `json:"name"`
 	BaseURL string             `json:"base_url"`
@@ -71,6 +73,9 @@ func (c *AgentConfig) validate() error {
 			return fmt.Errorf("duplicate provider id %q", p.ID)
 		}
 		providerIDs[p.ID] = true
+		if !validAgentAPI(p.API) {
+			return fmt.Errorf("provider %q: unsupported api %q", p.ID, p.API)
+		}
 		if p.BaseURL == "" {
 			return fmt.Errorf("provider %q: empty base_url", p.ID)
 		}
@@ -78,6 +83,9 @@ func (c *AgentConfig) validate() error {
 			return fmt.Errorf("provider %q: no models", p.ID)
 		}
 		for _, m := range p.Models {
+			if !validAgentAPI(m.API) {
+				return fmt.Errorf("model %q: unsupported api %q", m.ID, m.API)
+			}
 			if m.ID == "" {
 				return fmt.Errorf("provider %q: model with empty id", p.ID)
 			}
@@ -201,4 +209,14 @@ func (c *AgentConfig) Enabled() bool {
 		}
 	}
 	return false
+}
+
+func validAgentAPI(api string) bool {
+	return api == "" || api == "openai-completions" || api == "openai-responses"
+}
+func (p *AgentProvider) modelAPI(model *AgentModelConfig) string {
+	if model.API != "" {
+		return model.API
+	}
+	return p.API
 }

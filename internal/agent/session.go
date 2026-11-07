@@ -86,6 +86,7 @@ func (s *Session) RunTurnWithSteering(ctx context.Context, userText string, imag
 				// Preserve already-visible output on any stream failure, but
 				// never persist unexecuted calls without matching tool results.
 				assistant.ToolCalls = nil
+				assistant.Responses = nil
 				s.appendHistory(assistant)
 			case round == 0 && assistant.Content == "" && assistant.Reasoning == "" && len(assistant.ToolCalls) == 0:
 				// The first round failed with no output at all (both

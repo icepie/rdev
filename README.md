@@ -72,7 +72,7 @@
 ./rdev-server --agent-config ... --agent-session-ttl 720h   # 或 RDEV_AGENT_SESSION_TTL；0 = 关闭持久化
 ```
 
-`model-config.json` 示例（容忍 `api`/`opencode_npm` 等多余字段，`api_key` 支持 `${ENV_VAR}`）：
+`model-config.json` 示例（容忍 `opencode_npm` 等多余字段，`api_key` 支持 `${ENV_VAR}`）：
 
 ```json
 {
@@ -92,6 +92,10 @@
   ]
 }
 ```
+
+提供方或单个模型可设置 `"api": "openai-responses"` 使用 `/responses`，模型级设置优先。省略 `api` 或设置 `"openai-completions"` 沿用 `/chat/completions`；未知值会报配置错误。`base_url` 填接口根路径（通常以 `/v1` 结尾），不包含 `/responses`。保持供应商实际支持的模型 ID 不变。
+
+Responses 使用 SSE 和 `store: false`，支持函数工具、图片输入、推理摘要及 usage；同一提供方/地址/模型的原始输出条目随历史保存，用于加密推理与助手 phase 的续轮。切换提供方或模型后退回普通消息/工具历史，不复用原始条目。当前不包含 Responses WebSocket、供应商托管工具、Anthropic API 或完整 OMP RPC。
 
 ### 启动客户端
 

@@ -86,6 +86,9 @@ type Differ interface {
 
 // Config configures a Session.
 type Config struct {
+	API        string // empty/openai-completions or openai-responses
+	ProviderID string // scopes opaque provider replay state
+
 	BaseURL      string // OpenAI-compatible endpoint root, e.g. "https://api.openai.com/v1"
 	APIKey       string
 	Model        string
@@ -117,6 +120,8 @@ const DefaultMaxTurns = 25
 
 // Message is one conversation entry in OpenAI chat-completions wire shape.
 type Message struct {
+	Responses *ResponseReplay `json:"-"`
+
 	Display    json.RawMessage `json:"-"`    // UI metadata, never sent to the provider
 	Role       string          `json:"role"` // "system" | "user" | "assistant" | "tool"
 	Content    string          `json:"content"`
@@ -267,6 +272,14 @@ func cloneMessages(messages []Message) []Message {
 		cloned[i].ToolCalls = slices.Clone(message.ToolCalls)
 		cloned[i].Images = slices.Clone(message.Images)
 		cloned[i].Display = slices.Clone(message.Display)
+		if message.Responses != nil {
+			replay := *message.Responses
+			replay.Items = make([]json.RawMessage, len(message.Responses.Items))
+			for j, item := range message.Responses.Items {
+				replay.Items[j] = slices.Clone(item)
+			}
+			cloned[i].Responses = &replay
+		}
 	}
 	return cloned
 }

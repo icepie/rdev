@@ -596,6 +596,8 @@ func (s *Server) buildAgentSession(entry *agentSessionEntry, th *agentThread, cl
 		return s.requestQuestion(entry, th, question, marshalAskOptions(options))
 	}})
 	cfg := agent.Config{
+		API:             provider.modelAPI(model),
+		ProviderID:      provider.ID,
 		BaseURL:         provider.BaseURL,
 		APIKey:          provider.APIKey,
 		Model:           model.ID,

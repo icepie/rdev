@@ -40,6 +40,7 @@ type agentHistoryToolCall struct {
 
 // agentHistoryLine is one JSONL record: meta (t=="meta") or message (t=="msg").
 type agentHistoryLine struct {
+	Responses     *agent.ResponseReplay  `json:"responses,omitempty"`
 	OutcomeAt     string                 `json:"outcomeAt,omitempty"`
 	Outcome       string                 `json:"outcome,omitempty"`
 	Display       json.RawMessage        `json:"display,omitempty"`
@@ -300,7 +301,7 @@ func (st *agentSessionStore) loadLocked(deviceID, threadID string) (msgs []agent
 			default:
 				continue
 			}
-			msg := agent.Message{Display: line.Display, Role: line.Role, Content: line.Content, ToolCallID: line.ToolCallID, Reasoning: line.Reasoning}
+			msg := agent.Message{Responses: line.Responses, Display: line.Display, Role: line.Role, Content: line.Content, ToolCallID: line.ToolCallID, Reasoning: line.Reasoning}
 			for i, name := range line.Images {
 				var preview string
 				if i < len(line.ImagePreviews) {
@@ -489,7 +490,8 @@ func (st *agentSessionStore) setExtra(deviceID, threadID string, update func(*ag
 // strings are marshaled, so an error is practically unreachable.
 func marshalAgentHistoryMsg(m agent.Message) []byte {
 	line := agentHistoryLine{
-		Display: m.Display, ImagePreviews: agentImagePreviews(m.Images),
+		Responses: m.Responses,
+		Display:   m.Display, ImagePreviews: agentImagePreviews(m.Images),
 		T: "msg", Role: m.Role, Content: m.Content, ToolCallID: m.ToolCallID, Reasoning: m.Reasoning,
 	}
 	for _, img := range m.Images {

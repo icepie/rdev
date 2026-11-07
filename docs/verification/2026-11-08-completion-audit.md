@@ -24,7 +24,7 @@
 
 可独立推进：性能基线与热点检查、仍未覆盖的真实运行态交互、OMP 行为差异核对。不要因为缺截图或实机就停止其他可验证工作。
 
-需要外部信息才能精确判定：最后几张只显示 `[Image #1]` 的截图具体内容；“各种协议”是否包括 Responses/Anthropic 提供方适配或 OMP RPC 客户端兼容，以及要求的兼容范围。当前仅有 chat-completions provider，不能宣称这些额外协议已实现。
+需要外部信息才能精确判定：最后几张只显示 `[Image #1]` 的截图具体内容；“各种协议”是否包括 Responses/Anthropic 提供方适配或 OMP RPC 客户端兼容，以及要求的兼容范围。当前已有 chat-completions 与原生 Responses SSE provider；Anthropic、Responses WebSocket 和完整 OMP RPC 仍未实现，不能宣称全部协议已对齐。
 
 最终结论：完成尚未被证明，目标保持 active。本审计不是缩减范围，也不把未实现或未验证项标成完成。
 

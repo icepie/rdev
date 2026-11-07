@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -330,5 +331,23 @@ func TestAgentHistoryKeepsResponseScopedResultsAndFailures(t *testing.T) {
 		if entries[3].Reasoning != messages[5].Reasoning {
 			t.Fatal("reasoning-only response lost")
 		}
+	}
+}
+
+func TestAgentHistoryPersistsOpaqueResponsesWithoutUIExposure(t *testing.T) {
+	store := newTestStore(t)
+	replay := &agent.ResponseReplay{Scope: `["provider","url","model"]`, Items: []json.RawMessage{json.RawMessage(`{"type":"reasoning","encrypted_content":"opaque"}`), json.RawMessage(`{"type":"message","phase":"final_answer","content":[{"type":"output_text","text":"answer"}]}`)}}
+	messages := []agent.Message{{Role: "user", Content: "question"}, {Role: "assistant", Content: "answer", Responses: replay}}
+	store.save("device", "thread", "provider/model", messages)
+	restored, _, _, _ := store.load("device", "thread")
+	if len(restored) != 2 || !reflect.DeepEqual(restored[1].Responses, replay) {
+		t.Fatalf("lost Responses continuation: %+v", restored)
+	}
+	data, err := json.Marshal(renderAgentHistory(restored))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "opaque") || strings.Contains(string(data), "encrypted_content") {
+		t.Fatal("opaque model state leaked into UI")
 	}
 }
