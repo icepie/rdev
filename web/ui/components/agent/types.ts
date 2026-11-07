@@ -74,6 +74,9 @@ export interface AskItem {
   id: string;
   question: string;
   options: AskOption[];
+  /* Links the live card to its eventual settled tool row. */
+  turnKey?: number;
+  toolId?: string;
   /* null = pending; "" = dismissed; otherwise the chosen/typed answer. */
   answer: string | null;
 }

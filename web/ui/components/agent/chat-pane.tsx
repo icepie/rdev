@@ -1,3 +1,4 @@
+import { settledAskCardKeys } from "./transcript-rows";
 import { clearQueueReturns, requestQueueRemoval } from "./queue-actions";
 import { ThreadNavigation } from "./thread-navigation";
 import { ImagePreview } from "./image-preview";
@@ -479,6 +480,9 @@ export function ChatPaneView({
     return null;
   }, [items]);
 
+  const activeTurnKey = running && ops.turnOpen.current ? lastTurnKey : null;
+  const settledQuestions = useMemo(() => settledAskCardKeys(items, activeTurnKey), [items, activeTurnKey]);
+
   /* bb markdown local-file links → right-panel preview tab (line suffix
    * carried through for the pierre selectedLines highlight). */
   const handleOpenLocalFile = useCallback(
@@ -614,6 +618,7 @@ export function ChatPaneView({
               );
             }
             if (item.kind === "ask") {
+              if (settledQuestions.has(item.key)) return null;
               return (
                 <AskCard
                   key={item.key}
@@ -628,7 +633,7 @@ export function ChatPaneView({
               <div key={item.key} data-thread-message={item.key}>
               <TurnView
                 turn={item}
-                active={running && ops.turnOpen.current && item.key === lastTurnKey}
+                active={item.key === activeTurnKey}
                 t={t}
                 copied={copiedId === "t" + item.key}
                 dimmed={item.key !== lastTurnKey}

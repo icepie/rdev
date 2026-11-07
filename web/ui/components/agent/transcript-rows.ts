@@ -5,7 +5,7 @@
  * derived client-side from tool name/args/summary/result/diff + client
  * wall-clock stamps. */
 
-import type { ToolItem, Translator } from "./types";
+import type { ToolItem, TranscriptItem, Translator } from "./types";
 
 export type WorkKind =
   | "command"
@@ -236,4 +236,20 @@ export function toolImageDataUrl(tool: ToolItem): string | null {
   const body = tool.result.slice(match[0].length).trim();
   if (!body || !/^[A-Za-z0-9+/]+={0,2}$/.test(body)) return null;
   return `data:${mime};base64,${body}`;
+}
+
+// A live answer card remains visible until its completed tool row becomes
+// visible. Match both turn and call ID: providers may reuse IDs across turns.
+export function settledAskCardKeys(items: TranscriptItem[], activeTurnKey: number | null): Set<number> {
+  const settled = new Set<string>();
+  for (const item of items) {
+    if (item.kind !== "turn" || item.key === activeTurnKey) continue;
+    for (const tool of item.tools) {
+      if (tool.name === "ask" && tool.done) settled.add(`${item.key}:${tool.id}`);
+    }
+  }
+  return new Set(items.flatMap(item =>
+    item.kind === "ask" && item.answer !== null && item.turnKey !== undefined && item.toolId !== undefined &&
+      settled.has(`${item.turnKey}:${item.toolId}`) ? [item.key] : [],
+  ));
 }

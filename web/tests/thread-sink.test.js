@@ -261,3 +261,12 @@ it('keeps an in-flight tool unresolved when only the browser connection closes',
   await act(async () => sink.ops.finishTurn());
   expect(sink.state.items[0].tools[0]).toMatchObject({ done: false, isError: false });
 });
+
+it('links a question card to the pending ask call rather than its request ID', async () => {
+  await frame({ op: 'turn_start', text: 'ask me' });
+  await frame({ op: 'tool_start', id: 'model-call', name: 'ask' });
+  await frame({ op: 'ask_request', id: 'ui-request', text: 'Choose one', options: [] });
+  expect(sink.state.items[2]).toMatchObject({ kind: 'ask', id: 'ui-request', turnKey: sink.state.items[1].key, toolId: 'model-call', answer: null });
+  await frame({ op: 'ask_resolved', id: 'ui-request', answer: 'chosen' });
+  expect(sink.state.items[2].answer).toBe('chosen');
+});

@@ -585,17 +585,23 @@ export function applyScopedMessage(
       } catch {
         /* keep empty */
       }
-      ops.setItems((prev) => [
-        ...prev,
-        {
-          kind: "ask",
-          key: nextKey(),
-          id: asString(msg.id),
-          question: asString(msg.text),
-          options,
-          answer: null,
-        },
-      ]);
+      const open = ops.turnOpen.current;
+      ops.setItems((prev) => {
+        let owner: { turnKey?: number; toolId?: string } = {};
+        if (open) {
+          for (let i = prev.length - 1; i >= 0; i--) {
+            const turn = prev[i];
+            if (turn.kind !== "turn") continue;
+            const tool = [...turn.tools].reverse().find(tool => tool.name === "ask" && !tool.done);
+            if (tool) owner = { turnKey: turn.key, toolId: tool.id };
+            break;
+          }
+        }
+        return [...prev, {
+          kind: "ask", key: nextKey(), id: asString(msg.id),
+          question: asString(msg.text), options, answer: null, ...owner,
+        }];
+      });
       ops.scrollDown(true);
       return;
     }

@@ -11,6 +11,7 @@ vi.mock('../ui/components/agent/tool-row', () => ({
   ToolBundleRow: () => createElement('div', {'data-bundle': true}),
 }));
 import { TurnView } from '../ui/components/agent/turn-view';
+import { settledAskCardKeys } from '../ui/components/agent/transcript-rows';
 
 it('keeps an active tool phase expanded without a text cursor or duplicate ask row', () => {
   const turn = {
@@ -30,4 +31,18 @@ it('keeps an active tool phase expanded without a text cursor or duplicate ask r
   expect(settled).toContain('data-bundle');
   expect(settled).toContain('data-tool="ask"');
   expect(settled).toContain('data-actions');
+});
+
+it('replaces only linked answered cards once their settled tool row is visible', () => {
+  const first = { kind:'turn', key:1, tools:[{ id:'reused', name:'ask', done:true }] };
+  const second = { kind:'turn', key:2, tools:[{ id:'reused', name:'ask', done:false }] };
+  const cards = [
+    {kind:'ask',key:3,turnKey:1,toolId:'reused',answer:'one'},
+    {kind:'ask',key:4,turnKey:2,toolId:'reused',answer:'two'},
+    {kind:'ask',key:5,turnKey:1,toolId:'reused',answer:null},
+    {kind:'ask',key:6,answer:'unlinked'},
+  ];
+  expect([...settledAskCardKeys([first,second,...cards],1)]).toEqual([]);
+  expect([...settledAskCardKeys([first,second,...cards],2)]).toEqual([3]);
+  expect([...settledAskCardKeys([first,{...second,tools:[{...second.tools[0],done:true}]},...cards],null)]).toEqual([3,4]);
 });
