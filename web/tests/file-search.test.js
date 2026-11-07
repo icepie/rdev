@@ -8,7 +8,8 @@ vi.mock("../ui/components/agent/panel-desktop", () => ({ PanelDesktop: () => nul
 vi.mock("../ui/components/agent/panel-files", () => ({ PanelFiles: () => null }));
 vi.mock("../ui/components/agent/diff-view", () => ({ DIFF_THEME: {}, DIFF_VIEW_STYLE: {}, useThemeType: () => "dark", PierreFileDiff: () => null }));
 vi.mock("@pierre/diffs/react", () => ({ File: () => null, MultiFileDiff: () => null }));
-import { NewTabPage } from "../ui/components/agent/right-panel";
+import { TooltipProvider } from "../ui/components/tooltip";
+import { AgentRightPanel, NewTabPage } from "../ui/components/agent/right-panel";
 
 it("clears obsolete search results, ignores stale replies, and recovers after failure", async () => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;
@@ -118,6 +119,50 @@ it("resets the search page when its thread key changes", async () => {
   } finally {
     await act(async () => root.unmount());
     host.remove();
+    delete globalThis.IS_REACT_ACT_ENVIRONMENT;
+  }
+});
+
+
+it("resets project search on a confirmed cwd change and ignores the previous project's reply", async () => {
+  globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  vi.useFakeTimers();
+  vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  const pending = Promise.withResolvers();
+  const search = vi.fn().mockReturnValueOnce(pending.promise).mockResolvedValue(["new-project.ts"]);
+  const noop = () => {};
+  const props = { changes: null, diffs: {}, connected: true, threadKey: "device:cwd-test",
+    fileStates: {}, onRefresh: noop, onRequestDiff: noop, onRequestFile: noop,
+    onSearchFiles: search, onAddToChat: noop, onHide: noop };
+  const render = cwd => act(async () => root.render(createElement(TooltipProvider, null, createElement(AgentRightPanel, {
+    ...props, info: { device: "device", thread: "cwd-test", cwd },
+  }))));
+  const edit = value => act(async () => {
+    const input = host.querySelector("input");
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(input, value);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  try {
+    await render("/old");
+    await act(async () => host.querySelector('[aria-label="agent.openNewTab"]').click());
+    await edit("file");
+    await act(async () => vi.advanceTimersByTimeAsync(250));
+    await render("/new");
+    expect(host.querySelector("input").value).toBe("");
+    await act(async () => pending.resolve(["old-project.ts"]));
+    expect(host.querySelector('[title="old-project.ts"]')).toBeNull();
+    await edit("file");
+    await act(async () => vi.advanceTimersByTimeAsync(250));
+    expect(host.querySelector('[title="new-project.ts"]')).not.toBeNull();
+  } finally {
+    await act(async () => root.unmount());
+    host.remove();
+    localStorage.clear();
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
     delete globalThis.IS_REACT_ACT_ENVIRONMENT;
   }
 });
