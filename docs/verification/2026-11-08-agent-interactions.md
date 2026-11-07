@@ -325,3 +325,9 @@ Local fixture only (`@server` on port 19440); no real user history was deleted.
 - Historical rendering previously built one result map for the entire conversation, so a repeated call ID showed the newest result in earlier responses. Results now come only from the contiguous tool-result messages belonging to that assistant response. Reasoning-only responses are also retained instead of being filtered out.
 - Regressions verify denied model and explicit-command calls retain failure metadata, success remains success, save/load/render preserve distinct results for reused IDs, reasoning-only history survives, and browser replay honors explicit failures without guessing from text.
 - All 183 Web tests, TypeScript, frontend/embedded server builds and full Go tests passed. The first race invocation collided with Vite replacing embedded static assets and failed compilation; it was rerun after the build completed and both complete Agent/server race suites passed. No new browser visual review is claimed.
+
+## Agent file list opens existing preview tabs
+
+- The embedded Files panel rendered file names as buttons but handled only directories, leaving file-name clicks inert despite the right panel already having BB-style file preview tabs. File names now call the existing `openFileTab` path, reusing tab deduplication, lazy file loading, Markdown/source modes and code highlighting. Directory navigation and the separate download action remain available.
+- Both file and directory names receive pointer/hover/focus feedback. Icon-only download actions now expose a localized accessible name including the filename.
+- All 183 existing Web tests, TypeScript, frontend and embedded server builds passed; no new behavioral unit test or browser visual review was added for this small callback wiring change. Standalone Files still downloads on filename click and does not yet provide its own preview; this does not claim complete file-surface parity.

@@ -1559,6 +1559,7 @@ export function AgentRightPanel({
                 device={info.device}
                 visible={active === tabId(tab)}
                 t={t}
+                onOpenFile={openFileTab}
               />
             ) : (
               <PanelDesktop

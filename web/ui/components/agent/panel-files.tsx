@@ -196,6 +196,7 @@ export function PanelFiles({
   device,
   visible,
   t,
+  onOpenFile,
 }: {
   device: string;
   /* false while another panel tab is active: the panel stays mounted but is
@@ -203,6 +204,7 @@ export function PanelFiles({
    * stall ticker is paused. */
   visible: boolean;
   t: Translator;
+  onOpenFile: (path: string) => void;
 }) {
   const [pathInput, setPathInput] = useState("");
   const [entries, setEntries] = useState<FileEntry[]>([]);
@@ -959,12 +961,10 @@ export function PanelFiles({
                   >
                     <button
                       type="button"
-                      className={cn(
-                        "flex min-w-0 flex-1 items-center gap-1.5 text-left text-sm text-foreground",
-                        entry.isDir && "cursor-pointer hover:text-timeline-accent",
-                      )}
+                      className="flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 rounded-sm text-left text-sm text-foreground hover:text-timeline-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                       onClick={() => {
                         if (entry.isDir) list(entry.path);
+                        else onOpenFile(entry.path);
                       }}
                     >
                       <Icon
@@ -986,6 +986,7 @@ export function PanelFiles({
                         variant="ghost"
                         size="icon"
                         className="size-7 shrink-0"
+                        aria-label={`${t("files.download")} ${entry.name}`}
                         onClick={() =>
                           startDownload(entry.path, entry.name, entry.size)
                         }
