@@ -89,7 +89,6 @@ import {
 } from "../components/agent/thread-sink";
 import {
   asString,
-  formatTokenCount,
   parseAllThreads,
   parsePermMode,
   parseReasoningLevel,
@@ -121,6 +120,7 @@ import {
   setFocus,
   singlePaneLayout,
   splitPane,
+  reconcileThreadPanes,
   type PaneNode,
   type SplitLayout,
 } from "../lib/split-layout";
@@ -428,16 +428,6 @@ export function AgentPage() {
   }, [clearPing]);
 
   const currentDevice = devices.find((d) => d.id === device);
-
-  const totalTokens = useMemo(() => {
-    let sum = 0;
-    for (const item of primary.state.items) {
-      if (item.kind === "turn" && item.usage) {
-        sum += (item.usage.inputTokens || 0) + (item.usage.outputTokens || 0);
-      }
-    }
-    return sum;
-  }, [primary.state.items]);
 
   /* ── Right panel (bb three-column layout) ── */
 
@@ -1477,16 +1467,8 @@ export function AgentPage() {
   useEffect(() => {
     if (!threadsLoadedRef.current) return;
     const ids = new Set(threads.map((th) => th.id));
-    setLayoutState((l) => {
-      let next = l;
-      for (const p of listPanes(l.root)) {
-        if (p.threadId !== null && !ids.has(p.threadId)) {
-          next = removePane(next, p.paneId);
-        }
-      }
-      return next;
-    });
-  }, [threads]);
+    setLayoutState(l => reconcileThreadPanes(l, thread, ids));
+  }, [threads, thread]);
 
   const onSplitResize = useCallback(
     (path: readonly number[], childIndex: number, pairFraction: number) => {
@@ -1925,7 +1907,6 @@ export function AgentPage() {
       branch,
       model,
       thread,
-      tokens: formatTokenCount(totalTokens),
     },
     /* Scopes the persisted tab strip; "" until a thread is attached. */
     threadKey: device && thread ? device + ":" + thread : "",

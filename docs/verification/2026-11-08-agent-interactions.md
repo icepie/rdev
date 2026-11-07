@@ -4,7 +4,7 @@ References: BB `f51e6b0`, OMP `75e7801`, Hope `2b9f809`.
 
 ## Automated checks
 
-- Web: 45 files, 137 tests passed; TypeScript passed; production Vite build passed.
+- Web: 47 files, 139 tests passed; TypeScript passed; production Vite build passed.
 - `go test ./...` passed.
 - Race checks: `internal/client`, `internal/agent`, and `internal/server` passed. An initial server race build conflicted with Vite replacing embedded assets; rerunning after assets were stable passed.
 - New coverage: canceling a shell stops its process-group child while another session completes; final output flush waits for an in-flight send; output order is preserved; unread survives reload; streaming scroll calls coalesce; presentation metadata survives storage but is omitted from provider JSON; image preview bounds/storage; canvas validation and sandbox attributes; navigation targets the correct pane.
@@ -80,3 +80,12 @@ Local fixture only (`@server` on port 19440); no real user history was deleted.
 - On the rebuilt local service, a pending `/bg` approval survived native reload. At 390×900, all three buttons appeared above the composer (bottom around 653px; transcript scrolled 313px of 989px content into a 676px viewport).
 - Pending approval checked at 390/768/1440 × light/dark: all three enabled actions remained available, with no root horizontal overflow. One dark-mobile transitional sample preceded final positioning; after layout settled, buttons were contained. Native Deny then removed pending actions and returned the composer to its normal enabled state without executing the command.
 - 137 Web tests, TypeScript, production build and full server race suite passed.
+
+## Follow-up: split composer and empty conversation recovery
+
+- Native sidebar-thread drag onto the conversation edge created two panes. Typing left/right drafts and using Tab to complete `/bg` affected only the focused composer. Native Shift+Enter inserted a newline. Synthetic browser composition/Enter events did not send; this does not replace a real operating-system IME test.
+- Resize/reload exposed component-only draft storage. Text now uses a tab-scoped external store keyed by device/thread, synchronizes matching consumers, and restores from sessionStorage; successful clearing removes the saved value. Tests simulate module reload and same-ID conversations on different devices. Attachments are not persisted; text beyond 64K characters stays in memory only.
+- Server restart exposed missing explicit empty threads, allowing two restored panes to resolve to one conversation. New empty threads now persist under their thread lock before responding. Reconciliation removes duplicate/absent pinned panes. Tests cover restart/current selection, duplicate resolution and stable reconciliation.
+- Rebuilt browser verification: distinct panes held `left-refresh-draft` and `右侧草稿`; native reload restored both values under their distinct original titles. Mobile root had no horizontal overflow; side-by-side narrow-pane usability remains a separate review item.
+- Removed the remaining cumulative token row from conversation Info, its formatter and the per-transcript total scan. Native Info-tab inspection shows device/project/branch/model/thread ID and no token count.
+- 139 Web tests, TypeScript and production build passed; targeted empty-thread/reconnect/deletion race tests and the full server race suite passed.

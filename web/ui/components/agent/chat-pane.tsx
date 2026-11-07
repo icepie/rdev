@@ -1,6 +1,7 @@
 import { ThreadNavigation } from "./thread-navigation";
 import { ImagePreview } from "./image-preview";
 import { JobNotification, parseJobNotification, parseJobNotificationData } from "./job-notification";
+import { useComposerTextDraft } from "./use-composer-text-draft";
 import { useComposerDraft } from "./use-composer-draft";
 import { dispatchSlashCommand } from "./slash-command";
 import { parseJobsCommand } from "./jobs-command";
@@ -148,7 +149,7 @@ export function ChatPaneView({
   const { items, todos, queue, running, stopping, turnUsage, currentTool, workingSince } = state;
 
   const draftKey = JSON.stringify([device, threadId]);
-  const [input, setInput] = useComposerDraft(draftKey, "");
+  const [input, setInput] = useComposerTextDraft(draftKey);
   const [pendingImages, setPendingImages] = useComposerDraft(draftKey, EMPTY_COMPOSER_IMAGES);
   const imageReaders = useRef(new Set<FileReader>());
   const [readingImages, setReadingImages] = useState(0);

@@ -48,8 +48,6 @@ export interface RightPanelInfo {
   branch: string;
   model: string;
   thread: string;
-  /* Pre-formatted cumulative token count. */
-  tokens: string;
 }
 
 function splitPath(p: string): { dir: string; base: string } {
@@ -1283,7 +1281,6 @@ export function AgentRightPanel({
     { label: t("agent.infoBranch"), value: info.branch },
     { label: t("agent.infoModel"), value: info.model },
     { label: t("agent.infoThread"), value: info.thread },
-    { label: t("agent.infoTokens"), value: info.tokens },
   ];
 
   const pinnedTab = (

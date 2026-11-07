@@ -269,11 +269,6 @@ export function replayHistory(history: unknown[]): TranscriptItem[] {
   return restored;
 }
 
-export function formatTokenCount(n: number): string {
-  if (n >= 1000) return (n / 1000).toFixed(1) + "k";
-  return String(n);
-}
-
 /* auth_ok / thread_switched / done usage frame: cumulative tokens of the
  * thread's latest completed turn (drives the context-window indicator). */
 export function parseUsage(v: unknown): TurnUsage | null {

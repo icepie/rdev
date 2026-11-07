@@ -1661,10 +1661,24 @@ func (h *agentWSHandler) handleNewThread(ac *agentConn) {
 	srv := h.srv
 	srv.agentSessionsMu.Lock()
 	th := srv.newAgentThreadLocked(entry, newAgentThreadID(), nil, "", "")
+	th.persistMu.Lock() // new thread is not published yet; no competing owner
 	entry.threads[th.id] = th
 	entry.current = th.id // resume default for future connections
 	ac.current = th.id
 	srv.agentSessionsMu.Unlock()
+
+	// Persist explicit empty conversations too, so restoring a split after a
+	// server restart does not silently replace its newly-created thread.
+	srv.agentSessionsMu.Lock()
+	current := entry.threads[th.id] == th
+	model := th.model
+	srv.agentSessionsMu.Unlock()
+	if current {
+		if store := srv.agentStore(); store != nil {
+			store.replace(entry.deviceID, th.id, model, nil)
+		}
+	}
+	th.persistMu.Unlock()
 
 	srv.writeAgentPrefs(entry)
 	srv.broadcastThreadList(entry)

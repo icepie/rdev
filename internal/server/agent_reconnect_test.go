@@ -108,3 +108,26 @@ func TestApprovalSurvivesBrowserReconnectWithoutExecuting(t *testing.T) {
 		t.Fatal("reattached decision was not delivered")
 	}
 }
+
+func TestExplicitEmptyConversationSurvivesServerRestart(t *testing.T) {
+	srv := newTurnTestServer(t, "http://unused")
+	server := httptest.NewServer(http.HandlerFunc(srv.HandleAgentWS))
+	defer server.Close()
+	socket, rec := dialAgentWS(t, server)
+	waitAgentMsg(t, rec.msgs, "auth", func(m agentMsg) bool { return m.Op == "auth_ok" })
+	sendAgentOp(t, socket, `{"op":"new_thread"}`)
+	created := waitAgentMsg(t, rec.msgs, "new conversation", func(m agentMsg) bool { return m.Op == "thread_switched" })
+	reopened := newPrefsTestServer(t)
+	reopened.DataDir = srv.DataDir
+	entry, err := reopened.agentSessionFor("dev1", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	th := entry.threads[created.Thread]
+	if th == nil || len(th.session.History()) != 0 {
+		t.Fatal("explicit empty thread missing after restart")
+	}
+	if entry.current != created.Thread {
+		t.Fatal("empty current conversation not restored")
+	}
+}

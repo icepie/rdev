@@ -282,3 +282,18 @@ function validNode(node: unknown): node is LayoutNode {
   }
   return false;
 }
+
+/** Resolve followed/pinned panes against an authoritative thread list. */
+export function reconcileThreadPanes(layout: SplitLayout, current: string, valid: Set<string>): SplitLayout {
+  if (!current) return layout;
+  let next = layout;
+  const seen = new Set<string>();
+  // Keep the following pane when a stale pinned pane resolves to it.
+  const panes = listPanes(layout.root).sort((a, b) => Number(b.threadId === null) - Number(a.threadId === null));
+  for (const pane of panes) {
+    const thread = pane.threadId ?? current;
+    if (!valid.has(thread) || seen.has(thread)) next = removePane(next, pane.paneId);
+    else seen.add(thread);
+  }
+  return next;
+}
