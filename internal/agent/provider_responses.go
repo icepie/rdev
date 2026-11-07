@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"bufio"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -239,41 +238,12 @@ func readResponsesStream(body io.Reader, scope string, onText, onReasoning func(
 		}
 		return false, nil
 	}
-	scanner := bufio.NewScanner(body)
-	scanner.Buffer(make([]byte, 4096), 16<<20)
-	var data []string
-	flush := func() (bool, error) {
-		if len(data) == 0 {
-			return false, nil
-		}
-		payload := strings.Join(data, "\n")
-		data = nil
-		return process(payload)
+	done, err := readSSEEvents(body, poke, process)
+	if err != nil {
+		return assistant, usage, err
 	}
-	for scanner.Scan() {
-		line := strings.TrimSuffix(scanner.Text(), "\r")
-		if line == "" {
-			done, e := flush()
-			if e != nil {
-				return assistant, usage, e
-			}
-			if done {
-				return assistant, usage, nil
-			}
-			continue
-		}
-		if payload, ok := ssePayload([]byte(line)); ok {
-			if poke != nil {
-				poke()
-			}
-			data = append(data, string(payload))
-		}
+	if !done {
+		return assistant, usage, fmt.Errorf("agent: Responses stream ended before completion")
 	}
-	if e := scanner.Err(); e != nil {
-		return assistant, usage, e
-	}
-	if done, e := flush(); done || e != nil {
-		return assistant, usage, e
-	}
-	return assistant, usage, fmt.Errorf("agent: Responses stream ended before completion")
+	return assistant, usage, nil
 }
