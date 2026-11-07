@@ -1,3 +1,5 @@
+import { encodeFrame, decodeFrame } from "../../lib/file-transfer-frame";
+import { createListingGuard, readListingPage } from "../../lib/file-request-state";
 import { isImeComposing } from "../../lib/keyboard";
 /* PanelFiles: one device's file manager inside an agent right-panel tab
  * (scoped port of the standalone Files page). Self-contained /files WS
@@ -42,8 +44,6 @@ const FRAME_UPLOAD_ACK = 0x21;
 const FRAME_DOWNLOAD_CHUNK = 0x22;
 const FRAME_DOWNLOAD_END = 0x23;
 
-const enc = new TextEncoder();
-const dec = new TextDecoder();
 
 /* ── Types ── */
 
@@ -121,33 +121,6 @@ function updateSpeed(task: FileTask) {
     first && last && last.t > first.t
       ? Math.max(0, ((last.n - first.n) * 1000) / (last.t - first.t))
       : 0;
-}
-
-function encodeFrame(
-  typ: number,
-  taskId: string,
-  offset: number,
-  payload?: ArrayBuffer,
-) {
-  const idb = enc.encode(taskId);
-  const data = payload ? new Uint8Array(payload) : new Uint8Array(0);
-  const buf = new ArrayBuffer(2 + idb.length + 8 + data.length);
-  const out = new Uint8Array(buf);
-  const view = new DataView(buf);
-  out[0] = typ;
-  out[1] = idb.length;
-  out.set(idb, 2);
-  view.setBigUint64(2 + idb.length, BigInt(offset));
-  out.set(data, 2 + idb.length + 8);
-  return buf;
-}
-
-function decodeFrame(buf: ArrayBuffer) {
-  const u = new Uint8Array(buf);
-  const len = u[1];
-  const taskId = dec.decode(u.slice(2, 2 + len));
-  const offset = Number(new DataView(buf).getBigUint64(2 + len));
-  return { typ: u[0], taskId, offset, payload: buf.slice(2 + len + 8) };
 }
 
 function loadPersistedTasks(device: string): Map<string, FileTask> {
@@ -232,6 +205,7 @@ export function PanelFiles({
   const listOffsetRef = useRef(0);
   const listTotalRef = useRef(0);
   const listTruncatedRef = useRef(false);
+  const listingGuard = useRef(createListingGuard());
   const deviceRef = useRef(device);
   deviceRef.current = device;
   const tRef = useRef(t);
@@ -286,10 +260,12 @@ export function PanelFiles({
           total: 0,
         });
       }
+      const requestId = makeId();
+      listingGuard.current.begin(requestId, offset);
       send({
         op: "list",
         deviceId: deviceRef.current,
-        requestId: makeId(),
+        requestId,
         path: targetPath,
         offset,
         limit: FILE_LIST_LIMIT,
@@ -539,7 +515,11 @@ export function PanelFiles({
         openAuth();
         return;
       }
+      if (msg.op === "error" && msg.requestId) {
+        msg = { ...msg, op: "list_result", error: msg.message || msg.error || tRef.current("common.error") };
+      }
       if (msg.op === "list_result") {
+        if (!listingGuard.current.consume(typeof msg.requestId === "string" ? msg.requestId : "")) return;
         if (msg.error) {
           setEntries([]);
           setListView({
@@ -558,18 +538,21 @@ export function PanelFiles({
         const newEntries = (
           Array.isArray(msg.entries) ? msg.entries : []
         ) as FileEntry[];
+        const pagination = readListingPage(msg, listingGuard.current.offset(), newEntries.length);
+        if (!pagination) {
+          listTruncatedRef.current = false;
+          setListView(previous => ({ ...previous, truncated: false, notice: tRef.current("files.paginationFailed") }));
+          return;
+        }
         const append = offset > 0 && resultPath === currentPathRef.current;
         currentPathRef.current = resultPath;
         parentPathRef.current =
           typeof msg.parent === "string" && msg.parent ? msg.parent : resultPath;
         setPathInput(resultPath);
         setEntries((prev) => (append ? prev.concat(newEntries) : newEntries));
-        listOffsetRef.current = offset + newEntries.length;
-        listTotalRef.current = Number(
-          msg.total || msg.fileMode || listOffsetRef.current,
-        );
-        listTruncatedRef.current =
-          !!msg.truncated || listOffsetRef.current < listTotalRef.current;
+        listOffsetRef.current = pagination.nextOffset;
+        listTotalRef.current = pagination.total;
+        listTruncatedRef.current = pagination.more;
         setListView({
           truncated: listTruncatedRef.current,
           shown: append ? listOffsetRef.current : newEntries.length,
@@ -634,6 +617,7 @@ export function PanelFiles({
   const onBinary = useCallback(
     (buf: ArrayBuffer) => {
       const f = decodeFrame(buf);
+      if (!f) return;
       const task = tasksRef.current!.get(f.taskId);
       if (!task) return;
       if (f.typ === FRAME_UPLOAD_ACK) {
@@ -672,6 +656,7 @@ export function PanelFiles({
    * old socket, reconnects, and lists the home directory. */
   useEffect(() => {
     tasksRef.current = loadPersistedTasks(device);
+    listingGuard.current.invalidate();
     filesByTaskRef.current.clear();
     currentPathRef.current = "";
     parentPathRef.current = "";
@@ -727,7 +712,9 @@ export function PanelFiles({
         if (wsRef.current !== ws) return;
         if (evt.data instanceof ArrayBuffer) return onBinary(evt.data);
         if (evt.data instanceof Blob) {
-          void evt.data.arrayBuffer().then(onBinary);
+          void evt.data.arrayBuffer().then(data => {
+            if (!disposed && wsRef.current === ws) onBinary(data);
+          });
           return;
         }
         try {
@@ -746,6 +733,7 @@ export function PanelFiles({
     connect();
     return () => {
       disposed = true;
+      listingGuard.current.invalidate();
       window.clearTimeout(reconnectTimerRef.current);
       const ws = wsRef.current;
       if (ws) {
@@ -861,6 +849,7 @@ export function PanelFiles({
           variant="outline"
           size="icon"
           className="size-8 shrink-0"
+          aria-label={t("files.up")}
           onClick={() => list(parentPathRef.current || currentPathRef.current)}
         >
           <Icon name="ArrowUp" className="size-4" />
@@ -869,6 +858,7 @@ export function PanelFiles({
           variant="outline"
           size="icon"
           className="size-8 shrink-0"
+          aria-label={t("files.refresh")}
           onClick={() => list(currentPathRef.current)}
         >
           <Icon name="Refresh" className="size-4" />
@@ -877,6 +867,7 @@ export function PanelFiles({
           variant="outline"
           size="icon"
           className="size-8 shrink-0"
+          aria-label={t("files.upload")}
           onClick={() => fileInputRef.current?.click()}
         >
           <Icon name="Upload" className="size-4" />
