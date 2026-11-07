@@ -127,10 +127,15 @@ export interface SplitContainerProps {
 export function SplitContainer({ root, renderPane, onResize, compact }: SplitContainerProps) {
   const prefix = useId();
   const panes = listPanes(root);
+  const activeTabRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    activeTabRef.current?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+  }, [compact?.activePaneId, panes.length]);
   return <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
     {compact && panes.length > 1 && <div role="tablist" aria-label={compact.label}
       className="flex shrink-0 gap-1 overflow-x-auto border-b border-border-seam bg-sidebar px-2 py-1">
       {panes.map((pane, index) => <button key={pane.paneId} type="button" role="tab"
+        ref={compact.activePaneId === pane.paneId ? activeTabRef : undefined}
         id={`${prefix}-tab-${pane.paneId}`} aria-controls={`${prefix}-pane-${pane.paneId}`}
         aria-selected={compact.activePaneId === pane.paneId}
         tabIndex={compact.activePaneId === pane.paneId ? 0 : -1}

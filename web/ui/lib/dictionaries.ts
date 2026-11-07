@@ -2,6 +2,8 @@
 export const dictionaries = {
   "en": {
     "theme.toggle": "Theme",
+    "terminal.splitPanes": "Terminal panes",
+    "terminal.pane": "Pane {number}",
     "split.right": "Split right",
     "split.down": "Split down",
     "split.close": "Close pane",
@@ -583,6 +585,8 @@ export const dictionaries = {
     "index.logLevel": "日志级别",
     "index.logDate": "日志日期",
     "theme.toggle": "主题",
+    "terminal.splitPanes": "终端窗格",
+    "terminal.pane": "窗格 {number}",
     "split.right": "向右拆分",
     "split.down": "向下拆分",
     "split.close": "关闭窗格",

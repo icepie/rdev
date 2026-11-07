@@ -53,6 +53,7 @@ import {
   type PaneNode,
   type SplitLayout,
 } from "../lib/split-layout";
+import { useIsCompactViewport } from "../components/hooks/use-compact-viewport";
 import { SplitContainer } from "../components/agent/split-panes";
 import { DeviceDropTarget } from "../components/device-rail";
 import { COARSE_POINTER_HEADER_ICON_BUTTON_CLASS } from "../components/coarse-pointer-sizing";
@@ -171,6 +172,7 @@ function sendTerminalData(tab: TermTab | undefined, data: string) {
 export function TerminalPage() {
   const { t } = useI18n();
   const { devices } = useDevices();
+  const compact = useIsCompactViewport();
   const [searchParams] = useSearchParams();
 
   const [metas, setMetas] = useState<TabMeta[]>([]);
@@ -805,6 +807,17 @@ export function TerminalPage() {
       <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
         <SplitContainer
           root={splitLayout.root}
+          compact={compact && countPanes(splitLayout.root) > 1 ? {
+            activePaneId: focusedPane,
+            onSelect: paneId => setSplitLayout(layout => setFocus(layout, paneId)),
+            label: t("terminal.splitPanes"),
+            labelForPane: pane => {
+              const index = listPanes(splitLayout.root).findIndex(item => item.paneId === pane.paneId);
+              const active = paneTabs.get(pane.paneId)?.active;
+              const device = metas.find(meta => meta.id === active)?.deviceId;
+              return `${t("terminal.pane", { number: index + 1 })}${device ? ` · ${device}` : ""}`;
+            },
+          } : undefined}
           onResize={(path, childIndex, f) =>
             setSplitLayout((l) =>
               resizeSplit(l, path, childIndex, clampSplitPairFraction(f)),
