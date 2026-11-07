@@ -354,7 +354,7 @@ export function ChatPaneView({
           if (!arg) return false;
           const payload: Record<string, unknown> = {
             op: "chat",
-            text: `Use the bg tool to run this command in the background: ${arg}`,
+            text: `/bg ${arg}`,
           };
           if (threadId) payload.thread = threadId;
           if (model) payload.model = model;
@@ -371,7 +371,7 @@ export function ChatPaneView({
           if (!arg) return false;
           const payload: Record<string, unknown> = {
             op: "chat",
-            text: `Use the subagent tool to complete this delegated task: ${arg}`,
+            text: `/subagent ${arg}`,
           };
           if (threadId) payload.thread = threadId;
           if (model) payload.model = model;

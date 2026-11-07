@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -78,5 +79,48 @@ func TestCompactCommandPersistsAndPublishesReplacement(t *testing.T) {
 	}
 	if !reflect.DeepEqual(terminal.History, renderAgentHistory(loaded)) {
 		t.Fatal("live client and reconnect histories differ")
+	}
+}
+
+func TestExplicitCommandArguments(t *testing.T) {
+	for _, tc := range []struct {
+		command, argument, name, expected string
+	}{
+		{"/bg", "printf 'a b'\necho done", "bg", `{"command":"printf 'a b'\necho done"}`},
+		{"/bg", "--device machine-a echo hi", "bg", `{"command":"echo hi","device":"machine-a"}`},
+		{"/subagent", "inspect\nthen report", "subagent", `{"task":"inspect\nthen report"}`},
+	} {
+		name, raw, err := agentCommandTool(tc.command, tc.argument)
+		if err != nil || name != tc.name || string(raw) != tc.expected {
+			t.Fatalf("got %s %s %v", name, raw, err)
+		}
+	}
+	for _, argument := range []string{"", "--device", "--device machine-a"} {
+		if _, _, err := agentCommandTool("/bg", argument); err == nil {
+			t.Fatalf("accepted invalid argument %q", argument)
+		}
+	}
+}
+
+type commandDispatchTool struct {
+	calls int
+	args  json.RawMessage
+}
+
+func (*commandDispatchTool) Name() string            { return "bg" }
+func (*commandDispatchTool) Description() string     { return "test" }
+func (*commandDispatchTool) Schema() json.RawMessage { return json.RawMessage(`{}`) }
+func (t *commandDispatchTool) Execute(_ context.Context, args json.RawMessage) (string, error) {
+	t.calls++
+	t.args = append(json.RawMessage(nil), args...)
+	return "started", nil
+}
+
+func TestConversationDispatchesExplicitCommandWithoutModel(t *testing.T) {
+	tool := &commandDispatchTool{}
+	session := agent.New(agent.Config{Tools: []agent.Tool{tool}})
+	replaced, err := runAgentConversation(t.Context(), session, "/bg echo hi", nil, nil)
+	if err != nil || replaced || tool.calls != 1 || string(tool.args) != `{"command":"echo hi"}` {
+		t.Fatalf("dispatch: replaced=%v calls=%d args=%s err=%v", replaced, tool.calls, tool.args, err)
 	}
 }

@@ -89,7 +89,7 @@ it("preserves composer intent across modified keys, image loading and thread swi
       await act(async () => sendButton().click());
       expect(sent).toEqual([{
         op: "chat", thread: "thread-a", model: `model-${name}`,
-        text: name === "bg" ? `Use the bg tool to run this command in the background: ${argument}` : `Use the subagent tool to complete this delegated task: ${argument}`,
+        text: `/${name} ${argument}`,
       }]);
       expect(composer.value).toBe("");
       sent.length = 0;
