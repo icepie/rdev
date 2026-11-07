@@ -1035,8 +1035,8 @@ func (s *Server) requestQuestion(entry *agentSessionEntry, th *agentThread, ques
 
 // requestApproval implements agent.Config.Approve: short-circuits on full
 // permission mode / always-allow, otherwise broadcasts approval_request and
-// waits for the browser's decision (deny on timeout, turn cancel, or all
-// browsers disconnecting).
+// waits for the browser's decision (deny on timeout or turn cancellation).
+// A disconnected browser may reattach and answer the replayed request.
 func (s *Server) requestApproval(entry *agentSessionEntry, th *agentThread, tc agent.ToolCall, args json.RawMessage) (bool, error) {
 	s.agentSessionsMu.Lock()
 	if entry.permMode == agentPermFull || th.alwaysAllow[tc.Name] {
@@ -1229,16 +1229,11 @@ func (h *agentWSHandler) OnClose(socket *gws.Conn, err error) {
 	}
 	ac := acRaw.(*agentConn)
 	// Only detach: the turn (if any) keeps running server-side so a reopened
-	// tab can reattach and receive the remaining events. When the last
-	// browser disconnects, all pending approvals are denied.
+	// tab can reattach and receive remaining events and pending approvals.
+	// Approval timeout and turn cancellation still resolve unanswered requests.
 	if ac.entry != nil {
 		h.srv.agentSessionsMu.Lock()
 		delete(ac.entry.subs, socket)
-		if len(ac.entry.subs) == 0 {
-			for _, th := range ac.entry.threads {
-				denyApprovalsLocked(th)
-			}
-		}
 		h.srv.agentSessionsMu.Unlock()
 	}
 }

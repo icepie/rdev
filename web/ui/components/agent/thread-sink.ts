@@ -9,6 +9,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -144,11 +145,21 @@ export function useThreadSink(): ThreadSink {
 
   const scrollFrame = useRef<number | null>(null);
   const forceScroll = useRef(false);
+  const requestedForce = useRef(false);
+  const [scrollRequest, setScrollRequest] = useState(0);
   useEffect(() => () => {
     if (scrollFrame.current !== null) window.cancelAnimationFrame(scrollFrame.current);
   }, []);
   const scrollDown = useCallback((force?: boolean) => {
-    forceScroll.current ||= !!force;
+    requestedForce.current ||= !!force;
+    setScrollRequest(request => request + 1);
+  }, []);
+  // Schedule only after React has committed restored/streamed rows. A frame
+  // requested inside the socket handler can otherwise measure the old DOM.
+  useLayoutEffect(() => {
+    if (!scrollRequest) return;
+    forceScroll.current ||= requestedForce.current;
+    requestedForce.current = false;
     if (scrollFrame.current !== null) return;
     scrollFrame.current = window.requestAnimationFrame(() => {
       scrollFrame.current = null;
@@ -159,7 +170,7 @@ export function useThreadSink(): ThreadSink {
       const near = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
       if (forced || near) el.scrollTop = el.scrollHeight;
     });
-  }, []);
+  }, [scrollRequest]);
 
   const pushBubble = useCallback(
     (kind: "user" | "error" | "system" | "setup", text: string, images?: string[], imagePreviews?: string[], display?: unknown) => {

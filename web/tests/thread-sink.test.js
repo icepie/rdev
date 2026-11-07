@@ -107,14 +107,18 @@ it('coalesces streaming scroll requests without losing a forced jump', async () 
   window.requestAnimationFrame = callback => { callbacks.push(callback); return callbacks.length; };
   const el = { scrollHeight: 1000, scrollTop: 0, clientHeight: 200 };
   sink.ops.registerScrollEl(el);
-  sink.ops.scrollDown(false);
-  sink.ops.scrollDown(true);
-  for (let i = 0; i < 100; i++) sink.ops.scrollDown(false);
+  await act(async () => {
+    sink.ops.setItems([{ kind: 'user', key: 1, text: 'restored history' }]);
+    sink.ops.scrollDown(false);
+    sink.ops.scrollDown(true);
+    for (let i = 0; i < 100; i++) sink.ops.scrollDown(false);
+    expect(callbacks.length).toBe(0); // no measurement before commit
+  });
   expect(callbacks.length).toBe(1);
   callbacks[0]();
   expect(el.scrollTop).toBe(1000);
   el.scrollTop = 0;
-  sink.ops.scrollDown(false);
+  await act(async () => sink.ops.scrollDown(false));
   callbacks[1]();
   expect(el.scrollTop).toBe(0);
 });
