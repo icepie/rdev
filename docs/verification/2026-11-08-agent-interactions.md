@@ -89,3 +89,10 @@ Local fixture only (`@server` on port 19440); no real user history was deleted.
 - Rebuilt browser verification: distinct panes held `left-refresh-draft` and `右侧草稿`; native reload restored both values under their distinct original titles. Mobile root had no horizontal overflow; side-by-side narrow-pane usability remains a separate review item.
 - Removed the remaining cumulative token row from conversation Info, its formatter and the per-transcript total scan. Native Info-tab inspection shows device/project/branch/model/thread ID and no token count.
 - 139 Web tests, TypeScript and production build passed; targeted empty-thread/reconnect/deletion race tests and the full server race suite passed.
+
+## Follow-up: compact split conversations
+
+- Narrow layouts use conversation tabs and one full-width pane, retaining the same mounted pane tree. Hidden panes are inert; separators are hidden. Wide layouts restore the original split fractions. Only the visible narrow pane is considered read.
+- Component regression verifies tab ARIA linkage, native keyboard-event selection/focus, hidden/inert states, retained local state without remounts, and restored wide split fractions.
+- Rebuilt local browser at 390×844: root scroll width 390px, visible pane 342px and composer 308px (previous side-by-side composers were around 136px). Both distinct text drafts remain present; hidden pane has zero rendered width and is inert.
+- 140 Web tests, TypeScript, production frontend build and embedded server build passed.

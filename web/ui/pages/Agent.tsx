@@ -1780,9 +1780,11 @@ export function AgentPage() {
   /* Threads currently shown in any pane (sidebar highlight). */
   const openThreadIds = useMemo(() => {
     const ids = new Set<string>();
-    for (const p of listPanes(layout.root)) ids.add(p.threadId ?? thread);
+    for (const p of listPanes(layout.root)) {
+      if (!isNarrow || p.paneId === layout.focusedPaneId) ids.add(p.threadId ?? thread);
+    }
     return ids;
-  }, [layout, thread]);
+  }, [layout, thread, isNarrow]);
   const unreadThreads = useThreadUnread(sidebarRows, device, openThreadIds);
 
   /* One pane of the split layout: slim pane chrome (title, running dot,
@@ -2779,6 +2781,14 @@ export function AgentPage() {
         root={layout.root}
         renderPane={renderPane}
         onResize={onSplitResize}
+        compact={isNarrow && countPanes(layout.root) > 1 ? {
+          activePaneId: layout.focusedPaneId,
+          onSelect: id => setLayoutState(value => setFocus(value, id)),
+          labelForPane: pane => (pane.threadId ?? thread) === thread
+            ? currentThreadTitle
+            : threads.find(item => item.id === pane.threadId)?.title || t("agent.newThread"),
+          label: t("agent.splitConversations"),
+        } : undefined}
       />
 
       {/* bb-style in-app rename dialog (no native prompt). */}

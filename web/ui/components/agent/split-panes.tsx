@@ -6,11 +6,13 @@
 import {
   Fragment,
   useEffect,
+  useId,
   useRef,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
 import { cn } from "../../lib/utils";
+import { listPanes } from "../../lib/split-layout";
 import type {
   LayoutNode,
   PaneNode,
@@ -25,7 +27,9 @@ import type { ChatPaneViewProps } from "./chat-pane";
 function SplitHandle({
   dir,
   onDrag,
+  hidden,
 }: {
+  hidden?: boolean;
   dir: "row" | "col";
   /* fraction of the PAIR occupied by the first child (0.15–0.85). */
   onDrag: (pairFraction: number) => void;
@@ -78,9 +82,11 @@ function SplitHandle({
 
   return (
     <span
+      hidden={hidden}
       role="separator"
       aria-orientation={dir === "row" ? "vertical" : "horizontal"}
       className={cn(
+        hidden && "hidden",
         "relative z-10 shrink-0 bg-border-seam transition-colors hover:bg-ring/40 active:bg-ring/40",
         dir === "row" ? "w-px cursor-col-resize" : "h-px cursor-row-resize",
       )}
@@ -104,14 +110,48 @@ function SplitHandle({
 
 /* ── Recursive layout renderer ── */
 
+interface CompactPanes {
+  activePaneId: string;
+  onSelect: (id: string) => void;
+  labelForPane: (pane: PaneNode) => string;
+  label: string;
+}
+
 export interface SplitContainerProps {
   root: LayoutNode;
   renderPane: (pane: PaneNode) => ReactNode;
   onResize: (path: SplitPath, childIndex: number, pairFraction: number) => void;
+  compact?: CompactPanes;
 }
 
-export function SplitContainer({ root, renderPane, onResize }: SplitContainerProps) {
-  return <NodeView node={root} path={[]} renderPane={renderPane} onResize={onResize} />;
+export function SplitContainer({ root, renderPane, onResize, compact }: SplitContainerProps) {
+  const prefix = useId();
+  const panes = listPanes(root);
+  return <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+    {compact && panes.length > 1 && <div role="tablist" aria-label={compact.label}
+      className="flex shrink-0 gap-1 overflow-x-auto border-b border-border-seam bg-sidebar px-2 py-1">
+      {panes.map((pane, index) => <button key={pane.paneId} type="button" role="tab"
+        id={`${prefix}-tab-${pane.paneId}`} aria-controls={`${prefix}-pane-${pane.paneId}`}
+        aria-selected={compact.activePaneId === pane.paneId}
+        tabIndex={compact.activePaneId === pane.paneId ? 0 : -1}
+        onClick={() => compact.onSelect(pane.paneId)}
+        onKeyDown={event => {
+          let target = index;
+          if (event.key === "ArrowRight") target = (index + 1) % panes.length;
+          else if (event.key === "ArrowLeft") target = (index + panes.length - 1) % panes.length;
+          else if (event.key === "Home") target = 0;
+          else if (event.key === "End") target = panes.length - 1;
+          else return;
+          event.preventDefault();
+          compact.onSelect(panes[target].paneId);
+          document.getElementById(`${prefix}-tab-${panes[target].paneId}`)?.focus();
+        }}
+        className={cn("min-h-10 max-w-52 shrink-0 truncate rounded-md px-3 text-xs transition-colors",
+          compact.activePaneId === pane.paneId ? "bg-state-active text-foreground" : "text-muted-foreground hover:bg-state-hover")}
+        title={compact.labelForPane(pane)}>{compact.labelForPane(pane)}</button>)}
+    </div>}
+    <NodeView node={root} path={[]} renderPane={renderPane} onResize={onResize} compact={compact} prefix={prefix} />
+  </div>;
 }
 
 function NodeView({
@@ -119,7 +159,11 @@ function NodeView({
   path,
   renderPane,
   onResize,
+  compact,
+  prefix,
 }: {
+  compact?: CompactPanes;
+  prefix: string;
   node: LayoutNode;
   path: SplitPath;
   renderPane: (pane: PaneNode) => ReactNode;
@@ -129,7 +173,11 @@ function NodeView({
     /* data-pane-id: the thread drag session locates drop targets and their
      * bounding rects through it. */
     return (
-      <div data-pane-id={node.paneId} className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+      <div data-pane-id={node.paneId} id={`${prefix}-pane-${node.paneId}`}
+        role={compact ? "tabpanel" : undefined} aria-labelledby={compact ? `${prefix}-tab-${node.paneId}` : undefined}
+        hidden={!!compact && compact.activePaneId !== node.paneId}
+        inert={!!compact && compact.activePaneId !== node.paneId}
+        className={cn("min-h-0 min-w-0 flex-1 flex-col overflow-hidden", compact && compact.activePaneId !== node.paneId ? "hidden" : "flex")}>
         {renderPane(node)}
       </div>
     );
@@ -137,8 +185,8 @@ function NodeView({
   return (
     <div
       className={cn(
-        "flex min-h-0 min-w-0 flex-1",
-        node.dir === "row" ? "flex-row" : "flex-col",
+        compact ? "contents" : "flex min-h-0 min-w-0 flex-1",
+        !compact && (node.dir === "row" ? "flex-row" : "flex-col"),
       )}
     >
       {node.children.map((child, i) => (
@@ -146,14 +194,15 @@ function NodeView({
           {i > 0 && (
             <SplitHandle
               dir={node.dir}
+              hidden={!!compact}
               onDrag={(f) => onResize(path, i - 1, f)}
             />
           )}
           <div
             style={{ flexGrow: node.sizes[i] ?? 1, flexBasis: 0 }}
-            className="flex min-h-0 min-w-0 flex-col overflow-hidden"
+            className={compact ? "contents" : "flex min-h-0 min-w-0 flex-col overflow-hidden"}
           >
-            <NodeView node={child} path={[...path, i]} renderPane={renderPane} onResize={onResize} />
+            <NodeView node={child} path={[...path, i]} renderPane={renderPane} onResize={onResize} compact={compact} prefix={prefix} />
           </div>
         </Fragment>
       ))}
