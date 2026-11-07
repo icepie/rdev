@@ -1,7 +1,7 @@
 import { createTransferAttempts } from "../../lib/file-transfer-attempts";
 import { uploadChunks } from "../../lib/upload-chunks";
 import { encodeFrame, decodeFrame } from "../../lib/file-transfer-frame";
-import { createListingGuard, readListingPage, canResumeUpload, restoreFileTask, uploadResumeRequest } from "../../lib/file-request-state";
+import { availableFileTaskActions, createListingGuard, readListingPage, canResumeUpload, restoreFileTask, uploadResumeRequest } from "../../lib/file-request-state";
 import { isImeComposing } from "../../lib/keyboard";
 /* PanelFiles: one device's file manager inside an agent right-panel tab
  * (scoped port of the standalone Files page). Self-contained /files WS
@@ -820,6 +820,7 @@ export function PanelFiles({
 
   const taskAction = useCallback(
     (task: FileTask, act: "pause" | "resume" | "cancel" | "clear") => {
+      if (tasksRef.current!.get(task.id) !== task || !availableFileTaskActions(task.status)[act]) return;
       if (act === "pause") {
         task.status = "paused";
         const wire = transferAttempts.current.current(task.id);
@@ -1083,6 +1084,7 @@ export function PanelFiles({
               </div>
             )}
             {sortedTasks.map((task) => {
+              const actions = availableFileTaskActions(task.status);
               const pct = task.size
                 ? Math.min(
                     100,
@@ -1127,7 +1129,7 @@ export function PanelFiles({
                       variant="outline"
                       size="icon"
                       className="size-7"
-                      disabled={task.status !== "running"}
+                      disabled={!actions.pause}
                       aria-label={t("files.pause") + " " + task.name}
                       onClick={() => taskAction(task, "pause")}
                     >
@@ -1137,11 +1139,7 @@ export function PanelFiles({
                       variant="outline"
                       size="icon"
                       className="size-7"
-                      disabled={
-                        task.status === "running" ||
-                        task.status === "completed" ||
-                        task.status === "canceled"
-                      }
+                      disabled={!actions.resume}
                       aria-label={t("files.resume") + " " + task.name}
                       onClick={() => taskAction(task, "resume")}
                     >
@@ -1151,10 +1149,7 @@ export function PanelFiles({
                       variant="outline"
                       size="icon"
                       className="size-7"
-                      disabled={
-                        task.status === "completed" ||
-                        task.status === "canceled"
-                      }
+                      disabled={!actions.cancel}
                       aria-label={t("files.cancel") + " " + task.name}
                       onClick={() => taskAction(task, "cancel")}
                     >
@@ -1164,7 +1159,8 @@ export function PanelFiles({
                       variant="outline"
                       size="sm"
                       className="h-7 px-2 text-xs"
-                      disabled={task.status === "running"}
+                      disabled={!actions.clear}
+                      aria-label={t("files.clear") + " " + task.name}
                       onClick={() => taskAction(task, "clear")}
                     >
                       {t("files.clear")}

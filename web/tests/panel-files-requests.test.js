@@ -209,3 +209,26 @@ it('binds explicit reselect to its original task and rejects a mismatched file',
   expect(saved).toHaveLength(1);
   expect(saved[0]).toMatchObject({id:'old-upload',status:'queued'});
 });
+
+it('requires canceling a queued upload before clearing and ignores its later readiness', async()=>{
+  const socket=sockets[0];
+  await pickFile();
+  const start=socket.sent.at(-1);
+  const button=action=>document.querySelector(`[aria-label="files.${action} upload.txt"]`);
+  expect(button('pause').disabled).toBe(true);
+  expect(button('resume').disabled).toBe(true);
+  expect(button('clear').disabled).toBe(true);
+  expect(button('cancel').disabled).toBe(false);
+  const count=socket.sent.length;
+  await act(async()=>{ button('resume').click(); button('clear').click(); });
+  expect(socket.sent).toHaveLength(count);
+  expect(JSON.parse(localStorage.getItem('rdevFileTasks.one'))).toHaveLength(1);
+  await act(async()=>button('cancel').click());
+  expect(socket.sent.at(-1)).toMatchObject({op:'cancel',taskId:start.taskId});
+  expect(button('clear').disabled).toBe(false);
+  await act(async()=>button('clear').click());
+  expect(JSON.parse(localStorage.getItem('rdevFileTasks.one'))).toEqual([]);
+  await deliver(socket,{op:'upload_ready',taskId:start.taskId,path:'/tmp/upload.txt',offset:0});
+  expect(socket.sent.filter(x=>x instanceof ArrayBuffer)).toEqual([]);
+  expect(document.body.textContent).toContain('files.noTasks');
+});

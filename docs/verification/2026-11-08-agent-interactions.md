@@ -367,3 +367,9 @@ Local fixture only (`@server` on port 19440); no real user history was deleted.
 - Explicit Resume with a missing File now records the intended task. The file picker validates one matching name/size using the shared resume validator, then resumes that task's original destination even if the visible directory has changed. Mismatches produce a task message and no upload request; a normal Upload action clears the specific-task selection.
 - Mounted component tests restore a persisted active upload under a new panel device, navigate to a different directory and select the same filename: a new task targets the visible directory and the old task remains failed. A second test exercises explicit reselection, rejects the wrong filename, then verifies the original task/destination is used without duplicating it.
 - All 196 Web tests, TypeScript, frontend and embedded server builds passed. No browser visual review or original-file content/hash verification is claimed; reselection matches the existing name/size contract.
+
+## Embedded task controls share the lifecycle rules
+
+- PanelFiles allowed queued uploads to be resumed again or cleared before cancellation. Reused `availableFileTaskActions` for all four controls and for the action handler, which also verifies the task still belongs to the current map. Queued work must be canceled before it can be removed, matching standalone Files. Clear now has a filename-specific accessible name.
+- A mounted component regression selects a file and holds upload_ready, verifies only Cancel is available, attempts the disabled actions, cancels and clears, then delivers the old upload_ready. No file bytes are sent and the cleared task stays absent.
+- All 197 Web tests, TypeScript, frontend and embedded server builds passed. No additional browser visual review was performed for this state-rule change.
