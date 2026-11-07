@@ -51,15 +51,34 @@ it("isolates detail requests by thread and refreshes on visibility without polli
     await act(() =>
       document.querySelector('button[title="job-a: build"]').click(),
     );
-    expect(document.querySelector("pre").textContent).toBe("<build>");
-    expect(document.querySelector("pre").innerHTML).toContain("var(--ansi-1)");
-    expect(document.querySelector("pre build")).toBeNull();
+    expect(document.querySelector("[class*=select-text]").textContent).toBe("<build>");
+    expect(document.querySelector("[class*=select-text]").innerHTML).toContain("var(--ansi-1)");
+    expect(document.querySelector("build")).toBeNull();
     expect(sent).toContainEqual({
       op: "get_jobs",
       thread: "thread-a",
       id: "job-a",
     });
+    props.sink.state.jobs[0] = {
+      ...props.sink.state.jobs[0], state: "completed", output: "background verified\n",
+      result: "exit code: 0\n<stdout>\nbackground verified\n\n</stdout>\n<stderr>\n\n</stderr>",
+    };
+    await render();
+    const result = document.querySelector("[class*=select-text]");
+    expect(result.textContent.match(/background verified/g)).toHaveLength(1);
+    expect(result.textContent).toContain("exit code 0");
+    expect(result.textContent).not.toContain("<stdout>");
+    expect(result.textContent).not.toContain("<stderr>");
+    props.sink.state.jobs[0] = {
+      ...props.sink.state.jobs[0], state: "failed", error: "command exited with code 2",
+      result: "exit code: 2\n<stdout>\n\n</stdout>\n<stderr>\n\u001b[31mbuild failed\u001b[0m\n</stderr>",
+    };
+    await render();
+    expect(document.querySelector("[class*=select-text]").textContent).toContain("build failed");
+    expect(document.querySelector("[class*=select-text]").textContent).toContain("exit code 2");
+    expect(document.querySelector('[role="alert"]').textContent).toContain("command exited with code 2");
     sent.length = 0;
+    props.sink.state.jobs[0] = { ...props.sink.state.jobs[0], state: "running" };
     props.threadId = "thread-b";
     await render();
     expect(sent).toEqual([{ op: "get_jobs", thread: "thread-b" }]);

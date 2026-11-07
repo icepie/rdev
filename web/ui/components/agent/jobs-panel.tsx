@@ -1,3 +1,4 @@
+import { CommandOutputBody } from "./command-output";
 import { AnsiText } from "../ansi-text";
 import { DisclosureBody } from "../disclosure-body";
 import { useEffect, useState } from "react";
@@ -132,19 +133,23 @@ export function JobsPanel({
             </p>
           )}
           {job && (
-            <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap break-words rounded bg-muted p-2">
-              <AnsiText
-                text={
-                  [
-                    job.output,
-                    job.result && job.result !== job.output ? job.result : "",
-                    job.error,
-                  ]
-                    .filter(Boolean)
-                    .join("\n") || t("agent.jobs.waiting")
-                }
-              />
-            </pre>
+            <div className="mt-2">
+              {job.kind === "shell" ? (
+                <CommandOutputBody
+                  tool={{
+                    id: job.id, name: "shell", args: "{}", summary: job.label,
+                    result: job.result || job.output || t("agent.jobs.waiting"),
+                    diff: "", done: job.state !== "running", isError: job.state === "failed",
+                  }}
+                  t={t}
+                />
+              ) : (
+                <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words rounded bg-muted p-2">
+                  <AnsiText text={job.result || job.output || t("agent.jobs.waiting")} />
+                </pre>
+              )}
+              {job.error && <p role="alert" className="mt-2 whitespace-pre-wrap break-words text-destructive-text">{job.error}</p>}
+            </div>
           )}
         </section>
       </DisclosureBody>
