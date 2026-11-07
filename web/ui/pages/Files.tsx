@@ -1,3 +1,7 @@
+import { readFilePreviewReply } from "../lib/file-preview-reply";
+import { FilePreview } from "../components/agent/file-preview";
+import type { FilePreviewState } from "../components/agent/types";
+import { Dialog, DialogContent, DialogTitle } from "../components/dialog";
 import { FilesPaneLayout } from "../components/files-pane-layout";
 import { isImeComposing } from "../lib/keyboard";
 import { createKeyedRequest } from "../lib/keyed-request";
@@ -232,6 +236,20 @@ export function FilesBrowser({
 
   const [device, setDeviceState] = useState("");
   useEffect(() => { onDeviceChange?.(device); }, [device, onDeviceChange]);
+  const [preview, setPreview] = useState<{ id: string; device: string; path: string; state: FilePreviewState } | null>(null);
+  const previewRequest = useRef("");
+  const closePreview = useCallback(() => { previewRequest.current = ""; setPreview(null); }, []);
+  useEffect(() => {
+    if (!preview || preview.state.status !== "loading") return;
+    const id = preview.id;
+    const timer = window.setTimeout(() => {
+      if (previewRequest.current !== id) return;
+      previewRequest.current = "";
+      setPreview(current => current?.id === id ? { ...current, state: { ...current.state, status: "error", message: t("files.previewTimeout") } } : current);
+    }, 30000);
+    return () => window.clearTimeout(timer);
+  }, [preview, t]);
+  useEffect(() => () => { previewRequest.current = ""; }, []);
   const [pathInput, setPathInput] = useState("");
   const [entries, setEntries] = useState<FileEntry[]>([]);
   const [listView, setListView] = useState<ListView>({ truncated: false, shown: 0, total: 0 });
@@ -401,6 +419,21 @@ export function FilesBrowser({
       if (transferAuth.current.get(task.id) === wireId) transferAuth.current.delete(task.id);
     });
   }, [send, requireConnectedDevice, saveTasks, bump]);
+
+  const openPreview = useCallback((path: string) => {
+    const device = activeDeviceRef.current;
+    const id = makeId();
+    previewRequest.current = id;
+    setPreview({ id, device, path, state: { status: "loading", content: "", message: "", truncated: false } });
+    void requireConnectedDevice(device).then(() => {
+      if (previewRequest.current === id && activeDeviceRef.current === device) {
+        send({ op: "read", deviceId: device, requestId: id, path });
+      }
+    }).catch(error => {
+      if (previewRequest.current !== id) return;
+      setPreview(current => current?.id === id ? { ...current, state: { ...current.state, status: "error", message: String(error instanceof Error ? error.message : error) } } : current);
+    });
+  }, [requireConnectedDevice, send]);
 
   /* ── Downloads ── */
 
@@ -656,6 +689,14 @@ export function FilesBrowser({
         if (msg.op !== "auth_required" || (!msg.taskId && !msg.requestId)) return;
         msg = { ...msg, op: "error" };
       }
+      const previewReply = readFilePreviewReply(previewRequest.current, activeDeviceRef.current, msg);
+      if (previewReply) {
+        const id = previewRequest.current;
+        previewRequest.current = "";
+        setPreview(current => current?.id === id ? { ...current, state: previewReply } : current);
+        return;
+      }
+      if (msg.op === "file_content") return; // obsolete preview, never a directory response
       const directoryRequest = typeof msg.requestId === "string" ? directoryWaiters.current.get(msg.requestId) : undefined;
       if (directoryRequest && (msg.op === "mkdir_result" || msg.op === "error")) {
         directoryWaiters.current.delete(String(msg.requestId));
@@ -1002,6 +1043,7 @@ export function FilesBrowser({
   const setDevice = useCallback(
     (id: string) => {
       if (activeDeviceRef.current !== id) {
+        closePreview();
         listingGuard.current.invalidate();
         directoryReadyRef.current = false;
         listedForRef.current = "";
@@ -1037,7 +1079,7 @@ export function FilesBrowser({
         void list("");
       }
     },
-    [list, primary, setUrlParams],
+    [list, primary, setUrlParams, closePreview],
   );
 
   /* Full (paginated) listing of one directory without touching the visible
@@ -1446,7 +1488,7 @@ export function FilesBrowser({
                             title={entry.name}
                             onClick={() => {
                               if (entry.isDir) void list(entry.path);
-                              else startDownload(entry.path, entry.name, entry.size);
+                              else openPreview(entry.path);
                             }}
                           >
                             <Icon
@@ -1652,6 +1694,22 @@ export function FilesBrowser({
           </form>
         </AlertDialogContent>
       </AlertDialog>
+
+      <Dialog open={preview !== null} onOpenChange={open => { if (!open) closePreview(); }}>
+        <DialogContent className="flex h-[min(80dvh,800px)] min-h-0 w-[calc(100vw-2rem)] max-w-5xl flex-col overflow-hidden p-0">
+          <DialogTitle className="sr-only">{preview?.path || t("files.name")}</DialogTitle>
+          {preview && <div className="min-h-0 flex-1 pt-8">
+            <FilePreview key={preview.device + ":" + preview.path} path={preview.path} state={preview.state}
+              connected={device === preview.device} onRefresh={() => openPreview(preview.path)} t={t} />
+          </div>}
+          <div className="flex shrink-0 justify-end gap-2 border-t border-border-seam px-3 py-2">
+            <Button variant="outline" size="sm" onClick={() => {
+              if (preview) startDownload(preview.path, preview.path.split(/[\\/]/).pop() || "download", 0, undefined, preview.device);
+            }}>{t("files.download")}</Button>
+            <Button variant="ghost" size="sm" onClick={closePreview}>{t("common.close")}</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* Async error alert (auth_fail / auth_required) */}
       <AlertDialog open={!!alertMsg} onOpenChange={(open) => !open && setAlertMsg("")}>

@@ -23,7 +23,7 @@ func TestFileErrorsIdentifyOriginalOperation(t *testing.T) {
 	defer socket.WriteClose(1000, nil)
 	go socket.ReadLoop()
 	for _, device := range []string{"offline", "locked"} {
-		for _, op := range []string{"list", "upload_start", "download_start", "stat", "mkdir"} {
+		for _, op := range []string{"read", "list", "upload_start", "download_start", "stat", "mkdir"} {
 			request := fileMsg{Op: op, DeviceID: device}
 			if strings.HasSuffix(op, "_start") {
 				request.TaskID = device + "-" + op

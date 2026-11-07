@@ -12,6 +12,9 @@ import (
 )
 
 type fileMsg struct {
+	Content    string               `json:"content,omitempty"`
+	Encoding   string               `json:"encoding,omitempty"`
+	Mime       string               `json:"mime,omitempty"`
 	Op         string               `json:"op"`
 	DeviceID   string               `json:"deviceId,omitempty"`
 	RequestID  string               `json:"requestId,omitempty"`
@@ -145,6 +148,8 @@ func (h *filesWSHandler) OnMessage(socket *gws.Conn, message *gws.Message) {
 	switch msg.Op {
 	case "auth":
 		h.handleAuth(fs, msg)
+	case "read":
+		h.handleRead(fs, msg)
 	case "list":
 		h.handleList(fs, msg)
 	case "upload_start":
@@ -479,4 +484,27 @@ func (s *Server) HandleFilesWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	socket.ReadLoop()
+}
+
+// handleRead uses the same bounded text/image probes as Agent previews, but
+// authorizes against the Files socket and replies only to its requester.
+func (h *filesWSHandler) handleRead(socket *fileSocket, msg fileMsg) {
+	client, ok := h.clientFor(socket, msg)
+	if !ok {
+		return
+	}
+	h.srv.goAgent(func() {
+		reply := fileMsg{Op: "file_content", DeviceID: client.ID, RequestID: msg.RequestID, Path: msg.Path}
+		var err error
+		if mime := imageMIME(msg.Path); mime != "" {
+			reply.Content, err = h.srv.probeReadImage(client.ID, ".", msg.Path)
+			reply.Encoding, reply.Mime = "base64", mime
+		} else {
+			reply.Content, reply.Truncated, err = h.srv.probeReadFile(client.ID, ".", msg.Path)
+		}
+		if err != nil {
+			reply.Message = err.Error()
+		}
+		socket.writeText(reply)
+	})
 }
