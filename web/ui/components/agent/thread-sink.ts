@@ -1,3 +1,4 @@
+import { acceptQueueRemoval, type QueueReturns } from "./queue-actions";
 /* Per-thread transcript state ("sink"): one instance backs the connection's
  * current thread, and every secondary split-screen pane owns one for the
  * thread it shows. The WS handler routes tagged frames to the right sink,
@@ -60,6 +61,7 @@ export interface ThreadSinkState {
   items: TranscriptItem[];
   todos: TodoItem[];
   queue: string[];
+  queueIds: string[];
   running: boolean;
   /* Stop requested, server not yet acked (the turn unwind's stopped frame
    * clears it); keeps the stop button disabled in the meantime. */
@@ -75,6 +77,8 @@ export interface ThreadSinkOps {
   setItems: Dispatch<SetStateAction<TranscriptItem[]>>;
   setTodos: Dispatch<SetStateAction<TodoItem[]>>;
   setQueue: Dispatch<SetStateAction<string[]>>;
+  setQueueIds: Dispatch<SetStateAction<string[]>>;
+  queueReturns: RefObject<QueueReturns>;
   setRunning: Dispatch<SetStateAction<boolean>>;
   setStopping: Dispatch<SetStateAction<boolean>>;
   setTurnUsage: Dispatch<SetStateAction<TurnUsage | null>>;
@@ -130,6 +134,8 @@ export function useThreadSink(): ThreadSink {
   const [items, setItems] = useState<TranscriptItem[]>([]);
   const [todos, setTodos] = useState<TodoItem[]>([]);
   const [queue, setQueue] = useState<string[]>([]);
+  const [queueIds, setQueueIds] = useState<string[]>([]);
+  const queueReturns = useRef<QueueReturns>(new Map());
   const [running, setRunning] = useState(false);
   const [stopping, setStopping] = useState(false);
   const [turnUsage, setTurnUsage] = useState<TurnUsage | null>(null);
@@ -292,6 +298,8 @@ export function useThreadSink(): ThreadSink {
     setItems([]);
     setTodos([]);
     setQueue([]);
+    setQueueIds([]);
+    queueReturns.current.clear();
     setRunning(false);
     setTurnUsage(null);
   }, [resetTransient]);
@@ -303,6 +311,8 @@ export function useThreadSink(): ThreadSink {
       setItems,
       setTodos,
       setQueue,
+      setQueueIds,
+      queueReturns,
       setRunning,
       setStopping,
       setTurnUsage,
@@ -334,8 +344,8 @@ export function useThreadSink(): ThreadSink {
   );
 
   const state = useMemo<ThreadSinkState>(
-    () => ({ jobs, jobsError, items, todos, queue, running, stopping, turnUsage, currentTool, workingSince }),
-    [jobs, jobsError, items, todos, queue, running, stopping, turnUsage, currentTool, workingSince],
+    () => ({ jobs, jobsError, items, todos, queue, queueIds, running, stopping, turnUsage, currentTool, workingSince }),
+    [jobs, jobsError, items, todos, queue, queueIds, running, stopping, turnUsage, currentTool, workingSince],
   );
 
   return useMemo(() => ({ state, ops }), [state, ops]);
@@ -418,7 +428,9 @@ export function applyScopedMessage(
        * without switching the connection's current thread. */
       ops.resetTransient();
       ops.setTodos(parseTodos(msg.todos));
+      ops.queueReturns.current.clear();
       ops.setQueue(parseStringArray(msg.queue));
+      ops.setQueueIds(parseStringArray(msg.queueIds));
       const running = !!msg.running;
       ops.setRunning(running);
       const peekWorking = parseWorking(msg.working, running);
@@ -579,8 +591,12 @@ export function applyScopedMessage(
     case "todo":
       ops.setTodos(parseTodos(msg.items));
       return;
+    case "dequeued":
+      acceptQueueRemoval(ops.queueReturns.current, msg);
+      return;
     case "queue":
       ops.setQueue(parseStringArray(msg.items));
+      ops.setQueueIds(parseStringArray(msg.queueIds));
       return;
     case "done": {
       const usage = msg.usage;

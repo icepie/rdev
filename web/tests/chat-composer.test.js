@@ -31,8 +31,8 @@ it("preserves composer intent across modified keys, image loading and thread swi
   const sent = [];
   let insertDraft;
   const props = {
-    sink: { state: { items: [], todos: [], queue: [], running: false, stopping: false, turnUsage: null, currentTool: "", workingSince: null },
-      ops: { registerScrollEl() {}, pushBubble: vi.fn(), setRunning() {}, setWorkingSince() {} } },
+    sink: { state: { items: [], todos: [], queue: [], queueIds: [], running: false, stopping: false, turnUsage: null, currentTool: "", workingSince: null },
+      ops: { queueReturns: { current: new Map() }, registerScrollEl() {}, pushBubble: vi.fn(), setRunning() {}, setWorkingSince() {} } },
     t: key => key, threadId: "thread-a", device: "device", ready: true,
     sendRaw: payload => { sent.push(payload); return true; },
     emptyHint: "empty", copiedId: null, onCopy() {}, model: "model", models: [],
@@ -100,9 +100,11 @@ it("preserves composer intent across modified keys, image loading and thread swi
     expect(sendButton().disabled).toBe(true);
     expect(document.querySelector('[role="status"]').textContent).toBe("agent.readingImages");
     const first = readers[0];
+    props.sink.ops.queueReturns.current.set("pending-old-thread", () => {});
     props.threadId = "thread-b";
     await render();
     expect(first.abort).toHaveBeenCalledOnce();
+    expect(props.sink.ops.queueReturns.current.size).toBe(0);
     await act(async () => first.finish("data:image/png;base64,b2xk"));
     expect(document.querySelectorAll("img")).toHaveLength(0);
     expect(document.querySelector('[role="status"]')).toBeNull();

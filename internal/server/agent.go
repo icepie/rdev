@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -22,7 +23,7 @@ import (
 // Browser <-> server agent protocol (text JSON frames on /agent?device=<id>).
 // In:  {op:"auth",password} | {op:"chat",text,model?,thread?,images?} | {op:"approve",id,allow,always?} |
 //
-//	{op:"steer",text} | {op:"dequeue",thread?,index} | {op:"new_thread"} | {op:"switch_thread",thread} |
+//	{op:"steer",text} | {op:"dequeue",thread?,queueId,id} (legacy: index) | {op:"new_thread"} | {op:"switch_thread",thread} |
 //	{op:"delete_thread",thread} | {op:"rename_thread",thread,title} |
 //	{op:"set_cwd",path} | {op:"set_permission_mode",mode} |
 //	{op:"set_reasoning_level",level} | {op:"set_auto_approve",value} (legacy) |
@@ -64,6 +65,7 @@ type agentMsg struct {
 	Thread        string              `json:"thread,omitempty"`
 	Threads       []agentThreadInfo   `json:"threads,omitempty"`
 	Todos         []todoItem          `json:"todos,omitempty"`
+	QueueIDs      []string            `json:"queueIds,omitempty"`
 	Queue         []string            `json:"queue,omitempty"`
 	// Live carries the marshaled frames of the in-flight turn in auth_ok and
 	// thread_switched so the browser replays mid-turn UI state; each element
@@ -99,7 +101,9 @@ type agentMsg struct {
 	Images  json.RawMessage `json:"images,omitempty"`
 	Working *agentWorking   `json:"working,omitempty"`
 	// Index is the dequeue payload: position of the queued follow-up to drop.
-	Index int `json:"index,omitempty"`
+	Index   int    `json:"index,omitempty"`
+	QueueID string `json:"queueId,omitempty"`
+	Removed bool   `json:"removed,omitempty"`
 	// Canceled marks stopped frames: true when a running turn was canceled,
 	// false for the idle-stop ack.
 	Canceled bool `json:"canceled,omitempty"`
@@ -263,11 +267,25 @@ const agentApprovalTimeout = 5 * time.Minute
 
 // agentQueuedChat is one chat message waiting behind a running turn.
 type agentQueuedChat struct {
+	id       string
 	steering bool // inject at the next settled model/tool boundary
 	display  json.RawMessage
 	text     string
 	images   []agent.MessageImage
 	model    string // requested model ("" = keep the thread's)
+}
+
+// queueIDs assigns identity once under agentSessionsMu, including entries
+// created by background notifications. Identity survives queue reordering.
+func queueIDs(q []agentQueuedChat) []string {
+	ids := make([]string, len(q))
+	for i := range q {
+		if q[i].id == "" {
+			q[i].id = rand.Text()
+		}
+		ids[i] = q[i].id
+	}
+	return ids
 }
 
 // queueTexts reduces a pending queue to its texts for the queue broadcast.
@@ -974,12 +992,13 @@ func (s *Server) broadcastThreadList(entry *agentSessionEntry) {
 func (s *Server) broadcastQueue(entry *agentSessionEntry, th *agentThread) {
 	s.agentSessionsMu.Lock()
 	items := queueTexts(th.queue)
+	ids := queueIDs(th.queue)
 	s.agentSessionsMu.Unlock()
 	raw, err := json.Marshal(items)
 	if err != nil {
 		return
 	}
-	s.agentBroadcast(entry, agentMsg{Op: "queue", Thread: th.id, Items: raw})
+	s.agentBroadcast(entry, agentMsg{Op: "queue", Thread: th.id, Items: raw, QueueIDs: ids})
 }
 
 // denyApprovalsLocked resolves every pending approval of a thread with deny
@@ -1093,13 +1112,14 @@ func (s *Server) requestApproval(entry *agentSessionEntry, th *agentThread, tc a
 // agentThreadSnapshot is the replay state of one thread for auth_ok,
 // thread_switched, thread_peeked and delete-thread remaps.
 type agentThreadSnapshot struct {
-	history []agentHistoryEntry
-	todos   []todoItem
-	queue   []string
-	running bool
-	working *agentWorking
-	usage   *agentUsage
-	live    []json.RawMessage
+	history  []agentHistoryEntry
+	todos    []todoItem
+	queue    []string
+	queueIDs []string
+	running  bool
+	working  *agentWorking
+	usage    *agentUsage
+	live     []json.RawMessage
 }
 
 // threadSnapshotLocked snapshots a thread for an attacher. History and live
@@ -1110,10 +1130,11 @@ type agentThreadSnapshot struct {
 func (s *Server) threadSnapshotLocked(entry *agentSessionEntry, th *agentThread) agentThreadSnapshot {
 	msgs := th.session.History()
 	snap := agentThreadSnapshot{
-		todos:   th.todos,
-		queue:   queueTexts(th.queue),
-		running: th.running,
-		usage:   th.lastUsage,
+		todos:    th.todos,
+		queue:    queueTexts(th.queue),
+		queueIDs: queueIDs(th.queue),
+		running:  th.running,
+		usage:    th.lastUsage,
 	}
 	if snap.todos == nil {
 		snap.todos = []todoItem{}
@@ -1207,6 +1228,7 @@ func (h *agentWSHandler) establish(ac *agentConn, client *ClientConn) {
 		Threads:        threads,
 		Todos:          snap.todos,
 		Queue:          snap.queue,
+		QueueIDs:       snap.queueIDs,
 		AutoApprove:    permMode == agentPermFull, // legacy field
 		PermissionMode: permMode,
 		ReasoningLevel: reasoningLevel,
@@ -1306,7 +1328,7 @@ func (h *agentWSHandler) OnMessage(socket *gws.Conn, message *gws.Message) {
 	case "steer":
 		h.handleSteer(ac, msg.Text, msg.Thread)
 	case "dequeue":
-		h.handleDequeue(ac, msg.Thread, msg.Index)
+		h.handleDequeueItem(ac, msg.Thread, msg.Index, msg.QueueID, msg.ID)
 	case "stop":
 		if ac.entry == nil {
 			return
@@ -1581,9 +1603,13 @@ func (h *agentWSHandler) handleSteer(ac *agentConn, text, threadRef string) {
 	srv.broadcastQueue(entry, th)
 }
 
-// handleDequeue drops one queued follow-up by index and rebroadcasts the
-// queue so every pane reflects the removal.
+// handleDequeue retains the legacy index operation for older callers.
+// Current browsers use queue identity plus a correlated acknowledgement.
 func (h *agentWSHandler) handleDequeue(ac *agentConn, threadRef string, index int) {
+	h.handleDequeueItem(ac, threadRef, index, "", "")
+}
+
+func (h *agentWSHandler) handleDequeueItem(ac *agentConn, threadRef string, index int, queueID, requestID string) {
 	entry := ac.entry
 	if entry == nil {
 		return
@@ -1595,14 +1621,33 @@ func (h *agentWSHandler) handleDequeue(ac *agentConn, threadRef string, index in
 		threadID = threadRef
 	}
 	th := entry.threads[threadID]
-	removed := false
-	if th != nil && index >= 0 && index < len(th.queue) {
-		th.queue = append(th.queue[:index], th.queue[index+1:]...)
-		entry.lastActive = time.Now()
-		removed = true
+	var removed *agentQueuedChat
+	if th != nil {
+		if queueID != "" {
+			index = -1
+			for i := range th.queue {
+				if th.queue[i].id == queueID {
+					index = i
+					break
+				}
+			}
+		}
+		if index >= 0 && index < len(th.queue) {
+			item := th.queue[index]
+			removed = &item
+			th.queue = append(th.queue[:index], th.queue[index+1:]...)
+			entry.lastActive = time.Now()
+		}
 	}
 	srv.agentSessionsMu.Unlock()
-	if removed {
+	if requestID != "" {
+		reply := agentMsg{Op: "dequeued", Thread: threadID, ID: requestID, QueueID: queueID, Removed: removed != nil}
+		if removed != nil {
+			reply.Text = removed.text
+		}
+		ac.writeJSON(reply)
+	}
+	if th != nil {
 		srv.broadcastQueue(entry, th)
 	}
 }
@@ -1738,16 +1783,17 @@ func (h *agentWSHandler) handleSwitchThread(ac *agentConn, threadID string) {
 
 	// thread_switched is per-connection: only the requester's view changes.
 	ac.writeJSON(agentMsg{
-		Op:      "thread_switched",
-		Thread:  threadID,
-		Model:   model,
-		History: snap.history,
-		Todos:   snap.todos,
-		Queue:   snap.queue,
-		Running: snap.running,
-		Working: snap.working,
-		Live:    snap.live,
-		Usage:   snap.usage,
+		Op:       "thread_switched",
+		Thread:   threadID,
+		Model:    model,
+		History:  snap.history,
+		Todos:    snap.todos,
+		Queue:    snap.queue,
+		QueueIDs: snap.queueIDs,
+		Running:  snap.running,
+		Working:  snap.working,
+		Live:     snap.live,
+		Usage:    snap.usage,
 	})
 	srv.writeAgentPrefs(entry)
 	srv.broadcastThreadList(entry)
@@ -1777,15 +1823,16 @@ func (h *agentWSHandler) handlePeekThread(ac *agentConn, threadID string) {
 	srv.agentSessionsMu.Unlock()
 
 	ac.writeJSON(agentMsg{
-		Op:      "thread_peeked",
-		Thread:  threadID,
-		History: snap.history,
-		Todos:   snap.todos,
-		Queue:   snap.queue,
-		Running: snap.running,
-		Working: snap.working,
-		Live:    snap.live,
-		Usage:   snap.usage,
+		Op:       "thread_peeked",
+		Thread:   threadID,
+		History:  snap.history,
+		Todos:    snap.todos,
+		Queue:    snap.queue,
+		QueueIDs: snap.queueIDs,
+		Running:  snap.running,
+		Working:  snap.working,
+		Live:     snap.live,
+		Usage:    snap.usage,
 	})
 }
 
@@ -1885,16 +1932,17 @@ func (h *agentWSHandler) handleDeleteThread(ac *agentConn, threadID string) {
 		// browsers stay on their thread.
 		for _, conn := range affected {
 			conn.writeJSON(agentMsg{
-				Op:      "thread_switched",
-				Thread:  switchedTo,
-				Model:   switchModel,
-				History: snap.history,
-				Todos:   snap.todos,
-				Queue:   snap.queue,
-				Running: snap.running,
-				Working: snap.working,
-				Live:    snap.live,
-				Usage:   snap.usage,
+				Op:       "thread_switched",
+				Thread:   switchedTo,
+				Model:    switchModel,
+				History:  snap.history,
+				Todos:    snap.todos,
+				Queue:    snap.queue,
+				QueueIDs: snap.queueIDs,
+				Running:  snap.running,
+				Working:  snap.working,
+				Live:     snap.live,
+				Usage:    snap.usage,
 			})
 		}
 		srv.scheduleThreadMetaProbe(entry, switchedTo)

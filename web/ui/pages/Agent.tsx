@@ -845,6 +845,8 @@ export function AgentPage() {
           );
         }
         primaryOps.setQueue(parseStringArray(msg.queue));
+        primaryOps.setQueueIds(parseStringArray(msg.queueIds));
+        primaryOps.queueReturns.current.clear();
         primaryOps.setTodos(parseTodos(msg.todos));
         primaryOps.openToolIds.current.clear();
         const working = parseWorking(msg.working, !!msg.running);
@@ -1044,6 +1046,8 @@ export function AgentPage() {
         threadRef.current = switchThread;
         primaryOps.setTodos(parseTodos(msg.todos));
         primaryOps.setQueue(parseStringArray(msg.queue));
+        primaryOps.setQueueIds(parseStringArray(msg.queueIds));
+        primaryOps.queueReturns.current.clear();
         primaryOps.setRunning(!!msg.running);
         const switchWorking = parseWorking(msg.working, !!msg.running);
         primaryOps.setWorkingSince(switchWorking.since);

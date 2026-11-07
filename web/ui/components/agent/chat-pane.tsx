@@ -1,3 +1,4 @@
+import { requestQueueRemoval } from "./queue-actions";
 import { ThreadNavigation } from "./thread-navigation";
 import { ImagePreview } from "./image-preview";
 import { JobNotification, parseJobNotification, parseJobNotificationData } from "./job-notification";
@@ -146,9 +147,10 @@ export function ChatPaneView({
   onOpenDiff,
 }: ChatPaneViewProps) {
   const { state, ops } = sink;
-  const { items, todos, queue, running, stopping, turnUsage, currentTool, workingSince } = state;
+  const { items, todos, queue, queueIds, running, stopping, turnUsage, currentTool, workingSince } = state;
 
   const draftKey = JSON.stringify([device, threadId]);
+  useEffect(() => () => ops.queueReturns.current.clear(), [draftKey, ops.queueReturns]);
   const [input, setInput] = useComposerTextDraft(draftKey);
   const [pendingImages, setPendingImages] = useComposerDraft(draftKey, EMPTY_COMPOSER_IMAGES);
   const imageReaders = useRef(new Set<FileReader>());
@@ -671,7 +673,7 @@ export function ChatPaneView({
             </div>
             {queue.map((q, i) => (
               <div
-                key={i}
+                key={queueIds[i] ?? i}
                 className="group/queue flex items-center gap-1 rounded-md py-0.5 pr-1 pl-4 text-xs text-muted-foreground transition-colors hover:bg-sidebar-accent"
               >
                 <span className="w-4 shrink-0 text-right text-2xs text-subtle-foreground/75 tabular-nums">
@@ -680,15 +682,10 @@ export function ChatPaneView({
                 <button
                   type="button"
                   title={t("agent.queueEditHint")}
-                  disabled={!ready}
+                  disabled={!ready || !queueIds[i]}
                   className="min-w-0 flex-1 cursor-pointer truncate text-left transition-colors hover:text-foreground"
                   onClick={() => {
-                    const payload: Record<string, unknown> = {
-                      op: "dequeue",
-                      index: i,
-                    };
-                    if (threadId) payload.thread = threadId;
-                    if (sendRaw(payload)) addToChat(q);
+                    requestQueueRemoval(ops.queueReturns.current, sendRaw, threadId, queueIds[i], addToChat);
                   }}
                 >
                   {q}
@@ -697,15 +694,10 @@ export function ChatPaneView({
                   type="button"
                   aria-label={t("agent.queueRemove")}
                   title={t("agent.queueRemove")}
-                  disabled={!ready}
+                  disabled={!ready || !queueIds[i]}
                   className="shrink-0 cursor-pointer rounded p-0.5 text-subtle-foreground/75 opacity-0 transition-opacity group-hover/queue:opacity-100 group-focus-within/queue:opacity-100 pointer-coarse:opacity-100 hover:text-destructive-text disabled:pointer-events-none"
                   onClick={() => {
-                    const payload: Record<string, unknown> = {
-                      op: "dequeue",
-                      index: i,
-                    };
-                    if (threadId) payload.thread = threadId;
-                    sendRaw(payload);
+                    requestQueueRemoval(ops.queueReturns.current, sendRaw, threadId, queueIds[i]);
                   }}
                 >
                   <Icon name="X" className="size-3.5" />
