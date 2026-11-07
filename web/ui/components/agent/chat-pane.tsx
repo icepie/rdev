@@ -628,6 +628,7 @@ export function ChatPaneView({
               <div key={item.key} data-thread-message={item.key}>
               <TurnView
                 turn={item}
+                active={running && ops.turnOpen.current && item.key === lastTurnKey}
                 t={t}
                 copied={copiedId === "t" + item.key}
                 dimmed={item.key !== lastTurnKey}

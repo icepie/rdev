@@ -254,16 +254,19 @@ export function useThreadSink(): ThreadSink {
 
   const appendDelta = useCallback(
     (text: string) => {
-      mutateOpenTurn((turn) => ({ ...turn, text: turn.text + text, streaming: true }));
+      if (!text) return;
+      mutateOpenTurn((turn) => ({ ...turn, text: turn.text + text, streaming: true, streamingReasoning: false }));
     },
     [mutateOpenTurn],
   );
 
   const appendReasoning = useCallback(
     (text: string) => {
+      if (!text) return;
       mutateOpenTurn((turn) => ({
         ...turn,
         reasoning: turn.reasoning + text,
+        streaming: false,
         streamingReasoning: true,
         /* bb "Thought 46s": first frame → latest frame, client wall clock. */
         reasoningStartedAt: turn.reasoningStartedAt ?? Date.now(),
@@ -496,6 +499,8 @@ export function applyScopedMessage(
       ops.setCurrentTool(name);
       ops.mutateOpenTurn((turn) => ({
         ...turn,
+        streaming: false,
+        streamingReasoning: false,
         tools: [
           ...turn.tools.filter((x) => x.id !== id),
           {

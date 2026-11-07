@@ -204,3 +204,34 @@ it('does not carry bottom attachment into a replacement transcript element', asy
   callbacks[0]();
   expect(replacement.scrollTop).toBe(500);
 });
+
+it('tracks reasoning, answer and tool phases without leaving old streaming indicators active', async () => {
+  await frame({ op: 'turn_start', text: 'inspect then answer' });
+  await frame({ op: 'reasoning', text: 'checking' });
+  expect(sink.state.items[1]).toMatchObject({ streaming: false, streamingReasoning: true });
+  await frame({ op: 'delta', text: 'I will inspect' });
+  expect(sink.state.items[1]).toMatchObject({ streaming: true, streamingReasoning: false });
+  await frame({ op: 'tool_start', id: 'read', name: 'read_file' });
+  expect(sink.state.items[1]).toMatchObject({ streaming: false, streamingReasoning: false });
+  expect(sink.state).toMatchObject({ running: true, currentTool: 'read_file' });
+  await frame({ op: 'tool_end', id: 'read', name: 'read_file', result: 'contents' });
+  await frame({ op: 'reasoning', text: 'reviewing contents' });
+  expect(sink.state.items[1]).toMatchObject({ streaming: false, streamingReasoning: true });
+  await frame({ op: 'tool_start', id: 'check', name: 'shell' });
+  expect(sink.state.items[1]).toMatchObject({ streaming: false, streamingReasoning: false });
+  await frame({ op: 'tool_end', id: 'check', name: 'shell', result: 'ok' });
+  await frame({ op: 'delta', text: 'complete' });
+  expect(sink.state.items[1]).toMatchObject({ streaming: true, streamingReasoning: false });
+  await frame({ op: 'done' });
+  expect(sink.state.items[1]).toMatchObject({ streaming: false, streamingReasoning: false });
+  expect(sink.state.running).toBe(false);
+});
+
+it('ignores empty streaming fragments without creating a turn or switching phases', async () => {
+  await frame({ op: 'delta', text: '' });
+  await frame({ op: 'reasoning', text: '' });
+  expect(sink.state.items).toEqual([]);
+  await frame({ op: 'delta', text: 'answer' });
+  await frame({ op: 'reasoning', text: '' });
+  expect(sink.state.items[0]).toMatchObject({ streaming: true, streamingReasoning: false });
+});

@@ -12,7 +12,7 @@ import type { Translator, TurnItem } from "./types";
  * work rows (per-kind ToolRow / collapsed ToolBundleRow via the pure
  * groupTools projection), clickable file chips, usage, and the bb
  * hover-revealed action bar (copy / add to chat / timestamp). Deviations:
- * the bar is only rendered once the turn settles (text && !streaming) so it
+ * the bar is only rendered once the turn settles (text && !active) so it
  * never jumps around while tools keep streaming in; bb renders the h-5 slot
  * for the top-level message regardless. The todo checklist lives in the
  * TodoCard above the composer (bb ThreadTodoCard), not in the transcript.
@@ -20,6 +20,7 @@ import type { Translator, TurnItem } from "./types";
  * last turn render at opacity-40 (`dimmed` from the caller). */
 export function TurnView({
   turn,
+  active,
   t,
   copied,
   dimmed,
@@ -30,6 +31,7 @@ export function TurnView({
   onOpenLocalFile,
 }: {
   turn: TurnItem;
+  active: boolean;
   t: Translator;
   copied: boolean;
   /* Past-turn dimming (bb pastRowDimClassName, work rows only). */
@@ -42,7 +44,7 @@ export function TurnView({
   onOpenDiff?: (path: string) => void;
   onOpenLocalFile?: (link: LocalFileLink) => void;
 }) {
-  const groups = groupTools(turn.tools, turn.streaming);
+  const groups = groupTools(turn.tools, active);
   const workedMs =
     turn.time !== undefined && turn.endedAt !== undefined
       ? Math.max(0, turn.endedAt - turn.time)
@@ -122,7 +124,7 @@ export function TurnView({
           ))}
         </div>
       )}
-      {turn.text && !turn.streaming && (
+      {turn.text && !active && (
         <MessageActionBar
           align="start"
           text={turn.text}
