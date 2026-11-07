@@ -37,6 +37,10 @@ func TestAgentReasoningStreamsAndReplaysBeforeCompletion(t *testing.T) {
 	socket, rec := dialAgentWS(t, server)
 	auth := waitAgentMsg(t, rec.msgs, "auth", func(m agentMsg) bool { return m.Op == "auth_ok" })
 	sendAgentOp(t, socket, `{"op":"chat","text":"inspect"}`)
+	boundary := waitAgentMsg(t, rec.msgs, "assistant boundary", func(m agentMsg) bool { return m.Op == "assistant_start" })
+	if boundary.Thread != auth.Thread {
+		t.Fatalf("boundary thread = %q", boundary.Thread)
+	}
 	for _, expected := range []string{"检查设备", "，再执行。"} {
 		frame := waitAgentMsg(t, rec.msgs, "reasoning delta", func(m agentMsg) bool { return m.Op == "reasoning" })
 		if frame.Thread != auth.Thread || frame.Text != expected {
@@ -47,12 +51,19 @@ func TestAgentReasoningStreamsAndReplaysBeforeCompletion(t *testing.T) {
 	_, reconnected := dialAgentWS(t, server)
 	replay := waitAgentMsg(t, reconnected.msgs, "reconnected auth", func(m agentMsg) bool { return m.Op == "auth_ok" })
 	var thinking string
+	var boundaries int
 	for _, raw := range replay.Live {
 		var frame agentMsg
 		if err := json.Unmarshal(raw, &frame); err != nil {
 			t.Fatal(err)
 		}
+		if frame.Op == "assistant_start" {
+			boundaries++
+		}
 		if frame.Op == "reasoning" {
+			if boundaries != 1 {
+				t.Fatal("replayed reasoning before its unique boundary")
+			}
 			thinking += frame.Text
 		}
 		if frame.Op == "done" {

@@ -72,6 +72,7 @@ func (s *Session) RunTurnWithSteering(ctx context.Context, userText string, imag
 	var total Usage
 	for round := range cfg.MaxTurns {
 		s.compactToolOutputs()
+		emit(Event{Type: EventAssistantStart})
 		assistant, usage, err := streamChat(ctx, cfg, s.History(),
 			func(delta string) {
 				emit(Event{Type: EventTextDelta, Text: delta})

@@ -841,3 +841,51 @@ func TestShellStreamsSurviveTruncationAndHistoryCompaction(t *testing.T) {
 		}
 	}
 }
+
+func TestSessionAssistantBoundariesMatchHistory(t *testing.T) {
+	srv, _ := newFakeProvider(t,
+		sseChunk("Before tools", "First thought", sseToolCall("c1", "shell", `{}`))+sseDone,
+		sseChunk("After tools", "Second thought")+sseDone,
+	)
+	sess := New(testConfig(srv.URL, []Tool{&fakeTool{name: "shell"}}))
+	emit, events := collectEvents()
+	if _, err := sess.Run(context.Background(), "inspect", emit); err != nil {
+		t.Fatal(err)
+	}
+	var responses []Message
+	for _, event := range *events {
+		if event.Type == EventAssistantStart {
+			responses = append(responses, Message{Role: "assistant"})
+			continue
+		}
+		if event.Type != EventTextDelta && event.Type != EventReasoning && event.Type != EventToolStart {
+			continue
+		}
+		if len(responses) == 0 {
+			t.Fatalf("output before response boundary: %s", event.Type)
+		}
+		response := &responses[len(responses)-1]
+		switch event.Type {
+		case EventTextDelta:
+			response.Content += event.Text
+		case EventReasoning:
+			response.Reasoning += event.Text
+		case EventToolStart:
+			response.ToolCalls = append(response.ToolCalls, ToolCall{ID: event.ToolID})
+		}
+	}
+	var history []Message
+	for _, message := range sess.History() {
+		if message.Role == "assistant" {
+			history = append(history, message)
+		}
+	}
+	if len(responses) != 2 || len(history) != len(responses) {
+		t.Fatalf("response boundaries=%d, history=%d", len(responses), len(history))
+	}
+	for i, response := range responses {
+		if response.Content != history[i].Content || response.Reasoning != history[i].Reasoning || len(response.ToolCalls) != len(history[i].ToolCalls) {
+			t.Fatalf("response %d differs from history: %+v / %+v", i, response, history[i])
+		}
+	}
+}

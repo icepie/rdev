@@ -489,6 +489,14 @@ export function applyScopedMessage(
       ops.setCurrentTool(/^\/compact(?:\s|$)/i.test(asString(msg.text)) ? "/compact" : "");
       ops.openToolIds.current.clear();
       return;
+    case "assistant_start":
+      // A model response is a separate message, even when tools keep the
+      // enclosing user turn running. Delay creating it until output arrives.
+      if (ops.turnOpen.current) {
+        ops.mutateOpenTurn(turn => ({ ...turn, streaming: false, streamingReasoning: false }));
+      }
+      ops.turnOpen.current = false;
+      return;
     case "reasoning":
       ops.appendReasoning(asString(msg.text));
       return;

@@ -270,3 +270,63 @@ it('links a question card to the pending ask call rather than its request ID', a
   await frame({ op: 'ask_resolved', id: 'ui-request', answer: 'chosen' });
   expect(sink.state.items[2].answer).toBe('chosen');
 });
+
+it('keeps model responses in history order across tools and reconnect replay', async () => {
+  const frames = [
+    { op: 'turn_start', text: 'inspect', display: { time: 1000 } },
+    { op: 'assistant_start' },
+    { op: 'reasoning', text: 'First thought' },
+    { op: 'delta', text: 'Before tools' },
+    { op: 'tool_start', id: 'read', name: 'read_file', args: '{}' },
+    { op: 'tool_end', id: 'read', name: 'read_file', result: 'file contents' },
+    { op: 'assistant_start' },
+    { op: 'reasoning', text: 'Second thought' },
+    { op: 'delta', text: 'After tools' },
+  ];
+  // A single batched replay must behave like separately delivered frames.
+  await act(async () => frames.forEach(message => applyScopedMessage(sink.ops, message, key => key)));
+  const project = items => items.map(({ kind, text, reasoning, tools }) => ({ kind, text, reasoning, tools: tools?.map(({name, args, result}) => ({name, args, result})) }));
+  const live = project(sink.state.items);
+  expect(sink.state.running).toBe(true);
+  expect(sink.state.workingSince).toBe(1000);
+  expect(sink.state.items).toHaveLength(3);
+  expect(sink.state.items[1]).toMatchObject({ text: 'Before tools', reasoning: 'First thought', streaming: false, streamingReasoning: false });
+  expect(sink.state.items[2]).toMatchObject({ text: 'After tools', reasoning: 'Second thought', streaming: true });
+  await frame({ op: 'thread_peeked', running: true, history: [], live: frames, working: { since: 1000 } });
+  expect(project(sink.state.items)).toEqual(live);
+  await frame({ op: 'done', reasoning: 'Second thought' });
+  expect(project(sink.state.items)).toEqual(live);
+  await frame({ op: 'thread_peeked', history: [
+    { role: 'user', text: 'inspect' },
+    { role: 'assistant', text: 'Before tools', reasoning: 'First thought', tools: [{ name: 'read_file', args: '{}', result: 'file contents' }] },
+    { role: 'assistant', text: 'After tools', reasoning: 'Second thought' },
+  ] });
+  expect(project(sink.state.items)).toEqual(live);
+});
+
+it('does not create an empty message when the next response fails before output', async () => {
+  await frame({ op: 'turn_start', text: 'inspect' });
+  await frame({ op: 'assistant_start' });
+  await frame({ op: 'delta', text: 'Before tools' });
+  await frame({ op: 'tool_start', id: 'read', name: 'read_file' });
+  await frame({ op: 'tool_end', id: 'read', result: 'contents' });
+  await frame({ op: 'assistant_start' });
+  await frame({ op: 'error', message: 'provider unavailable' });
+  expect(sink.state.items.map(item => item.kind)).toEqual(['user', 'turn', 'error']);
+  expect(sink.state.items[1]).toMatchObject({ text: 'Before tools', streaming: false });
+});
+
+it('separates tool-only responses even if the provider reuses a tool call id', async () => {
+  await frame({ op: 'turn_start', text: 'inspect twice' });
+  for (const result of ['first', 'second']) {
+    await frame({ op: 'assistant_start' });
+    await frame({ op: 'tool_start', id: 'call', name: 'read_file' });
+    await frame({ op: 'tool_end', id: 'call', result });
+  }
+  await frame({ op: 'assistant_start' });
+  await frame({ op: 'delta', text: 'Complete' });
+  await frame({ op: 'done' });
+  const turns = sink.state.items.filter(item => item.kind === 'turn');
+  expect(turns.map(turn => turn.text)).toEqual(['', '', 'Complete']);
+  expect(turns.flatMap(turn => turn.tools.map(tool => tool.result))).toEqual(['first', 'second']);
+});
