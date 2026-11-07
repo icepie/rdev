@@ -152,3 +152,10 @@ Local fixture only (`@server` on port 19440); no real user history was deleted.
 - A multi-tool model-response regression cancels after the first read tool, verifies the following write tool (which intentionally ignores context) never executes, checks exactly one provider request, and checks paired history and UI end events. Separate cases cover an already canceled turn and approval returning allow after cancellation.
 - Agent race tests passed. The guard covers cancellation already observed at the execution boundary; an operation already inside Execute still relies on its own cancellation implementation.
 - Full Go suite and server build passed after this change.
+
+## Follow-up: measured output retention hotspot
+
+- Added reproducible backend job-output and client framing benchmarks; results and limits are in `2026-11-08-output-performance.md`.
+- Replaced per-delta tail-string concatenation with bounded ring-buffer storage. Reads/finalization produce immutable snapshots; finalization releases the live buffer. Truncated result/error strings are cloned so they do not retain arbitrarily large original allocations.
+- At 32B deltas over 256KiB with periodic snapshots, three-run median cumulative allocation fell from 311,276,068 to 1,159,810 B/op and time from 29,164,617 to 137,614 ns/op. This is a local retention-path microbenchmark, not end-to-end throughput.
+- UTF-8/chunk-boundary and snapshot regression, full server/client race suites and server build passed.

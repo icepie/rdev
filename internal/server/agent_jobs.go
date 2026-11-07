@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 	"unicode/utf8"
@@ -28,6 +29,7 @@ type agentJobSnapshot struct {
 }
 
 type agentJob struct {
+	output   agentJobOutput
 	snapshot agentJobSnapshot
 	cancel   context.CancelFunc
 	done     chan struct{}
@@ -91,6 +93,8 @@ func (m *agentJobs) run(ctx context.Context, job *agentJob, run func(context.Con
 		}
 		m.mu.Lock()
 		finished := time.Now()
+		job.snapshot.Output = job.output.String()
+		job.output = agentJobOutput{}
 		job.snapshot.Finished = &finished
 		job.snapshot.Result = agentJobTail(result)
 		switch {
@@ -117,7 +121,9 @@ func (m *agentJobs) run(ctx context.Context, job *agentJob, run func(context.Con
 	}()
 	result, err = run(ctx, func(output string) {
 		m.mu.Lock()
-		job.snapshot.Output = agentJobTail(job.snapshot.Output + output)
+		if job.snapshot.Finished == nil {
+			job.output.append(output)
+		}
 		m.mu.Unlock()
 	})
 }
@@ -130,7 +136,9 @@ func agentJobTail(output string) string {
 	for start < len(output) && !utf8.RuneStart(output[start]) {
 		start++
 	}
-	return output[start:]
+	// Do not retain a potentially huge result/error backing string for a
+	// bounded finished-job snapshot. This copy happens only when truncated.
+	return strings.Clone(output[start:])
 }
 
 func (m *agentJobs) List() []agentJobSnapshot {
@@ -151,7 +159,11 @@ func (m *agentJobs) Read(id string) (agentJobSnapshot, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if job := m.jobs[id]; job != nil {
-		return job.snapshot, nil
+		snapshot := job.snapshot
+		if snapshot.Finished == nil {
+			snapshot.Output = job.output.String()
+		}
+		return snapshot, nil
 	}
 	return agentJobSnapshot{}, fmt.Errorf("unknown job %q in this thread", id)
 }
