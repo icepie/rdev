@@ -85,7 +85,8 @@ func (t *connectedDevicesTool) Execute(context.Context, json.RawMessage) (string
 }
 
 type remoteDeviceTool struct {
-	srv *Server
+	srv       *Server
+	arguments agent.ToolArgumentValidator
 }
 
 func (*remoteDeviceTool) Name() string    { return "device_tool" }
@@ -116,6 +117,9 @@ func (t *remoteDeviceTool) Execute(ctx context.Context, raw json.RawMessage) (st
 	}
 	if len(args.Arguments) == 0 {
 		return "", fmt.Errorf("arguments are required")
+	}
+	if err := t.arguments.Validate(tool, args.Arguments); err != nil {
+		return "", fmt.Errorf("invalid arguments for tool %q: %w", args.Tool, err)
 	}
 	return tool.Execute(ctx, args.Arguments)
 }

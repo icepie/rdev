@@ -16,9 +16,10 @@ import (
 // serialize Run calls, but History, SetHistory and Reset are safe to call
 // while a Run is in progress (e.g. a browser reattaching mid-turn).
 type Session struct {
-	cfg     Config
-	mu      sync.Mutex // guards history
-	history []Message
+	cfg           Config
+	mu            sync.Mutex // guards history
+	history       []Message
+	toolArguments ToolArgumentValidator
 }
 
 // Run appends userText to the conversation and drives the model until it
@@ -170,6 +171,9 @@ func (s *Session) executeTool(ctx context.Context, tool Tool, tc ToolCall, args 
 	}
 	if !json.Valid(args) {
 		return fmt.Sprintf("error: malformed arguments JSON: %s", tc.Arguments), true
+	}
+	if err := s.toolArguments.Validate(tool, args); err != nil {
+		return fmt.Sprintf("error: invalid arguments for tool %q: %v", tc.Name, err), true
 	}
 	if s.cfg.Approve != nil {
 		ask := s.cfg.ApproveAll != nil && s.cfg.ApproveAll()
