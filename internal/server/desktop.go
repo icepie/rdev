@@ -14,6 +14,7 @@ import (
 )
 
 type desktopMsg struct {
+	Retryable       bool                          `json:"retryable,omitempty"`
 	Op              string                        `json:"op"`
 	Message         string                        `json:"message,omitempty"`
 	Device          string                        `json:"device,omitempty"`
@@ -99,7 +100,7 @@ func (h *desktopWSHandler) OnOpen(socket *gws.Conn) {
 	client, ok := h.srv.clients[deviceID.(string)]
 	h.srv.mu.RUnlock()
 	if !ok {
-		h.sendJSON(socket, desktopMsg{Op: "error", Message: "device not connected"})
+		h.sendJSON(socket, desktopMsg{Op: "error", Message: "device not connected", Retryable: true})
 		socket.WriteClose(1000, nil)
 		return
 	}

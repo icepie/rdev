@@ -1,3 +1,4 @@
+import { desktopOwnsKeyboard } from "../../lib/desktop-input-focus";
 import { writeOwnedClipboard } from "../../lib/clipboard-write";
 import { paintDesktopImage } from "../../lib/desktop-frame";
 /* PanelDesktop: one device remote-desktop session inside an agent right-panel
@@ -324,7 +325,7 @@ export function PanelDesktop({
   const resizeTimerRef = useRef<number | undefined>(undefined);
   const lastMouseSentRef = useRef(0);
   const lastAdaptiveSizeRef = useRef<{ width: number; height: number } | null>(null);
-  const gpuReconnectDelayRef = useRef(1000);
+  const desktopReconnectDelayRef = useRef(1000);
 
   const frameCountRef = useRef(0);
   const frameBytesRef = useRef(0);
@@ -1212,26 +1213,30 @@ export function PanelDesktop({
 
   /* ── Connect / disconnect ── */
 
-  const nextGPUReconnectDelay = () => {
-    const base = gpuReconnectDelayRef.current;
-    gpuReconnectDelayRef.current = Math.min(30000, gpuReconnectDelayRef.current * 2);
+  const nextDesktopReconnectDelay = () => {
+    const base = desktopReconnectDelayRef.current;
+    desktopReconnectDelayRef.current = Math.min(30000, desktopReconnectDelayRef.current * 2);
     const spread = Math.max(1, Math.floor(base / 5));
     return base - spread + Math.floor(Math.random() * (spread * 2 + 1));
   };
 
-  const scheduleGPUReconnect = (dev: string, connID: number) => {
-    if (manualDisconnectRef.current || connID !== connSeqRef.current || connModeRef.current !== "gpu")
+  const scheduleDesktopReconnect = (dev: string, connID: number) => {
+    const mode = connModeRef.current;
+    if (manualDisconnectRef.current || connID !== connSeqRef.current || !mode || dev !== deviceRef.current)
       return;
-    const delay = nextGPUReconnectDelay();
+    const delay = nextDesktopReconnectDelay();
     clearTimeout(reconnectTimerRef.current);
     reconnectTimerRef.current = window.setTimeout(() => {
       if (
         !manualDisconnectRef.current &&
         connID === connSeqRef.current &&
-        connModeRef.current === "gpu" &&
+        connModeRef.current === mode &&
+        dev === deviceRef.current &&
         visibleRef.current
-      )
-        connectGPUDesktop(dev, true);
+      ) {
+        if (mode === "gpu") connectGPUDesktop(dev, true);
+        else void connect(false, true);
+      }
     }, delay);
   };
 
@@ -1269,7 +1274,7 @@ export function PanelDesktop({
     setCanvasShown(false);
     setGpuEmpty(null);
     lastCloseMsgRef.current = "";
-    gpuReconnectDelayRef.current = 1000;
+    desktopReconnectDelayRef.current = 1000;
     pendingPwRef.current = "";
     gpuAuthPendingRef.current = false;
     setAuthOpen(false);
@@ -1309,7 +1314,7 @@ export function PanelDesktop({
     setStatus(tt("common.connecting"));
     ws.onopen = () => {
       if (connID !== connSeqRef.current || wsRef.current !== ws) return;
-      gpuReconnectDelayRef.current = 1000;
+      desktopReconnectDelayRef.current = 1000;
       setStatus(tRef.current("desktop.starting"));
       gpuSend("GetCapturableList");
       gpuSendConfig();
@@ -1346,7 +1351,7 @@ export function PanelDesktop({
         lastCloseMsgRef.current || tRef.current("desktop.closed"),
         lastCloseMsgRef.current ? "err" : "warn",
       );
-      scheduleGPUReconnect(dev, connID);
+      scheduleDesktopReconnect(dev, connID);
     };
     ws.onmessage = (evt) => {
       if (connID !== connSeqRef.current || wsRef.current !== ws) return;
@@ -1427,8 +1432,10 @@ export function PanelDesktop({
     connectGPUDesktop(dev);
   };
 
-  async function connect(resetFormat = true) {
+  async function connect(resetFormat = true, retry = false) {
+    const retryDelay = desktopReconnectDelayRef.current;
     disconnect();
+    if (retry) desktopReconnectDelayRef.current = retryDelay;
     if (resetFormat) forcedFormatRef.current = null;
     manualDisconnectRef.current = false;
     const dev = deviceRef.current;
@@ -1451,6 +1458,7 @@ export function PanelDesktop({
     lastCloseMsgRef.current = "";
     ws.binaryType = "arraybuffer";
     setStatus(tRef.current("common.connecting"));
+    let retryAfterClose = true;
     ws.onmessage = (evt) => {
       if (connID !== connSeqRef.current || wsRef.current !== ws) return;
       if (evt.data instanceof ArrayBuffer) {
@@ -1473,12 +1481,14 @@ export function PanelDesktop({
         setAuthError("");
         setStatus(tt("desktop.starting"));
       } else if (msg.op === "auth_fail") {
+        retryAfterClose = false;
         forgetDevicePassword(dev);
         pendingPwRef.current = "";
         setAuthError(msg.message || tt("common.passwordWrong"));
       } else if (msg.op === "starting") {
         setStatus(tt("desktop.starting"));
       } else if (msg.op === "ready") {
+        desktopReconnectDelayRef.current = 1000;
         const canvas = canvasRef.current;
         if (canvas) {
           canvas.width = msg.width || 1;
@@ -1515,6 +1525,7 @@ export function PanelDesktop({
             : null,
         );
       } else if (msg.op === "error") {
+        retryAfterClose = msg.retryable === true;
         lastCloseMsgRef.current = msg.message || tt("common.error");
         setStatus(lastCloseMsgRef.current, "err");
       } else if (msg.op === "closed") {
@@ -1540,6 +1551,7 @@ export function PanelDesktop({
         lastCloseMsgRef.current || tRef.current("desktop.closed"),
         lastCloseMsgRef.current ? "err" : "warn",
       );
+      if (retryAfterClose) scheduleDesktopReconnect(dev, connID);
     };
   }
 
@@ -1924,7 +1936,7 @@ export function PanelDesktop({
         on(overlay, type, (e: PointerEvent) => {
           if (!apiRef.current.gpuInputAllowed()) return;
           if (!apiRef.current.gpuPointerTypes().includes(e.pointerType || "mouse")) return;
-          overlay.focus();
+          if (type === "pointerdown") overlay.focus({ preventScroll: true });
           if (type === "pointerdown" && overlay.setPointerCapture)
             overlay.setPointerCapture(e.pointerId);
           const events =
@@ -1956,6 +1968,11 @@ export function PanelDesktop({
         },
         { passive: false },
       );
+      on(overlay, "blur", () => {
+        apiRef.current.gpuReleaseKeyboard();
+        gpuComposingRef.current = false;
+        gpuIgnoreNextTextInputRef.current = false;
+      });
       on(overlay, "keydown", (e: KeyboardEvent) => {
         if (!apiRef.current.gpuInputAllowed()) return;
         if (gpuComposingRef.current || e.isComposing || e.key === "Process" || e.keyCode === 229) {
@@ -2048,7 +2065,7 @@ export function PanelDesktop({
         window,
         "beforeinput",
         (e: InputEvent) => {
-          if (!apiRef.current.gpuInputAllowed()) return;
+          if (!apiRef.current.gpuInputAllowed() || !desktopOwnsKeyboard(overlayRef.current)) return;
           if (
             e.target instanceof HTMLInputElement ||
             e.target instanceof HTMLTextAreaElement ||
@@ -2075,7 +2092,7 @@ export function PanelDesktop({
         window,
         "paste",
         (e: ClipboardEvent) => {
-          if (!apiRef.current.gpuInputAllowed()) return;
+          if (!apiRef.current.gpuInputAllowed() || !desktopOwnsKeyboard(overlayRef.current)) return;
           if (
             e.target instanceof HTMLInputElement ||
             e.target instanceof HTMLTextAreaElement ||
@@ -2093,7 +2110,7 @@ export function PanelDesktop({
         window,
         "compositionstart",
         (e: CompositionEvent) => {
-          if (!apiRef.current.gpuInputAllowed()) return;
+          if (!apiRef.current.gpuInputAllowed() || !desktopOwnsKeyboard(overlayRef.current)) return;
           if (
             e.target instanceof HTMLInputElement ||
             e.target instanceof HTMLTextAreaElement ||
@@ -2110,7 +2127,7 @@ export function PanelDesktop({
         window,
         "compositionend",
         (e: CompositionEvent) => {
-          if (!apiRef.current.gpuInputAllowed()) return;
+          if (!apiRef.current.gpuInputAllowed() || !desktopOwnsKeyboard(overlayRef.current)) return;
           if (
             e.target instanceof HTMLInputElement ||
             e.target instanceof HTMLTextAreaElement ||

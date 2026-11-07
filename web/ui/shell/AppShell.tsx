@@ -457,7 +457,7 @@ export function AppShell() {
             close: () => setMobileNavOpen(false),
           }}
         >
-          <Suspense fallback={<div role="status" className="flex h-full min-h-48 items-center justify-center gap-2 text-sm text-muted-foreground"><Icon name="Loader2" className="size-4 animate-spin motion-reduce:animate-none" />{t("common.loading")}</div>}>
+          <Suspense fallback={<div role="status" className="flex h-full min-h-48 items-center justify-center gap-2 text-sm text-muted-foreground"><Icon name="Spinner" className="size-4 animate-spin motion-reduce:animate-none" />{t("common.loading")}</div>}>
             <Outlet />
           </Suspense>
         </MobileNavContext.Provider>

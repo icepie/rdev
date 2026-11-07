@@ -535,7 +535,7 @@ export function ChatPaneView({
                   data-thread-message={item.key}
                   className="group/message ml-auto flex w-fit max-w-[70%] flex-col items-end"
                 >
-                  {item.steering && <span className="mb-1 flex items-center gap-1 text-xs text-muted-foreground"><Icon name="CornerUpLeft" className="size-3" />Steer</span>}
+                  {item.steering && <span className="mb-1 flex items-center gap-1 text-xs text-muted-foreground"><Icon name="CornerDownRight" className="size-3" />Steer</span>}
                   {item.images && item.images.length > 0 && (
                     <div className="mb-1 flex max-w-full flex-wrap justify-end gap-1">
                       {item.images.map((name, i) => item.imagePreviews?.[i] ? (

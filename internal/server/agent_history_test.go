@@ -276,3 +276,32 @@ func TestHistoryCleanupDoesNotRaceNewDeviceWrites(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+func TestAgentOutcomeSurvivesReopenRewriteAndReset(t *testing.T) {
+	st := newTestStore(t)
+	for _, outcome := range []string{"error", "stopped", "done", "running"} {
+		st.saveOutcome("device", "thread", "fixture", outcome)
+		reopened := newAgentSessionStore(st.dir, time.Hour)
+		metas := reopened.listThreads("device")
+		if len(metas) != 1 || metas[0].Outcome != outcome {
+			t.Fatalf("outcome lost on reopen: %+v", metas)
+		}
+		reopened.replace("device", "thread", "fixture", []agent.Message{{Role: "user", Content: "retained"}})
+		again := newAgentSessionStore(st.dir, time.Hour).listThreads("device")
+		if len(again) != 1 || again[0].Outcome != outcome {
+			t.Fatalf("outcome lost on rewrite: %+v", again)
+		}
+	}
+	if restoredAgentOutcome("running") != "stopped" {
+		t.Fatal("interrupted execution restored as running")
+	}
+	st.clear("device", "thread")
+	if metas := newAgentSessionStore(st.dir, time.Hour).listThreads("device"); len(metas) != 0 {
+		t.Fatalf("reset retained outcome: %+v", metas)
+	}
+	st.save("device", "thread", "fixture", []agent.Message{{Role: "user", Content: "new"}})
+	if metas := newAgentSessionStore(st.dir, time.Hour).listThreads("device"); len(metas) != 1 || metas[0].Outcome != "" {
+		t.Fatalf("reset inherited old outcome: %+v", metas)
+	}
+
+}

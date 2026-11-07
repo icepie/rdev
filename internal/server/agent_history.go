@@ -39,6 +39,7 @@ type agentHistoryToolCall struct {
 
 // agentHistoryLine is one JSONL record: meta (t=="meta") or message (t=="msg").
 type agentHistoryLine struct {
+	Outcome       string                 `json:"outcome,omitempty"`
 	Display       json.RawMessage        `json:"display,omitempty"`
 	ImagePreviews []string               `json:"imagePreviews,omitempty"`
 	T             string                 `json:"t"`
@@ -80,8 +81,9 @@ type agentHistoryTool struct {
 
 // agentThreadMeta describes one persisted thread of a device.
 type agentThreadMeta struct {
-	ID    string
-	Title string // explicit meta title if set, else derived from the first user message
+	Outcome string
+	ID      string
+	Title   string // explicit meta title if set, else derived from the first user message
 	// MetaTitle is the explicit title stored in the meta line ("" when the
 	// thread was never renamed).
 	MetaTitle string
@@ -104,8 +106,9 @@ type agentSessionStore struct {
 // agentThreadExtras are the meta-line fields (besides the model) carried
 // through rewrites: the thread's working directory and explicit title.
 type agentThreadExtras struct {
-	Cwd   string
-	Title string
+	Outcome string
+	Cwd     string
+	Title   string
 }
 
 func newAgentSessionStore(dir string, ttl time.Duration) *agentSessionStore {
@@ -215,6 +218,7 @@ func (st *agentSessionStore) listThreads(deviceID string) []agentThreadMeta {
 			Model:     model,
 			Cwd:       cwd,
 			UpdatedAt: updated,
+			Outcome:   st.extras[deviceID+"/"+threadID].Outcome,
 		})
 	}
 	sort.Slice(metas, func(i, j int) bool { return metas[i].UpdatedAt.After(metas[j].UpdatedAt) })
@@ -274,7 +278,14 @@ func (st *agentSessionStore) loadLocked(deviceID, threadID string) (msgs []agent
 				cwd = line.Cwd
 				title = line.Title
 				updated, _ = time.Parse(time.RFC3339, line.Updated)
-				st.extras[deviceID+"/"+threadID] = agentThreadExtras{Cwd: cwd, Title: title}
+				st.extras[deviceID+"/"+threadID] = agentThreadExtras{Cwd: cwd, Title: title, Outcome: validatedAgentOutcome(line.Outcome)}
+			}
+		case "outcome":
+			if outcome := validatedAgentOutcome(line.Outcome); outcome != "" {
+				key := deviceID + "/" + threadID
+				extras := st.extras[key]
+				extras.Outcome = outcome
+				st.extras[key] = extras
 			}
 		case "msg":
 			switch line.Role {
@@ -410,7 +421,7 @@ func (st *agentSessionStore) rewriteLocked(deviceID, threadID, model string, msg
 	var buf bytes.Buffer
 	meta, err := json.Marshal(agentHistoryLine{
 		T: "meta", V: agentHistoryVersion, Device: deviceID, Thread: threadID, Model: model,
-		Cwd: extras.Cwd, Title: extras.Title,
+		Cwd: extras.Cwd, Title: extras.Title, Outcome: extras.Outcome,
 		Updated: time.Now().UTC().Format(time.RFC3339),
 	})
 	if err != nil {
@@ -495,6 +506,10 @@ func (st *agentSessionStore) clear(deviceID, threadID string) {
 		log.Printf("agent history: clear %s/%s: %v", deviceID, threadID, err)
 	}
 	delete(st.saved, deviceID+"/"+threadID)
+	key := deviceID + "/" + threadID
+	extras := st.extras[key]
+	extras.Outcome = ""
+	st.extras[key] = extras
 	// st.extras is kept: a reset thread lives on in memory and its next save
 	// must re-persist cwd/title. Deleted threads drop extras via dropExtras.
 }
@@ -646,4 +661,57 @@ func (s *Server) agentStore() *agentSessionStore {
 		}
 	})
 	return s.agentStoreInst
+}
+
+func validatedAgentOutcome(outcome string) string {
+	switch outcome {
+	case "done", "error", "stopped", "running":
+		return outcome
+	}
+	return ""
+}
+
+// A small append record preserves the outcome even when a command failed
+// before producing history. Normal saves remain incremental, not full rewrites.
+// The caller holds the thread persistence lock to serialize reset/deletion.
+func (st *agentSessionStore) saveOutcome(deviceID, threadID, model, outcome string) {
+	outcome = validatedAgentOutcome(outcome)
+	if outcome == "" {
+		return
+	}
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	path := st.path(deviceID, threadID)
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		if err := st.rewriteLocked(deviceID, threadID, model, nil); err != nil {
+			log.Printf("agent history: outcome %s/%s: %v", deviceID, threadID, err)
+			return
+		}
+	}
+	data, _ := json.Marshal(agentHistoryLine{T: "outcome", Outcome: outcome})
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0600)
+	if err == nil {
+		_, err = f.Write(append(data, '\n'))
+		closeErr := f.Close()
+		if err == nil {
+			err = closeErr
+		}
+	}
+	if err != nil {
+		log.Printf("agent history: outcome %s/%s: %v", deviceID, threadID, err)
+		return
+	}
+	key := deviceID + "/" + threadID
+	extras := st.extras[key]
+	extras.Outcome = outcome
+	st.extras[key] = extras
+}
+
+// A running marker read from disk has no surviving foreground process after
+// restart. Report interruption instead of reviving its previous success.
+func restoredAgentOutcome(outcome string) string {
+	if outcome == "running" {
+		return "stopped"
+	}
+	return validatedAgentOutcome(outcome)
 }

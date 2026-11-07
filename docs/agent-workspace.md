@@ -56,3 +56,6 @@ Agent 的 write_file/edit 使用按设备与路径隔离、可取消的写入锁
 - client 非 PTY 取消现在终止进程；Linux/macOS/BSD 使用独立进程组覆盖同组子进程，其他平台目前终止直接进程。定时输出与最终 flush 串行，缓冲区复用，避免尾部消息越过退出消息；流式 UI 滚动每动画帧合并一次。
 
 参考：本地 BB `f51e6b0` 的主题、TerminalOutputBlock、ThreadTableOfContents；OMP `rpc-types.ts` 的独立图片／事件和会话命令边界；Hope `docs/architecture/infra/canvas.md` 的隔离预览设计。rdev 使用向后兼容的增量协议，不宣称可直接替换 OMP RPC 客户端。
+
+- 前台轮次结果（done/error/stopped）持久化到会话历史；启动前先记录 running，重启恢复时将中断轮次显示为 stopped。重置会话会清除旧结果。该状态不表示所有后台任务成功。
+- 桌面普通流与 GPU 流均按退避策略重连；设备暂时离线允许重试，密码错误停止自动重试，手动断开和设备切换取消旧连接重试。GPU 全局粘贴/IME 仅发送到当前获得焦点的桌面，鼠标悬停不抢焦点。

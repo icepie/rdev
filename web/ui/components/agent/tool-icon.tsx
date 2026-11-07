@@ -1,7 +1,7 @@
-import { Icon } from "../icon";
+import { Icon, type BuiltinIconName } from "../icon";
 
-const TOOL_ICON_NAMES: Record<string, string> = {
-  canvas: "Layout",
+const TOOL_ICON_NAMES: Record<string, BuiltinIconName> = {
+  canvas: "AppWindow",
   shell: "ComputerTerminal01",
   read_file: "File",
   write_file: "EditFile",

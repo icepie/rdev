@@ -33,7 +33,7 @@ export function JobNotification({ job, t }: { job: AgentJob; t: Translator }) {
     <div className="min-w-0 py-1">
       <button type="button" aria-expanded={open} onClick={() => setOpen(value => !value)}
         className="flex w-full min-w-0 cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-muted-foreground hover:bg-state-hover focus-visible:outline focus-visible:outline-ring">
-        <Icon name={job.state === "failed" ? "CircleAlert" : "ListTodo"} className="size-3.5 shrink-0" />
+        <Icon name={job.state === "failed" ? "AlertCircle" : "ListTodo"} className="size-3.5 shrink-0" />
         <span className="shrink-0">{t("agent.jobs.title")} · {t(`agent.jobs.${job.state}`)}</span>
         <span className="min-w-0 truncate" title={job.label}>{job.label}</span>
         <Icon name={open ? "ChevronDown" : "ChevronRight"} className="ml-auto size-3 shrink-0" />

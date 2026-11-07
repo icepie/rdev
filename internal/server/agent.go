@@ -658,6 +658,7 @@ func (s *Server) agentSessionFor(deviceID string, client *ClientConn) (*agentSes
 			msgs, savedModel, cwd, title := store.load(deviceID, meta.ID)
 			th := s.newAgentThreadLocked(entry, meta.ID, msgs, cwd, title)
 			th.updatedAt = meta.UpdatedAt
+			th.lastOutcome = restoredAgentOutcome(meta.Outcome)
 			// Per-thread model: a thread restored with a different model
 			// keeps it instead of being retargeted to the entry default.
 			if savedModel != "" && savedModel != th.model {
@@ -922,6 +923,7 @@ func (s *Server) collectAllThreads() []agentDeviceThreads {
 		for _, m := range metas {
 			threads = append(threads, agentThreadInfo{
 				ID:        m.ID,
+				Outcome:   restoredAgentOutcome(m.Outcome),
 				Title:     m.Title,
 				UpdatedAt: m.UpdatedAt.UTC().Format(time.RFC3339),
 			})
@@ -2426,7 +2428,32 @@ func (s *Server) runAgentTurn(entry *agentSessionEntry, th *agentThread, turn ag
 		}
 	}
 
+	// Record admission before execution, without holding the global session
+	// lock during disk I/O. Reset/delete share the thread persistence lock.
+	th.persistMu.Lock()
+	s.agentSessionsMu.Lock()
+	admitted := th.epoch == startEpoch && entry.threads[th.id] == th
+	s.agentSessionsMu.Unlock()
+	if admitted {
+		if store := s.agentStore(); store != nil {
+			store.saveOutcome(entry.deviceID, th.id, turnModel, "running")
+		}
+	}
+	th.persistMu.Unlock()
+	if !admitted {
+		cancel()
+		return
+	}
+
 	historyReplaced, runErr := runAgentConversation(ctx, sess, text, images, emit)
+	outcome := "done"
+	if runErr != nil {
+		if ctx.Err() == context.Canceled {
+			outcome = "stopped"
+		} else {
+			outcome = "error"
+		}
+	}
 	timing, _ := json.Marshal(map[string]int64{"time": turn.started, "endedAt": time.Now().UnixMilli()})
 	if !historyReplaced {
 		sess.AnnotateTurn(turn.historyIndex, turn.display, timing)
@@ -2445,6 +2472,7 @@ func (s *Server) runAgentTurn(entry *agentSessionEntry, th *agentThread, turn ag
 			} else {
 				store.save(entry.deviceID, th.id, turnModel, sess.History())
 			}
+			store.saveOutcome(entry.deviceID, th.id, turnModel, outcome)
 		}
 	}
 	// Remain running until persistence completes.
@@ -2454,8 +2482,8 @@ func (s *Server) runAgentTurn(entry *agentSessionEntry, th *agentThread, turn ag
 	// terminal broadcast (reset_ok already closed the transcript).
 	epochOK := th.epoch == startEpoch
 	var terminal agentMsg
-	switch {
-	case runErr == nil:
+	switch outcome {
+	case "done":
 		terminal = agentMsg{
 			Op:        "done",
 			Thread:    th.id,
@@ -2470,7 +2498,7 @@ func (s *Server) runAgentTurn(entry *agentSessionEntry, th *agentThread, turn ag
 			terminal.Compacted = true
 			terminal.History = renderAgentHistory(sess.History())
 		}
-	case ctx.Err() == context.Canceled:
+	case "stopped":
 		terminal = agentMsg{Op: "stopped", Thread: th.id, Canceled: true}
 	default:
 		terminal = agentMsg{Op: "error", Thread: th.id, Message: runErr.Error()}
