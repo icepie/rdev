@@ -31,9 +31,11 @@ interface ShellResult {
 }
 
 function parseShellResult(result: string): ShellResult | null {
+  // Transport output may contain CRLF (including Windows command results).
+  const normalized = result.replace(/\r\n/g, "\n");
   const m =
     /^([^\n]*)\n<stdout>\n([\s\S]*?)\n<\/stdout>\n<stderr>\n([\s\S]*?)\n<\/stderr>\s*$/.exec(
-      result,
+      normalized,
     );
   if (!m) return null;
   const code = /^exit code: (-?\d+)$/.exec(m[1]);

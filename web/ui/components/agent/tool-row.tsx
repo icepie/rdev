@@ -254,7 +254,17 @@ function ToolRowBody({
   );
 }
 
-export function ToolRow({ tool, t, dimmed, onOpenFile, onOpenDiff }: RowProps) {
+export function ToolRow({ tool: originalTool, t, dimmed, onOpenFile, onOpenDiff }: RowProps) {
+  // device_tool returns the inner tool's output unchanged. Use its schema for
+  // presentation only; retain the original call ID, result, and device label.
+  const remote = originalTool.name === "device_tool" ? parseArgs(originalTool.args) : null;
+  const remoteArgs = remote?.arguments;
+  const isRemote = typeof remote?.device === "string" && typeof remote?.tool === "string"
+    && remoteArgs !== null && typeof remoteArgs === "object" && !Array.isArray(remoteArgs);
+  const tool = isRemote
+    ? { ...originalTool, name: remote.tool as string, args: JSON.stringify(remoteArgs) }
+    : originalTool;
+  const device = isRemote ? remote.device as string : null;
   /* bb terminalFrontierRowIds: running command rows stay expanded and
    * collapse when settled; userOpen ?? auto makes a manual toggle stick. */
   const [userOpen, setUserOpen] = useState<boolean | null>(null);
@@ -312,6 +322,11 @@ export function ToolRow({ tool, t, dimmed, onOpenFile, onOpenDiff }: RowProps) {
         ) : (
           <span className="min-w-0 flex-1 truncate font-medium text-foreground opacity-70">
             {rowTarget(tool)}
+          </span>
+        )}
+        {device && (
+          <span className="max-w-28 shrink truncate text-xs text-muted-foreground" title={device}>
+            {device}
           </span>
         )}
         {stats && (
