@@ -36,3 +36,23 @@ go test -race ./internal/client
 ```
 
 随机分块回归覆盖 1B/7B/1KiB/32KiB/64KiB、中文和 emoji 的任意字节边界、超限输入、重复环绕及旧快照不变。已有运行中读取、完成、取消、异常、保留淘汰、后台与 subagent 测试仍通过。完整服务端和客户端 race suite、服务端构建通过。
+
+## 前台会话重连回放
+
+服务端原先逐条保留每个 delta/reasoning 的完整 JSON。现在只合并小于 256B 的相邻同类、同线程文字增量，每块最多 8KiB；较大增量直接保存原帧。工具、审批、指导和终止帧都会结束当前块。实时 WebSocket 推送频率不变，正文不截断。快照复制列表并单独编码当前待写块，后续追加和 reset 不会修改旧快照。
+
+每次操作产生 256KiB 文本；两条路径都逐增量序列化实时推送帧，最后生成一份独立回放快照。下表为三次 200ms 样本中位数。与同机测试并行运行，未隔离 CPU；时间列不能证明端到端提速。replay bytes 为快照中 JSON 字节总和，不含 slice/对象头，不等于 RSS；B/op 是累计分配。
+
+| 增量 | 原/新回放帧 | 原/新 replay bytes | 原/新 ns/op | 原/新 B/op | 原/新 allocs/op |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 32B | 8192 / 32 | 606208 / 263488 | 7494343 / 7423486 | 18386015 / 18352530 | 24639 / 24821 |
+| 1KiB | 256 / 256 | 272896 / 272896 | 457816 / 361078 | 843574 / 843620 | 780 / 780 |
+
+明确收益是 32B 小增量场景的回放帧数减少 256 倍，JSON 体积减少约 56.5%；并不宣称总分配次数下降，测试中小增量分配次数略增。1KiB 场景采用直接保存路径，无体积收益。尚未测量真实浏览器重连延迟或服务端 RSS。
+
+回归覆盖中文/emoji/引号/换行、思考与正文切换、工具/审批/指导边界、大增量、线程边界、旧快照不变和 reset 清理。已有真实 SSE→WebSocket 思考重连回归继续通过。
+
+```sh
+go test ./internal/server -run '^$' -bench '^BenchmarkAgentReplay$' -benchmem -count=3 -benchtime=200ms
+go test -race ./internal/server -run 'TestAgentReplay|TestAgentReasoningStreamsAndReplaysBeforeCompletion|TestResetRejectsLateTurnEvents|TestAgentStop|TestApprovalSurvivesBrowserReconnect'
+```

@@ -69,7 +69,7 @@ func TestResetBeforeTurnGoroutineStartsCannotRestoreHistory(t *testing.T) {
 	srv.agentSessionsMu.Unlock()
 	(&agentWSHandler{srv: srv}).handleReset(&agentConn{entry: entry, current: th.id, deviceID: entry.deviceID}, th.id)
 	srv.runAgentTurn(entry, th, turn, "/compact", nil)
-	if len(th.session.History()) != 0 || len(th.live) != 0 {
+	if len(th.session.History()) != 0 || len(th.live.Snapshot()) != 0 {
 		t.Fatal("old turn restored reset history")
 	}
 	history, _, _, _ := srv.agentStore().load(entry.deviceID, th.id)

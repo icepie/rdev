@@ -32,11 +32,11 @@ func TestResetRejectsLateTurnEvents(t *testing.T) {
 			t.Fatalf("accepted late event: %v", event.Type)
 		}
 	}
-	if len(th.live) != 0 || th.lastUsage != nil || len(th.todos) != 0 || th.workingTool != "" || len(th.turnFiles) != 0 {
+	if len(th.live.Snapshot()) != 0 || th.lastUsage != nil || len(th.todos) != 0 || th.workingTool != "" || len(th.turnFiles) != 0 {
 		t.Fatal("late events repopulated reset state")
 	}
 	// Current events must still stream and replay normally.
-	if !srv.emitAgentTurnEvent(entry, th, th.epoch, agent.Event{Type: agent.EventTextDelta, Text: "current"}) || len(th.live) != 1 {
+	if !srv.emitAgentTurnEvent(entry, th, th.epoch, agent.Event{Type: agent.EventTextDelta, Text: "current"}) || len(th.live.Snapshot()) != 1 {
 		t.Fatal("current event was lost")
 	}
 }

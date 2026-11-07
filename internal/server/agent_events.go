@@ -53,7 +53,7 @@ func (s *Server) emitAgentTurnEvent(entry *agentSessionEntry, th *agentThread, e
 	if msg.Op != "" {
 		data, _ = json.Marshal(msg)
 		if data != nil {
-			th.live = append(th.live, json.RawMessage(data))
+			th.live.Append(msg, data)
 		}
 	}
 	s.agentSessionsMu.Unlock()

@@ -368,7 +368,7 @@ type agentThread struct {
 	// terminal frame) so a browser switching in mid-turn can replay the
 	// exact UI state; cleared at the next turn start, read only while
 	// running (idle attach replays full history instead).
-	live []json.RawMessage
+	live agentReplayBuffer
 }
 
 // Permission modes: how much of the agent's tool use needs browser
@@ -810,7 +810,7 @@ func (s *Server) agentBroadcastTurn(entry *agentSessionEntry, th *agentThread, m
 		return
 	}
 	s.agentSessionsMu.Lock()
-	th.live = append(th.live, json.RawMessage(data))
+	th.live.Append(msg, data)
 	s.agentSessionsMu.Unlock()
 	s.agentBroadcastData(entry, data)
 	if msg.Op == "turn_start" {
@@ -1164,7 +1164,7 @@ func (s *Server) threadSnapshotLocked(entry *agentSessionEntry, th *agentThread)
 			msgs = msgs[:th.turnHistIdx]
 		}
 		snap.working = &agentWorking{Since: th.workingSince.UTC().Format(time.RFC3339Nano), Tool: th.workingTool}
-		snap.live = append([]json.RawMessage(nil), th.live...)
+		snap.live = th.live.Snapshot()
 	}
 	snap.history = renderAgentHistory(msgs)
 	if snap.history == nil {
@@ -1715,7 +1715,7 @@ func (h *agentWSHandler) handleReset(ac *agentConn, threadRef string) {
 	th.outcomeAt = ""
 	th.alwaysAllow = make(map[string]bool)
 	th.branch = ""
-	th.live = nil
+	th.live.Reset()
 	th.updatedAt = time.Now()
 	denyApprovalsLocked(th)
 	srv.agentSessionsMu.Unlock()
@@ -2459,7 +2459,7 @@ func (s *Server) startAgentTurnLocked(entry *agentSessionEntry, th *agentThread,
 		th.workingTool = "/compact"
 	}
 	th.updatedAt = th.workingSince
-	th.live = nil
+	th.live.Reset()
 	th.turnHistIdx = len(th.session.History())
 	entry.lastActive = th.workingSince
 	ctx, cancel := context.WithCancel(context.Background())
@@ -2629,7 +2629,7 @@ func (s *Server) runAgentTurn(entry *agentSessionEntry, th *agentThread, turn ag
 		th.outcomeAt = outcomeAt
 		if data, err := json.Marshal(terminal); err == nil {
 			terminalData = data
-			th.live = append(th.live, json.RawMessage(data))
+			th.live.Append(terminal, data)
 		}
 	}
 	th.running = false

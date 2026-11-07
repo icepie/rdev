@@ -64,7 +64,8 @@ func TestCompactCommandPersistsAndPublishesReplacement(t *testing.T) {
 	waitFor(t, "compaction turn finished", func() bool { srv.agentSessionsMu.Lock(); defer srv.agentSessionsMu.Unlock(); return !thread.running })
 	srv.agentSessionsMu.Lock()
 	var terminal agentMsg
-	err = json.Unmarshal(thread.live[len(thread.live)-1], &terminal)
+	live := thread.live.Snapshot()
+	err = json.Unmarshal(live[len(live)-1], &terminal)
 	expected := thread.session.History()
 	srv.agentSessionsMu.Unlock()
 	if err != nil {

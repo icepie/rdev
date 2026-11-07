@@ -246,3 +246,10 @@ Local fixture only (`@server` on port 19440); no real user history was deleted.
 - Self-contained schema references are supported; external network/file references are disabled. Tests cover required fields, null/type errors, closed objects, nested arrays, enum/integer/range constraints, local references, broken schemas and external references.
 - HTTP model-loop regression verifies an invalid write call skips approval/execution, retains its paired error, and a corrected explicit empty write succeeds on the next round. Actual write_file/bg/jobs/subagent schemas are exercised through HTTP provider calls. A server-mode routing regression checks invalid nested write/shell calls emit zero device messages.
 - Agent race and full server race suites passed before extracting the validator for nested routing; focused Agent/server schema regressions passed under race detection after extraction. Final full Go suite and embedded server build passed.
+
+## Compact live replay for long outputs
+
+- Replaced per-delta retained JSON with a thread-owned replay buffer. Only adjacent text/reasoning deltas smaller than 256 bytes are coalesced, up to 8KiB per block. Larger frames and all lifecycle/tool/approval/steering frames preserve their original payload and order. Live broadcasts remain unbatched.
+- Snapshot and reset regressions verify complete Unicode/escaped content, immutable old snapshots, thread and lifecycle boundaries, and no prior-turn text after reset. Existing actual SSE/WebSocket reasoning reconnect coverage also exercises the new buffer.
+- Benchmark and limits are recorded in output-performance.md: 256KiB delivered in 32B deltas changes replay from 8192 frames/606208 JSON bytes to 32 frames/263488 bytes. This measures replay storage, not RSS or end-to-end reconnect latency.
+- Validation: complete server race suite passed before the large-delta bypass refinement; final focused replay/reconnect/stop/approval race tests, full Go suite and embedded server build passed after refinement. No browser latency or visual test was added in this change.
