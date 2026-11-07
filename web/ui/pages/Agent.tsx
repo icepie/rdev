@@ -1,3 +1,4 @@
+import { discardComposerTextDraft } from "../components/agent/use-composer-text-draft";
 import { AgentConnectionError } from "../components/agent/connection-error";
 import { threadIdentity, useThreadUnread } from "../hooks/use-thread-unread";
 import { useDevicePassword } from "../hooks/use-device-password";
@@ -725,6 +726,7 @@ export function AgentPage() {
             (asString(msg.id) && pendingDeleteRef.current.requestID !== asString(msg.id)) ||
             pendingDeleteRef.current.id !== frameThread ||
             pendingDeleteRef.current.device !== asString(msg.device)) break;
+        discardComposerTextDraft(JSON.stringify([asString(msg.device), frameThread]));
         pendingDeleteRef.current = null;
         setDeleteBusy(false);
         setDeleteTarget((target) =>

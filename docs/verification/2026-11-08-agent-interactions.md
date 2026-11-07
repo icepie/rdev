@@ -124,3 +124,10 @@ Local fixture only (`@server` on port 19440); no real user history was deleted.
 - Wire tests cover multiple images mixed with text-only results, trailing result groups, intact source history, malformed/oversized/truncated previews and user text that resembles the preview envelope. A real two-round httptest HTTP exchange runs a read-preview fixture tool and checks the next provider request contains image_url while the tool_end UI event retains the original preview.
 - Agent race tests passed. These are protocol/transport checks; the fixture response is not evidence of an actual model's vision quality. Existing bounded preview resolution and model vision capability remain practical limits.
 - Full `go test ./...` and server build also passed after the provider conversion.
+
+## Follow-up: deleted conversation drafts
+
+- The matching successful thread_deleted response now clears the device/thread text draft from the shared live store and tab sessionStorage. Canceled or failed delete attempts do not clear it. This cleanup applies to the requesting browser; other browser tabs retain their own tab-scoped storage until separately reconciled.
+- Hook regression verifies mirrored consumers clear, another device with the same thread ID retains its draft, and module reload does not resurrect the deleted draft.
+- Native browser created a disposable empty @server conversation and typed a draft. Canceling the delete dialog retained the exact saved value; reopening and confirming deletion removed its storage key and cleared the visible composer.
+- 141 Web tests, TypeScript, frontend build and embedded server build passed.

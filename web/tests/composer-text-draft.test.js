@@ -30,9 +30,17 @@ it("keeps drafts isolated, synchronizes matching panes, and restores after modul
     await show();
     expect(snapshots.left[0]).toBe("left text");
     expect(snapshots.right[0]).toBe("right text");
-    await act(async () => snapshots.left[1](""));
+    const { discardComposerTextDraft } = await import("../ui/components/agent/use-composer-text-draft");
+    await act(async () => discardComposerTextDraft('["a","thread"]'));
     expect(snapshots.mirror[0]).toBe("");
     expect(sessionStorage.getItem('rdev-composer-text:["a","thread"]')).toBeNull();
+    expect(snapshots.right[0]).toBe("right text");
+    await act(async () => root.unmount());
+    vi.resetModules();
+    hook = (await import("../ui/components/agent/use-composer-text-draft")).useComposerTextDraft;
+    root = createRoot(document.createElement("div"));
+    await show();
+    expect(snapshots.left[0]).toBe("");
     expect(snapshots.right[0]).toBe("right text");
   } finally {
     await act(async () => root.unmount());
