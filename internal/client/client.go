@@ -1533,7 +1533,6 @@ func (c *Client) startShellExecSession(msg *protocol.Message) (*clientSession, e
 	} else {
 		cmd = exec.CommandContext(ctx, shell)
 	}
-	configureExecCancellation(cmd)
 	cmd.Env = append(os.Environ(), msg.Env...)
 
 	stdinR, stdinW, err := os.Pipe()
@@ -1559,7 +1558,8 @@ func (c *Client) startShellExecSession(msg *protocol.Message) (*clientSession, e
 	cmd.Stdout = stdoutW
 	cmd.Stderr = stderrW
 
-	if err := cmd.Start(); err != nil {
+	releaseProcess, err := startExecCommand(cmd)
+	if err != nil {
 		stdinR.Close()
 		stdinW.Close()
 		stdoutR.Close()
@@ -1581,6 +1581,7 @@ func (c *Client) startShellExecSession(msg *protocol.Message) (*clientSession, e
 	}
 	sess.stdinPipe = wincompat.EncodeInput(stdinW)
 	sess.cmdWaitFn = func() (int, error) {
+		defer releaseProcess()
 		err := cmd.Wait()
 		if err == nil {
 			return 0, nil

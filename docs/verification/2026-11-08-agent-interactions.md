@@ -24,7 +24,7 @@ Used a separate local server at port 19440, isolated browser context, seeded rev
 
 ## Boundaries
 
-No production deployment occurred. The original full-resolution sent image is not persisted; the bounded preview is. Older history cannot recover absent timestamps or image data. Windows currently cancels only the direct non-PTY process; Unix process-group tests ran on Linux, not macOS hardware. The canvas is an isolated retained call preview, not Hope's complete artifact/version/export platform. Hardware GPU capture and the complete active-state animation/overlay matrix remain separate acceptance work.
+No production deployment occurred. The original full-resolution sent image is not persisted; the bounded preview is. Older history cannot recover absent timestamps or image data. Windows non-PTY process-tree cancellation now uses Job Objects and has isolated Wine coverage (see follow-up below), but Windows hardware is not verified; Unix process-group tests ran on Linux, not macOS hardware. The canvas is an isolated retained call preview, not Hope's complete artifact/version/export platform. Hardware GPU capture and the complete active-state animation/overlay matrix remain separate acceptance work.
 
 ## Follow-up: desktop isolation and durable outcomes
 
@@ -138,3 +138,10 @@ Local fixture only (`@server` on port 19440); no real user history was deleted.
 - Extended the actual WebSocket deletion race regression to two browsers. It checks the requester receives its request ID, the peer receives an uncorrelated notification with the exact device/thread, both are switched away from the deleted thread, active work is canceled, and late completion cannot resurrect persisted history.
 - Targeted server race tests, 141 Web tests, TypeScript and frontend/server builds passed. Browsers disconnected throughout deletion do not receive this live notification; their tab-scoped stale drafts are not claimed to be pruned by this change.
 - Full server race suite also passed after the deletion broadcast change.
+
+## Follow-up: Windows command-tree cancellation
+
+- Each non-PTY Windows execution now owns an unnamed Job Object with kill-on-close. The shell starts suspended, is assigned to the job, then resumes; cancellation is serialized with setup so an early cancellation cannot terminate an empty job and miss the process. Cancel terminates descendants; after Wait, closing the job also removes surviving descendants. Startup failure kills/reaps the suspended process and releases the job handle.
+- Initial Windows runtime test exposed Go argument quoting breaking a quoted executable path through cmd.exe. For cmd.exe /c, preserve the raw command tail via SysProcAttr.CmdLine; other executable argument handling remains standard.
+- Built a Windows amd64 test executable and ran it under Wine 11.21 in a new isolated /tmp prefix on Xvfb :98. Tests start a shell -> helper -> grandchild tree using an executable path containing spaces, cancel it, wait for the grandchild process handle to signal exit, and verify an independent concurrent session completes. Repeated close, canceled-before-start, cancellation during startup, and missing executable cases pass.
+- Linux client race tests and full Go suite passed. Windows amd64 and arm64 client binaries cross-build successfully. Wine validates these Windows API paths in compatibility emulation; native Windows job nesting/service-host policies and Windows/macOS hardware remain unverified. No production deployment.

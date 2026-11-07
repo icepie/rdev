@@ -11,7 +11,7 @@ import (
 
 // Each command owns a process group, so canceling a shell also stops its
 // children without signaling another concurrent session.
-func configureExecCancellation(cmd *exec.Cmd) {
+func startExecCommand(cmd *exec.Cmd) (func(), error) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error {
 		err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
@@ -20,4 +20,5 @@ func configureExecCancellation(cmd *exec.Cmd) {
 		}
 		return err
 	}
+	return func() {}, cmd.Start()
 }
