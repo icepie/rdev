@@ -1080,7 +1080,7 @@ export function ChatPaneView({
                 ))}
               </DropdownMenuContent>
             </DropdownMenu>
-            {totalTokens > 0 && (
+            {totalTokens > 0 && (turnUsage === null || contextWindow === undefined) && (
               <span className="whitespace-nowrap text-xs text-muted-foreground">
                 {t("agent.tokensTotal", { tokens: formatTokenCount(totalTokens) })}
               </span>
@@ -1090,6 +1090,7 @@ export function ChatPaneView({
             {turnUsage !== null && contextWindow !== undefined && (
               <ContextWindowIndicator
                 used={turnUsage.inputTokens}
+                totalTokens={totalTokens}
                 contextWindow={contextWindow}
                 t={t}
               />

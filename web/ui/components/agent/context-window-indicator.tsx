@@ -1,14 +1,10 @@
 import { cn } from "../../lib/utils";
 import { Popover, PopoverContent, PopoverTrigger } from "../popover";
+import { formatTokenCount } from "./protocol";
 import type { Translator } from "./types";
 
-/* bb ThreadContextWindowIndicator: 16px ring gauge in the status strip +
- * click popover with a bar gauge and token counts. Deviations: bb opens
- * the popover on hover (useHoverPopover) — the vendored Popover is
- * click-only (contract-sanctioned); the trigger is size-6, not bb's
- * size-8, because the rdev status strip is a fixed 24px overflow-hidden
- * row. Details/cost rows are not ported (no per-category snapshot or cost
- * data on the wire). */
+/* Shared footer entry: cumulative usage beside the context-window ring.
+ * The popover reports the latest input snapshot, not cumulative billing usage. */
 
 const compactTokens = new Intl.NumberFormat("en-US", {
   notation: "compact",
@@ -30,11 +26,13 @@ const CIRCUMFERENCE = 2 * Math.PI * RADIUS;
 
 export function ContextWindowIndicator({
   used,
+  totalTokens,
   contextWindow,
   t,
 }: {
   /* usage.inputTokens of the thread's latest completed turn. */
   used: number;
+  totalTokens?: number;
   /* Current model's context window (> 0). */
   contextWindow: number;
   t: Translator;
@@ -47,13 +45,13 @@ export function ContextWindowIndicator({
       <PopoverTrigger asChild>
         <button
           type="button"
-          aria-label={t("agent.contextWindowUsed", { pct })}
-          className="-m-1 inline-flex size-8 cursor-pointer items-center justify-center rounded-full transition-colors hover:bg-state-hover focus-visible:ring-2 focus-visible:ring-ring"
+          aria-label={[totalTokens !== undefined ? t("agent.tokensTotal", { tokens: formatTokenCount(totalTokens) }) : "", t("agent.contextWindowUsed", { pct })].filter(Boolean).join(", ")}
+          className="inline-flex h-6 shrink-0 cursor-pointer items-center justify-center gap-2 whitespace-nowrap rounded-md px-1.5 text-xs tabular-nums text-muted-foreground transition-colors hover:bg-state-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
-          <span className={cn("hidden text-xs tabular-nums max-md:inline", tone)}>
-            {pct}%
-          </span>
-          <svg viewBox="0 0 16 16" className={cn("size-4", tone)}>
+          {totalTokens !== undefined && (
+            <span>{t("agent.tokensTotal", { tokens: formatTokenCount(totalTokens) })}</span>
+          )}
+          <svg aria-hidden="true" viewBox="0 0 16 16" className={cn("size-4 shrink-0", tone)}>
             <circle
               cx="8"
               cy="8"
