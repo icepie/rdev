@@ -144,9 +144,11 @@ export function useThreadSink(): ThreadSink {
   const turnOpen = useRef(false);
   const openToolIds = useRef<Set<string>>(new Set());
   const scrollEl = useRef<HTMLDivElement | null>(null);
+  const scrollAnchor = useRef<{ element: HTMLDivElement; top: number; follow: boolean } | null>(null);
 
   const registerScrollEl = useCallback((el: HTMLDivElement | null) => {
     scrollEl.current = el;
+    scrollAnchor.current = null;
   }, []);
 
   const scrollFrame = useRef<number | null>(null);
@@ -157,11 +159,20 @@ export function useThreadSink(): ThreadSink {
     if (scrollFrame.current !== null) window.cancelAnimationFrame(scrollFrame.current);
   }, []);
   const scrollDown = useCallback((force?: boolean) => {
+    // Capture attachment before React commits a taller row. Measuring only
+    // afterward mistakes content growth for the user leaving the bottom.
+    const el = scrollEl.current;
+    if (el && !scrollAnchor.current) {
+      scrollAnchor.current = {
+        element: el, top: el.scrollTop,
+        follow: el.scrollHeight - el.scrollTop - el.clientHeight < 120,
+      };
+    }
     requestedForce.current ||= !!force;
     setScrollRequest(request => request + 1);
   }, []);
-  // Schedule only after React has committed restored/streamed rows. A frame
-  // requested inside the socket handler can otherwise measure the old DOM.
+  // Write only after React commits restored/streamed rows. Attachment above
+  // is captured against the old geometry; the destination uses the new DOM.
   useLayoutEffect(() => {
     if (!scrollRequest) return;
     forceScroll.current ||= requestedForce.current;
@@ -172,9 +183,14 @@ export function useThreadSink(): ThreadSink {
       const forced = forceScroll.current;
       forceScroll.current = false;
       const el = scrollEl.current;
+      const anchor = scrollAnchor.current;
+      scrollAnchor.current = null;
       if (!el) return;
       const near = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
-      if (forced || near) el.scrollTop = el.scrollHeight;
+      // An upward scroll while the frame was pending cancels automatic
+      // following. Never apply another pane's captured attachment.
+      const followed = anchor?.element === el && anchor.follow && el.scrollTop >= anchor.top;
+      if (forced || near || followed) el.scrollTop = el.scrollHeight;
     });
   }, [scrollRequest]);
 

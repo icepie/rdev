@@ -163,3 +163,44 @@ it('shows reasoning before completion and finalizes it without duplication', asy
   });
   expect(sink.state.running).toBe(false);
 });
+
+it('keeps following when a streamed block grows beyond the bottom threshold', async () => {
+  const callbacks = [];
+  window.requestAnimationFrame = callback => { callbacks.push(callback); return callbacks.length; };
+  const el = { scrollHeight: 1000, scrollTop: 800, clientHeight: 200 };
+  sink.ops.registerScrollEl(el);
+  await act(async () => sink.ops.appendDelta('a tall code block'));
+  el.scrollHeight = 1800; // committed content grew by more than the 120px threshold
+  await act(async () => sink.ops.appendDelta('more content before the same animation frame'));
+  el.scrollHeight = 2200;
+  expect(callbacks).toHaveLength(1);
+  callbacks[0]();
+  expect(el.scrollTop).toBe(2200);
+});
+
+it('does not pull the reader back down after an upward scroll before paint', async () => {
+  const callbacks = [];
+  window.requestAnimationFrame = callback => { callbacks.push(callback); return callbacks.length; };
+  const el = { scrollHeight: 1000, scrollTop: 800, clientHeight: 200 };
+  sink.ops.registerScrollEl(el);
+  await act(async () => sink.ops.appendDelta('new content'));
+  el.scrollHeight = 1800;
+  el.scrollTop = 500;
+  callbacks[0]();
+  expect(el.scrollTop).toBe(500);
+  await act(async () => sink.ops.appendDelta('still streaming'));
+  el.scrollHeight = 2200;
+  callbacks[1]();
+  expect(el.scrollTop).toBe(500);
+});
+
+it('does not carry bottom attachment into a replacement transcript element', async () => {
+  const callbacks = [];
+  window.requestAnimationFrame = callback => { callbacks.push(callback); return callbacks.length; };
+  sink.ops.registerScrollEl({ scrollHeight: 1000, scrollTop: 800, clientHeight: 200 });
+  await act(async () => sink.ops.appendDelta('old pane'));
+  const replacement = { scrollHeight: 2000, scrollTop: 500, clientHeight: 200 };
+  sink.ops.registerScrollEl(replacement);
+  callbacks[0]();
+  expect(replacement.scrollTop).toBe(500);
+});
