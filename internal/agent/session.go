@@ -163,6 +163,12 @@ func (s *Session) findTool(name string) Tool {
 // unknown tool, malformed arguments, denied approval, Execute error — to an
 // error text result so the model can see what went wrong and recover.
 func (s *Session) executeTool(ctx context.Context, tool Tool, tc ToolCall, args json.RawMessage) (result string, isErr bool) {
+	// Keep the tool/result pair valid even if an implementation panics.
+	defer func() {
+		if failure := recover(); failure != nil {
+			result, isErr = fmt.Sprintf("error: internal tool failure: %v", failure), true
+		}
+	}()
 	if err := ctx.Err(); err != nil {
 		return "error: " + err.Error(), true
 	}

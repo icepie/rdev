@@ -281,3 +281,10 @@ Local fixture only (`@server` on port 19440); no real user history was deleted.
 - Normal completion checks generation, thread identity and context ownership before changing running state, approvals or queue. Panic recovery applies the same ownership check, so a late old tool failure cannot clear a replacement turn or publish its error against that turn.
 - A deterministic gated tool deliberately ignores cancellation until released. Tests reset its thread, admit a new gated turn, install a pending approval and queue entry, then release the old tool normally or with a panic. The replacement remains running with its own context/approval/queue intact and completes with only its own persisted history. The reset-before-admission regression now also asserts the thread is not left busy.
 - Focused new ownership regressions passed 10 consecutive runs under race detection; reset/WebSocket late-event regressions passed three runs earlier. Full Go suite, full server race suite and embedded server build passed.
+
+## Unexpected execution failures settle through the normal lifecycle
+
+- The outer panic fallback previously released running state but bypassed persistence and queue admission. Execution now converts tool panics into failed, paired tool results; unexpected conversation/provider failures return an error through the ordinary finalizer so queued work proceeds. The outer fallback remains for unexpected lifecycle/plumbing failures.
+- A compaction that already replaced history records that fact before emitting UI events, preserving replacement persistence even if event delivery unexpectedly fails.
+- Model-loop regression verifies a panicking tool emits ToolEnd with IsError, preserves its call/result pair and lets the model respond to the failure. Queue regressions simulate a failing explicit tool command and a panicking provider RoundTripper; each admits and persists the queued command afterward. Focused regressions, including reset ownership, passed five consecutive race runs.
+- Final validation: full Go suite, complete Agent/server race suites and embedded server build passed.

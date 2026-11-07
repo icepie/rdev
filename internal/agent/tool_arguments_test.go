@@ -102,3 +102,31 @@ func TestInvalidOrExternalToolSchemaCannotExecute(t *testing.T) {
 		}
 	}
 }
+
+type panickingExecutionTool struct{ fakeTool }
+
+func (*panickingExecutionTool) Execute(context.Context, json.RawMessage) (string, error) {
+	panic("fixture failure")
+}
+
+func TestToolPanicBecomesPairedErrorAndModelCanContinue(t *testing.T) {
+	provider, _ := newFakeProvider(t,
+		sseChunk("", "", sseToolCall("failed", "probe", `{}`))+sseDone,
+		sseChunk("reported failure", "")+sseDone,
+	)
+	tool := &panickingExecutionTool{fakeTool{name: "probe"}}
+	session := New(testConfig(provider.URL, []Tool{tool}))
+	emit, events := collectEvents()
+	answer, err := session.Run(context.Background(), "inspect", emit)
+	if err != nil || answer != "reported failure" {
+		t.Fatalf("answer=%q error=%v", answer, err)
+	}
+	history := session.History()
+	if len(history) != 4 || history[2].ToolCallID != "failed" || !strings.Contains(history[2].Content, "internal tool failure") {
+		t.Fatalf("panic lost tool/result pair: %+v", history)
+	}
+	ends := eventsOfType(*events, EventToolEnd)
+	if len(ends) != 1 || !ends[0].IsError {
+		t.Fatalf("panic lifecycle=%+v", ends)
+	}
+}

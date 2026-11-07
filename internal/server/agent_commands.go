@@ -14,6 +14,13 @@ import (
 // management. historyReplaced tells persistence to replace, rather than append,
 // even when a summary happens to contain the same number of messages.
 func runAgentConversation(ctx context.Context, sess *agent.Session, text string, images []agent.MessageImage, emit func(agent.Event), steering ...func() *agent.Message) (historyReplaced bool, err error) {
+	// Return unexpected execution failures through the normal turn finalizer
+	// so persistence, terminal replay and queued work still settle together.
+	defer func() {
+		if failure := recover(); failure != nil {
+			err = fmt.Errorf("internal conversation failure: %v", failure)
+		}
+	}()
 	command, argument := splitAgentCommand(text)
 	if command == "/bg" || command == "/subagent" {
 		name, args, err := agentCommandTool(command, argument)
@@ -34,6 +41,7 @@ func runAgentConversation(ctx context.Context, sess *agent.Session, text string,
 	if err != nil {
 		return false, err
 	}
+	historyReplaced = true
 	const message = "Context compacted. The latest conversation and its tool results were preserved."
 	emit(agent.Event{Type: agent.EventTextDelta, Text: message})
 	emit(agent.Event{Type: agent.EventDone, Text: message, Usage: usage})
