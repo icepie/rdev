@@ -1691,11 +1691,12 @@ func (h *agentWSHandler) handleReset(ac *agentConn, threadRef string) {
 		return
 	}
 	defer th.persistMu.Unlock()
-	var cancel context.CancelFunc
-	if th.running {
-		th.epoch++
-		cancel = th.cancel
-	}
+	cancel := th.cancel
+	th.epoch++
+	th.running = false
+	th.cancel = nil
+	th.turnCtx = nil
+	th.workingTool = ""
 	if th.jobs != nil {
 		th.jobs.Close()
 		th.jobs = nil
@@ -2508,12 +2509,19 @@ func (s *Server) runAgentTurn(entry *agentSessionEntry, th *agentThread, turn ag
 		if r := recover(); r != nil {
 			log.Printf("PANIC in agent turn for %s/%s: %v", entry.deviceID, th.id, r)
 			s.agentSessionsMu.Lock()
-			th.running = false
-			th.cancel = nil
-			th.turnCtx = nil
+			current := th.epoch == startEpoch && entry.threads[th.id] == th && th.turnCtx == ctx
+			if current {
+				th.running = false
+				th.cancel = nil
+				th.turnCtx = nil
+				th.workingTool = ""
+				denyApprovalsLocked(th)
+			}
 			s.agentSessionsMu.Unlock()
 			cancel()
-			s.agentBroadcast(entry, agentMsg{Op: "error", Thread: th.id, Message: fmt.Sprintf("internal error: %v", r)})
+			if current {
+				s.agentBroadcast(entry, agentMsg{Op: "error", Thread: th.id, Message: fmt.Sprintf("internal error: %v", r)})
+			}
 		}
 	}()
 
@@ -2596,10 +2604,15 @@ func (s *Server) runAgentTurn(entry *agentSessionEntry, th *agentThread, turn ag
 	}
 	// Remain running until persistence completes.
 	s.agentSessionsMu.Lock()
-	// A reset mid-turn bumped the epoch: the pre-reset conversation is gone,
-	// so skip the save (it would resurrect cleared history) and the
-	// terminal broadcast (reset_ok already closed the transcript).
-	epochOK := th.epoch == startEpoch
+	// Reset/delete may have admitted a replacement while this turn unwound.
+	// Its state, approvals and queue belong to that replacement, so an old
+	// completion must not clear or drain them (nor publish a terminal frame).
+	if th.epoch != startEpoch || entry.threads[th.id] != th || th.turnCtx != ctx {
+		s.agentSessionsMu.Unlock()
+		th.persistMu.Unlock()
+		cancel()
+		return
+	}
 	var terminal agentMsg
 	switch outcome {
 	case "done":
@@ -2624,13 +2637,11 @@ func (s *Server) runAgentTurn(entry *agentSessionEntry, th *agentThread, turn ag
 	}
 	terminal.Display = timing
 	var terminalData []byte
-	if epochOK {
-		th.lastOutcome = terminal.Op
-		th.outcomeAt = outcomeAt
-		if data, err := json.Marshal(terminal); err == nil {
-			terminalData = data
-			th.live.Append(terminal, data)
-		}
+	th.lastOutcome = terminal.Op
+	th.outcomeAt = outcomeAt
+	if data, err := json.Marshal(terminal); err == nil {
+		terminalData = data
+		th.live.Append(terminal, data)
 	}
 	th.running = false
 	th.cancel = nil

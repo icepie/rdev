@@ -72,6 +72,9 @@ func TestResetBeforeTurnGoroutineStartsCannotRestoreHistory(t *testing.T) {
 	if len(th.session.History()) != 0 || len(th.live.Snapshot()) != 0 {
 		t.Fatal("old turn restored reset history")
 	}
+	if th.running || th.cancel != nil || th.turnCtx != nil {
+		t.Fatal("reset before admission left the thread permanently busy")
+	}
 	history, _, _, _ := srv.agentStore().load(entry.deviceID, th.id)
 	if len(history) != 0 {
 		t.Fatal("old turn resurrected history on disk")
