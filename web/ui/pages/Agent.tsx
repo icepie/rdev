@@ -1,3 +1,4 @@
+import { AgentConnectionError } from "../components/agent/connection-error";
 import { threadIdentity, useThreadUnread } from "../hooks/use-thread-unread";
 import { useDevicePassword } from "../hooks/use-device-password";
 import { shouldTogglePanel } from "../components/agent/panel-shortcut";
@@ -2790,9 +2791,7 @@ export function AgentPage() {
         </div>
       </div>
       {status === "disconnected" && authError && (
-        <div role="alert" className="shrink-0 break-words border-b border-border-seam px-4 py-2 text-xs text-destructive-text">
-          {authError}
-        </div>
+        <AgentConnectionError message={authError} t={t} />
       )}
 
       <SplitContainer
