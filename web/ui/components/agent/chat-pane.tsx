@@ -57,7 +57,6 @@ import {
   MAX_IMAGES,
   PERM_MODES,
   REASONING_LEVELS,
-  formatTokenCount,
   nextKey,
   type ModelInfo,
   type PendingImage,
@@ -181,16 +180,6 @@ export function ChatPaneView({
   const workingLabel = currentTool
     ? t("agent.workingWithTool", { seconds: elapsedSeconds, tool: currentTool })
     : t("agent.working", { seconds: elapsedSeconds });
-
-  const totalTokens = useMemo(() => {
-    let sum = 0;
-    for (const item of items) {
-      if (item.kind === "turn" && item.usage) {
-        sum += (item.usage.inputTokens || 0) + (item.usage.outputTokens || 0);
-      }
-    }
-    return sum;
-  }, [items]);
 
   /* bb Add to chat: insert the message source into the composer (no
    * blockquote — the rdev composer has no quote rendering). */
@@ -1080,17 +1069,11 @@ export function ChatPaneView({
                 ))}
               </DropdownMenuContent>
             </DropdownMenu>
-            {totalTokens > 0 && (turnUsage === null || contextWindow === undefined) && (
-              <span className="whitespace-nowrap text-xs text-muted-foreground">
-                {t("agent.tokensTotal", { tokens: formatTokenCount(totalTokens) })}
-              </span>
-            )}
             {/* bb context-window ring: needs both a usage snapshot and a
              * model with a known context window. */}
             {turnUsage !== null && contextWindow !== undefined && (
               <ContextWindowIndicator
                 used={turnUsage.inputTokens}
-                totalTokens={totalTokens}
                 contextWindow={contextWindow}
                 t={t}
               />

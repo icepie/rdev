@@ -4,7 +4,7 @@ import { createRoot } from "react-dom/client";
 import { expect, it } from "vitest";
 import { ContextWindowIndicator } from "../ui/components/agent/context-window-indicator";
 
-it("opens context details from the cumulative token entry without conflating their counts", async () => {
+it("opens context details from a ring without a visible token count", async () => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;
   const host = document.createElement("div");
   document.body.append(host);
@@ -12,10 +12,10 @@ it("opens context details from the cumulative token entry without conflating the
   const t = (key, vars) => `${key} ${Object.values(vars || {}).join(" / ")}`;
   try {
     await act(async () => root.render(createElement(ContextWindowIndicator, {
-      used: 32000, contextWindow: 128000, totalTokens: 70800, t,
+      used: 32000, contextWindow: 128000, t,
     })));
     const button = host.querySelector("button");
-    expect(button.textContent).toContain("70.8k");
+    expect(button.textContent).toBe("");
     expect(button.getAttribute("aria-label")).toContain("25");
     await act(async () => button.click());
     const details = document.querySelector('[role="dialog"]');
