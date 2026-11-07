@@ -237,6 +237,7 @@ type agentWorking struct {
 
 // agentThreadInfo is one thread in a thread_list / auth_ok broadcast.
 type agentThreadInfo struct {
+	OutcomeAt      string `json:"outcomeAt,omitempty"`
 	Outcome        string `json:"outcome,omitempty"`
 	BackgroundJobs int    `json:"backgroundJobs,omitempty"`
 	ID             string `json:"id"`
@@ -315,8 +316,9 @@ type agentThread struct {
 	toolPaths    map[string]string      // in-flight tool call id -> path arg (edit/write_file)
 	turnFiles    []string               // files changed by edit/write_file this turn
 	workingSince time.Time              // current turn start
-	lastOutcome  string                 // latest foreground turn: done, error, stopped
-	workingTool  string                 // currently executing tool name
+	outcomeAt    string
+	lastOutcome  string // latest foreground turn: done, error, stopped
+	workingTool  string // currently executing tool name
 	updatedAt    time.Time
 	// lastUsage is the token accounting of the most recent completed turn,
 	// replayed in auth_ok/thread_switched for the context-usage indicator.
@@ -659,6 +661,7 @@ func (s *Server) agentSessionFor(deviceID string, client *ClientConn) (*agentSes
 			th := s.newAgentThreadLocked(entry, meta.ID, msgs, cwd, title)
 			th.updatedAt = meta.UpdatedAt
 			th.lastOutcome = restoredAgentOutcome(meta.Outcome)
+			th.outcomeAt = meta.OutcomeAt
 			// Per-thread model: a thread restored with a different model
 			// keeps it instead of being retargeted to the entry default.
 			if savedModel != "" && savedModel != th.model {
@@ -855,6 +858,7 @@ func agentThreadListLocked(entry *agentSessionEntry) []agentThreadInfo {
 			UpdatedAt: th.updatedAt.UTC().Format(time.RFC3339),
 			Running:   th.running,
 			Outcome:   th.lastOutcome,
+			OutcomeAt: th.outcomeAt,
 			Model:     th.model,
 		}
 		if th.jobs != nil {
@@ -924,6 +928,7 @@ func (s *Server) collectAllThreads() []agentDeviceThreads {
 			threads = append(threads, agentThreadInfo{
 				ID:        m.ID,
 				Outcome:   restoredAgentOutcome(m.Outcome),
+				OutcomeAt: m.OutcomeAt,
 				Title:     m.Title,
 				UpdatedAt: m.UpdatedAt.UTC().Format(time.RFC3339),
 			})
@@ -1633,6 +1638,7 @@ func (h *agentWSHandler) handleReset(ac *agentConn, threadRef string) {
 	th.queue = nil
 	th.lastUsage = nil
 	th.lastOutcome = ""
+	th.outcomeAt = ""
 	th.alwaysAllow = make(map[string]bool)
 	th.branch = ""
 	th.live = nil
@@ -2436,7 +2442,7 @@ func (s *Server) runAgentTurn(entry *agentSessionEntry, th *agentThread, turn ag
 	s.agentSessionsMu.Unlock()
 	if admitted {
 		if store := s.agentStore(); store != nil {
-			store.saveOutcome(entry.deviceID, th.id, turnModel, "running")
+			store.saveOutcome(entry.deviceID, th.id, turnModel, "running", "")
 		}
 	}
 	th.persistMu.Unlock()
@@ -2446,6 +2452,7 @@ func (s *Server) runAgentTurn(entry *agentSessionEntry, th *agentThread, turn ag
 	}
 
 	historyReplaced, runErr := runAgentConversation(ctx, sess, text, images, emit)
+	outcomeAt := time.Now().UTC().Format(time.RFC3339Nano)
 	outcome := "done"
 	if runErr != nil {
 		if ctx.Err() == context.Canceled {
@@ -2472,7 +2479,7 @@ func (s *Server) runAgentTurn(entry *agentSessionEntry, th *agentThread, turn ag
 			} else {
 				store.save(entry.deviceID, th.id, turnModel, sess.History())
 			}
-			store.saveOutcome(entry.deviceID, th.id, turnModel, outcome)
+			store.saveOutcome(entry.deviceID, th.id, turnModel, outcome, outcomeAt)
 		}
 	}
 	// Remain running until persistence completes.
@@ -2507,6 +2514,7 @@ func (s *Server) runAgentTurn(entry *agentSessionEntry, th *agentThread, turn ag
 	var terminalData []byte
 	if epochOK {
 		th.lastOutcome = terminal.Op
+		th.outcomeAt = outcomeAt
 		if data, err := json.Marshal(terminal); err == nil {
 			terminalData = data
 			th.live = append(th.live, json.RawMessage(data))

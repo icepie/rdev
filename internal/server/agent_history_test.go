@@ -280,15 +280,15 @@ func TestHistoryCleanupDoesNotRaceNewDeviceWrites(t *testing.T) {
 func TestAgentOutcomeSurvivesReopenRewriteAndReset(t *testing.T) {
 	st := newTestStore(t)
 	for _, outcome := range []string{"error", "stopped", "done", "running"} {
-		st.saveOutcome("device", "thread", "fixture", outcome)
+		st.saveOutcome("device", "thread", "fixture", outcome, "2026-11-08T01:00:00.123456789Z")
 		reopened := newAgentSessionStore(st.dir, time.Hour)
 		metas := reopened.listThreads("device")
-		if len(metas) != 1 || metas[0].Outcome != outcome {
+		if len(metas) != 1 || metas[0].Outcome != outcome || metas[0].OutcomeAt != "2026-11-08T01:00:00.123456789Z" {
 			t.Fatalf("outcome lost on reopen: %+v", metas)
 		}
 		reopened.replace("device", "thread", "fixture", []agent.Message{{Role: "user", Content: "retained"}})
 		again := newAgentSessionStore(st.dir, time.Hour).listThreads("device")
-		if len(again) != 1 || again[0].Outcome != outcome {
+		if len(again) != 1 || again[0].Outcome != outcome || again[0].OutcomeAt != metas[0].OutcomeAt {
 			t.Fatalf("outcome lost on rewrite: %+v", again)
 		}
 	}

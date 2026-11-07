@@ -73,3 +73,41 @@ it("restores unread and observes a completion across reload without marking old 
     delete globalThis.IS_REACT_ACT_ENVIRONMENT;
   }
 });
+
+it("detects unseen turns across reload without treating renames or initial history as unread", async () => {
+  globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  sessionStorage.clear();
+  let rows = [
+    { device: "a", id: "thread", running: false, outcomeAt: "completion-1" },
+    { device: "b", id: "thread", running: false },
+  ];
+  let openIds = new Set();
+  let unread;
+  function Harness() { unread = useThreadUnread(rows, "a", openIds); return null; }
+  let root = createRoot(document.createElement("div"));
+  const render = () => act(async () => root.render(createElement(Harness)));
+  try {
+    await render();
+    expect(unread.size).toBe(0);
+    rows = rows.map(row => ({ ...row, title: "renamed", updatedAt: "newer" }));
+    await render();
+    expect(unread.size).toBe(0);
+    await act(async () => root.unmount());
+    rows = rows.map(row => ({ ...row, outcomeAt: "completion-2" }));
+    root = createRoot(document.createElement("div"));
+    await render();
+    expect(unread.size).toBe(2);
+    openIds = new Set(["thread"]);
+    await render();
+    expect([...unread]).toEqual([threadIdentity("b", "thread")]);
+    // Reset and metadata updates do not manufacture another completion.
+    rows = rows.map(row => ({ ...row, outcomeAt: undefined }));
+    openIds = new Set();
+    await render();
+    expect([...unread]).toEqual([threadIdentity("b", "thread")]);
+  } finally {
+    await act(async () => root.unmount());
+    sessionStorage.clear();
+    delete globalThis.IS_REACT_ACT_ENVIRONMENT;
+  }
+});

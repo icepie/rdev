@@ -86,6 +86,7 @@ export interface TodoItem {
 }
 
 export interface ThreadInfo {
+  outcomeAt?: string;
   outcome?: "done" | "error" | "stopped";
   backgroundJobs?: number;
   waiting?: "approval" | "answer";

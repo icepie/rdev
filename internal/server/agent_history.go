@@ -39,6 +39,7 @@ type agentHistoryToolCall struct {
 
 // agentHistoryLine is one JSONL record: meta (t=="meta") or message (t=="msg").
 type agentHistoryLine struct {
+	OutcomeAt     string                 `json:"outcomeAt,omitempty"`
 	Outcome       string                 `json:"outcome,omitempty"`
 	Display       json.RawMessage        `json:"display,omitempty"`
 	ImagePreviews []string               `json:"imagePreviews,omitempty"`
@@ -81,9 +82,10 @@ type agentHistoryTool struct {
 
 // agentThreadMeta describes one persisted thread of a device.
 type agentThreadMeta struct {
-	Outcome string
-	ID      string
-	Title   string // explicit meta title if set, else derived from the first user message
+	OutcomeAt string
+	Outcome   string
+	ID        string
+	Title     string // explicit meta title if set, else derived from the first user message
 	// MetaTitle is the explicit title stored in the meta line ("" when the
 	// thread was never renamed).
 	MetaTitle string
@@ -106,9 +108,10 @@ type agentSessionStore struct {
 // agentThreadExtras are the meta-line fields (besides the model) carried
 // through rewrites: the thread's working directory and explicit title.
 type agentThreadExtras struct {
-	Outcome string
-	Cwd     string
-	Title   string
+	OutcomeAt string
+	Outcome   string
+	Cwd       string
+	Title     string
 }
 
 func newAgentSessionStore(dir string, ttl time.Duration) *agentSessionStore {
@@ -219,6 +222,7 @@ func (st *agentSessionStore) listThreads(deviceID string) []agentThreadMeta {
 			Cwd:       cwd,
 			UpdatedAt: updated,
 			Outcome:   st.extras[deviceID+"/"+threadID].Outcome,
+			OutcomeAt: st.extras[deviceID+"/"+threadID].OutcomeAt,
 		})
 	}
 	sort.Slice(metas, func(i, j int) bool { return metas[i].UpdatedAt.After(metas[j].UpdatedAt) })
@@ -278,13 +282,14 @@ func (st *agentSessionStore) loadLocked(deviceID, threadID string) (msgs []agent
 				cwd = line.Cwd
 				title = line.Title
 				updated, _ = time.Parse(time.RFC3339, line.Updated)
-				st.extras[deviceID+"/"+threadID] = agentThreadExtras{Cwd: cwd, Title: title, Outcome: validatedAgentOutcome(line.Outcome)}
+				st.extras[deviceID+"/"+threadID] = agentThreadExtras{Cwd: cwd, Title: title, Outcome: validatedAgentOutcome(line.Outcome), OutcomeAt: line.OutcomeAt}
 			}
 		case "outcome":
 			if outcome := validatedAgentOutcome(line.Outcome); outcome != "" {
 				key := deviceID + "/" + threadID
 				extras := st.extras[key]
 				extras.Outcome = outcome
+				extras.OutcomeAt = line.OutcomeAt
 				st.extras[key] = extras
 			}
 		case "msg":
@@ -421,7 +426,7 @@ func (st *agentSessionStore) rewriteLocked(deviceID, threadID, model string, msg
 	var buf bytes.Buffer
 	meta, err := json.Marshal(agentHistoryLine{
 		T: "meta", V: agentHistoryVersion, Device: deviceID, Thread: threadID, Model: model,
-		Cwd: extras.Cwd, Title: extras.Title, Outcome: extras.Outcome,
+		Cwd: extras.Cwd, Title: extras.Title, Outcome: extras.Outcome, OutcomeAt: extras.OutcomeAt,
 		Updated: time.Now().UTC().Format(time.RFC3339),
 	})
 	if err != nil {
@@ -509,6 +514,7 @@ func (st *agentSessionStore) clear(deviceID, threadID string) {
 	key := deviceID + "/" + threadID
 	extras := st.extras[key]
 	extras.Outcome = ""
+	extras.OutcomeAt = ""
 	st.extras[key] = extras
 	// st.extras is kept: a reset thread lives on in memory and its next save
 	// must re-persist cwd/title. Deleted threads drop extras via dropExtras.
@@ -674,7 +680,7 @@ func validatedAgentOutcome(outcome string) string {
 // A small append record preserves the outcome even when a command failed
 // before producing history. Normal saves remain incremental, not full rewrites.
 // The caller holds the thread persistence lock to serialize reset/deletion.
-func (st *agentSessionStore) saveOutcome(deviceID, threadID, model, outcome string) {
+func (st *agentSessionStore) saveOutcome(deviceID, threadID, model, outcome, outcomeAt string) {
 	outcome = validatedAgentOutcome(outcome)
 	if outcome == "" {
 		return
@@ -688,7 +694,10 @@ func (st *agentSessionStore) saveOutcome(deviceID, threadID, model, outcome stri
 			return
 		}
 	}
-	data, _ := json.Marshal(agentHistoryLine{T: "outcome", Outcome: outcome})
+	if outcome == "running" {
+		outcomeAt = st.extras[deviceID+"/"+threadID].OutcomeAt
+	}
+	data, _ := json.Marshal(agentHistoryLine{T: "outcome", Outcome: outcome, OutcomeAt: outcomeAt})
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0600)
 	if err == nil {
 		_, err = f.Write(append(data, '\n'))
@@ -704,6 +713,7 @@ func (st *agentSessionStore) saveOutcome(deviceID, threadID, model, outcome stri
 	key := deviceID + "/" + threadID
 	extras := st.extras[key]
 	extras.Outcome = outcome
+	extras.OutcomeAt = outcomeAt
 	st.extras[key] = extras
 }
 

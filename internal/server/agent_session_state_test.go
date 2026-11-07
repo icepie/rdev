@@ -775,6 +775,12 @@ func TestAgentAttachAfterDone(t *testing.T) {
 
 	_, rec2 := dialAgentWS(t, httpSrv)
 	auth2 := waitAgentMsg(t, rec2.msgs, "auth_ok #2", func(m agentMsg) bool { return m.Op == "auth_ok" })
+	if len(auth2.Threads) == 0 || auth2.Threads[0].OutcomeAt == "" {
+		t.Fatal("completion marker missing on reconnect")
+	}
+	if _, err := time.Parse(time.RFC3339Nano, auth2.Threads[0].OutcomeAt); err != nil {
+		t.Fatalf("invalid completion marker: %v", err)
+	}
 	if auth2.Running {
 		t.Fatal("auth_ok running = true after done")
 	}
