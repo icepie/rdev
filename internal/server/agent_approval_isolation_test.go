@@ -16,7 +16,7 @@ func TestApprovalAndQuestionRepliesStayInTheirThread(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			makeThread := func(id string) *agentThread {
-				return &agentThread{id: id, turnCtx: ctx, approvals: make(map[string]chan approvalDecision), questions: make(map[string]chan string)}
+				return &agentThread{id: id, session: agent.New(agent.Config{}), turnCtx: ctx, approvals: make(map[string]chan approvalDecision), questions: make(map[string]chan string)}
 			}
 			first, second := makeThread("first"), makeThread("second")
 			entry := &agentSessionEntry{permMode: agentPermAsk, threads: map[string]*agentThread{"first": first, "second": second}}

@@ -2180,10 +2180,13 @@ export function AgentPage() {
       )}
       <span className="flex h-4 w-4 shrink-0 items-center justify-center">
         {th.running && (
-          <Icon
-            name="Spinner"
-            className="size-3.5 animate-spin text-timeline-accent motion-reduce:animate-none"
-          />
+          <span role="img" aria-label={t(th.waiting === "approval" ? "agent.waitingApproval" : th.waiting === "answer" ? "agent.waitingAnswer" : "agent.filterRunning")}
+            title={t(th.waiting === "approval" ? "agent.waitingApproval" : th.waiting === "answer" ? "agent.waitingAnswer" : "agent.filterRunning")}>
+            <Icon
+              name={th.waiting ? "MessageCircle" : "Spinner"}
+              className={th.waiting ? "size-3.5 text-warning-text" : "size-3.5 animate-spin text-timeline-accent motion-reduce:animate-none"}
+            />
+          </span>
         )}
       </span>
       {renamingId !== `${th.device}:${th.id}` && (

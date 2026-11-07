@@ -239,6 +239,7 @@ type agentThreadInfo struct {
 	Title     string `json:"title"`
 	UpdatedAt string `json:"updatedAt"`
 	Running   bool   `json:"running"`
+	Waiting   string `json:"waiting,omitempty"`
 	// Model is the thread's canonical "provider/model".
 	Model string `json:"model,omitempty"`
 	// Tool is the currently executing tool name; only set while running.
@@ -838,6 +839,11 @@ func agentThreadListLocked(entry *agentSessionEntry) []agentThreadInfo {
 		}
 		if th.running {
 			info.Tool = th.workingTool
+			if len(th.approvals) > 0 {
+				info.Waiting = "approval"
+			} else if len(th.questions) > 0 {
+				info.Waiting = "answer"
+			}
 		}
 		list = append(list, info)
 	}
@@ -971,6 +977,7 @@ func (s *Server) requestQuestion(entry *agentSessionEntry, th *agentThread, ques
 	s.agentSessionsMu.Unlock()
 
 	s.agentBroadcastTurn(entry, th, agentMsg{Op: "ask_request", ID: id, Text: question, Options: options})
+	s.broadcastThreadList(entry)
 
 	if turnCtx == nil {
 		turnCtx = context.Background()
@@ -981,6 +988,7 @@ func (s *Server) requestQuestion(entry *agentSessionEntry, th *agentThread, ques
 		s.agentSessionsMu.Lock()
 		delete(th.questions, id)
 		s.agentSessionsMu.Unlock()
+		s.broadcastThreadList(entry)
 	}
 	var answer string
 	select {
@@ -1019,6 +1027,7 @@ func (s *Server) requestApproval(entry *agentSessionEntry, th *agentThread, tc a
 		Args:    string(args),
 		Summary: tc.Summary,
 	})
+	s.broadcastThreadList(entry)
 
 	if turnCtx == nil {
 		turnCtx = context.Background()
@@ -1029,6 +1038,7 @@ func (s *Server) requestApproval(entry *agentSessionEntry, th *agentThread, tc a
 		s.agentSessionsMu.Lock()
 		delete(th.approvals, id)
 		s.agentSessionsMu.Unlock()
+		s.broadcastThreadList(entry)
 	}
 	select {
 	case d := <-ch:

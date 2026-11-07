@@ -771,3 +771,26 @@ func TestAgentAttachAfterDone(t *testing.T) {
 		}
 	}
 }
+
+func TestThreadSnapshotRestoresWaitingState(t *testing.T) {
+	th := &agentThread{id: "one", title: "One", running: true,
+		approvals: map[string]chan approvalDecision{"approval": make(chan approvalDecision, 1)},
+		questions: map[string]chan string{"question": make(chan string, 1)}}
+	entry := &agentSessionEntry{threads: map[string]*agentThread{"one": th}}
+	if got := agentThreadListLocked(entry)[0].Waiting; got != "approval" {
+		t.Fatalf("approval snapshot: %q", got)
+	}
+	delete(th.approvals, "approval")
+	if got := agentThreadListLocked(entry)[0].Waiting; got != "answer" {
+		t.Fatalf("question snapshot: %q", got)
+	}
+	delete(th.questions, "question")
+	if got := agentThreadListLocked(entry)[0].Waiting; got != "" {
+		t.Fatalf("resolved snapshot: %q", got)
+	}
+	th.questions["stale"] = make(chan string, 1)
+	th.running = false
+	if got := agentThreadListLocked(entry)[0].Waiting; got != "" {
+		t.Fatalf("idle snapshot retained waiting: %q", got)
+	}
+}
