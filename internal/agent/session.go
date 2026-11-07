@@ -188,14 +188,39 @@ const (
 // head and tail and replacing the middle with a marker. Rune boundaries are
 // preserved.
 func truncateToolOutput(s string) string {
-	if len(s) <= toolOutputMax {
+	if len(s) > toolOutputMax {
+		if result, ok := mapShellStreams(s, func(stream string) string {
+			return truncateOutputText(stream, 5000, 3000, 1800)
+		}); ok {
+			return result
+		}
+	}
+	return truncateOutputText(s, toolOutputMax, toolOutputHead, toolOutputTail)
+}
+
+// Preserve shell stream boundaries during model-context reduction. The same
+// stored result is replayed to the UI, which needs the complete envelope.
+func mapShellStreams(s string, transform func(string) string) (string, bool) {
+	status, body, ok := strings.Cut(s, "\n<stdout>\n")
+	if !ok || !strings.HasPrefix(status, "exit code: ") || strings.Contains(status, "\n") {
+		return "", false
+	}
+	stdout, rest, ok := strings.Cut(body, "\n</stdout>\n<stderr>\n")
+	if !ok || !strings.HasSuffix(rest, "\n</stderr>") {
+		return "", false
+	}
+	stderr := strings.TrimSuffix(rest, "\n</stderr>")
+	return status + "\n<stdout>\n" + transform(stdout) + "\n</stdout>\n<stderr>\n" + transform(stderr) + "\n</stderr>", true
+}
+
+func truncateOutputText(s string, limit, head, tail int) string {
+	if len(s) <= limit {
 		return s
 	}
-	head := toolOutputHead
 	for head < len(s) && !utf8.RuneStart(s[head]) {
 		head++
 	}
-	tailStart := len(s) - toolOutputTail
+	tailStart := len(s) - tail
 	for tailStart > head && !utf8.RuneStart(s[tailStart]) {
 		tailStart++
 	}
@@ -224,11 +249,21 @@ func (s *Session) compactToolOutputs() {
 		if m.Role != "tool" || len(m.Content) <= compactMaxLen || strings.HasSuffix(m.Content, compactMarker) {
 			continue
 		}
-		head := compactHeadLen
-		for head < len(m.Content) && !utf8.RuneStart(m.Content[head]) {
-			head++
+		compact := func(text string) string {
+			if len(text) <= compactHeadLen {
+				return text
+			}
+			head := compactHeadLen
+			for head < len(text) && !utf8.RuneStart(text[head]) {
+				head++
+			}
+			return text[:head] + compactMarker
 		}
-		m.Content = m.Content[:head] + compactMarker
+		if result, ok := mapShellStreams(m.Content, compact); ok {
+			m.Content = result
+		} else {
+			m.Content = compact(m.Content)
+		}
 	}
 }
 

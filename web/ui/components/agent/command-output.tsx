@@ -33,11 +33,24 @@ interface ShellResult {
 function parseShellResult(result: string): ShellResult | null {
   // Transport output may contain CRLF (including Windows command results).
   const normalized = result.replace(/\r\n/g, "\n");
-  const m =
+  let m: string[] | null =
     /^([^\n]*)\n<stdout>\n([\s\S]*?)\n<\/stdout>\n<stderr>\n([\s\S]*?)\n<\/stderr>\s*$/.exec(
       normalized,
     );
-  if (!m) return null;
+  if (!m) {
+    // Older histories compacted the entire envelope to a head fragment.
+    // Recover only this known format; arbitrary shell text stays untouched.
+    const compacted = /^(exit code: [^\n]*)\n<stdout>\n([\s\S]*\n\.\.\.\[earlier output truncated\])$/.exec(normalized);
+    if (!compacted) return null;
+    const boundary = "\n</stdout>\n<stderr>\n";
+    const split = compacted[2].indexOf(boundary);
+    if (split >= 0) {
+      m = [compacted[0], compacted[1], compacted[2].slice(0, split), compacted[2].slice(split + boundary.length)];
+    } else {
+      if (compacted[2].includes("\n</stdout>")) return null;
+      m = [compacted[0], compacted[1], compacted[2], ""];
+    }
+  }
   const code = /^exit code: (-?\d+)$/.exec(m[1]);
   return {
     status: m[1],

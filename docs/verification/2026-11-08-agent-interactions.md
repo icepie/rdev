@@ -4,7 +4,7 @@ References: BB `f51e6b0`, OMP `75e7801`, Hope `2b9f809`.
 
 ## Automated checks
 
-- Web: 45 files, 135 tests passed; TypeScript passed; production Vite build passed.
+- Web: 45 files, 137 tests passed; TypeScript passed; production Vite build passed.
 - `go test ./...` passed.
 - Race checks: `internal/client`, `internal/agent`, and `internal/server` passed. An initial server race build conflicted with Vite replacing embedded assets; rerunning after assets were stable passed.
 - New coverage: canceling a shell stops its process-group child while another session completes; final output flush waits for an in-flight send; output order is preserved; unread survives reload; streaming scroll calls coalesce; presentation metadata survives storage but is omitted from provider JSON; image preview bounds/storage; canvas validation and sandbox attributes; navigation targets the correct pane.
@@ -56,3 +56,10 @@ No production deployment occurred. The original full-resolution sent image is no
 - Compared BB ThreadTableOfContents constants and layout: minimum owning pane width 896px, minimum three user messages, maximum 20 rail ticks. Rdev now follows these limits, samples both endpoints, and closes the index when the pane narrows.
 - Navigation jumps call the owning transcript's scrollTo, rather than scrollIntoView which can move ancestor/sibling layouts. The active marker now updates on coalesced scroll frames rather than relying on stale IntersectionObserver entry positions. Ordered row lookup uses binary search to avoid measuring the full transcript each frame.
 - Component regressions cover owning-pane jumps, latest-message inclusion with 60 messages, the 20-tick bound, narrow-pane hiding and closed state on widening. 135 Web tests, TypeScript and production build passed. The earlier mobile navigation screenshot predates this BB width alignment; the rail is now intentionally absent in narrow panes.
+
+## Follow-up: font verification and shortened shell results
+
+- Inspected actual code-block computed styles: BB mono stack is applied; mobile code is 14px/20px as specified by the shared coarse-pointer typography tokens. Source font-sans/font-mono/font-terminal declarations match the BB reference.
+- Found that generic head/tail truncation could remove the stdout/stderr boundary and old-history head-only compaction always removed closing tags. Shell-shaped results now shorten each stream independently and retain the status/envelope. Tests cover noisy stdout alone, noisy stdout plus stderr, UTF-8, size budgets and repeated compaction.
+- Legacy head-compacted stdout results render retained text and the explicit truncation marker without exposing wrapper tags. Arbitrary malformed output retains the generic fallback.
+- 137 Web tests, TypeScript and production build passed; full Go tests and Agent race tests passed. Legacy tests cover both stdout-only and partial-stderr compacted history.

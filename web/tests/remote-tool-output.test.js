@@ -28,3 +28,16 @@ it("retains malformed remote calls as generic tool details", () => {
   }));
   expect(html).toContain("arguments are required");
 });
+
+it.each(["", "\n</stdout>\n<stderr>\nretained error line"])("renders legacy compacted shell history without leaking stream tags (%s)", (stderr) => {
+  const html = renderToStaticMarkup(createElement(ToolRow, {
+    tool: { id: "old-output", name: "shell", done: true, args: '{"command":"large-log"}',
+      result: "exit code: 0\n<stdout>\nretained log line" + stderr + "\n...[earlier output truncated]" },
+    t: key => key,
+  }));
+  expect(html).toContain("retained log line");
+  expect(html).toContain("earlier output truncated");
+  expect(html).toContain("exit code 0");
+  expect(html).not.toContain("&lt;stdout&gt;");
+  expect(html).not.toContain("&lt;stderr&gt;");
+});
