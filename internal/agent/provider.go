@@ -126,7 +126,7 @@ func marshalChatRequest(cfg Config, history []Message) ([]byte, error) {
 	}
 	reqBody := chatRequest{
 		Model:         cfg.Model,
-		Messages:      msgs,
+		Messages:      providerMessages(msgs),
 		Stream:        true,
 		StreamOptions: &streamOptions{IncludeUsage: true},
 	}
