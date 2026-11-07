@@ -1,0 +1,43 @@
+/* Ported from get-bb/bb f51e6b0; MIT, see docs/licenses/bb.txt.
+ * BB uses a shared animated alpha mask for working labels and icons. */
+.animate-shine,
+.animate-shine-icon {
+  -webkit-mask-image: url("./shine-sweep.png");
+  mask-image: url("./shine-sweep.png");
+  -webkit-mask-size: 100% 100%;
+  mask-size: 100% 100%;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  will-change: transform;
+}
+
+.animate-shine {
+  display: inline-block;
+  -webkit-text-fill-color: var(--foreground);
+}
+
+/*
+ * Hidden hosts keep shimmering rows mounted: the closed sidebar drawer's
+ * inert panel, a collapsed `aria-hidden` banner body, a retained overlay.
+ * Drop the mask and release the layer there so nothing off-screen draws.
+ * The rightmost compound is a class, so toggling `inert` or
+ * `aria-hidden` on the host invalidates only these elements.
+ */
+[inert] .animate-shine,
+[inert] .animate-shine-icon,
+[aria-hidden="true"] .animate-shine,
+[aria-hidden="true"] .animate-shine-icon {
+  -webkit-mask-image: none;
+  mask-image: none;
+  will-change: auto;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-shine,
+  .animate-shine-icon {
+    -webkit-mask-image: none;
+    mask-image: none;
+    will-change: auto;
+  }
+  .animate-shine { -webkit-text-fill-color: currentColor; }
+}

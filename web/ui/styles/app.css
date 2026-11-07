@@ -4,6 +4,7 @@
 @import "./bb-theme.css";
 @import "./bb-code-highlight.css";
 @import "./motion.css";
+@import "./bb-working-motion.css";
 @source "..";
 
 @custom-variant dark (&:is(.dark *));

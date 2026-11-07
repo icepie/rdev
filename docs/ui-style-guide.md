@@ -63,3 +63,7 @@ Agent 的思考、工具详情、工具分组和待办列表共用 `DisclosureBo
 图片放大预览使用 BB `f51e6b0` 的 `image-lightbox.tsx`（移除无关视频分支并接入本地化）、`pan-zoom.ts` 与透明背景棋盘格变量。所有 Agent 图片入口共用全屏 `black/70` 遮罩、82dvh 图片范围、44px 导航按钮和安全区间距；同一条消息/草稿内左右导航。复用 overlay 焦点管理，关闭回到缩略图，减少动态效果时禁用淡入。仅打开的预览安装缩放手势监听器。
 
 文件双窗格按工作区可用宽度适配：低于 900px 时以标签切换完整窗格，达到断点后并排显示。设备栏宽度计入判断，避免仅依据屏幕宽度导致每个文件浏览器过窄。隐藏窗格保持挂载并设为 hidden/inert；标签支持左右键、Home/End，以及内部文件拖拽经过时切换目标。折叠第二窗格不会销毁目录或传输状态。
+
+### 工作状态动效
+
+工作标签使用 BB f51e6b0 的 `animate-shine`，图标使用 `animate-shine-icon`，共享原始 128×2、30 帧 `shine-sweep.png` alpha mask（MIT，见 docs/licenses/bb.txt）。正文不施加整段闪烁。回到底部按钮的 active 表示会话正在运行，与 BB FollowUpPromptBox 一致。减少动态效果、inert 和 aria-hidden 容器会移除 mask 并释放 will-change 图层；任务结束时移除动效类。资源由生产 CSS 内联。

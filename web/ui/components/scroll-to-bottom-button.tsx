@@ -3,7 +3,7 @@ import { Icon } from "./icon";
 
 /* Floating round button over the bottom of the transcript; slides/fades
  * in when the view is scrolled away from the bottom. `active` marks
- * unread events below by tinting the icon. */
+ * a running conversation with BB's working sweep. */
 export function ScrollToBottomButton({
   visible,
   active = false,
@@ -30,7 +30,7 @@ export function ScrollToBottomButton({
       >
         <Icon
           name="ArrowDown"
-          className={cn("size-4", active && visible && "text-primary")}
+          className={cn("size-4", active && visible && "animate-shine-icon")}
         />
       </button>
     </div>

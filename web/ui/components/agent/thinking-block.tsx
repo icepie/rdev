@@ -54,7 +54,7 @@ export function ThinkingBlock({
           className="size-3.5 shrink-0 text-muted-foreground"
         />
         <span className="inline-flex min-w-0 max-w-full items-baseline gap-1 overflow-hidden whitespace-nowrap">
-          <span className={cn(streaming && "animate-pulse")}>
+          <span className={cn(streaming && "animate-shine")}>
             {streaming ? t("agent.thinking") : t("agent.thought")}
           </span>
           {durationMs !== null && durationMs > 1000 && (
@@ -77,10 +77,7 @@ export function ThinkingBlock({
       <DisclosureBody open={open}>
         <div className="px-2 pb-1 pt-0.5">
           <div
-            className={cn(
-              "ms-1.5 max-h-80 overflow-auto border-l border-border-seam pl-3 text-sm leading-relaxed break-words whitespace-pre-wrap text-muted-foreground select-text",
-              streaming && "animate-pulse",
-            )}
+            className="ms-1.5 max-h-80 overflow-auto border-l border-border-seam pl-3 text-sm leading-relaxed break-words whitespace-pre-wrap text-muted-foreground select-text"
           >
             {text}
           </div>

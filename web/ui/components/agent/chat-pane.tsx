@@ -487,24 +487,20 @@ export function ChatPaneView({
     [onOpenFile],
   );
 
-  /* ScrollToBottomButton state: hidden while pinned to the bottom;
-  `unreadBelow` (tinted icon) when new items landed while scrolled up. */
+  /* BB's back-to-bottom cue: visible while scrolled up, shimmering only
+   * while the conversation is actively running. */
   const transcriptRef = useRef<HTMLDivElement>(null);
   const registerTranscript = useCallback((node: HTMLDivElement | null) => {
     transcriptRef.current = node;
     ops.registerScrollEl(node);
   }, [ops.registerScrollEl]);
   const [atBottom, setAtBottom] = useState(true);
-  const [unreadBelow, setUnreadBelow] = useState(false);
   const handleTranscriptScroll = (e: React.UIEvent<HTMLDivElement>) => {
     const el = e.currentTarget;
     const near = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
     setAtBottom(near);
-    if (near) setUnreadBelow(false);
   };
-  useEffect(() => {
-    if (!atBottom) setUnreadBelow(true);
-  }, [items.length, atBottom]);
+  useEffect(() => { setAtBottom(true); }, [device, threadId]);
 
   return (
     <>
@@ -647,7 +643,7 @@ export function ChatPaneView({
           {running && (
             <div className="mt-4 flex min-h-7 items-center gap-2 px-2 text-sm text-muted-foreground">
               <Icon name="Spinner" className="size-3.5 animate-spin" />
-              <span className="animate-pulse">{workingLabel}</span>
+              <span className="animate-shine">{workingLabel}</span>
             </div>
           )}
         </div>
@@ -657,7 +653,7 @@ export function ChatPaneView({
       {/* Floating back-to-bottom button over the transcript. */}
       <ScrollToBottomButton
         visible={!atBottom}
-        active={unreadBelow}
+        active={running}
         label={t("agent.scrollToBottom")}
         onClick={() => ops.scrollDown(true)}
       />
