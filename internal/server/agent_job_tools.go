@@ -96,11 +96,14 @@ func (t *backgroundTool) Execute(ctx context.Context, raw json.RawMessage) (stri
 	return marshalJobResult(job)
 }
 
-type jobsTool struct{ jobs *agentJobs }
+type jobsTool struct {
+	jobs     *agentJobs
+	steering func() <-chan struct{}
+}
 
 func (*jobsTool) Name() string { return "jobs" }
 func (*jobsTool) Description() string {
-	return "List this thread's background commands and subagents, read output, cancel a job, or wait up to 30 seconds. A wait timeout does not cancel the job. Results also arrive automatically; avoid repeated polling."
+	return "List this thread's background commands and subagents, read output, cancel a job, or wait up to 30 seconds. A wait timeout or queued user guidance releases the wait without canceling the job. Results also arrive automatically; avoid repeated polling."
 }
 func (*jobsTool) Schema() json.RawMessage {
 	return json.RawMessage(`{"type":"object","properties":{"action":{"type":"string","enum":["list","read","cancel","wait"]},"id":{"type":"string"},"timeout":{"type":"integer","minimum":1,"maximum":30}},"required":["action"],"additionalProperties":false}`)
@@ -138,7 +141,11 @@ func (t *jobsTool) Execute(ctx context.Context, raw json.RawMessage) (string, er
 		}
 		waitCtx, cancel := context.WithTimeout(ctx, time.Duration(seconds)*time.Second)
 		defer cancel()
-		job, err := t.jobs.Wait(waitCtx, args.ID)
+		var interrupt <-chan struct{}
+		if t.steering != nil {
+			interrupt = t.steering()
+		}
+		job, interrupted, err := t.jobs.wait(waitCtx, args.ID, interrupt)
 		if err != nil {
 			if ctx.Err() != nil {
 				return "", ctx.Err()
@@ -149,6 +156,12 @@ func (t *jobsTool) Execute(ctx context.Context, raw json.RawMessage) (string, er
 		}
 		if err != nil {
 			return "", err
+		}
+		if interrupted {
+			return marshalJobResult(struct {
+				agentJobSnapshot
+				WaitInterrupted bool `json:"waitInterrupted"`
+			}{job, true})
 		}
 		return marshalJobResult(job)
 	default:

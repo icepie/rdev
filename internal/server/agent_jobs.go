@@ -191,21 +191,36 @@ func (m *agentJobs) CancelAll() {
 }
 
 func (m *agentJobs) Wait(ctx context.Context, id string) (agentJobSnapshot, error) {
+	job, _, err := m.wait(ctx, id, nil)
+	return job, err
+}
+
+// wait can release a passive waiter without canceling the underlying job.
+// Keep the captured job: retention can evict it while the waiter wakes.
+func (m *agentJobs) wait(ctx context.Context, id string, interrupt <-chan struct{}) (agentJobSnapshot, bool, error) {
 	m.mu.Lock()
 	job := m.jobs[id]
 	m.mu.Unlock()
 	if job == nil {
-		return agentJobSnapshot{}, fmt.Errorf("unknown job %q in this thread", id)
+		return agentJobSnapshot{}, false, fmt.Errorf("unknown job %q in this thread", id)
 	}
 	select {
 	case <-job.done:
-		// Keep the captured job: retention may evict it while this waiter wakes.
-		m.mu.Lock()
-		defer m.mu.Unlock()
-		return job.snapshot, nil
+	case <-interrupt:
 	case <-ctx.Done():
-		return agentJobSnapshot{}, ctx.Err()
+		return agentJobSnapshot{}, false, ctx.Err()
 	}
+	if err := ctx.Err(); err != nil {
+		return agentJobSnapshot{}, false, err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	snapshot := job.snapshot
+	interrupted := snapshot.Finished == nil
+	if interrupted {
+		snapshot.Output = job.output.String()
+	}
+	return snapshot, interrupted, nil
 }
 
 func (m *agentJobs) Close() {

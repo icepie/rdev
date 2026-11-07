@@ -300,6 +300,7 @@ type agentThread struct {
 	running       bool        // a chat turn is in flight
 	cancel        context.CancelFunc
 	turnCtx       context.Context
+	steeringWake  chan struct{} // guarded by agentSessionsMu; wakes only passive job waits
 	// turnHistIdx is the history length at the current turn's start: while
 	// running, attachers replay history[:turnHistIdx] + live so no frame is
 	// seen twice (history/live disjoint invariant).
@@ -555,7 +556,7 @@ func (s *Server) buildAgentSession(entry *agentSessionEntry, th *agentThread, cl
 			return tool.(*shellTool), nil
 		}})
 	}
-	tools = append(tools, &jobsTool{jobs: th.jobs}, &canvasTool{})
+	tools = append(tools, &jobsTool{jobs: th.jobs, steering: func() <-chan struct{} { return s.agentSteeringSignal(th) }}, &canvasTool{})
 	tools = append(tools, &askTool{ask: func(_ context.Context, question string, options []askOption) string {
 		return s.requestQuestion(entry, th, question, marshalAskOptions(options))
 	}})
@@ -1572,6 +1573,10 @@ func (h *agentWSHandler) handleSteer(ac *agentConn, text, threadRef string) {
 	th.queue = append(th.queue, agentQueuedChat{})
 	copy(th.queue[index+1:], th.queue[index:])
 	th.queue[index] = queued
+	if th.steeringWake != nil {
+		close(th.steeringWake)
+		th.steeringWake = nil
+	}
 	srv.agentSessionsMu.Unlock()
 	srv.broadcastQueue(entry, th)
 }
