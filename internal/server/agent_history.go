@@ -30,6 +30,7 @@ const (
 // MarshalJSON emits the OpenAI wire shape without a matching UnmarshalJSON,
 // so history uses its own plain representation.
 type agentHistoryToolCall struct {
+	IsError   bool   `json:"isError,omitempty"`
 	ID        string `json:"id"`
 	Name      string `json:"name"`
 	Arguments string `json:"arguments"`
@@ -73,6 +74,7 @@ type agentHistoryEntry struct {
 }
 
 type agentHistoryTool struct {
+	IsError bool   `json:"isError,omitempty"`
 	Name    string `json:"name"`
 	Args    string `json:"args,omitempty"`
 	Result  string `json:"result,omitempty"`
@@ -307,7 +309,7 @@ func (st *agentSessionStore) loadLocked(deviceID, threadID string) (msgs []agent
 				msg.Images = append(msg.Images, agent.MessageImage{Name: name, Preview: preview})
 			}
 			for _, tc := range line.ToolCalls {
-				msg.ToolCalls = append(msg.ToolCalls, agent.ToolCall{ID: tc.ID, Name: tc.Name, Arguments: tc.Arguments, Summary: tc.Summary, Diff: tc.Diff})
+				msg.ToolCalls = append(msg.ToolCalls, agent.ToolCall{ID: tc.ID, Name: tc.Name, Arguments: tc.Arguments, Summary: tc.Summary, Diff: tc.Diff, IsError: tc.IsError})
 			}
 			msgs = append(msgs, msg)
 		}
@@ -494,7 +496,7 @@ func marshalAgentHistoryMsg(m agent.Message) []byte {
 		line.Images = append(line.Images, img.Name)
 	}
 	for _, tc := range m.ToolCalls {
-		line.ToolCalls = append(line.ToolCalls, agentHistoryToolCall{ID: tc.ID, Name: tc.Name, Arguments: tc.Arguments, Summary: tc.Summary, Diff: tc.Diff})
+		line.ToolCalls = append(line.ToolCalls, agentHistoryToolCall{ID: tc.ID, Name: tc.Name, Arguments: tc.Arguments, Summary: tc.Summary, Diff: tc.Diff, IsError: tc.IsError})
 	}
 	data, err := json.Marshal(line)
 	if err != nil {
@@ -621,14 +623,8 @@ func (st *agentSessionStore) startJanitor() {
 // renderAgentHistory converts stored messages into the auth_ok history shape:
 // user messages and assistant turns, with tool results paired by tool_call_id.
 func renderAgentHistory(msgs []agent.Message) []agentHistoryEntry {
-	toolResults := make(map[string]string)
-	for _, m := range msgs {
-		if m.Role == "tool" && m.ToolCallID != "" {
-			toolResults[m.ToolCallID] = m.Content
-		}
-	}
 	var entries []agentHistoryEntry
-	for _, m := range msgs {
+	for i, m := range msgs {
 		switch m.Role {
 		case "user":
 			if m.Content == "" && len(m.Images) == 0 {
@@ -637,14 +633,19 @@ func renderAgentHistory(msgs []agent.Message) []agentHistoryEntry {
 			entries = append(entries, agentHistoryEntry{Display: m.Display, Role: "user", Text: m.Content, Images: agentImageNames(m.Images), ImagePreviews: agentImagePreviews(m.Images)})
 		case "assistant":
 			e := agentHistoryEntry{Display: m.Display, Role: "assistant", Text: m.Content, Reasoning: m.Reasoning}
+			// Call IDs are scoped to this response, not the conversation.
+			toolResults := make(map[string]string)
+			for j := i + 1; j < len(msgs) && msgs[j].Role == "tool"; j++ {
+				toolResults[msgs[j].ToolCallID] = msgs[j].Content
+			}
 			for _, tc := range m.ToolCalls {
-				t := agentHistoryTool{Name: tc.Name, Args: tc.Arguments, Summary: tc.Summary, Diff: tc.Diff}
+				t := agentHistoryTool{Name: tc.Name, Args: tc.Arguments, Summary: tc.Summary, Diff: tc.Diff, IsError: tc.IsError}
 				if res, ok := toolResults[tc.ID]; ok {
 					t.Result = res
 				}
 				e.Tools = append(e.Tools, t)
 			}
-			if e.Text == "" && len(e.Tools) == 0 {
+			if e.Text == "" && e.Reasoning == "" && len(e.Tools) == 0 {
 				continue
 			}
 			entries = append(entries, e)

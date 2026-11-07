@@ -121,6 +121,7 @@ func (s *Session) RunTurnWithSteering(ctx context.Context, userText string, imag
 			}
 			emit(Event{Type: EventToolStart, ToolID: tc.ID, ToolName: tc.Name, ToolArgs: args, Summary: tc.Summary})
 			result, isErr := s.executeTool(ctx, tool, *tc, args)
+			tc.IsError = isErr
 			result = truncateToolOutput(result)
 			if d, ok := tool.(Differ); ok && !isErr {
 				tc.Diff = d.LastDiff()

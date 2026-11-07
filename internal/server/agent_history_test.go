@@ -305,3 +305,30 @@ func TestAgentOutcomeSurvivesReopenRewriteAndReset(t *testing.T) {
 	}
 
 }
+
+func TestAgentHistoryKeepsResponseScopedResultsAndFailures(t *testing.T) {
+	st := newTestStore(t)
+	messages := []agent.Message{
+		{Role: "user", Content: "try twice"},
+		{Role: "assistant", ToolCalls: []agent.ToolCall{{ID: "same", Name: "read_file", IsError: true}}},
+		{Role: "tool", ToolCallID: "same", Content: "permission denied"},
+		{Role: "assistant", ToolCalls: []agent.ToolCall{{ID: "same", Name: "read_file"}}},
+		{Role: "tool", ToolCallID: "same", Content: "file contents"},
+		{Role: "assistant", Reasoning: "Only thinking before cancellation"},
+	}
+	st.save("device", "thread", "model", messages)
+	loaded, _, _, _ := st.load("device", "thread")
+	for _, source := range [][]agent.Message{messages, loaded} {
+		entries := renderAgentHistory(source)
+		if len(entries) != 4 {
+			t.Fatalf("entries = %+v", entries)
+		}
+		first, second := entries[1].Tools[0], entries[2].Tools[0]
+		if first.Result != "permission denied" || !first.IsError || second.Result != "file contents" || second.IsError {
+			t.Fatalf("results crossed responses or lost failure: %+v / %+v", first, second)
+		}
+		if entries[3].Reasoning != messages[5].Reasoning {
+			t.Fatal("reasoning-only response lost")
+		}
+	}
+}

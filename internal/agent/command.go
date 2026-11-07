@@ -32,6 +32,7 @@ func (s *Session) RunToolCommand(ctx context.Context, text, name string, args js
 	}
 	emit(Event{Type: EventToolStart, ToolID: tc.ID, ToolName: name, ToolArgs: args, Summary: tc.Summary})
 	result, failed := s.executeTool(ctx, tool, tc, args)
+	tc.IsError = failed
 	result = truncateToolOutput(result)
 	// Keep the complete call/result chain even when approval is denied or the
 	// tool is canceled. Reconnect and subsequent model turns see the same result.

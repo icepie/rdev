@@ -197,8 +197,9 @@ type ToolCall struct {
 	ID        string `json:"id"`
 	Name      string `json:"name"`
 	Arguments string `json:"arguments"` // raw JSON text as produced by the model
-	// Summary and Diff are display metadata filled in by the session while
+	// Summary, Diff and IsError are display metadata filled in by the session while
 	// executing the call; they never go back to the provider.
+	IsError bool   `json:"-"`
 	Summary string `json:"-"`
 	Diff    string `json:"-"`
 }

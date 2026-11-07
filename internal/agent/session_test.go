@@ -147,6 +147,11 @@ func TestSessionApproveDenySkipsExecution(t *testing.T) {
 	if len(ends) != 1 || !ends[0].IsError || ends[0].ToolResult != "error: denied by user" {
 		t.Fatalf("tool_end events = %+v", ends)
 	}
+	for _, message := range sess.History() {
+		if message.Role == "assistant" && len(message.ToolCalls) > 0 && !message.ToolCalls[0].IsError {
+			t.Fatal("denied tool lost failure metadata")
+		}
+	}
 	// The denial is fed back to the model as a tool message.
 	var found bool
 	for _, m := range sess.History() {

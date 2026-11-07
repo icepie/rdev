@@ -330,3 +330,13 @@ it('separates tool-only responses even if the provider reuses a tool call id', a
   expect(turns.map(turn => turn.text)).toEqual(['', '', 'Complete']);
   expect(turns.flatMap(turn => turn.tools.map(tool => tool.result))).toEqual(['first', 'second']);
 });
+
+it('restores explicit tool failures without guessing from result text', async () => {
+  await frame({ op: 'thread_peeked', history: [{ role:'assistant', tools:[
+    {name:'read_file',result:'permission denied',isError:true},
+    {name:'read_file',result:'error: literal file content',isError:false},
+    {name:'read_file',result:'legacy result'},
+  ] }, { role:'assistant',reasoning:'Thinking before cancellation' }] });
+  expect(sink.state.items[0].tools.map(tool=>tool.isError)).toEqual([true,false,false]);
+  expect(sink.state.items[1].reasoning).toBe('Thinking before cancellation');
+});

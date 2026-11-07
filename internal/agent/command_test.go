@@ -23,6 +23,9 @@ func TestToolCommandRespectsApprovalWithoutProvider(t *testing.T) {
 		if len(history) != 3 || history[1].ToolCalls[0].ID != history[2].ToolCallID {
 			t.Fatalf("incomplete history: %+v", history)
 		}
+		if history[1].ToolCalls[0].IsError == allow {
+			t.Fatalf("persisted tool failure incorrect: %+v", history[1])
+		}
 		if len(events) != 2 || events[1].Type != EventToolEnd || events[1].IsError == allow {
 			t.Fatalf("unexpected events: %+v", events)
 		}

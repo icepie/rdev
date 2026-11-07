@@ -258,6 +258,7 @@ export function replayHistory(history: unknown[]): TranscriptItem[] {
           result?: unknown;
           summary?: unknown;
           diff?: unknown;
+          isError?: unknown;
         };
         return {
           id: `h${i}`,
@@ -267,7 +268,7 @@ export function replayHistory(history: unknown[]): TranscriptItem[] {
           result: asString(tool.result),
           diff: asString(tool.diff),
           done: true,
-          isError: false,
+          isError: tool.isError === true,
         };
       }),
     });
