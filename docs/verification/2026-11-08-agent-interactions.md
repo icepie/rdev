@@ -145,3 +145,10 @@ Local fixture only (`@server` on port 19440); no real user history was deleted.
 - Initial Windows runtime test exposed Go argument quoting breaking a quoted executable path through cmd.exe. For cmd.exe /c, preserve the raw command tail via SysProcAttr.CmdLine; other executable argument handling remains standard.
 - Built a Windows amd64 test executable and ran it under Wine 11.21 in a new isolated /tmp prefix on Xvfb :98. Tests start a shell -> helper -> grandchild tree using an executable path containing spaces, cancel it, wait for the grandchild process handle to signal exit, and verify an independent concurrent session completes. Repeated close, canceled-before-start, cancellation during startup, and missing executable cases pass.
 - Linux client race tests and full Go suite passed. Windows amd64 and arm64 client binaries cross-build successfully. Wine validates these Windows API paths in compatibility emulation; native Windows job nesting/service-host policies and Windows/macOS hardware remain unverified. No production deployment.
+
+## Follow-up: canceled tool batches
+
+- The agent loop now checks the context before tool lookup/approval and again after approval returns, before Execute. A tool remaining in a canceled batch gets an explicit canceled result without invoking its implementation; the complete assistant tool-call/result chain is still retained.
+- A multi-tool model-response regression cancels after the first read tool, verifies the following write tool (which intentionally ignores context) never executes, checks exactly one provider request, and checks paired history and UI end events. Separate cases cover an already canceled turn and approval returning allow after cancellation.
+- Agent race tests passed. The guard covers cancellation already observed at the execution boundary; an operation already inside Execute still relies on its own cancellation implementation.
+- Full Go suite and server build passed after this change.

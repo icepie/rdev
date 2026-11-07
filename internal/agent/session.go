@@ -135,6 +135,9 @@ func (s *Session) findTool(name string) Tool {
 // unknown tool, malformed arguments, denied approval, Execute error — to an
 // error text result so the model can see what went wrong and recover.
 func (s *Session) executeTool(ctx context.Context, tool Tool, tc ToolCall, args json.RawMessage) (result string, isErr bool) {
+	if err := ctx.Err(); err != nil {
+		return "error: " + err.Error(), true
+	}
 	if tool == nil {
 		return fmt.Sprintf("error: unknown tool %q", tc.Name), true
 	}
@@ -156,6 +159,11 @@ func (s *Session) executeTool(ctx context.Context, tool Tool, tc ToolCall, args 
 				return "error: denied by user", true
 			}
 		}
+	}
+	// Approval may complete concurrently with a stop/reset. Recheck before
+	// handing control to a tool, including tools that do not inspect ctx.
+	if err := ctx.Err(); err != nil {
+		return "error: " + err.Error(), true
 	}
 	out, err := tool.Execute(ctx, args)
 	if err != nil {
