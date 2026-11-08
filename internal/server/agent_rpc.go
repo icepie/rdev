@@ -329,18 +329,35 @@ func (h *agentWSHandler) handleRPCState(ac *agentConn, request agentMsg) {
 		return
 	}
 	snap := s.threadSnapshotLocked(ac.entry, th)
+	steering, followUp := splitRPCQueue(snap.queue, snap.queueModes)
+	jobsRunning := false
+	if th.jobs != nil {
+		for _, job := range th.jobs.List() {
+			if job.State == "running" { jobsRunning = true; break }
+		}
+	}
 	state := map[string]any{
 		"thread": threadID, "model": th.model, "isStreaming": snap.running,
-		"isCompacting": snap.running && th.turnCommand,
+		"isCompacting": snap.running && th.workingTool == "/compact",
 		"messageCount": len(snap.history), "queuedMessageCount": len(snap.queue),
-		"isSettled":      !snap.running && len(snap.queue) == 0,
-		"queuedMessages": map[string]any{"followUp": snap.queue, "steering": []string{}},
+		"hasPendingAsyncWork": jobsRunning,
+		"isSettled": !snap.running && len(snap.queue) == 0 && !jobsRunning,
+		"queuedMessages": map[string]any{"followUp": followUp, "steering": steering, "liveSteered": len(steering)},
 		"todoPhases":     snap.todos, "sessionFile": "rdev://thread/" + threadID,
 	}
 	s.agentSessionsMu.Unlock()
 	success := true
 	data, _ := json.Marshal(state)
 	ac.writeJSON(agentMsg{Type: "response", Command: request.Command, ID: request.ID, Success: &success, Data: data})
+}
+
+func splitRPCQueue(items, modes []string) (steering, followUp []string) {
+	for i, item := range items {
+		if i < len(modes) && modes[i] == "steer" { steering = append(steering, item) } else { followUp = append(followUp, item) }
+	}
+	if steering == nil { steering = []string{} }
+	if followUp == nil { followUp = []string{} }
+	return steering, followUp
 }
 
 func (h *agentWSHandler) handleRPCAvailableModels(ac *agentConn, request agentMsg) {
