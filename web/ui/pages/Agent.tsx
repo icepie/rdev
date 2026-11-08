@@ -1,3 +1,4 @@
+import { createFileReadRequests } from "../components/agent/file-read-requests";
 import { useThreadModels } from "../components/agent/use-thread-models";
 import { createStreamBatch } from "../components/agent/stream-batch";
 import { clearQueueReturns } from "../components/agent/queue-actions";
@@ -345,7 +346,10 @@ export function AgentPage() {
    * panel state. */
   const panelRequestEpochRef = useRef(0);
   const diffRequestEpochRef = useRef(new Map<string, { epoch: number; id: string }>());
-  const fileRequestEpochRef = useRef(new Map<string, { epoch: number; id: string }>());
+  const panelTranslatorRef = useRef(t);
+  panelTranslatorRef.current = t;
+  const fileRequestsRef = useRef<ReturnType<typeof createFileReadRequests> | null>(null);
+  if (!fileRequestsRef.current) fileRequestsRef.current = createFileReadRequests();
   const changesRequestRef = useRef<{ epoch: number; id: string } | null>(null);
   const requestSeqRef = useRef(0);
   useEffect(() => {
@@ -576,7 +580,11 @@ export function AgentPage() {
           },
         }));
         const id = `file_${++requestSeqRef.current}`;
-        fileRequestEpochRef.current.set(path, { epoch: panelRequestEpochRef.current, id });
+        fileRequestsRef.current!.begin(path, panelRequestEpochRef.current, id, () => {
+          setFileStates(previous => previous[path]?.status === "loading" ? {
+            ...previous, [path]: { ...previous[path], status: "error", message: t("files.previewTimeout") },
+          } : previous);
+        });
         wsRef.current.send(JSON.stringify({ op: "file_read", id, path }));
       } else {
         setFileStates((prev) => ({
@@ -629,6 +637,16 @@ export function AgentPage() {
     >(),
   );
   const rejectPendingPanelRequests = useCallback((reason = "disconnected") => {
+    const paths = fileRequestsRef.current!.clear();
+    if (paths.length) setFileStates(previous => {
+      const next = { ...previous };
+      for (const path of paths) {
+        if (next[path]?.status === "loading") next[path] = {
+          ...next[path], status: "error", message: panelTranslatorRef.current("agent.status.disconnected"),
+        };
+      }
+      return next;
+    });
     for (const [key, pending] of dirReqsRef.current) {
       window.clearTimeout(pending.timer);
       pending.reject(new Error(reason));
@@ -777,7 +795,7 @@ export function AgentPage() {
         setDiffs({});
         panelRequestEpochRef.current++;
         diffRequestEpochRef.current.clear();
-        fileRequestEpochRef.current.clear();
+        fileRequestsRef.current!.clear();
         changesRequestRef.current = null;
         primaryOps.setRunning(!!msg.running);
         setModels(parseModelCatalog(msg.models));
@@ -900,9 +918,8 @@ export function AgentPage() {
       case "file_content": {
         const path = asString(msg.path);
         if (!path) break;
-        const request = fileRequestEpochRef.current.get(path);
         const responseID = asString(msg.id);
-        if (!request || request.epoch !== panelRequestEpochRef.current || (responseID && request.id !== responseID)) break;
+        if (!fileRequestsRef.current!.consume(path, panelRequestEpochRef.current, responseID)) break;
         const message = asString(msg.message);
         setFileStates((prev) => ({
           ...prev,
@@ -1051,7 +1068,7 @@ export function AgentPage() {
         setDiffs({});
         changesRequestRef.current = null;
         diffRequestEpochRef.current.clear();
-        fileRequestEpochRef.current.clear();
+        fileRequestsRef.current!.clear();
         panelRequestEpochRef.current++;
         const history = Array.isArray(msg.history) ? msg.history : [];
         primaryOps.setItems(replayHistory(history));
@@ -1252,7 +1269,7 @@ export function AgentPage() {
     setDiffs({});
     panelRequestEpochRef.current++;
     diffRequestEpochRef.current.clear();
-    fileRequestEpochRef.current.clear();
+    fileRequestsRef.current!.clear();
     setStatus("disconnected");
     if (id) connect(id);
   }, [clearPing, clearReconnectTimer, connect, primaryOps, rejectPendingPanelRequests, setSearchParams]);
@@ -1276,6 +1293,7 @@ export function AgentPage() {
     () => () => {
       clearReconnectTimer();
       clearPing();
+      fileRequestsRef.current!.clear();
       rejectPendingPanelRequests();
       if (wsRef.current) {
         streamBatchRef.current?.dispose();
@@ -1301,9 +1319,10 @@ export function AgentPage() {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       panelRequestEpochRef.current++;
       diffRequestEpochRef.current.clear();
-      fileRequestEpochRef.current.clear();
+      fileRequestsRef.current!.clear();
       changesRequestRef.current = null;
       wsRef.current.send(JSON.stringify({ op: "set_cwd", path }));
+      setFileStates({});
     }
   };
 
