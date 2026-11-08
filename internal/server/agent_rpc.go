@@ -79,6 +79,10 @@ func (h *agentWSHandler) handleAgentRPCFrame(ac *agentConn, raw []byte) bool {
 		return true
 	}
 	switch request.Command {
+	case "negotiate_protocol":
+		h.handleRPCProtocol(ac, request)
+	case "get_available_commands":
+		h.handleRPCAvailableCommands(ac, request)
 	case "get_subagents":
 		h.handleGetSubagents(ac, request)
 	case "get_subagent_messages":
@@ -123,6 +127,31 @@ func (h *agentWSHandler) handleAgentRPCFrame(ac *agentConn, raw []byte) bool {
 		fail("unsupported_command", fmt.Sprintf("unsupported RPC command %q", request.Command))
 	}
 	return true
+}
+
+func (h *agentWSHandler) handleRPCProtocol(ac *agentConn, request agentMsg) {
+	success := true
+	data, _ := json.Marshal(struct {
+		ProtocolVersion int `json:"protocolVersion"`
+	}{2})
+	ac.writeJSON(agentMsg{Type: "response", Command: request.Command, ID: request.ID, Success: &success, Data: data})
+}
+
+func (h *agentWSHandler) handleRPCAvailableCommands(ac *agentConn, request agentMsg) {
+	// Keep this list explicit and stable: clients use it to gate their command
+	// palette, and unsupported OMP commands must remain visible as unsupported.
+	commands := []map[string]any{
+		{"name": "negotiate_protocol"}, {"name": "get_available_commands"},
+		{"name": "compact", "params": map[string]any{"customInstructions": "string?"}},
+		{"name": "get_subagents"}, {"name": "get_subagent_messages"},
+		{"name": "steer_subagent", "params": map[string]any{"subagentId": "string", "message": "string"}},
+		{"name": "cancel_subagent", "params": map[string]any{"subagentId": "string"}},
+	}
+	success := true
+	data, _ := json.Marshal(struct {
+		Commands []map[string]any `json:"commands"`
+	}{commands})
+	ac.writeJSON(agentMsg{Type: "response", Command: request.Command, ID: request.ID, Success: &success, Data: data})
 }
 
 func (h *agentWSHandler) handleRPCCompact(ac *agentConn, request agentMsg) {

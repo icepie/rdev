@@ -84,6 +84,16 @@ func TestSubagentRPCWireContract(t *testing.T) {
 	if string(data.Subagents[0]["status"]) != `"running"` {
 		t.Fatal("wrong status")
 	}
+	for _, command := range []string{"negotiate_protocol", "get_available_commands"} {
+		raw, _ := json.Marshal(map[string]any{"type": command, "id": command})
+		sendAgentOp(t, socket, string(raw))
+		protocol := waitRawMsg(t, rec.msgs, "protocol response", func(m map[string]json.RawMessage) bool {
+			return string(m["type"]) == `"response"` && string(m["id"]) == `"`+command+`"`
+		})
+		if string(protocol["success"]) != "true" || len(protocol["data"]) == 0 {
+			t.Fatalf("invalid %s response: %s", command, protocol)
+		}
+	}
 	call("get_subagents", "missing", "", "", false)
 	// Invalid RPC frames must return a correlated failure, not silently fall
 	// into the browser protocol or wait forever for a reply.
