@@ -86,3 +86,29 @@ GPU WebCodecs输出原来每帧赋值canvas.width与canvas.height，即使分辨
 操作次数回归：120个同尺寸帧对应0次宽高赋值，仍完成120次清除/绘制；宽度单独变化只设置一次宽度。真实Chromium加载本次源码编译模块，在原生Canvas上重复该检查，得到same-size resets=0、宽度变化后total resets=1；绘制不透明红图后再绘制透明/半透明蓝图，读取像素分别为[255,0,0,255]、[0,0,0,0]、[0,0,255,128]，确认旧像素被清除且透明度保留。
 
 242项Web测试、类型检查及Vite构建通过。上述为画布操作与像素正确性验证，未测量真实硬件GPU解码帧率、内存或端到端延迟，不宣称相应性能指标已提升。
+
+
+## 真实客户端终端链路基线
+
+新增 `scripts/terminal-throughput.mjs`：独立loopback服务、随机设备ID/端口/管理token、临时数据目录，真实Linux客户端使用/bin/sh；执行完成或失败均关闭自身WebSocket/进程并清理临时目录，不连接用户已有服务或桌面。固定输出命令只读取/dev/zero，不修改设备文件。原始样本见 `2026-11-08-terminal-throughput.json`，含二进制SHA256以核对复现版本；本次产品代码基线为c8aef3c。
+
+每终端输出256KiB，共1/4/8路并发，各5次，另有一次32KiB预热。计时从发送命令至接收到完整输出结束标记；每字节验证为预期值，跨WebSocket帧边界组装标记。总计65次测量输出均正确。测量包含shell命令调度、客户端PTY读取/TCP、服务端WebSocket转发与Bun接收，但**不含浏览器xterm渲染、硬件GPU或真实远程网络**。这是一组可比较基线，没有优化前对照，不宣称本轮提速。
+
+| 并发终端 | 组完成时间中位数 ms | 五次范围 ms | 聚合吞吐中位数 MiB/s |
+| --- | ---: | ---: | ---: |
+| 1 | 20.84 | 20.28–22.13 | 12.00 |
+| 4 | 25.54 | 24.58–42.48 | 39.16 |
+| 8 | 31.13 | 30.16–42.44 | 64.24 |
+
+server RSS 27.40 → 63.16 MiB；client RSS 22.29 → 32.83 MiB。RSS为/proc每25ms抽样的整轮峰值，短暂峰值可能遗漏，不包括Bun接收端和shell子进程，不能视作整个系统的内存占用。未隔离CPU，与本机其他活动共享资源；5次样本不报告P95/P99或SLA。
+
+复现顺序（前端构建与Go编译必须串行）：
+
+```sh
+bun run build
+go build -o /tmp/rdev-throughput-server ./cmd/rdev-server
+go build -o /tmp/rdev-throughput-client ./cmd/rdev-client
+bun scripts/terminal-throughput.mjs /tmp/rdev-throughput-server /tmp/rdev-throughput-client /tmp/rdev-terminal-throughput.json
+```
+
+脚本已连续完成两轮；归档表格采用含二进制hash/runtime信息的第二轮。完成后检查没有遗留测试服务/客户端进程。真实网络延迟、浏览器长会话渲染与全系统内存基线仍未完成。
