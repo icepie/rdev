@@ -78,3 +78,27 @@ it("retries broken thumbnails without opening a dialog and resets errors for rep
   expect(document.querySelector('[role="dialog"] img').getAttribute("src")).toBe(second.src);
  } finally {await act(async () => root.unmount());host.remove();delete globalThis.IS_REACT_ACT_ENVIRONMENT;}
 });
+
+it("returns keyboard focus after closing and reopens at the clicked image", async () => {
+ globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+ const host = document.createElement("div"); document.body.append(host);
+ const root = createRoot(host);
+ const a = {src:"data:image/png;base64,YQ==",name:"a.png"};
+ const b = {src:"data:image/png;base64,Yg==",name:"b.png"};
+ const key = value => act(async () => window.dispatchEvent(new KeyboardEvent("keydown", {key:value,bubbles:true})));
+ try {
+  await act(async () => root.render(createElement(ImagePreview, {...a,gallery:[a,b]})));
+  const trigger = host.querySelector("button");
+  trigger.focus();
+  await act(async () => trigger.click());
+  await key("ArrowRight");
+  expect(document.querySelector('[role="dialog"] img').getAttribute("alt")).toBe("b.png");
+  await key("Escape");
+  // Radix schedules focus restoration on modal unmount.
+  await act(async () => new Promise(resolve => setTimeout(resolve, 0)));
+  expect(document.querySelector('[role="dialog"]')).toBeNull();
+  expect(document.activeElement).toBe(trigger);
+  await act(async () => trigger.click());
+  expect(document.querySelector('[role="dialog"] img').getAttribute("alt")).toBe("a.png");
+ } finally {await act(async () => root.unmount());host.remove();delete globalThis.IS_REACT_ACT_ENVIRONMENT;}
+});

@@ -17,7 +17,8 @@ export function ImagePreview({ src, name, className, gallery }: PreviewImage & {
   const [selected, setSelected] = useState<PreviewImage | null>(null);
   useEffect(() => { setOpen(false); setSelected(null); setFailed(false); setAttempt(0); }, [src, name]);
   if (!isPreviewSource(src)) return null;
-  const images = gallery?.filter(image => isPreviewSource(image.src)) ?? [{ src, name }];
+  // Closed thumbnails do not scan their gallery or mount modal hooks.
+  const images = (open ? gallery?.filter(image => isPreviewSource(image.src)) : undefined) ?? [{ src, name }];
   // The trigger must remain reachable even if a partially restored gallery
   // omits it. Selection follows image identity through insertions/reordering.
   let triggerIndex = images.findIndex(image => image.src === src && image.name === name);
@@ -44,10 +45,10 @@ export function ImagePreview({ src, name, className, gallery }: PreviewImage & {
         <Icon name="Image" className="size-4 shrink-0" />
         <span className="sr-only">{t("agent.imageLoadFailed")}</span>
         <span>{t("agent.imageRetry")}</span>
-      </span> : <img key={`${src}:${attempt}`} onError={() => setFailed(true)} src={src} alt={name} loading="lazy" decoding="async" style={IMAGE_TRANSPARENCY_CHECKER_STYLE} className={cn("max-h-64 max-w-full object-contain", className)} />}
+      </span> : <img key={attempt} onError={() => setFailed(true)} src={src} alt={name} loading="lazy" decoding="async" style={IMAGE_TRANSPARENCY_CHECKER_STYLE} className={cn("max-h-64 max-w-full object-contain", className)} />}
     </button>
-    <ImageLightbox isOpen={open} imageSrc={current.src} imageAlt={current.name} title={current.name}
+    {open && <ImageLightbox isOpen imageSrc={current.src} imageAlt={current.name} title={current.name}
       hasMultipleImages={images.length > 1} navigationStatus={images.length > 1 ? `${index + 1} / ${images.length}` : undefined}
-      onPrevious={() => move("previous")} onNext={() => move("next")} onClose={() => setOpen(false)} />
+      onPrevious={() => move("previous")} onNext={() => move("next")} onClose={() => setOpen(false)} />}
   </>;
 }
