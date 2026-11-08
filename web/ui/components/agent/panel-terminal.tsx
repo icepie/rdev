@@ -1,3 +1,4 @@
+import { terminalMayTakeFocus } from "../../lib/terminal-focus";
 import { createTerminalLayout } from "../../lib/terminal-layout";
 /* PanelTerminal: one device shell session inside an agent right-panel tab
  * (bb usePanelTerminals, scoped port). Self-contained xterm + /terminal WS
@@ -53,12 +54,15 @@ export function PanelTerminal({
   const decoderRef = useRef<TextDecoder>(new TextDecoder());
   const pendingPwRef = useRef("");
   const needAuthRef = useRef(false);
-  const [status, setStatus] = useState<SessionStatus>("connecting");
+  const [status, setStatusState] = useState<SessionStatus>("connecting");
   const [authOpen, setAuthOpen] = useState(false);
   const [authError, setAuthError] = useState("");
   const [authRound, setAuthRound] = useState(0);
   const statusRef = useRef(status);
-  statusRef.current = status;
+  const setStatus = useCallback((next: SessionStatus) => {
+    statusRef.current = next;
+    setStatusState(next);
+  }, []);
 
   const connect = useCallback(() => {
     const term = termRef.current;
@@ -87,6 +91,7 @@ export function PanelTerminal({
     wsRef.current = ws;
 
     const writeBytes = (buf: ArrayBuffer) => {
+      if (statusRef.current === "disconnected") return;
       setAuthOpen(false);
       if (statusRef.current !== "connected") setStatus("connected");
       const bytes = new Uint8Array(buf);
@@ -98,11 +103,11 @@ export function PanelTerminal({
     };
 
     ws.onopen = () => {
-      if (wsRef.current !== ws) return;
-      setStatus((s) => (s === "connected" ? s : "authing"));
+      if (wsRef.current !== ws || statusRef.current === "disconnected") return;
+      if (statusRef.current !== "connected") setStatus("authing");
     };
     ws.onmessage = (evt) => {
-      if (wsRef.current !== ws) return;
+      if (wsRef.current !== ws || statusRef.current === "disconnected") return;
       if (evt.data instanceof ArrayBuffer) {
         writeBytes(evt.data);
         return;
@@ -136,7 +141,7 @@ export function PanelTerminal({
         setStatus("connected");
         if (visibleRef.current) {
           layoutRef.current?.flush();
-          term.focus();
+          if (terminalMayTakeFocus(hostRef.current?.parentElement ?? null)) term.focus();
         }
         ws.send(JSON.stringify({ op: "resize", rows: term.rows, cols: term.cols }));
       } else if (msg.op === "auth_fail") {
@@ -181,7 +186,7 @@ export function PanelTerminal({
       setAuthOpen(false);
       setStatus("disconnected");
     };
-  }, [device, t]);
+  }, [device, t, setStatus]);
 
   /* Mount xterm once; bind input/resize; connect; tear down on unmount. */
   useEffect(() => {
@@ -224,13 +229,13 @@ export function PanelTerminal({
 
     term.onData((data) => {
       const ws = wsRef.current;
-      if (ws && ws.readyState === WebSocket.OPEN && !needAuthRef.current) {
+      if (ws && ws.readyState === WebSocket.OPEN && statusRef.current === "connected" && !needAuthRef.current) {
         ws.send(inputEncoder.encode(data));
       }
     });
     term.onResize(({ cols, rows }) => {
       const ws = wsRef.current;
-      if (ws && ws.readyState === WebSocket.OPEN && !needAuthRef.current) {
+      if (ws && ws.readyState === WebSocket.OPEN && statusRef.current === "connected" && !needAuthRef.current) {
         ws.send(JSON.stringify({ op: "resize", rows, cols }));
       }
     });
@@ -323,7 +328,7 @@ export function PanelTerminal({
       )}
       {status === "connecting" && (
         <div className="absolute inset-0 z-10 flex items-center justify-center bg-background/60">
-          <Icon name="Spinner" className="size-4 animate-spin text-muted-foreground" />
+          <Icon name="Spinner" className="size-4 animate-spin motion-reduce:animate-none text-muted-foreground" />
         </div>
       )}
     </div>

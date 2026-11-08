@@ -9,7 +9,7 @@ vi.mock("@xterm/xterm", () => ({ Terminal: class {
   rows = 42; cols = 132;
   options = {}; focus = vi.fn(); write = vi.fn(); reset = vi.fn(); dispose = vi.fn();
   constructor() { terminals.push(this); }
-  loadAddon() {} open() {} onData() {} onResize() {}
+  loadAddon() {} open() {} onData(handler) { this.input = handler; } onResize(handler) { this.resize = handler; }
 } }));
 vi.mock("@xterm/addon-fit", () => ({ FitAddon: class { fit() {} } }));
 vi.mock("@xterm/addon-web-links", () => ({ WebLinksAddon: class {} }));
@@ -45,6 +45,9 @@ it("keeps hidden shells connected without stealing focus and ignores replaced so
   try {
     await render();
     const terminal = terminals.at(-1), first = sockets[0];
+    terminal.input("before-ready");
+    terminal.resize({rows:30,cols:80});
+    expect(first.send).not.toHaveBeenCalled();
     await act(async () => first.message({ op: "auth" }));
     for (let attempt = 0; attempt < 3; attempt++) {
       await act(async () => auth.current.onSubmit("incorrect"));
@@ -53,7 +56,11 @@ it("keeps hidden shells connected without stealing focus and ignores replaced so
       expect(auth.current.error).toBe("same rejection");
     }
 
-    await act(async () => first.message({ op: "auth_ok" }));
+    await act(async () => {
+      first.message({ op: "auth_ok" });
+      terminal.input("after-ready");
+    });
+    expect(first.send).toHaveBeenCalledWith(new TextEncoder().encode("after-ready"));
     expect(terminal.focus).not.toHaveBeenCalled();
     expect(first.send).toHaveBeenCalledWith(JSON.stringify({op:"resize",rows:42,cols:132}));
     props.visible = true;
@@ -62,8 +69,23 @@ it("keeps hidden shells connected without stealing focus and ignores replaced so
     expect(terminal.dispose).not.toHaveBeenCalled();
     await act(async () => first.message({ op: "auth_ok" }));
     expect(terminal.focus).toHaveBeenCalledTimes(1);
+    const composer = document.createElement("textarea");
+    document.body.append(composer);
+    composer.focus();
+    await act(async () => first.message({op:"ready"}));
+    expect(document.activeElement).toBe(composer);
+    expect(terminal.focus).toHaveBeenCalledTimes(1);
     const lateClose = first.onclose, lateError = first.onerror;
     await act(async () => first.onerror());
+    const sentBefore = first.send.mock.calls.length;
+    await act(async () => {
+      first.onmessage({data: new TextEncoder().encode("late-output").buffer});
+      first.message({op: "ready"});
+      first.onopen();
+    });
+    terminal.input("after-error");
+    terminal.resize({rows:30,cols:80});
+    expect(first.send).toHaveBeenCalledTimes(sentBefore);
     await act(async () => document.querySelector("button").click());
     expect(sockets).toHaveLength(2);
     await act(async () => sockets[1].message({ op: "ready" }));

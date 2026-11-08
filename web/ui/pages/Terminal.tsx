@@ -1,3 +1,4 @@
+import { terminalMayTakeFocus } from "../lib/terminal-focus";
 import { createTerminalLayout } from "../lib/terminal-layout";
 import { useDevicePassword } from "../hooks/use-device-password";
 import {
@@ -144,7 +145,7 @@ function prepareTerminalInput(tab: TermTab, resize: () => void) {
 }
 
 function sendTerminalData(tab: TermTab | undefined, data: string) {
-  if (tab && tab.ws && tab.ws.readyState === WebSocket.OPEN && !tab.needAuth) {
+  if (tab && tab.ws && tab.ws.readyState === WebSocket.OPEN && tab.status === "connected" && !tab.needAuth) {
     tab.ws.send(terminalInputEncoder.encode(data));
   }
 }
@@ -222,6 +223,7 @@ export function TerminalPage() {
 
   const handleTerminalBytes = useCallback(
     (tab: TermTab, data: ArrayBuffer) => {
+      if (tab.status === "disconnected") return;
       removeAuthOverlay(tab);
       if (tab.status !== "connected") {
         tab.status = "connected";
@@ -262,13 +264,13 @@ export function TerminalPage() {
       ws.binaryType = "arraybuffer";
 
       ws.onopen = () => {
-        if (tab.ws !== ws) return;
+        if (tab.ws !== ws || tab.status === "disconnected") return;
         tab.status = "authing";
         patchMeta(tab.id, { status: "authing" });
       };
 
       ws.onmessage = (evt) => {
-        if (tab.ws !== ws) return;
+        if (tab.ws !== ws || tab.status === "disconnected") return;
         if (evt.data instanceof ArrayBuffer) {
           handleTerminalBytes(tab, evt.data);
           return;
@@ -305,7 +307,7 @@ export function TerminalPage() {
           tab.authOpen = false;
           tab.status = "connected";
           patchMeta(tab.id, { status: "connected", authOpen: false, authError: "" });
-          if (tab.id === activeTabIdRef.current) tab.term.focus();
+          if (tab.id === activeTabIdRef.current && terminalMayTakeFocus(tab.pane)) tab.term.focus();
           doResize(tab);
           tab.layout.flush();
           ws.send(JSON.stringify({ op: "resize", rows: tab.term.rows, cols: tab.term.cols }));
@@ -367,7 +369,7 @@ export function TerminalPage() {
           sendTerminalData(tab, data);
         });
         tab.term.onResize(({ cols, rows }) => {
-          if (tab.ws && tab.ws.readyState === WebSocket.OPEN && !tab.needAuth) {
+          if (tab.ws && tab.ws.readyState === WebSocket.OPEN && tab.status === "connected" && !tab.needAuth) {
             tab.ws.send(JSON.stringify({ op: "resize", rows, cols }));
           }
         });
