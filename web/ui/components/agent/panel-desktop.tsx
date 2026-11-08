@@ -1,3 +1,4 @@
+import { attachDesktopMediaSource } from "../../lib/desktop-media";
 import { desktopOwnsKeyboard } from "../../lib/desktop-input-focus";
 import { writeOwnedClipboard } from "../../lib/clipboard-write";
 import { paintDesktopImage } from "../../lib/desktop-frame";
@@ -340,6 +341,7 @@ export function PanelDesktop({
   const videoFormatRef = useRef("");
 
   const gpuMediaSourceRef = useRef<MediaSource | null>(null);
+  const gpuMediaCleanupRef = useRef<(() => void) | null>(null);
   const gpuSourceBufferRef = useRef<SourceBuffer | null>(null);
   const gpuQueueRef = useRef<ArrayBuffer[]>([]);
   const gpuLastPointerRef = useRef(new Map<number, { x: number; y: number }>());
@@ -762,6 +764,8 @@ export function PanelDesktop({
   /* ── GPU video output (MSE + WebCodecs) ── */
 
   const closeGPUVideo = () => {
+    gpuMediaCleanupRef.current?.();
+    gpuMediaCleanupRef.current = null;
     gpuQueueRef.current = [];
     gpuSourceBufferRef.current = null;
     const ms = gpuMediaSourceRef.current;
@@ -846,24 +850,13 @@ export function PanelDesktop({
     setGpuDisplay("video");
     const video = videoRef.current;
     if (video) video.src = URL.createObjectURL(ms);
-    ms.addEventListener(
-      "sourceopen",
-      () => {
-        let mime = 'video/mp4; codecs="avc1.4D403D"';
-        if (!MS.isTypeSupported(mime)) mime = "video/mp4";
-        const sb = ms.addSourceBuffer(mime);
-        // Sequence mode makes appends order-authoritative, which suits a
-        // live stream where we keep chasing the newest fragment.
-        try {
-          sb.mode = "sequence";
-        } catch {
-          /* ignore */
-        }
-        gpuSourceBufferRef.current = sb;
-        sb.addEventListener("updateend", gpuUpdateBuffer);
-      },
-      { once: true },
-    );
+    gpuMediaCleanupRef.current = attachDesktopMediaSource(ms, {
+      current: () => gpuMediaSourceRef.current === ms && gpuVideoModeRef.current === "mse",
+      supported: mime => MS.isTypeSupported(mime),
+      ready: buffer => { gpuSourceBufferRef.current = buffer; },
+      update: gpuUpdateBuffer,
+      error: cause => setStatus(errMessage(cause), "err"),
+    });
   };
 
   const gpuStartWebCodecsVideo = (config: { codec?: string; width?: number; height?: number }) => {

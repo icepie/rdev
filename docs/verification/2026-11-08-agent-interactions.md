@@ -525,3 +525,10 @@ Local fixture only (`@server` on port 19440); no real user history was deleted.
 - 真实Chromium与Linux客户端（DISPLAY=:98）验证：1440×1000视口首次终端同步63×147，原生输入 `stty size` 远端返回63 147；向右分屏后新终端同步63×72，返回63 72。浏览器测试只记录fixture终端的resize帧和输出；不涉及真实桌面DISPLAY=:0。
 - WebSocket回归覆盖免密/密码认证、设备启动时立即输出、ready后尺寸转发、配额拒绝与发送失败无名额泄漏；针对性race通过。Agent终端面板回归验证隐藏不抢焦点、认证/重连明确发送尺寸。233项Web测试、类型检查、前端及嵌入服务构建通过。
 - 首次全量Go检查与Vite资源替换重叠而出现embed文件缺失，已在Vite结束后单独重跑，`go test ./...`通过。该失败属于验证调度错误，不是产品运行时失败。
+
+## GPU MediaSource 流生命周期（2026-11-08）
+
+- 旧MediaSource的sourceopen原先不检查归属，可在关闭/替换后创建SourceBuffer并覆盖当前ref。现在将sourceopen/updateend监听器作为同一个流的生命周期管理；回调检查当前MediaSource与视频模式，关闭时移除监听器，旧流事件不再操作新队列。
+- SourceBuffer建立后立即调用队列处理，不要求再收到下一包才追加此前排队的数据；addSourceBuffer失败转为界面错误状态，不让浏览器事件抛出未捕获异常。sequence模式不支持时保留原降级行为。
+- 回归用EventTarget模拟浏览器媒体事件，覆盖首批排队数据启动、updateend继续处理、sourceopen一次性行为、替换前后的晚到事件、关闭清理及不支持编码格式的异常路径。241项Web测试、类型检查和Vite构建通过。
+- 本轮未运行硬件GPU视频源或Safari ManagedMediaSource实机验收；这些仍是审计边界，不将事件模拟描述为真实视频播放验证。
