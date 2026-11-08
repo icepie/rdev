@@ -239,7 +239,11 @@ it("uses the authorized HTML resource URL, retains its frame across modes, and r
   expect(updated).not.toBe(frame);
   expect(updated.getAttribute('src')).toBe(previewUrl);
   await render({...props,state:{...props.state,content:'<h1>Refreshed</h1>'},visible:false});
-  expect(host.querySelector('iframe')).toBe(updated);
+  expect(host.querySelector('iframe')).toBeNull();
+  expect(updated.isConnected).toBe(false);
+  await render({...props,state:{...props.state,content:'<h1>Refreshed</h1>'},visible:true});
+  expect(host.querySelector('iframe')).not.toBe(updated);
+  expect(host.querySelector('iframe').getAttribute('src')).toBe(previewUrl);
  } finally {await dispose();}
 });
 
@@ -323,4 +327,28 @@ it("shows decode failures, gates refresh offline, and resets errors for refreshe
   await act(async()=>button(host,"Open photo.png in full screen preview").click());
   expect(document.querySelector('[role="dialog"]')).not.toBeNull();
  } finally {await dispose();}
+});
+
+
+it("defers hidden HTML loads and aborts in-flight checks when its panel is hidden", async () => {
+ const requests=[];
+ const fetchMock=vi.spyOn(globalThis,"fetch").mockImplementation((url,options)=>new Promise(resolve=>requests.push({url,options,resolve})));
+ const props={path:"/hidden.html",state:{...ready("<h1>Hidden</h1>"),previewUrl:"/api/media/"+"e".repeat(64)+"/index.html"}};
+ const {host,render,dispose}=await mount({...props,visible:false});
+ try {
+  expect(fetchMock).not.toHaveBeenCalled();
+  expect(host.querySelector("iframe")).toBeNull();
+  await render({...props,visible:true});
+  expect(requests).toHaveLength(1);
+  expect(requests[0].options.signal.aborted).toBe(false);
+  await render({...props,visible:false});
+  expect(requests[0].options.signal.aborted).toBe(true);
+  await act(async()=>requests[0].resolve({ok:true}));
+  expect(host.querySelector("iframe")).toBeNull();
+  await render({...props,visible:true});
+  expect(requests).toHaveLength(2);
+  await act(async()=>requests[1].resolve({ok:true}));
+  expect(host.querySelector("iframe")).not.toBeNull();
+ } finally {await dispose();}
+ expect(requests[1].options.signal.aborted).toBe(true);
 });

@@ -134,7 +134,9 @@ function FilePreviewContent({
             ) : (
               <>
                 {isHTML ? (
-                  <HtmlFilePreview content={state.content} name={base} hidden={viewMode !== "preview"} previewUrl={state.previewUrl} connected={connected} onRetry={onRefresh} onLoadingChange={setHtmlLoading} t={t} />
+                  // Switching preview/source retains the document; hiding the
+                  // entire panel releases its scripts and remote resources.
+                  visible && <HtmlFilePreview content={state.content} name={base} hidden={viewMode !== "preview"} previewUrl={state.previewUrl} connected={connected} onRetry={onRefresh} onLoadingChange={setHtmlLoading} t={t} />
                 ) : hasPreview && (
                   <FileViewPane active={viewMode === "preview"} mode="preview">
                     {isCSV ? <CsvFilePreview name={base} content={state.content} t={t} /> : (
