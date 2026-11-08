@@ -14,7 +14,8 @@ vi.mock("../ui/lib/api", () => ({
 vi.mock("../ui/lib/i18n", () => ({ useI18n: () => ({ t: (key) => key }) }));
 vi.mock("../ui/components/icon", () => ({ Icon: () => null }));
 vi.mock("../ui/components/os-icon", () => ({ OsIcon: () => null }));
-vi.mock("../ui/components/split-layout", () => ({ SplitPageShell: ({ children, ...props }) => { fixtures.shell = props; return children; } }));
+vi.mock("../ui/components/split-layout", () => ({ MobileSidebarTrigger: () => null,
+  SplitPageShell: ({ children, ...props }) => { fixtures.shell = props; return children; } }));
 vi.mock("../ui/components/device-rail", () => ({ DEVICE_DRAG_MIME: "device", DeviceDropTarget: ({ children }) => { fixtures.panes = children.props.panesRef; return children; } }));
 import { FilesPage, FilesBrowser } from "../ui/pages/Files";
 import { encodeFrame } from "../ui/lib/file-transfer-frame";

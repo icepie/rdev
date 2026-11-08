@@ -3,6 +3,8 @@ import { Button } from "./button";
 import { Icon } from "./icon";
 import { COARSE_POINTER_HEADER_ICON_BUTTON_CLASS } from "./coarse-pointer-sizing";
 import {
+  createContext,
+  useContext,
   useEffect,
   useLayoutEffect,
   useRef,
@@ -19,6 +21,22 @@ import {
   SIDEBAR_MAX_WIDTH,
   SIDEBAR_MIN_WIDTH,
 } from "./workspace-sidebar";
+
+const MobileSidebarContext = createContext<{ open: boolean; show: () => void } | null>(null);
+
+/** Place the one mobile navigation entry in the page's existing toolbar. */
+export function MobileSidebarTrigger() {
+  const sidebar = useContext(MobileSidebarContext);
+  const { t } = useI18n();
+  if (!sidebar) return null;
+  return (
+    <Button variant="ghost" size="icon"
+      className={`${COARSE_POINTER_HEADER_ICON_BUTTON_CLASS} shrink-0 md:hidden`}
+      aria-label={t("rail.expand")} aria-expanded={sidebar.open} onClick={sidebar.show}>
+      <Icon name="PanelLeft" />
+    </Button>
+  );
+}
 
 /** Pixel-sized BB sidebar. Children stay mounted through resizing and folding. */
 export function SplitPageShell({
@@ -209,13 +227,9 @@ export function SplitPageShell({
           className="flex h-full min-h-0 flex-col outline-none"
           inert={compact && mobileOpen}
         >
-          <div className="flex h-12 shrink-0 items-center border-b border-border-seam px-3 md:hidden">
-            <Button variant="ghost" size="icon" className={COARSE_POINTER_HEADER_ICON_BUTTON_CLASS}
-              aria-label={t("rail.expand")} aria-expanded={mobileOpen} onClick={() => setMobileOpen(true)}>
-              <Icon name="PanelLeft" />
-            </Button>
-          </div>
-          <div className="min-h-0 flex-1">{children}</div>
+          <MobileSidebarContext.Provider value={{ open: mobileOpen, show: () => setMobileOpen(true) }}>
+            <div className="min-h-0 flex-1">{children}</div>
+          </MobileSidebarContext.Provider>
         </div>
         {compact && mobileOpen && (
           <button

@@ -1,3 +1,4 @@
+import { useComposerAutosize } from "./use-composer-autosize";
 import { needsAttachmentRaster, rasterizeAttachment } from "./attachment-raster";
 import { settledAskCardKeys } from "./transcript-rows";
 import { observeTranscriptResize } from "./transcript-resize";
@@ -180,6 +181,7 @@ export function ChatPaneView({
   useEffect(() => () => cancelImageReads(), [draftKey, cancelImageReads]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
+  useComposerAutosize(composerRef, input);
   const [nowTick, setNowTick] = useState(0);
   const slashListId = useId();
 
@@ -928,7 +930,7 @@ export function ChatPaneView({
             aria-controls={slashOpen ? slashListId : undefined}
             aria-activedescendant={slashOpen ? `${slashListId}-${slashFiltered[Math.min(slashIndex, slashFiltered.length - 1)].name}` : undefined}
             placeholder={t("agent.composerPlaceholder")}
-            className="max-h-36 min-h-[68px] w-full resize-none border-0 bg-transparent px-4 pt-3 pb-1 pr-14 text-sm leading-relaxed shadow-none placeholder:font-light placeholder:text-subtle-foreground/70 focus-visible:ring-0"
+            className="max-h-[max(68px,calc(50dvh-3rem))] min-h-[68px] w-full resize-none border-0 bg-transparent px-4 pt-3 pb-1 pr-14 text-sm leading-relaxed shadow-none placeholder:font-light placeholder:text-subtle-foreground/70 focus-visible:ring-0"
             onChange={(e) => setInput(e.target.value)}
             onPaste={(e) => {
               const files = Array.from(e.clipboardData.items)

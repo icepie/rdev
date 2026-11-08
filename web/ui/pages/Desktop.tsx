@@ -6,7 +6,7 @@ import { DisclosureBody } from "../components/disclosure-body";
 import { Icon } from "../components/icon";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useSearchParams } from "react-router-dom";
-import { SplitPageShell } from "../components/split-layout";
+import { SplitPageShell, MobileSidebarTrigger } from "../components/split-layout";
 import { DeviceDropTarget } from "../components/device-rail";
 import { useI18n } from "../lib/i18n";
 import {
@@ -2267,6 +2267,7 @@ function DesktopSession({
     <div className="page-workspace overflow-hidden">
       {/* Controls bar */}
       <div className="page-toolbar">
+        <MobileSidebarTrigger />
         {/* Device comes from the left rail; the bar only shows it. */}
         <div className="flex h-8 items-center gap-1.5 rounded-md border border-border-seam px-2.5 text-xs text-muted-foreground select-none">
           <OsIcon

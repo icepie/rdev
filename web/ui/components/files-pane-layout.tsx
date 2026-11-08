@@ -4,6 +4,7 @@ import { Icon } from "./icon";
 import { cn } from "../lib/utils";
 
 type Props = {
+  toolbarStart?: ReactNode;
   focusedPane: number;
   onFocus: (id: number) => void;
   secondMounted: boolean;
@@ -47,6 +48,7 @@ export function FilesPaneLayout(props: Props) {
   const visible = secondOpen ? [0, 1] : [0];
   return <div ref={workspace} className="flex h-full min-h-0 min-w-0 flex-col">
     <div className={cn("page-toolbar shrink-0", compact && "bg-sidebar")}>
+      {props.toolbarStart}
       <div role={compact ? "tablist" : undefined} aria-label={props.label} className="flex min-w-0 gap-1 overflow-x-auto">
         {visible.map((id, index) => <Button key={id} size="sm" variant={focusedPane === id ? "secondary" : "ghost"}
           ref={focusedPane === id ? activeTab : undefined}

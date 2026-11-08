@@ -40,7 +40,7 @@ import {
 } from "../components/select";
 import { Icon } from "../components/icon";
 import { OsIcon } from "../components/os-icon";
-import { SplitPageShell } from "../components/split-layout";
+import { SplitPageShell, MobileSidebarTrigger } from "../components/split-layout";
 import {
   clampSplitPairFraction,
   countPanes,
@@ -850,6 +850,7 @@ export function TerminalPage() {
                       : "border-b-border-seam",
                   )}
                 >
+                  <MobileSidebarTrigger />
                   <div className="scrollbar-none flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
                     {paneMetas.map((m) => (
                       <div

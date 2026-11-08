@@ -16,7 +16,7 @@ vi.mock("../ui/lib/rail-control", () => ({
   },
 }));
 vi.mock("../ui/components/device-rail", () => ({ DeviceRail: () => null }));
-import { SplitPageShell } from "../ui/components/split-layout";
+import { SplitPageShell, MobileSidebarTrigger } from "../ui/components/split-layout";
 
 it("preserves a live workspace across collapse and breakpoints and persists bounded pixel resizing", async () => {
   const dom = new JSDOM(
@@ -48,7 +48,7 @@ it("preserves a live workspace across collapse and breakpoints and persists boun
         unmounts++;
       };
     }, []);
-    return createElement("textarea", { defaultValue: "keep this session" });
+    return createElement("div", null, createElement("header", null, createElement(MobileSidebarTrigger)), createElement("textarea", { defaultValue: "keep this session" }));
   }
   const root = createRoot(document.getElementById("root"));
   const render = () =>
@@ -80,7 +80,8 @@ it("preserves a live workspace across collapse and breakpoints and persists boun
     expect(document.activeElement).toBe(pane.closest("[tabindex]"));
     expect(document.activeElement.closest("[inert]")).toBeNull();
     const toggle = document.querySelector('button[aria-label="rail.expand"]');
-    expect(toggle).not.toBeNull();
+    expect(toggle.closest("header")).not.toBeNull();
+    expect(document.querySelectorAll('button[aria-label="rail.expand"]')).toHaveLength(1);
     toggle.focus();
     await act(() => toggle.click());
     expect(document.activeElement).toBe(document.querySelector("aside"));

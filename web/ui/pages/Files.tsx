@@ -50,7 +50,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "../components/alert-dialog";
-import { SplitPageShell } from "../components/split-layout";
+import { SplitPageShell, MobileSidebarTrigger } from "../components/split-layout";
 import { DeviceDropTarget } from "../components/device-rail";
 import {
   Table,
@@ -1762,7 +1762,7 @@ export function FilesPage() {
       selectedDevice={paneDevices[focusedPane] || ""}
       onDevicePick={(id) => requestDevice(focusedPane, id)}
     >
-      <FilesPaneLayout focusedPane={focusedPane} onFocus={setFocusedPane} dragMime={FILE_DRAG_MIME}
+      <FilesPaneLayout toolbarStart={<MobileSidebarTrigger />} focusedPane={focusedPane} onFocus={setFocusedPane} dragMime={FILE_DRAG_MIME}
         secondMounted={secondMounted} secondOpen={secondOpen}
         label={t("files.title")} paneLabel={id => t("files.pane", { number: id + 1 })}
         toggleLabel={t(secondOpen ? "files.hideSecondPane" : "files.showSecondPane")}
