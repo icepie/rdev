@@ -149,10 +149,10 @@ it("renders native video controls without treating the media URL as file text", 
   expect(button(host,'Copy file contents')).toBeUndefined();
   expect(button(host,'Toggle line wrap')).toBeUndefined();
   await act(async () => video.dispatchEvent(new Event('error')));
-  expect(host.querySelector('[role="status"]').textContent).toContain('Unable to play video');
+  expect(video.parentElement.querySelector('[role="status"]').textContent).toContain('Unable to play video');
   await render({path:'/clip.mp4',state:{...state,content:'/api/media/refreshed'}});
   expect(host.querySelector('video')).not.toBe(video);
-  expect(host.querySelector('[role="status"]')).toBeNull();
+  expect(host.querySelector('video').parentElement.querySelector('[role="status"]')).toBeNull();
  } finally {await dispose();}
 });
 

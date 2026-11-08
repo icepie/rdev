@@ -9,9 +9,8 @@ import { IMAGE_TRANSPARENCY_CHECKER_STYLE } from "../../lib/image-preview";
 import { Button } from "../button";
 import { Icon } from "../icon";
 import { Markdown } from "../markdown";
-import { copyText } from "../../lib/clipboard";
+import { FilePreviewHeader } from "./file-preview-header";
 import { DIFF_THEME, DIFF_VIEW_STYLE, useThemeType } from "./diff-view";
-import { resolveFileIconName } from "./file-visuals";
 import type { FilePreviewState, Translator } from "./types";
 
 function splitPath(path: string) {
@@ -49,7 +48,7 @@ function FilePreviewContent({
   const bodyRef = useRef<HTMLDivElement>(null);
   const [wrap, setWrap] = useState(false);
   const [imageOpen, setImageOpen] = useState(false);
-  const { dir, base } = splitPath(path);
+  const { base } = splitPath(path);
   const ext = base.includes(".") ? (base.split(".").pop() ?? "").toLowerCase() : "";
   const isMarkdown = ext === "md" || ext === "markdown";
   const isCSV = ext === "csv";
@@ -76,78 +75,14 @@ function FilePreviewContent({
     [base, state?.content],
   );
 
-  const headerIconBtn =
-    "inline-flex size-5 cursor-pointer items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-state-hover hover:text-foreground [&_svg]:size-3 max-md:pointer-coarse:size-9 max-md:pointer-coarse:[&_svg]:size-5";
-
   return (
     <div className="flex h-full min-w-0 flex-col">
-      {/* bb FilePreviewHeader: icon + name + icon buttons. */}
-      <div className="flex shrink-0 items-center gap-1.5 px-3 py-1.5">
-        <Icon
-          name={resolveFileIconName(path)}
-          className="size-3.5 shrink-0 text-muted-foreground"
-        />
-        <span className="min-w-0 truncate text-xs" title={path}>
-          <span className="text-foreground">{base}</span>
-          {dir && <span className="text-muted-foreground"> {dir}</span>}
-        </span>
-        <div className="ml-auto flex shrink-0 items-center gap-0.5">
-          <Button
-            variant="ghost"
-            size="icon"
-            className="size-7 max-md:pointer-coarse:size-10"
-            aria-label={t("agent.refresh")}
-            disabled={!connected || state?.status === "loading"}
-            onClick={onRefresh}
-          >
-            <Icon name="Refresh" className="size-3.5" />
-          </Button>
-          {hasPreview && (
-            <button
-              type="button"
-              className={headerIconBtn}
-              title={viewMode === "preview" ? t("agent.showSource") : t("agent.showPreview")}
-              aria-label={viewMode === "preview" ? t("agent.showSource") : t("agent.showPreview")}
-              onClick={() => setViewMode(viewMode === "preview" ? "source" : "preview")}
-            >
-              <Icon name={viewMode === "preview" ? "Code" : "Eye"} />
-            </button>
-          )}
-          {(viewMode === "source" || !hasPreview) &&
-            !state?.encoding && (
-            <button
-              type="button"
-              className={headerIconBtn}
-              title={t("agent.toggleWrap")}
-              aria-label={t("agent.toggleWrap")}
-              data-active={wrap || undefined}
-              aria-pressed={wrap}
-              onClick={() => setWrap(!wrap)}
-            >
-              <Icon name="TextWrap" />
-            </button>
-          )}
-          {state?.status === "ready" && !state.encoding && (
-            <button type="button" className={headerIconBtn}
-              title={t("agent.copyFileContents")} aria-label={t("agent.copyFileContents")}
-              onClick={() => void copyText(state.content)}>
-              <Icon name="FileText" />
-            </button>
-          )}
-          <button
-            type="button"
-            className={headerIconBtn}
-            title={t("agent.copyPath", { label: base })}
-            aria-label={t("agent.copyPath", { label: base })}
-            onClick={() => void copyText(path)}
-          >
-            <Icon name="Copy" />
-          </button>
-        </div>
-      </div>
+      <FilePreviewHeader path={path} name={base} content={state?.status === "ready" && !state.encoding ? state.content : null}
+        loading={!state || state.status === "loading"} connected={connected} hasPreview={hasPreview}
+        viewMode={viewMode} onViewModeChange={setViewMode} wrap={wrap} onWrapChange={setWrap} onRefresh={onRefresh} t={t} />
       {state === undefined || state.status === "loading" ? (
         <div className="flex flex-1 items-center justify-center text-muted-foreground">
-          <Icon name="Spinner" className="size-4 animate-spin" />
+          <Icon name="Spinner" className="size-4 animate-spin motion-reduce:animate-none" />
         </div>
       ) : state.status === "error" ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-3 px-3 text-center text-xs break-words text-muted-foreground">
