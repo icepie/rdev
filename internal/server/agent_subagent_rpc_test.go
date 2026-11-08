@@ -107,6 +107,14 @@ func TestSubagentRPCWireContract(t *testing.T) {
 	if got := guidance.snapshot(); len(got) != 1 || got[0] != "inspect tests" {
 		t.Fatal(got)
 	}
+	// Transcript reads use the bounded rdev output window and remain a normal
+	// correlated RPC response even before the subagent has produced output.
+	raw, _ := json.Marshal(map[string]any{"type": "get_subagent_messages", "id": "messages-1", "thread": th.id, "subagentId": child.ID, "fromByte": 0})
+	sendAgentOp(t, socket, string(raw))
+	messages := waitRawMsg(t, rec.msgs, "subagent messages", func(m map[string]json.RawMessage) bool { return string(m["type"]) == `"response"` })
+	if string(messages["success"]) != "true" || !strings.Contains(string(messages["data"]), `"sessionFile":"rdev://subagent/`) {
+		t.Fatalf("invalid transcript response: %s", messages)
+	}
 	call("steer_subagent", "missing", child.ID, "foreign", false)
 	call("steer_subagent", th.id, shell.ID, "wrong kind", false)
 	call("cancel_subagent", th.id, shell.ID, "", false)

@@ -81,6 +81,24 @@ func (h *agentWSHandler) handleAgentRPCFrame(ac *agentConn, raw []byte) bool {
 	switch request.Command {
 	case "get_subagents":
 		h.handleGetSubagents(ac, request)
+	case "get_subagent_messages":
+		if err := rpcStringField(fields, "subagentId", &request.SubagentID, false); err != nil {
+			fail("invalid_request", err.Error())
+			return true
+		}
+		if err := rpcStringField(fields, "sessionFile", &request.SessionFile, false); err != nil {
+			fail("invalid_request", err.Error())
+			return true
+		}
+		if raw, ok := fields["fromByte"]; ok {
+			var value int64
+			if json.Unmarshal(raw, &value) != nil || value < 0 {
+				fail("invalid_request", "fromByte must be a non-negative integer")
+				return true
+			}
+			request.FromByte = &value
+		}
+		h.handleGetSubagentMessages(ac, request)
 	case "steer_subagent", "cancel_subagent":
 		if err := rpcStringField(fields, "subagentId", &request.SubagentID, true); err != nil {
 			fail("invalid_request", err.Error())

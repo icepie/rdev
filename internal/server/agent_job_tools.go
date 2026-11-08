@@ -431,3 +431,82 @@ type ompSubagentSnapshot struct {
 	Task        string `json:"task,omitempty"`
 	LastUpdate  int64  `json:"lastUpdate"`
 }
+
+// ompSubagentMessages is a bounded rdev transcript view. Jobs do not persist
+// OMP session JSONL files, so the cursor describes the retained output window;
+// reset is true whenever the caller asks for bytes before that window.
+type ompSubagentMessages struct {
+	SessionFile string           `json:"sessionFile"`
+	FromByte    int64            `json:"fromByte"`
+	NextByte    int64            `json:"nextByte"`
+	Reset       bool             `json:"reset"`
+	Entries     []map[string]any `json:"entries"`
+	Messages    []map[string]any `json:"messages"`
+}
+
+func (h *agentWSHandler) handleGetSubagentMessages(ac *agentConn, request agentMsg) {
+	threadID := request.Thread
+	if threadID == "" {
+		threadID = ac.current
+	}
+	if request.SubagentID == "" && request.SessionFile == "" {
+		h.writeRPCError(ac, request, "invalid_request", "subagentId or sessionFile is required")
+		return
+	}
+	var jobs *agentJobs
+	if ac.entry != nil {
+		h.srv.agentSessionsMu.Lock()
+		if th := ac.entry.threads[threadID]; th != nil {
+			jobs = th.jobs
+		}
+		h.srv.agentSessionsMu.Unlock()
+	}
+	if jobs == nil {
+		h.writeRPCError(ac, request, "invalid_request", "unknown thread")
+		return
+	}
+	var selected agentJobSnapshot
+	var found bool
+	for _, job := range jobs.List() {
+		if job.Kind == "subagent" && (request.SubagentID == job.ID || request.SessionFile == "rdev://subagent/"+job.ID) {
+			selected, found = job, true
+			if detailed, err := jobs.Read(job.ID); err == nil {
+				selected = detailed
+			}
+			break
+		}
+	}
+	if !found && request.SubagentID != "" {
+		if job, err := jobs.Read(request.SubagentID); err == nil && job.Kind == "subagent" {
+			selected, found = job, true
+		}
+	}
+	if !found {
+		h.writeRPCError(ac, request, "invalid_request", "unknown subagent")
+		return
+	}
+	output := selected.Output
+	if selected.State != "running" && selected.Result != "" {
+		output = selected.Result
+	}
+	from := int64(0)
+	if request.FromByte != nil {
+		from = *request.FromByte
+	}
+	window := int64(len(output))
+	reset := from > window
+	if reset {
+		from = 0
+	}
+	for from > 0 && from < window && (output[from]&0xc0) == 0x80 {
+		from--
+	}
+	content := output[from:]
+	data := ompSubagentMessages{SessionFile: "rdev://subagent/" + selected.ID, FromByte: from, NextByte: window, Reset: reset, Entries: []map[string]any{}, Messages: []map[string]any{}}
+	if content != "" {
+		data.Messages = []map[string]any{{"role": "assistant", "content": content}}
+	}
+	success := true
+	raw, _ := json.Marshal(data)
+	ac.writeJSON(agentMsg{Type: "response", Command: request.Command, ID: request.ID, Success: &success, Data: raw})
+}

@@ -64,6 +64,8 @@ type agentMsg struct {
 	JobID              string              `json:"jobId,omitempty"`
 	SubagentID         string              `json:"subagentId,omitempty"`
 	CustomInstructions string              `json:"customInstructions,omitempty"`
+	FromByte           *int64              `json:"fromByte,omitempty"`
+	SessionFile        string              `json:"sessionFile,omitempty"`
 	Name               string              `json:"name,omitempty"`
 	Args               string              `json:"args,omitempty"`
 	Result             string              `json:"result,omitempty"`
