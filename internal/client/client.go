@@ -190,15 +190,6 @@ type fileStream struct {
 	mode os.FileMode
 }
 
-type managedUpload struct {
-	path      string
-	partPath  string
-	file      *os.File
-	size      int64
-	offset    int64
-	startedAt time.Time
-}
-
 // Client is the rdev client that connects to the server
 type Client struct {
 	serverURL       string
@@ -216,6 +207,8 @@ type Client struct {
 	forwardOpen     map[string]chan struct{}
 	listeners       map[string]net.Listener
 	fileStreams     map[string]*fileStream
+	uploadMu        sync.Mutex // upload maps; never held during file I/O
+	uploadPaths     map[string]*managedUpload
 	uploads         map[string]*managedUpload
 	downloads       map[string]chan struct{}
 	desktopSessions map[string]*desktopSession
@@ -308,6 +301,7 @@ func NewClient(serverURL, clientID, password, shell string) *Client {
 		listeners:       make(map[string]net.Listener),
 		fileStreams:     make(map[string]*fileStream),
 		uploads:         make(map[string]*managedUpload),
+		uploadPaths:     make(map[string]*managedUpload),
 		downloads:       make(map[string]chan struct{}),
 		desktopSessions: make(map[string]*desktopSession),
 		done:            make(chan struct{}, 1),
@@ -430,10 +424,7 @@ func (h *wsEventHandler) OnClose(socket *gws.Conn, err error) {
 		tcpConn.Close()
 		delete(h.client.forwards, fid)
 	}
-	for tid, upload := range h.client.uploads {
-		upload.file.Close()
-		delete(h.client.uploads, tid)
-	}
+	uploads := h.client.snapshotUploads()
 	for tid, cancel := range h.client.downloads {
 		close(cancel)
 		delete(h.client.downloads, tid)
@@ -445,6 +436,9 @@ func (h *wsEventHandler) OnClose(socket *gws.Conn, err error) {
 	h.client.conn = nil
 	h.client.transport = nil
 	h.client.mu.Unlock()
+	for _, upload := range uploads {
+		h.client.cancelManagedUpload(upload)
+	}
 	select {
 	case h.client.done <- struct{}{}:
 	default:
@@ -866,10 +860,7 @@ func (c *Client) closeCurrentTransport(transport clientTransport, conn net.Conn)
 		tcpConn.Close()
 		delete(c.forwards, fid)
 	}
-	for tid, upload := range c.uploads {
-		upload.file.Close()
-		delete(c.uploads, tid)
-	}
+	uploads := c.snapshotUploads()
 	for tid, cancel := range c.downloads {
 		close(cancel)
 		delete(c.downloads, tid)
@@ -881,6 +872,9 @@ func (c *Client) closeCurrentTransport(transport clientTransport, conn net.Conn)
 	c.transport = nil
 	c.conn = nil
 	c.mu.Unlock()
+	for _, upload := range uploads {
+		c.cancelManagedUpload(upload)
+	}
 	conn.Close()
 	select {
 	case c.done <- struct{}{}:
@@ -1082,109 +1076,6 @@ func safeJoinFile(dir, name string) string {
 	return filepath.Join(defaultFilePath(dir), filepath.Base(name))
 }
 
-func (c *Client) handleManagedUploadStart(msg *protocol.Message) {
-	taskID := msg.TaskID
-	if taskID == "" {
-		return
-	}
-	target := msg.Path
-	if target == "" {
-		target = safeJoinFile(msg.ParentPath, msg.Name)
-	}
-	if target == "" {
-		c.sendFileTransferError(taskID, "", "missing target path")
-		return
-	}
-	partPath := target + ".rdevpart"
-	if err := os.MkdirAll(filepath.Dir(partPath), 0755); err != nil {
-		c.sendFileTransferError(taskID, target, fmt.Sprintf("mkdir error: %v", err))
-		return
-	}
-	f, err := os.OpenFile(partPath, os.O_CREATE|os.O_RDWR, 0644)
-	if err != nil {
-		c.sendFileTransferError(taskID, target, err.Error())
-		return
-	}
-	st, err := f.Stat()
-	if err != nil {
-		f.Close()
-		c.sendFileTransferError(taskID, target, err.Error())
-		return
-	}
-	offset := st.Size()
-	if msg.Size >= 0 && offset > msg.Size {
-		if err := f.Truncate(0); err != nil {
-			f.Close()
-			c.sendFileTransferError(taskID, target, err.Error())
-			return
-		}
-		offset = 0
-	}
-	if _, err := f.Seek(offset, io.SeekStart); err != nil {
-		f.Close()
-		c.sendFileTransferError(taskID, target, err.Error())
-		return
-	}
-	c.mu.Lock()
-	if old := c.uploads[taskID]; old != nil {
-		old.file.Close()
-	}
-	c.uploads[taskID] = &managedUpload{path: target, partPath: partPath, file: f, size: msg.Size, offset: offset, startedAt: time.Now()}
-	c.mu.Unlock()
-	c.send(&protocol.Message{Type: protocol.MsgFileUploadReady, TaskID: taskID, Path: target, Offset: offset, Size: msg.Size})
-}
-
-func (c *Client) handleManagedUploadChunk(taskID string, offset int64, data []byte) {
-	c.mu.Lock()
-	up := c.uploads[taskID]
-	c.mu.Unlock()
-	if up == nil {
-		c.sendFileTransferError(taskID, "", "upload not found")
-		return
-	}
-	if offset != up.offset {
-		c.sendFileTransferError(taskID, up.path, fmt.Sprintf("unexpected offset %d, want %d", offset, up.offset))
-		return
-	}
-	n, err := up.file.Write(data)
-	if err != nil {
-		c.sendFileTransferError(taskID, up.path, err.Error())
-		return
-	}
-	up.offset += int64(n)
-	c.sendBinaryOffset(protocol.BinFileUploadAck, taskID, up.offset, nil)
-}
-
-func (c *Client) handleManagedUploadEnd(msg *protocol.Message) {
-	taskID := msg.TaskID
-	c.mu.Lock()
-	up := c.uploads[taskID]
-	delete(c.uploads, taskID)
-	c.mu.Unlock()
-	if up == nil {
-		c.sendFileTransferError(taskID, msg.Path, "upload not found")
-		return
-	}
-	if err := up.file.Sync(); err != nil {
-		up.file.Close()
-		c.sendFileTransferError(taskID, up.path, err.Error())
-		return
-	}
-	if err := up.file.Close(); err != nil {
-		c.sendFileTransferError(taskID, up.path, err.Error())
-		return
-	}
-	if up.size >= 0 && up.offset != up.size {
-		c.sendFileTransferError(taskID, up.path, fmt.Sprintf("size mismatch: wrote %d of %d", up.offset, up.size))
-		return
-	}
-	if err := os.Rename(up.partPath, up.path); err != nil {
-		c.sendFileTransferError(taskID, up.path, err.Error())
-		return
-	}
-	c.send(&protocol.Message{Type: protocol.MsgFileTransferEnd, TaskID: taskID, Path: up.path, Size: up.offset, Success: true})
-}
-
 func (c *Client) handleManagedDownloadStart(msg *protocol.Message) {
 	taskID := msg.TaskID
 	path := msg.Path
@@ -1283,11 +1174,10 @@ func (c *Client) handleManagedTransferCancel(taskID string) {
 	if taskID == "" {
 		return
 	}
-	c.mu.Lock()
-	if up := c.uploads[taskID]; up != nil {
-		up.file.Close()
-		delete(c.uploads, taskID)
+	if up := c.managedUploadFor(taskID); up != nil {
+		c.cancelManagedUpload(up)
 	}
+	c.mu.Lock()
 	if cancel := c.downloads[taskID]; cancel != nil {
 		close(cancel)
 		delete(c.downloads, taskID)
