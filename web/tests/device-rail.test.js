@@ -44,3 +44,18 @@ it("uses a reduced-motion-safe loading indicator", async () => {
   const spinner = document.querySelector('[data-icon="Spinner"]');
   expect(spinner?.className).toContain("motion-reduce:animate-none");
 });
+
+it("supports keyboard navigation across filtered device rows", async () => {
+  state = { devices: [{ id: "alpha", os: "linux", hasPassword: false }, { id: "beta", os: "macos", hasPassword: false }, { id: "gamma", os: "windows", hasPassword: false }], error: "", loading: false };
+  const picked = vi.fn();
+  const dom = new JSDOM('<div id="root"></div>', { url: "http://localhost" });
+  Object.assign(globalThis, { window: dom.window, document: dom.window.document, IS_REACT_ACT_ENVIRONMENT: true });
+  const root = createRoot(document.getElementById("root"));
+  await act(() => root.render(createElement(DeviceRail, { onPick: picked })));
+  const rows = [...document.querySelectorAll("button[draggable]")];
+  rows[0].focus();
+  await act(() => rows[0].dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "End", bubbles: true })));
+  expect(document.activeElement).toBe(rows[2]);
+  await act(() => rows[2].dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true })));
+  expect(document.activeElement).toBe(rows[1]);
+});

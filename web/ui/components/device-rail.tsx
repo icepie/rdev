@@ -23,6 +23,7 @@ export function DeviceRail({
   const { devices, error, loading, refresh } = useDevices();
   const { t } = useI18n();
   const searchTriggerRef = useRef<HTMLButtonElement>(null);
+  const deviceRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const [searchOpen, setSearchOpen] = useState(false);
   const [query, setQuery] = useState("");
   const visibleDevices = devices.filter((device) =>
@@ -88,7 +89,7 @@ export function DeviceRail({
             {t("common.loading")}
           </div>
         )}
-        {visibleDevices.map((d) => (
+        {visibleDevices.map((d, index) => (
           <button
             key={d.id}
             type="button"
@@ -100,6 +101,19 @@ export function DeviceRail({
               e.dataTransfer.effectAllowed = "copy";
             }}
             onClick={() => onPick(d.id)}
+            ref={(node) => { deviceRefs.current[index] = node; }}
+            onKeyDown={(event) => {
+              if (!visibleDevices.length) return;
+              let next = -1;
+              if (event.key === "ArrowDown") next = (index + 1) % visibleDevices.length;
+              else if (event.key === "ArrowUp") next = (index - 1 + visibleDevices.length) % visibleDevices.length;
+              else if (event.key === "Home") next = 0;
+              else if (event.key === "End") next = visibleDevices.length - 1;
+              if (next >= 0) {
+                event.preventDefault();
+                deviceRefs.current[next]?.focus();
+              }
+            }}
             className={cn(
               SIDEBAR_ROW_CLASS,
               "mb-0.5",
