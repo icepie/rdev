@@ -52,3 +52,34 @@ it('navigates a gallery, zooms and resets, then restores trigger focus without l
     delete globalThis.IS_REACT_ACT_ENVIRONMENT;
   }
 });
+
+it('recovers decode errors without closing the gallery and isolates failures between images', async () => {
+ globalThis.IS_REACT_ACT_ENVIRONMENT=true;
+ const host=document.createElement('div');document.body.append(host);
+ const root=createRoot(host);
+ const gallery=[{src:'data:image/png;base64,YQ==',name:'first'},{src:'data:image/png;base64,Yg==',name:'second'}];
+ const dialog=()=>document.querySelector('[role=dialog]');
+ try {
+  await act(async()=>root.render(createElement(ImagePreview,{...gallery[0],gallery})));
+  await act(async()=>host.querySelector('button').click());
+  const first=dialog().querySelector('img');
+  await act(async()=>first.dispatchEvent(new Event('error')));
+  expect(dialog().textContent).toContain('agent.imageLoadFailed');
+  expect(first.hidden).toBe(true);
+  const wheel=new WheelEvent('wheel',{deltaY:-100,cancelable:true});
+  window.dispatchEvent(wheel);
+  expect(wheel.defaultPrevented).toBe(false);
+  const retry=[...dialog().querySelectorAll('button')].find(button=>button.textContent.includes('agent.imageRetry'));
+  await act(async()=>retry.click());
+  expect(dialog()).not.toBeNull();
+  expect(dialog().querySelector('img')).not.toBe(first);
+  expect(dialog().querySelector('img').hidden).toBe(false);
+  await act(async()=>dialog().querySelector('img').dispatchEvent(new Event('error')));
+  await act(async()=>document.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowRight',bubbles:true,cancelable:true})));
+  expect(dialog().querySelector('img').alt).toBe('second');
+  expect(dialog().textContent).not.toContain('agent.imageLoadFailed');
+  expect(dialog().querySelector('img').hidden).toBe(false);
+ } finally {
+  await act(async()=>root.unmount());host.remove();delete globalThis.IS_REACT_ACT_ENVIRONMENT;
+ }
+});

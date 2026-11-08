@@ -94,6 +94,8 @@ function LightboxZoomableImage({
 }: LightboxZoomableImageProps) {
   const { t } = useI18n();
   const imageRef = useRef<HTMLImageElement>(null);
+  const [failed, setFailed] = useState(false);
+  const [attempt, setAttempt] = useState(0);
   const constrainView = useCallback(
     (view: PanZoomView) => {
       const image = imageRef.current;
@@ -113,7 +115,7 @@ function LightboxZoomableImage({
   );
   const { isDragging, pointerHandlers, resetView, view } = usePanZoom({
     constrainView,
-    enabled: true,
+    enabled: !failed,
     limits: LIGHTBOX_SCALE_LIMITS,
     viewportElement: viewport,
   });
@@ -121,8 +123,20 @@ function LightboxZoomableImage({
 
   return (
     <>
+      {failed && <div role="status" className="flex max-w-sm cursor-default flex-col items-center gap-3 rounded-xl bg-black/60 p-6 text-center text-sm text-white">
+        <Icon name="Image" className="size-6" />
+        <p>{t("agent.imageLoadFailed")}</p>
+        <Button type="button" variant="ghost" className="text-white hover:bg-white/15 hover:text-white"
+          onClick={() => { resetView(); setFailed(false); setAttempt(value => value + 1); }}>
+          <Icon name="Refresh" className="size-4" />{t("agent.imageRetry")}
+        </Button>
+      </div>}
       <img
+        key={attempt}
         ref={imageRef}
+        onError={() => { resetView(); setFailed(true); }}
+        onLoad={() => setFailed(false)}
+        hidden={failed}
         src={src}
         alt={alt}
         draggable={!isZoomed}
@@ -132,6 +146,7 @@ function LightboxZoomableImage({
         }}
         className={cn(
           "max-h-[82dvh] max-w-full object-contain",
+          failed && "hidden",
           isZoomed &&
             (isDragging ? "cursor-grabbing select-none" : "cursor-grab"),
         )}

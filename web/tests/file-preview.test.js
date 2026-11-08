@@ -304,3 +304,23 @@ it("aborts obsolete HTML probes and ignores their late failure without refetchin
   expect(fetch.mock.calls.every(([,options])=>options.method==='HEAD')).toBe(true);
  }finally{await dispose();}
 });
+
+it("shows decode failures, gates refresh offline, and resets errors for refreshed image content", async () => {
+ const onRefresh=vi.fn();
+ const image=content=>({...ready(content),encoding:"base64",mime:"image/png"});
+ const {host,render,dispose}=await mount({path:"/photo.png",state:image("bad"),onRefresh});
+ try {
+  await act(async()=>host.querySelector("img").dispatchEvent(new Event("error")));
+  expect(host.textContent).toContain("This image could not be displayed");
+  const retry=[...host.querySelectorAll("button")].find(button=>button.textContent.includes("Reload image"));
+  await act(async()=>retry.click());
+  expect(onRefresh).toHaveBeenCalledOnce();
+  await render({path:"/photo.png",state:image("bad"),connected:false,onRefresh});
+  expect([...host.querySelectorAll("button")].find(button=>button.textContent.includes("Reload image")).disabled).toBe(true);
+  await render({path:"/photo.png",state:image("new-content"),onRefresh});
+  expect(host.textContent).not.toContain("This image could not be displayed");
+  expect(host.querySelector("img").getAttribute("src")).toBe("data:image/png;base64,new-content");
+  await act(async()=>button(host,"Open photo.png in full screen preview").click());
+  expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+ } finally {await dispose();}
+});

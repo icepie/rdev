@@ -67,7 +67,7 @@ function FilePreviewContent({
   const bodyRef = useRef<HTMLDivElement>(null);
   const sourceRef = useRef<HTMLDivElement>(null);
   const [wrap, setWrap] = useState(false);
-  const [imageOpen, setImageOpen] = useState(false);
+
   const [htmlLoading, setHtmlLoading] = useState(false);
   const { base } = splitPath(path);
   const ext = base.includes(".") ? (base.split(".").pop() ?? "").toLowerCase() : "";
@@ -129,14 +129,8 @@ function FilePreviewContent({
             {state.encoding === "url" && state.mime?.startsWith("video/") ? (
               <VideoFilePreview key={state.content} src={state.content} name={base} visible={visible} t={t} />
             ) : state.encoding === "base64" && state.mime ? (
-              <div className="h-full w-full overflow-auto p-4" style={IMAGE_TRANSPARENCY_CHECKER_STYLE}>
-                <button type="button" className="block w-full cursor-zoom-in" aria-label={t("agent.openImagePreview", { name: base })} onClick={() => setImageOpen(true)}>
-                  <img src={`data:${state.mime};base64,${state.content}`} alt={base}
-                    decoding="async" className="mx-auto block h-auto max-w-full" />
-                </button>
-                <ImageLightbox isOpen={imageOpen} imageSrc={imageOpen ? `data:${state.mime};base64,${state.content}` : null}
-                  imageAlt={base} title={base} onClose={() => setImageOpen(false)} />
-              </div>
+              <FileImagePreview key={state.content} src={`data:${state.mime};base64,${state.content}`} name={base}
+                connected={connected} onRefresh={onRefresh} t={t} />
             ) : (
               <>
                 {isHTML ? (
@@ -164,3 +158,26 @@ function FilePreviewContent({
   );
 }
 
+
+// Scope decode failures and the lightbox to the image content, including a
+// refreshed image at the same path. An old image's failure cannot hide the new one.
+function FileImagePreview({src, name, connected, onRefresh, t}: {
+  src: string; name: string; connected: boolean; onRefresh: () => void; t: Translator;
+}) {
+  const [failed, setFailed] = useState(false);
+  const [open, setOpen] = useState(false);
+  if (failed) return <div className="flex h-full flex-col items-center justify-center gap-3 p-4 text-center text-xs text-muted-foreground">
+    <Icon name="Image" className="size-6" />
+    <p role="status">{t("agent.imageLoadFailed")}</p>
+    <Button variant="outline" size="sm" disabled={!connected} onClick={onRefresh}>
+      <Icon name="Refresh" className="size-3.5" />{t("agent.imageRetry")}
+    </Button>
+  </div>;
+  return <div className="h-full w-full overflow-auto p-4" style={IMAGE_TRANSPARENCY_CHECKER_STYLE}>
+    <button type="button" className="block w-full cursor-zoom-in" aria-label={t("agent.openImagePreview", {name})} onClick={() => setOpen(true)}>
+      <img src={src} alt={name} decoding="async" onError={() => {setFailed(true); setOpen(false);}}
+        className="mx-auto block h-auto max-w-full" />
+    </button>
+    <ImageLightbox isOpen={open} imageSrc={open ? src : null} imageAlt={name} title={name} onClose={() => setOpen(false)} />
+  </div>;
+}
