@@ -2331,7 +2331,7 @@ export function AgentPage() {
   );
 
   return (
-    <div className="relative flex h-full overflow-hidden [--agent-mobile-sidebar-width:min(calc(100vw_-_48px),312px)]">
+    <div className="relative flex h-full overflow-hidden [--agent-mobile-sidebar-width:min(calc(100vw_-_48px),360px)]">
       {/* BB offcanvas on desktop; below 768px reveal the fixed-width drawer
        * and translate the full-width conversation without squeezing it. */}
       <div
@@ -2362,7 +2362,7 @@ export function AgentPage() {
         inert={!sidebarOpen}
         style={{ "--sidebar-w": `${sidebarWidth}px` } as CSSProperties}
         className={cn(
-          "flex shrink-0 flex-col overflow-hidden border-r border-border-seam bg-sidebar text-sidebar-foreground select-none",
+          "flex shrink-0 flex-col overflow-hidden border-r border-border-seam bg-sidebar text-sidebar-foreground select-none max-md:pl-12",
           isNarrow
             ? "absolute inset-y-0 left-0 z-20 w-[var(--agent-mobile-sidebar-width)]"
             : "absolute inset-y-0 left-0 z-20 w-[var(--sidebar-w)]",

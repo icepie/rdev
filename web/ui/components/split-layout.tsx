@@ -131,7 +131,7 @@ export function SplitPageShell({
         aria-hidden={!open}
         inert={!open}
         data-open={open}
-        className="workspace-device-sidebar relative flex shrink-0 flex-col overflow-hidden bg-sidebar outline-none"
+        className="workspace-device-sidebar relative flex shrink-0 flex-col overflow-hidden max-md:pl-12 bg-sidebar outline-none"
         style={{ width: compact ? undefined : open ? width : 0 }}
       >
         <MobileWorkspaceNavigation />

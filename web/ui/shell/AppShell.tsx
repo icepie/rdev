@@ -44,7 +44,7 @@ const THEME_CHOICES: { value: ThemeChoice; key: string }[] = [
 ];
 
 const RAIL_BUTTON_CLASS =
-  "flex size-8 max-md:pointer-coarse:size-9 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-state-hover hover:text-foreground";
+  "flex size-8 shrink-0 max-md:pointer-coarse:size-9 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-state-hover hover:text-foreground";
 
 function RailLink({
   item,
@@ -260,7 +260,12 @@ function DrawerRailLink({ item }: { item: (typeof NAV_ITEMS)[number] }) {
 /** Hidden with the owning sidebar; mobile has no persistent navigation rail. */
 export function MobileWorkspaceNavigation() {
   const { t } = useI18n();
-  return <nav aria-label={t("nav.label")} className="flex shrink-0 flex-wrap items-center gap-1 border-b border-border-seam p-2 md:hidden">
+  const railControl = useRailControl();
+  return <nav aria-label={t("nav.label")} className="absolute inset-y-0 left-0 flex w-12 flex-col items-center gap-0.5 overflow-y-auto border-r border-border-seam bg-sidebar py-2 md:hidden">
+    <button type="button" aria-label={t("rail.collapse")} onClick={railControl?.toggle}
+      className={cn(RAIL_BUTTON_CLASS, "mb-2 shrink-0 cursor-pointer")}>
+      <Icon name="PanelLeft" className="size-4.5" />
+    </button>
     {NAV_ITEMS.map(item => <RailLink key={item.to} item={item} label={t(item.key)} />)}
     <RailSettings />
   </nav>;

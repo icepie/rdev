@@ -43,7 +43,7 @@
     position: absolute;
     inset: 0 auto 0 0;
     z-index: 20;
-    width: min(312px, calc(100vw - 48px));
+    width: min(360px, calc(100vw - 48px));
     border-right: 1px solid var(--border-seam);
     translate: -100% 0;
     visibility: hidden;
@@ -58,7 +58,7 @@
     transition: translate var(--motion-panel) var(--motion-ease);
   }
   .workspace-device-content[data-sidebar-open="true"] {
-    translate: min(312px, calc(100vw - 48px)) 0;
+    translate: min(360px, calc(100vw - 48px)) 0;
   }
 }
 
