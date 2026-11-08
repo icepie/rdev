@@ -3,8 +3,41 @@ package server
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
+
+	"rdev/internal/agent"
 )
+
+// OMP ImageContent uses mimeType; browser attachments use mime/name.
+func parseRPCImages(raw json.RawMessage) ([]agent.MessageImage, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	if string(raw) == "null" {
+		return nil, fmt.Errorf("images must be an array")
+	}
+	var input []struct {
+		Type     string `json:"type"`
+		MimeType string `json:"mimeType"`
+		Data     string `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &input); err != nil {
+		return nil, fmt.Errorf("images must be an array of ImageContent")
+	}
+	if len(input) > agentMaxImages {
+		return nil, fmt.Errorf("too many images: max %d", agentMaxImages)
+	}
+	images := make([]agentImage, 0, len(input))
+	for i, image := range input {
+		if image.Type != "image" || !strings.HasPrefix(image.MimeType, "image/") || image.Data == "" {
+			return nil, fmt.Errorf("image %d requires type=image, mimeType and data", i+1)
+		}
+		images = append(images, agentImage{Name: fmt.Sprintf("image-%d", i+1), Mime: image.MimeType, Data: image.Data})
+	}
+	encoded, _ := json.Marshal(images)
+	return parseAgentImages(encoded)
+}
 
 // rpcTurnCompletion keeps a native RPC request correlated with the one turn
 // that fulfills it. It is intentionally connection-scoped: turn frames are
@@ -102,6 +135,13 @@ func (h *agentWSHandler) handleAgentRPCFrame(ac *agentConn, raw []byte) bool {
 			return true
 		}
 		h.handleRPCPrompt(ac, request)
+	case "steer", "follow_up":
+		if err := rpcStringField(fields, "message", &request.Message, false); err != nil {
+			fail("invalid_request", err.Error())
+			return true
+		}
+		request.Images = fields["images"]
+		h.handleRPCQueuedInput(ac, request)
 	case "get_subagents":
 		h.handleGetSubagents(ac, request)
 	case "get_subagent_messages":
@@ -176,6 +216,62 @@ func (h *agentWSHandler) handleRPCPrompt(ac *agentConn, request agentMsg) {
 	s.agentSessionsMu.Unlock()
 	s.agentBroadcastTurn(ac.entry, th, start)
 	s.goAgent(func() { s.runAgentTurn(ac.entry, th, turn, request.Message, nil) })
+}
+
+func (h *agentWSHandler) handleRPCQueuedInput(ac *agentConn, request agentMsg) {
+	if ac.entry == nil {
+		h.writeRPCError(ac, request, "invalid_request", "unknown thread")
+		return
+	}
+	threadID := request.Thread
+	if threadID == "" {
+		threadID = ac.current
+	}
+	images, err := parseRPCImages(request.Images)
+	if err != nil {
+		h.writeRPCError(ac, request, "invalid_request", err.Error())
+		return
+	}
+	text := strings.TrimSpace(request.Message)
+	if text == "" && len(images) == 0 {
+		h.writeRPCError(ac, request, "invalid_request", "message must not be blank")
+		return
+	}
+	s := h.srv
+	s.agentSessionsMu.Lock()
+	th := ac.entry.threads[threadID]
+	if th == nil {
+		s.agentSessionsMu.Unlock()
+		h.writeRPCError(ac, request, "invalid_request", "unknown thread")
+		return
+	}
+	queued := th.running
+	var start agentMsg
+	var turn agentTurnSnapshot
+	if queued {
+		item := agentQueuedChat{text: text, images: images}
+		if request.Command == "steer" {
+			queueAgentSteeringLocked(th, item)
+		} else {
+			th.queue = append(th.queue, item)
+		}
+		ac.entry.lastActive = time.Now()
+	} else {
+		s.rebindAgentSessionLocked(ac.entry)
+		start = s.startAgentTurnLocked(ac.entry, th, text, images)
+		turn = snapshotAgentTurnLocked(th)
+	}
+	s.agentSessionsMu.Unlock()
+	// Acknowledge admission, as OMP does for steer/follow_up. Validation and
+	// insertion share one lock hold, so deletion cannot produce a false ack.
+	success := true
+	ac.writeJSON(agentMsg{Type: "response", Command: request.Command, ID: request.ID, Success: &success})
+	if queued {
+		s.broadcastQueue(ac.entry, th)
+	} else {
+		s.agentBroadcastTurn(ac.entry, th, start)
+		s.goAgent(func() { s.runAgentTurn(ac.entry, th, turn, text, images) })
+	}
 }
 
 func (h *agentWSHandler) handleRPCAbort(ac *agentConn, request agentMsg) {
@@ -317,6 +413,8 @@ func (h *agentWSHandler) handleRPCAvailableCommands(ac *agentConn, request agent
 		{"name": "set_model", "params": map[string]any{"model": "string", "thread": "string?"}},
 		{"name": "abort", "params": map[string]any{"thread": "string?"}},
 		{"name": "prompt", "params": map[string]any{"message": "string", "thread": "string?"}},
+		{"name": "steer", "params": map[string]any{"message": "string", "thread": "string?"}},
+		{"name": "follow_up", "params": map[string]any{"message": "string", "thread": "string?"}},
 		{"name": "compact", "params": map[string]any{"customInstructions": "string?"}},
 		{"name": "get_subagents"}, {"name": "get_subagent_messages"},
 		{"name": "steer_subagent", "params": map[string]any{"subagentId": "string", "message": "string"}},

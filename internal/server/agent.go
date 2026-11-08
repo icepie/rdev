@@ -1665,19 +1665,7 @@ func (h *agentWSHandler) handleSteer(ac *agentConn, text, threadRef string, imag
 		h.handleChatWithImages(ac, entry, text, "", threadRef, images)
 		return
 	}
-	// Keep multiple steering messages FIFO, ahead of normal follow-ups.
-	index := 0
-	for index < len(th.queue) && th.queue[index].steering {
-		index++
-	}
-	queued := agentQueuedChat{text: text, images: images, steering: true, display: json.RawMessage(`{"steering":true}`)}
-	th.queue = append(th.queue, agentQueuedChat{})
-	copy(th.queue[index+1:], th.queue[index:])
-	th.queue[index] = queued
-	if th.steeringWake != nil {
-		close(th.steeringWake)
-		th.steeringWake = nil
-	}
+	queueAgentSteeringLocked(th, agentQueuedChat{text: text, images: images})
 	srv.agentSessionsMu.Unlock()
 	srv.broadcastQueue(entry, th)
 }

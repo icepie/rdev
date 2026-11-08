@@ -136,6 +136,24 @@ func TestSubagentRPCWireContract(t *testing.T) {
 	if string(promptReply["success"]) != "false" || string(promptReply["code"]) != `"execution_error"` {
 		t.Fatalf("prompt should report provider failure: %s", promptReply)
 	}
+	for _, command := range []string{"steer", "follow_up"} {
+		queuedRaw, _ := json.Marshal(map[string]any{"type": command, "id": command + "-1", "thread": th.id, "message": "queued"})
+		sendAgentOp(t, socket, string(queuedRaw))
+		queuedReply := waitRawMsg(t, rec.msgs, "queued input response", func(m map[string]json.RawMessage) bool {
+			return string(m["type"]) == `"response"` && string(m["id"]) == `"`+command+`-1"`
+		})
+		if string(queuedReply["success"]) != "true" {
+			t.Fatalf("invalid %s response: %s", command, queuedReply)
+		}
+	}
+	badQueue, _ := json.Marshal(map[string]any{"type": "follow_up", "id": "bad-follow", "thread": "missing", "message": "must reject"})
+	sendAgentOp(t, socket, string(badQueue))
+	badQueueReply := waitRawMsg(t, rec.msgs, "unknown queue thread", func(m map[string]json.RawMessage) bool {
+		return string(m["type"]) == `"response"` && string(m["id"]) == `"bad-follow"`
+	})
+	if string(badQueueReply["success"]) != "false" || string(badQueueReply["code"]) != `"invalid_request"` {
+		t.Fatalf("invalid queue accepted: %s", badQueueReply)
+	}
 	call("get_subagents", "missing", "", "", false)
 	// Invalid RPC frames must return a correlated failure, not silently fall
 	// into the browser protocol or wait forever for a reply.
