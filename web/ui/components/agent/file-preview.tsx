@@ -68,6 +68,7 @@ function FilePreviewContent({
   const sourceRef = useRef<HTMLDivElement>(null);
   const [wrap, setWrap] = useState(false);
   const [imageOpen, setImageOpen] = useState(false);
+  const [htmlLoading, setHtmlLoading] = useState(false);
   const { base } = splitPath(path);
   const ext = base.includes(".") ? (base.split(".").pop() ?? "").toLowerCase() : "";
   const isMarkdown = ext === "md" || ext === "markdown";
@@ -100,7 +101,7 @@ function FilePreviewContent({
   return (
     <div className="flex h-full min-w-0 flex-col">
       <FilePreviewHeader path={path} name={base} externalUrl={state?.status === "ready" ? state.previewUrl : undefined} content={state?.status === "ready" && !state.encoding ? state.content : null}
-        loading={!state || state.status === "loading"} connected={connected} hasPreview={hasPreview}
+        loading={!state || state.status === "loading"} previewLoading={isHTML && viewMode === "preview" && htmlLoading} connected={connected} hasPreview={hasPreview}
         viewMode={viewMode} onViewModeChange={setViewMode} wrap={wrap} onWrapChange={setWrap} onRefresh={onRefresh} t={t} />
       {state === undefined || state.status === "loading" ? (
         <div className="flex flex-1 items-center justify-center text-muted-foreground">
@@ -139,7 +140,7 @@ function FilePreviewContent({
             ) : (
               <>
                 {isHTML ? (
-                  <HtmlFilePreview content={state.content} name={base} hidden={viewMode !== "preview"} previewUrl={state.previewUrl} />
+                  <HtmlFilePreview content={state.content} name={base} hidden={viewMode !== "preview"} previewUrl={state.previewUrl} connected={connected} onRetry={onRefresh} onLoadingChange={setHtmlLoading} t={t} />
                 ) : hasPreview && (
                   <FileViewPane active={viewMode === "preview"} mode="preview">
                     {isCSV ? <CsvFilePreview name={base} content={state.content} t={t} /> : (

@@ -162,6 +162,7 @@ func TestHTMLPreviewResponseSandboxAndSizeLimit(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, method := range []string{"GET", "HEAD"} {
+		before := tr.reads
 		w := httptest.NewRecorder()
 		s.HandleMedia(w, httptest.NewRequest(method, url, nil))
 		if w.Code != 200 || w.Header().Get("Content-Type") != "text/html; charset=utf-8" {
@@ -173,6 +174,9 @@ func TestHTMLPreviewResponseSandboxAndSizeLimit(t *testing.T) {
 		}
 		if method == "GET" && !bytes.Equal(w.Body.Bytes(), tr.data) {
 			t.Fatal("authored HTML changed")
+		}
+		if method == "HEAD" && tr.reads-before != 1 {
+			t.Fatal("HEAD downloaded the HTML body")
 		}
 		if method == "HEAD" && w.Body.Len() != 0 {
 			t.Fatal("HEAD returned body")

@@ -31,6 +31,9 @@ it('moves actions at the actual pane breakpoint and preserves keyboard menu acti
   await act(async()=>resize([{contentRect:{width:559}}]));
   expect(host.querySelector('[aria-label="Copy file contents"]')).toBeNull();
   expect(host.querySelector('a[aria-label="Open in browser"]')).not.toBeNull();
+  const scoped=props.externalUrl+'/page%20one.html';
+  await render({externalUrl:scoped});
+  expect(host.querySelector('a[aria-label="Open in browser"]').getAttribute('href')).toBe(scoped);
   const trigger=host.querySelector('[aria-label="File actions"]');
   await act(async()=>{trigger.focus();trigger.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}))});
   const menu=document.querySelector('[role="menu"]');expect(menu).not.toBeNull();

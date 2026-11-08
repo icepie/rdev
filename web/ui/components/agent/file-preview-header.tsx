@@ -3,6 +3,7 @@ import { Button } from "../button";
 import { Icon } from "../icon";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../tooltip";
 import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "../dropdown-menu";
+import { filePreviewURL } from "../../lib/file-preview-url";
 import { copyText } from "../../lib/clipboard";
 import { resolveFileIconName } from "./file-visuals";
 import type { Translator } from "./types";
@@ -14,11 +15,21 @@ function Action({ label, icon, ...props }: ComponentProps<typeof Button> & { lab
 
 // BB f51e6b0 FilePreviewHeader / FilePreviewChrome: use actual pane width,
 // keeping view modes visible and moving secondary actions into a narrow menu.
-export function FilePreviewHeader({ path, name, externalUrl, content, loading, connected, hasPreview, viewMode, onViewModeChange, wrap, onWrapChange, onRefresh, t }: {
-  path: string; name: string; externalUrl?: string; content: string | null; loading: boolean; connected: boolean;
+export function FilePreviewHeader({ path, name, externalUrl, content, loading, previewLoading = false, connected, hasPreview, viewMode, onViewModeChange, wrap, onWrapChange, onRefresh, t }: {
+  path: string; name: string; externalUrl?: string; content: string | null; loading: boolean; previewLoading?: boolean; connected: boolean;
   hasPreview: boolean; viewMode: "preview" | "source"; onViewModeChange: (mode: "preview" | "source") => void;
   wrap: boolean; onWrapChange: (wrap: boolean) => void; onRefresh: () => void; t: Translator;
 }) {
+  const safeExternalUrl = filePreviewURL(externalUrl);
+  const busy = loading || previewLoading;
+  const [spinning, setSpinning] = useState(false);
+  // BB FilePreviewIcon waits 160ms, avoiding a flash for fast local reads.
+  useEffect(() => {
+    setSpinning(false);
+    if (!busy) return;
+    const timeout = setTimeout(() => setSpinning(true), 160);
+    return () => clearTimeout(timeout);
+  }, [busy]);
   const header = useRef<HTMLDivElement>(null);
   const [narrow, setNarrow] = useState(false);
   const [copyStatus, setCopyStatus] = useState<"path" | "content" | "error" | null>(null);
@@ -52,7 +63,8 @@ export function FilePreviewHeader({ path, name, externalUrl, content, loading, c
     <TooltipProvider delayDuration={300}>
       <div className="flex min-h-9 items-center gap-2 bg-surface-raised px-4 max-md:pointer-coarse:min-h-12 max-md:pointer-coarse:px-3">
         <div className="flex min-w-0 flex-1 items-center gap-1.5">
-          <Icon name={loading ? "Spinner" : resolveFileIconName(path)} className={`size-3.5 shrink-0 text-subtle-foreground max-md:pointer-coarse:size-5 ${loading ? "animate-spin motion-reduce:animate-none" : ""}`} />
+          <Icon name={spinning ? "Spinner" : resolveFileIconName(path)} className={`size-3.5 shrink-0 text-subtle-foreground max-md:pointer-coarse:size-5 ${spinning ? "animate-spin motion-reduce:animate-none" : ""}`} />
+          {spinning && <span role="status" className="sr-only">{t("common.loading")}</span>}
           <Tooltip><TooltipTrigger asChild>
             <button type="button" aria-label={pathLabel} onClick={() => void copy("path", path)}
               className="min-w-0 cursor-pointer truncate rounded-sm text-left font-mono text-xs font-medium leading-5 text-file-accent underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring max-md:pointer-coarse:text-sm" dir="rtl">
@@ -63,8 +75,8 @@ export function FilePreviewHeader({ path, name, externalUrl, content, loading, c
             <Action label={refreshLabel} icon="Refresh" disabled={!connected || loading} onClick={onRefresh} />
             {content !== null && <Action label={contentLabel} icon={copyStatus === "content" ? "Check" : "Copy"} onClick={() => void copy("content", content)} />}
           </>}
-          {externalUrl && /^\/api\/media\/[a-f0-9]{64}$/.test(externalUrl) && <Tooltip><TooltipTrigger asChild>
-            <a href={externalUrl} target="_blank" rel="noopener noreferrer" aria-label={t("agent.openExternalPreview")}
+          {safeExternalUrl && <Tooltip><TooltipTrigger asChild>
+            <a href={safeExternalUrl} target="_blank" rel="noopener noreferrer" aria-label={t("agent.openExternalPreview")}
               className={`${iconClass} inline-flex items-center justify-center focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring`}>
               <Icon name="Globe" />
             </a>

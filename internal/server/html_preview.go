@@ -102,6 +102,11 @@ func (s *Server) servePreviewResource(w http.ResponseWriter, r *http.Request, ct
 			http.Error(w, "HTML preview exceeds size limit", 502)
 			return
 		}
+		if r.Method == http.MethodHead {
+			w.Header().Set("Content-Type", mime)
+			w.Header().Set("Content-Length", strconv.FormatInt(meta.Size, 10))
+			return
+		}
 		content, err := io.ReadAll(io.LimitReader(reader, agentFileReadCap+1))
 		if err != nil || int64(len(content)) != meta.Size {
 			http.Error(w, "HTML preview changed or could not be read", 502)

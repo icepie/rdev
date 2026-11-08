@@ -16,6 +16,7 @@ afterEach(() => vi.restoreAllMocks());
 
 async function mount(props, wrap = node => node) {
  globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+ if (!vi.isMockFunction(globalThis.fetch)) vi.spyOn(globalThis, "fetch").mockResolvedValue({ok:true});
  vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function () { return this.tagName === "TR" ? 29 : 400; });
  const host = document.createElement("div"); document.body.append(host);
  const root = createRoot(host);
@@ -127,7 +128,7 @@ it("previews HTML in an isolated frame, preserves it across source toggles and r
   expect(host.querySelector('iframe')).toBe(frame);
   expect(frame.hidden).toBe(false);
   await render({path:'/counter.html',state:ready('<h1>Updated</h1>')});
-  expect(frame.srcdoc).toContain('<h1>Updated</h1>');
+  expect(host.querySelector('iframe').srcdoc).toContain('<h1>Updated</h1>');
   await render({path:'/other.htm',state:ready('<h1>Other</h1>'),lineRange:{start:1,end:1}});
   expect(host.querySelector('iframe')).not.toBe(frame);
   expect(host.querySelector('iframe').hidden).toBe(true);
@@ -222,7 +223,7 @@ it("retains independent preview/source reading positions, lazily mounts source a
 });
 
 it("uses the authorized HTML resource URL, retains its frame across modes, and reloads changed content", async () => {
- const previewUrl='/api/media/ticket/index.html';
+ const previewUrl='/api/media/'+'b'.repeat(64)+'/index.html';
  const props={path:'/site/index.html',state:{...ready('<link rel="stylesheet" href="style.css">'),previewUrl}};
  const {host,render,dispose}=await mount(props);
  try {
@@ -233,11 +234,73 @@ it("uses the authorized HTML resource URL, retains its frame across modes, and r
   await act(async()=>button(host,'Show source').click());
   await act(async()=>button(host,'Show preview').click());
   expect(host.querySelector('iframe')).toBe(frame);
-  const srcSetter=vi.spyOn(frame,'src','set');
   await render({...props,state:{...props.state,content:'<h1>Refreshed</h1>'}});
-  expect(srcSetter).toHaveBeenCalledOnce();
-  expect(srcSetter).toHaveBeenCalledWith(previewUrl);
+  const updated=host.querySelector('iframe');
+  expect(updated).not.toBe(frame);
+  expect(updated.getAttribute('src')).toBe(previewUrl);
   await render({...props,state:{...props.state,content:'<h1>Refreshed</h1>'},visible:false});
-  expect(srcSetter).toHaveBeenCalledOnce();
+  expect(host.querySelector('iframe')).toBe(updated);
  } finally {await dispose();}
+});
+
+it("shows delayed HTML loading, isolates old frame events, and offers a connected retry on failure", async () => {
+ vi.useFakeTimers();
+ const refresh=vi.fn();
+ const props={path:'/page.html',state:{...ready('<h1>Page</h1>'),previewUrl:'/api/media/'+'c'.repeat(64)+'/page.html'},onRefresh:refresh};
+ const {host,render,dispose}=await mount(props);
+ const loading=()=>[...host.querySelectorAll('[role="status"]')].some(e=>e.textContent==='Loading…');
+ try {
+  const first=host.querySelector('iframe');
+  expect(loading()).toBe(false);
+  await act(async()=>vi.advanceTimersByTimeAsync(159));
+  expect(loading()).toBe(false);
+  await act(async()=>vi.advanceTimersByTimeAsync(1));
+  expect(loading()).toBe(true);
+  await act(async()=>first.dispatchEvent(new Event('load')));
+  expect(loading()).toBe(false);
+  const next={...props,state:{...props.state,content:'<h1>Changed</h1>'}};
+  await render(next);
+  const second=host.querySelector('iframe');
+  expect(second).not.toBe(first);
+  await act(async()=>{first.dispatchEvent(new Event('load'));vi.advanceTimersByTime(160)});
+  expect(loading()).toBe(true);
+  await act(async()=>button(host,'Show source').click());
+  expect(loading()).toBe(false);
+  await act(async()=>button(host,'Show preview').click());
+  expect(host.querySelector('iframe')).toBe(second);
+  await act(async()=>second.dispatchEvent(new Event('load')));
+  globalThis.fetch.mockResolvedValueOnce({ok:false,status:503});
+  const failed={...next,state:{...next.state,content:'<h1>Offline</h1>'}};
+  await render(failed);
+  expect(loading()).toBe(false);
+  expect(host.querySelector('[role="alert"]').textContent).toContain('Unable to load HTML preview');
+  const retry=[...host.querySelectorAll('button')].find(e=>e.textContent==='Retry');
+  await act(async()=>retry.click());
+  expect(refresh).toHaveBeenCalledOnce();
+  await render({...failed,connected:false});
+  expect(retry.disabled).toBe(true);
+  await act(async()=>retry.click());
+  expect(refresh).toHaveBeenCalledOnce();
+ } finally {await dispose();vi.useRealTimers();}
+});
+
+it("aborts obsolete HTML probes and ignores their late failure without refetching on mode switches",async()=>{
+ const pending=Promise.withResolvers();
+ const fetch=vi.spyOn(globalThis,'fetch').mockReturnValueOnce(pending.promise).mockResolvedValue({ok:true});
+ const props={path:'/page.html',state:{...ready('<h1>Old</h1>'),previewUrl:'/api/media/'+'d'.repeat(64)+'/page.html'}};
+ const {host,render,dispose}=await mount(props);
+ try {
+  expect(host.querySelector('iframe')).toBeNull();
+  const signal=fetch.mock.calls[0][1].signal;
+  await render({...props,state:{...props.state,content:'<h1>New</h1>'}});
+  expect(signal.aborted).toBe(true);
+  const frame=host.querySelector('iframe');
+  await act(async()=>pending.resolve({ok:false,status:404}));
+  expect(host.querySelector('[role="alert"]')).toBeNull();
+  expect(host.querySelector('iframe')).toBe(frame);
+  await act(async()=>button(host,'Show source').click());
+  await act(async()=>button(host,'Show preview').click());
+  expect(fetch).toHaveBeenCalledTimes(2);
+  expect(fetch.mock.calls.every(([,options])=>options.method==='HEAD')).toBe(true);
+ }finally{await dispose();}
 });
