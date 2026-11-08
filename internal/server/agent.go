@@ -411,18 +411,19 @@ func validReasoningLevel(level string) bool {
 // lifetimes. Browsers attach as subscribers; events are broadcast to all.
 // Guarded by Server.agentSessionsMu.
 type agentSessionEntry struct {
-	prefsMu        sync.Mutex // serializes disk updates for this device, outside agentSessionsMu
-	deviceID       string
-	client         *ClientConn // latest known live device connection
-	os             string      // device OS (client registration or desktop platform)
-	model          string      // canonical "provider/model"
-	permMode       string      // agentPerm*; default agentPermWrite
-	reasoningLevel string      // off|low|medium|high; default "medium"
-	subs           map[*gws.Conn]bool
-	lastActive     time.Time
-	threads        map[string]*agentThread
-	current        string // current thread id
-	defaultCwd     string // device default working directory, probed once at entry creation
+	prefsMu         sync.Mutex // serializes disk updates for this device, outside agentSessionsMu
+	deviceID        string
+	client          *ClientConn // latest known live device connection
+	os              string      // device OS (client registration or desktop platform)
+	model           string      // canonical "provider/model"
+	permMode        string      // agentPerm*; default agentPermWrite
+	reasoningLevel  string      // off|low|medium|high; default "medium"
+	subs            map[*gws.Conn]bool
+	lastActive      time.Time
+	threads         map[string]*agentThread
+	current         string        // current thread id
+	defaultCwd      string        // device default working directory
+	defaultCwdProbe chan struct{} // coalesces discovery across concurrent panel requests
 }
 
 // agentConn is the per-connection (browser tab) state stored in
@@ -2075,6 +2076,9 @@ func (h *agentWSHandler) handleGetChanges(ac *agentConn, requestID string) {
 	srv.agentSessionsMu.Unlock()
 
 	srv.goAgent(func() {
+		if cwd == "" && th != nil {
+			cwd = srv.awaitAgentDefaultCwd(entry)
+		}
 		reply := agentChangesMsg{Op: "changes", ID: requestID, Thread: threadID, Cwd: cwd, Branch: branch, Files: []agentChangeFile{}}
 		if cwd == "" {
 			reply.Error = "no working directory"
@@ -2111,6 +2115,9 @@ func (h *agentWSHandler) handleGetDiff(ac *agentConn, path, requestID string) {
 	srv.agentSessionsMu.Unlock()
 
 	srv.goAgent(func() {
+		if cwd == "" && th != nil {
+			cwd = srv.awaitAgentDefaultCwd(entry)
+		}
 		reply := agentDiffMsg{Op: "diff", ID: requestID, Thread: threadID, Path: path}
 		if cwd == "" {
 			reply.Error = "no working directory"
@@ -2150,6 +2157,9 @@ func (h *agentWSHandler) handleFileRead(ac *agentConn, path, requestID string) {
 		return
 	}
 	srv.goAgent(func() {
+		if cwd == "" && th != nil {
+			cwd = srv.awaitAgentDefaultCwd(entry)
+		}
 		switch {
 		case cwd == "":
 			reply.Message = "no working directory"
@@ -2280,6 +2290,9 @@ func (h *agentWSHandler) handleSearchFiles(ac *agentConn, q, requestID string) {
 		return
 	}
 	h.srv.goAgent(func() {
+		if cwd == "" && th != nil {
+			cwd = srv.awaitAgentDefaultCwd(entry)
+		}
 		if cwd == "" {
 			reply.Message = "no working directory"
 			ac.writeJSON(reply)
@@ -2397,16 +2410,20 @@ func (h *agentWSHandler) handleDirList(ac *agentConn, path, requestID string) {
 	}
 	srv.agentSessionsMu.Unlock()
 
-	if path == "" {
-		path = cwd
-	}
 	reply := agentMsg{Op: "dir_entries", ID: requestID, Thread: threadID, Path: path}
-	if path == "" {
-		reply.Message = "no working directory"
-		ac.writeJSON(reply)
-		return
-	}
 	h.srv.goAgent(func() {
+		if path == "" {
+			if cwd == "" && th != nil {
+				cwd = srv.awaitAgentDefaultCwd(entry)
+			}
+			path = cwd
+			reply.Path = path
+		}
+		if path == "" {
+			reply.Message = "no working directory"
+			ac.writeJSON(reply)
+			return
+		}
 		parent, entries, roots, err := srv.probeListDir(entry.deviceID, path)
 		if err != nil {
 			reply.Message = err.Error()
@@ -2778,6 +2795,13 @@ func agentEffectiveCwdLocked(entry *agentSessionEntry, th *agentThread) string {
 func (s *Server) scheduleThreadMetaProbe(entry *agentSessionEntry, threadID string) {
 	s.goAgent(func() {
 		s.agentSessionsMu.Lock()
+		initial := entry.threads[threadID]
+		needsDefault := initial != nil && agentEffectiveCwdLocked(entry, initial) == ""
+		s.agentSessionsMu.Unlock()
+		if needsDefault {
+			s.awaitAgentDefaultCwd(entry)
+		}
+		s.agentSessionsMu.Lock()
 		th := entry.threads[threadID]
 		if th == nil {
 			s.agentSessionsMu.Unlock()
@@ -2831,30 +2855,57 @@ func (s *Server) scheduleThreadMetaProbe(entry *agentSessionEntry, threadID stri
 // (pwd / cd) once per entry and backfills thread_meta for the current
 // thread. Runs off-lock; failures leave defaultCwd empty.
 func (s *Server) probeAgentDefaultCwd(entry *agentSessionEntry) {
-	client, ok := s.GetClient(entry.deviceID)
-	if !ok {
+	if s.awaitAgentDefaultCwd(entry) == "" {
 		return
 	}
-	command := "pwd"
-	if clientOS(client) == "windows" {
-		command = "cd"
+	s.agentSessionsMu.Lock()
+	current := entry.current
+	s.agentSessionsMu.Unlock()
+	s.scheduleThreadMetaProbe(entry, current)
+}
+
+// awaitAgentDefaultCwd runs off-lock and shares one bounded probe among cold
+// panel requests. Failures are not cached, so reconnects can retry without a
+// model turn. A failed command's stdout must never become a working directory.
+func (s *Server) awaitAgentDefaultCwd(entry *agentSessionEntry) string {
+	s.agentSessionsMu.Lock()
+	if entry.defaultCwd != "" || entry.deviceID == agentServerDeviceID {
+		cwd := entry.defaultCwd
+		s.agentSessionsMu.Unlock()
+		return cwd
 	}
-	out, _, err := s.runDeviceProbe(client, command, 5*time.Second, 4096)
-	if err != nil {
-		return
+	if pending := entry.defaultCwdProbe; pending != nil {
+		s.agentSessionsMu.Unlock()
+		<-pending
+		s.agentSessionsMu.Lock()
+		cwd := entry.defaultCwd
+		s.agentSessionsMu.Unlock()
+		return cwd
 	}
-	cwd, _, _ := strings.Cut(out, "\n")
-	cwd = strings.TrimSpace(cwd)
-	if cwd == "" {
-		return
+	pending := make(chan struct{})
+	entry.defaultCwdProbe = pending
+	s.agentSessionsMu.Unlock()
+	cwd := ""
+	if client, ok := s.GetClient(entry.deviceID); ok {
+		command := "pwd"
+		if clientOS(client) == "windows" {
+			command = "cd"
+		}
+		out, code, err := s.runDeviceProbe(client, command, 5*time.Second, 4096)
+		if err == nil && code == 0 {
+			cwd, _, _ = strings.Cut(out, "\n")
+			cwd = strings.TrimSpace(cwd)
+		}
 	}
 	s.agentSessionsMu.Lock()
 	if entry.defaultCwd == "" {
 		entry.defaultCwd = cwd
 	}
-	current := entry.current
+	cwd = entry.defaultCwd
+	entry.defaultCwdProbe = nil
+	close(pending)
 	s.agentSessionsMu.Unlock()
-	s.scheduleThreadMetaProbe(entry, current)
+	return cwd
 }
 
 // probeGitBranch asks a device for the current git branch of cwd; "" when
