@@ -970,7 +970,8 @@ export function ChatPaneView({
               }
               if (e.key === "Enter" && !e.shiftKey && !composing) {
                 e.preventDefault();
-                sendChat();
+                if (running && (e.ctrlKey || e.metaKey) && !input.trimStart().startsWith("/")) sendSteer();
+                else sendChat();
               }
             }}
           />
@@ -1067,7 +1068,7 @@ export function ChatPaneView({
                       <Icon name="Zap" />
                     </Button>
                   </TooltipTrigger>
-                  <TooltipContent>{t("agent.steer")}</TooltipContent>
+                  <TooltipContent>{t("agent.steer")} · Ctrl / ⌘ Enter</TooltipContent>
                 </Tooltip>
               )}
               {(running || stopping) && (

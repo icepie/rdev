@@ -268,6 +268,14 @@ it("preserves composer intent across modified keys, image loading and thread swi
     expect(sent).toEqual([{ op: "chat", text: "", thread: "thread-b", model: "model", images: [{ name: "second.png", mime: "image/png", data: "bmV3" }] }]);
     expect(document.querySelectorAll("img")).toHaveLength(0);
     props.sink.state.running = true;
+    for (const modifier of [{}, { ctrlKey: true }, { metaKey: true }]) {
+      await render();
+      await act(async () => insertDraft("follow up"));
+      await act(async () => document.querySelector("textarea").dispatchEvent(
+        new dom.window.KeyboardEvent("keydown", { key: "Enter", ...modifier, bubbles: true, cancelable: true })));
+      expect(sent.at(-1)).toMatchObject({ op: modifier.ctrlKey || modifier.metaKey ? "steer" : "chat", text: "follow up", thread: "thread-b" });
+      expect(document.querySelector("textarea").value).toBe("");
+    }
     props.sink.state.queue = ["same", "same"];
     props.sink.state.queueIds = ["guidance", "followup"];
     props.sink.state.queueModes = ["steer", "follow_up"];
