@@ -409,3 +409,14 @@ it('retains pending guidance on summaries and replaces it on explicit details', 
   await frame({op:'job',items:job});
   expect(sink.state.jobs[0].pendingGuidance).toEqual([]);
 });
+
+it('tracks cancellation requests from detail and list snapshots until a terminal reply', async () => {
+  const job = {id:'slow',kind:'shell',label:'cleanup',state:'running'};
+  await frame({op:'jobs',items:[job]});
+  await frame({op:'job',items:{...job,cancelRequested:true}});
+  expect(sink.state.jobs[0]).toMatchObject({state:'running',cancelRequested:true});
+  await frame({op:'jobs',items:[{...job,cancelRequested:true}]});
+  expect(sink.state.jobs[0].cancelRequested).toBe(true);
+  await frame({op:'job',items:{...job,state:'canceled'}});
+  expect(sink.state.jobs[0]).toMatchObject({state:'canceled',cancelRequested:false});
+});

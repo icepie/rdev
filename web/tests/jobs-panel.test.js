@@ -60,6 +60,15 @@ it("isolates detail requests by thread and refreshes on visibility without polli
       thread: "thread-a",
       id: "job-a",
     });
+    props.sink.state.jobs[0] = {...props.sink.state.jobs[0], cancelRequested: true};
+    await render();
+    const stoppingButton = [...document.querySelectorAll('button')].find(button => button.textContent === 'agent.cmd.stop');
+    expect(stoppingButton.disabled).toBe(true);
+    const countBeforeCancel = sent.length;
+    await act(() => stoppingButton.click());
+    expect(sent).toHaveLength(countBeforeCancel);
+    expect(document.body.textContent).toContain('agent.jobs.canceling');
+    props.sink.state.jobs[0] = {...props.sink.state.jobs[0], cancelRequested: false};
     props.sink.state.jobs[0] = {
       ...props.sink.state.jobs[0], state: "completed", output: "background verified\n",
       result: "exit code: 0\n<stdout>\nbackground verified\n\n</stdout>\n<stderr>\n\n</stderr>",

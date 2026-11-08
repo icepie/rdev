@@ -64,7 +64,15 @@ it('correlates replies, retains drafts across targets and failures, and cleans u
     const wrong = sent.at(-1);
     await reply(wrong,{jobId:'a'});
     expect(input().value).toBe('other task');
-    props.job = {...props.job,state:'completed'};
+    props.job = {...props.job,cancelRequested:true};
+    await render();
+    expect(input().value).toBe('other task');
+    expect(host.querySelector('button').disabled).toBe(true);
+    expect(host.textContent).toContain('agent.jobs.guidanceCanceling');
+    const beforeStopping = sent.length;
+    await submit();
+    expect(sent).toHaveLength(beforeStopping);
+    props.job = {...props.job,state:'completed',cancelRequested:false};
     await render();
     expect(input().value).toBe('other task');
     expect(host.querySelector('button').disabled).toBe(true);

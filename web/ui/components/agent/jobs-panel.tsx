@@ -121,13 +121,13 @@ export function JobsPanel({
                 {item.label}
               </button>
               <span className="shrink-0 text-muted-foreground">
-                {t(`agent.jobs.${item.state}`)}
+                {t(item.state === "running" && item.cancelRequested ? "agent.jobs.canceling" : `agent.jobs.${item.state}`)}
               </span>
               {item.state === "running" && (
                 <Button
                   size="sm"
                   variant="ghost"
-                  disabled={!ready}
+                  disabled={!ready || item.cancelRequested}
                   onClick={() =>
                     sendRaw({ op: "cancel_job", thread: threadId, id: item.id })
                   }

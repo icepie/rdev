@@ -23,8 +23,14 @@ func TestJobGuidanceSocketAcknowledgesTargetAndRejectsStaleJobs(t *testing.T) {
 	thread.jobs.Close()
 	thread.jobs = jobs
 	defer jobs.Close()
+	release := make(chan struct{})
+	defer close(release)
 	guidance := &agentJobGuidance{}
-	job, err := jobs.start("subagent", "inspect", func(ctx context.Context, _ func(string)) (string, error) { <-ctx.Done(); return "", ctx.Err() }, guidance)
+	job, err := jobs.start("subagent", "inspect", func(ctx context.Context, _ func(string)) (string, error) {
+		<-ctx.Done()
+		<-release
+		return "", ctx.Err()
+	}, guidance)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,8 +68,15 @@ func TestJobGuidanceSocketAcknowledgesTargetAndRejectsStaleJobs(t *testing.T) {
 	request.JobID = job.ID
 	request.ID = ""
 	send(request, true)
-	if err := jobs.Cancel(job.ID); err != nil {
+	cancelRequest, _ := json.Marshal(agentMsg{Op: "cancel_job", Thread: thread.id, ID: job.ID})
+	sendAgentOp(t, socket, string(cancelRequest))
+	canceled := waitAgentMsg(t, rec.msgs, "cancellation pending", func(m agentMsg) bool { return m.Op == "job" })
+	var snapshot agentJobSnapshot
+	if err := json.Unmarshal(canceled.Items, &snapshot); err != nil {
 		t.Fatal(err)
+	}
+	if snapshot.ID != job.ID || !snapshot.CancelRequested || snapshot.State != "running" {
+		t.Fatalf("cancellation receipt did not expose cleanup: %+v", snapshot)
 	}
 	request.ID = "request-4"
 	send(request, true)

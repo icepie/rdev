@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -300,5 +301,64 @@ func TestJobCountChangesOutsideLock(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("completion did not publish count")
+	}
+}
+
+func TestCancellationPendingRemainsVisibleUntilWorkersExit(t *testing.T) {
+	jobs := newAgentJobs(nil)
+	defer jobs.Close()
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	finish := func() { releaseOnce.Do(func() { close(release) }) }
+	defer finish()
+	ids := make([]string, 0, agentMaxRunningJobs)
+	for range agentMaxRunningJobs {
+		job, err := jobs.Start("shell", "slow cleanup", func(ctx context.Context, _ func(string)) (string, error) {
+			<-ctx.Done()
+			<-release
+			return "", ctx.Err()
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, job.ID)
+	}
+	if err := jobs.Cancel(ids[0]); err != nil {
+		t.Fatal(err)
+	}
+	for _, snapshot := range jobs.List() {
+		if snapshot.CancelRequested != (snapshot.ID == ids[0]) {
+			t.Fatal("single-job cancellation leaked across jobs")
+		}
+	}
+	jobs.CancelAll()
+	jobs.CancelAll() // repeated requests are idempotent while cleanup is blocked
+	for _, id := range ids {
+		snapshot, err := jobs.Read(id)
+		if err != nil || snapshot.State != "running" || !snapshot.CancelRequested || snapshot.Finished != nil {
+			t.Fatalf("pending cancellation lost: %+v %v", snapshot, err)
+		}
+	}
+	if jobs.RunningCount() != agentMaxRunningJobs {
+		t.Fatal("cancel request released running slots")
+	}
+	if _, err := jobs.Start("shell", "over quota", func(context.Context, func(string)) (string, error) { return "", nil }); err == nil {
+		t.Fatal("admitted replacement before cleanup completed")
+	}
+	finish()
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	for _, id := range ids {
+		snapshot, err := jobs.Wait(ctx, id)
+		if err != nil || snapshot.State != "canceled" || snapshot.CancelRequested {
+			t.Fatalf("terminal cancellation: %+v %v", snapshot, err)
+		}
+		if err := jobs.Cancel(id); err != nil {
+			t.Fatal(err)
+		}
+		snapshot, _ = jobs.Read(id)
+		if snapshot.CancelRequested {
+			t.Fatal("completed task returned to stopping state")
+		}
 	}
 }

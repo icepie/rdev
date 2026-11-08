@@ -30,7 +30,8 @@ export function JobGuidance({ job, threadId, ready, ops, sendRaw, t }: {
     for (const settle of [...pending.current.values()]) settle();
   }, []);
   if (job?.kind !== "subagent") return null;
-  const running = job.state === "running";
+  const canceling = job.state === "running" && job.cancelRequested;
+  const running = job.state === "running" && !canceling;
   if (!running && !draft.text && !draft.pending && !draft.error && !draft.notice) return null;
 
   const submit = () => {
@@ -72,7 +73,7 @@ export function JobGuidance({ job, threadId, ready, ops, sendRaw, t }: {
         className="min-h-16 text-sm" rows={2} value={draft.text}
         onChange={event => setDraft(previous => ({ ...previous, text: event.target.value, error: "", notice: "" }))} />
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <span className="text-xs text-muted-foreground">{t(running ? "agent.jobs.guidanceBoundary" : "agent.jobs.guidanceFinished")}</span>
+        <span className="text-xs text-muted-foreground">{t(running ? "agent.jobs.guidanceBoundary" : canceling ? "agent.jobs.guidanceCanceling" : "agent.jobs.guidanceFinished")}</span>
         <Button type="submit" size="sm" variant="secondary" disabled={!ready || !running || !draft.text.trim() || draft.pending}>
           {t(draft.pending ? "agent.jobs.guidanceSending" : "agent.jobs.guidance")}
         </Button>

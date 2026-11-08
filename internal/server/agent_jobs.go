@@ -27,6 +27,7 @@ type agentJobSnapshot struct {
 	Started         time.Time  `json:"started"`
 	Finished        *time.Time `json:"finished,omitempty"`
 	PendingGuidance []string   `json:"pendingGuidance,omitempty"`
+	CancelRequested bool       `json:"cancelRequested,omitempty"`
 }
 
 type agentJob struct {
@@ -102,6 +103,7 @@ func (m *agentJobs) run(ctx context.Context, job *agentJob, run func(context.Con
 		job.snapshot.Output = job.output.String()
 		job.output = agentJobOutput{}
 		job.snapshot.Finished = &finished
+		job.snapshot.CancelRequested = false
 		job.snapshot.Result = agentJobTail(result)
 		if job.guidance != nil {
 			job.guidance.close()
@@ -191,11 +193,21 @@ func (m *agentJobs) Cancel(id string) error {
 	if job == nil {
 		return fmt.Errorf("unknown job %q in this thread", id)
 	}
+	job.requestCancel()
+	return nil
+}
+
+// Called with the manager lock held. Requesting cancellation does not free a
+// running slot: the worker must actually exit before completion is published.
+func (job *agentJob) requestCancel() {
+	if job.snapshot.State != "running" || job.snapshot.CancelRequested {
+		return
+	}
+	job.snapshot.CancelRequested = true
 	if job.guidance != nil {
 		job.guidance.close()
 	}
 	job.cancel()
-	return nil
 }
 
 // CancelAll affects only this thread's jobs, atomically with job admission.
@@ -203,12 +215,7 @@ func (m *agentJobs) CancelAll() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, job := range m.jobs {
-		if job.snapshot.State == "running" {
-			if job.guidance != nil {
-				job.guidance.close()
-			}
-			job.cancel()
-		}
+		job.requestCancel()
 	}
 }
 
@@ -254,10 +261,7 @@ func (m *agentJobs) Close() {
 	defer m.mu.Unlock()
 	m.closed = true
 	for _, job := range m.jobs {
-		if job.guidance != nil {
-			job.guidance.close()
-		}
-		job.cancel()
+		job.requestCancel()
 	}
 }
 

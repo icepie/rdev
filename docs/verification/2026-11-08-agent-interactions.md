@@ -572,3 +572,11 @@ Local fixture only (`@server` on port 19440); no real user history was deleted.
 - `/bg --device` recognizes the same Unicode whitespace boundaries as command splitting, including newline, NBSP and em-space, while preserving the shell command's internal newlines. Similar prefixes such as `--device-name` remain ordinary shell text. Invalid/missing targets and empty commands are rejected by parser regression tests.
 - Web validation: 247 tests / 66 files, TypeScript and production build passed. This slice has no new browser visual acceptance claim.
 - `go test ./...` and focused explicit-command/compaction tests with `-race -count=1` passed after the production Web build.
+
+### Background cancellation request versus completed cleanup
+
+- Job snapshots now expose `cancelRequested` while a canceled worker is still unwinding. A shared manager-locked cancellation method handles one job, all jobs and closure idempotently. The job remains `running` for quota purposes until its worker returns; final snapshots clear the transitional flag and report `canceled`.
+- After receipt/list refresh, JobsPanel shows “正在停止…” and disables the Stop button. Subagent guidance is disabled while stopping, with any entered draft retained for copying. The count remains truthful about occupied slots. No optimistic completion or automatic retry is introduced.
+- A deterministic server test holds all 8 workers in cleanup: single cancellation does not affect other jobs, repeated cancel-all stays pending, reads expose the flag, replacement admission is rejected, and only actual exit releases the slots. The real WebSocket guidance test now also checks the cancellation reply while cleanup is held, followed by rejected guidance. React tests check disabled actions, retained drafts and transition from stopping to canceled snapshots.
+- Web suite: 248 tests / 66 files; TypeScript and production build passed. No new browser visual acceptance claim for this state-label change.
+- `go test ./...` and focused cancellation/job-guidance tests with `-race -count=1` passed after the Web build completed.
