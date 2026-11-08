@@ -20,7 +20,7 @@ it("preserves composer intent across modified keys, image loading and thread swi
   class Reader {
     abort = vi.fn();
     constructor() { readers.push(this); }
-    readAsDataURL() {}
+    readAsDataURL(file) { if (file.name === "sync-failure.png") throw new Error("read unavailable"); }
     finish(data) { this.result = data; this.onload?.(); }
   }
   const replacements = {
@@ -45,7 +45,7 @@ it("preserves composer intent across modified keys, image loading and thread swi
   const render = () => act(async () => root.render(createElement(ChatPaneView, props)));
   const attach = async name => {
     const picker = document.querySelector('input[type="file"]');
-    Object.defineProperty(picker, "files", { configurable: true, value: [new dom.window.File(["image"], name, { type: "image/png" })] });
+    Object.defineProperty(picker, "files", { configurable: true, value: (Array.isArray(name) ? name : [name]).map(value => new dom.window.File(["image"], value, { type: "image/png" })) });
     await act(async () => picker.dispatchEvent(new dom.window.Event("change", { bubbles: true })));
   };
   const sendButton = () => document.querySelector('button[aria-label="agent.send"]');
@@ -167,6 +167,28 @@ it("preserves composer intent across modified keys, image loading and thread swi
     await attach("unreadable.png");
     await act(async () => readers[2].onerror());
     expect(props.sink.ops.pushBubble).toHaveBeenCalledWith("error", "agent.imageReadFailed");
+    expect(document.querySelector('[role="status"]')).toBeNull();
+    expect(sendButton().disabled).toBe(true);
+    // Parallel reads may finish in reverse order, including separate picks.
+    await attach(["first-in-order.png", "second-in-order.png"]);
+    const [earlier, later] = readers.slice(-2);
+    await act(async () => later.finish("data:image/png;base64,c2Vjb25k"));
+    expect(sendButton().disabled).toBe(true);
+    expect(document.querySelectorAll("img")).toHaveLength(0);
+    await act(async () => earlier.finish("data:image/png;base64,Zmlyc3Q="));
+    expect([...document.querySelectorAll("img")].map(image => image.alt)).toEqual(["first-in-order.png", "second-in-order.png"]);
+    await act(async () => sendButton().click());
+    expect(sent.at(-1).images.map(image => image.name)).toEqual(["first-in-order.png", "second-in-order.png"]);
+    // A failed earlier read unblocks later successful reads without reordering.
+    await attach("failed-earlier.png");
+    await attach("surviving-later.png");
+    const [failed, surviving] = readers.slice(-2);
+    await act(async () => surviving.finish("data:image/png;base64,b2s="));
+    await act(async () => failed.onerror());
+    expect([...document.querySelectorAll("img")].map(image => image.alt)).toEqual(["surviving-later.png"]);
+    await act(async () => sendButton().click());
+    expect(sent.at(-1).images.map(image => image.name)).toEqual(["surviving-later.png"]);
+    await attach("sync-failure.png");
     expect(document.querySelector('[role="status"]')).toBeNull();
     expect(sendButton().disabled).toBe(true);
     await attach("pending-at-unmount.png");

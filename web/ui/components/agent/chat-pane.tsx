@@ -162,10 +162,10 @@ export function ChatPaneView({
   useEffect(() => () => clearQueueReturns(ops.queueReturns.current), [draftKey, ops.queueReturns]);
   const [input, setInput] = useComposerTextDraft(draftKey);
   const [pendingImages, setPendingImages] = useComposerDraft(draftKey, EMPTY_COMPOSER_IMAGES);
-  const imageReaders = useRef(new Set<FileReader>());
+  const imageReaders = useRef(new Map<FileReader, PendingImage | null | undefined>());
   const [readingImages, setReadingImages] = useState(0);
   const cancelImageReads = useCallback(() => {
-    const readers = [...imageReaders.current];
+    const readers = [...imageReaders.current.keys()];
     imageReaders.current.clear();
     setReadingImages(0);
     for (const reader of readers) reader.abort();
@@ -240,16 +240,29 @@ export function ChatPaneView({
       }
       room--;
       const reader = new FileReader();
-      imageReaders.current.add(reader);
+      imageReaders.current.set(reader, undefined);
       setReadingImages(imageReaders.current.size);
-      reader.onerror = () => {
-        if (!imageReaders.current.delete(reader)) return;
+      // Completion order is not selection order. Retain settled reads until
+      // every earlier selection has settled, then append the ready prefix.
+      const settle = (image: PendingImage | null) => {
+        if (!imageReaders.current.has(reader) || imageReaders.current.get(reader) !== undefined) return false;
+        imageReaders.current.set(reader, image);
+        const ready: PendingImage[] = [];
+        for (const [entry, value] of imageReaders.current) {
+          if (value === undefined) break;
+          imageReaders.current.delete(entry);
+          if (value) ready.push(value);
+        }
         setReadingImages(imageReaders.current.size);
-        ops.pushBubble("error", t("agent.imageReadFailed", { name: f.name }));
+        if (ready.length) setPendingImages(prev => [...prev, ...ready].slice(0, MAX_IMAGES));
+        return true;
       };
+      const readFailed = () => {
+        if (settle(null)) ops.pushBubble("error", t("agent.imageReadFailed", { name: f.name }));
+      };
+      reader.onerror = readFailed;
       reader.onload = () => {
-        if (!imageReaders.current.delete(reader)) return;
-        setReadingImages(imageReaders.current.size);
+        if (!imageReaders.current.has(reader) || imageReaders.current.get(reader) !== undefined) return;
         const url = String(reader.result || "");
         const img: PendingImage = {
           name:
@@ -259,11 +272,9 @@ export function ChatPaneView({
           data: url.slice(url.indexOf(",") + 1),
           preview: url,
         };
-        setPendingImages((prev) =>
-          prev.length >= MAX_IMAGES ? prev : [...prev, img],
-        );
+        settle(img);
       };
-      reader.readAsDataURL(f);
+      try { reader.readAsDataURL(f); } catch { readFailed(); }
     }
   };
 
