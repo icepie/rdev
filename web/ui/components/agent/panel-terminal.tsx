@@ -1,3 +1,4 @@
+import { createTerminalLayout } from "../../lib/terminal-layout";
 /* PanelTerminal: one device shell session inside an agent right-panel tab
  * (bb usePanelTerminals, scoped port). Self-contained xterm + /terminal WS
  * client mirroring the Terminal page's protocol (auth / auth_ok / auth_fail
@@ -46,7 +47,7 @@ export function PanelTerminal({
   visibleRef.current = visible;
   const hostRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<XTerm | null>(null);
-  const fitRef = useRef<FitAddon | null>(null);
+  const layoutRef = useRef<ReturnType<typeof createTerminalLayout> | null>(null);
   const imageRef = useRef<KittyImageWriter | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const decoderRef = useRef<TextDecoder>(new TextDecoder());
@@ -134,7 +135,7 @@ export function PanelTerminal({
         setAuthError("");
         setStatus("connected");
         if (visibleRef.current) {
-          try { fitRef.current?.fit(); } catch { /* layout may still be pending */ }
+          layoutRef.current?.flush();
           term.focus();
         }
         ws.send(JSON.stringify({ op: "resize", rows: term.rows, cols: term.cols }));
@@ -211,7 +212,14 @@ export function PanelTerminal({
     }
     term.open(host);
     termRef.current = term;
-    fitRef.current = fitAddon;
+    const layout = createTerminalLayout({
+      visible: () => visibleRef.current && host.isConnected && host.clientWidth > 0 && host.clientHeight > 0,
+      fit: () => fitAddon.fit(),
+      repaint: () => term.refresh(0, Math.max(0, term.rows - 1)),
+      invalidate: () => term.clearTextureAtlas(),
+    });
+    layoutRef.current = layout;
+    document.fonts?.ready.then(() => layout.request(true)).catch(() => {});
     imageRef.current = createKittyImageWriter(term);
 
     term.onData((data) => {
@@ -231,7 +239,7 @@ export function PanelTerminal({
     const themeObserver = new MutationObserver(() => {
       term.options.theme = readXtermTheme();
       term.options.fontFamily = readTerminalFontFamily();
-      fitAddon.fit();
+      layout.request(true);
     });
     themeObserver.observe(document.documentElement, {
       attributes: true,
@@ -250,9 +258,10 @@ export function PanelTerminal({
         ws.close();
         wsRef.current = null;
       }
+      layout.dispose();
+      layoutRef.current = null;
       term.dispose();
       termRef.current = null;
-      fitRef.current = null;
       imageRef.current = null;
     };
   }, [connect]);
@@ -261,21 +270,11 @@ export function PanelTerminal({
   useEffect(() => {
     const host = hostRef.current;
     if (!host || !visible) return;
-    const fit = () => {
-      try {
-        fitRef.current?.fit();
-      } catch {
-        /* not laid out yet */
-      }
-    };
+    const fit = () => layoutRef.current?.request();
     fit();
-    const raf = requestAnimationFrame(fit);
     const observer = new ResizeObserver(fit);
     observer.observe(host);
-    return () => {
-      cancelAnimationFrame(raf);
-      observer.disconnect();
-    };
+    return () => observer.disconnect();
   }, [visible]);
 
   const submitAuth = (password: string) => {

@@ -1,3 +1,4 @@
+import { createTerminalLayout } from "../lib/terminal-layout";
 import { useDevicePassword } from "../hooks/use-device-password";
 import {
   useCallback,
@@ -67,7 +68,7 @@ interface TermTab {
   deviceId: string;
   ws: WebSocket | null;
   term: XTerm;
-  fitAddon: FitAddon;
+  layout: ReturnType<typeof createTerminalLayout>;
   imageWriter: KittyImageWriter;
   decoder: TextDecoder;
   status: TabStatus;
@@ -118,27 +119,8 @@ const MOBILE_KEYS: { label: string; key: string }[] = [
 
 /* ── Layout helpers (ported from terminal.html) ── */
 
-function refreshTerminalLayout(tab: TermTab) {
-  if (!tab || !tab.opened) return;
-  const fit = () => {
-    try {
-      tab.fitAddon.fit();
-    } catch {
-      /* not laid out yet */
-    }
-    try {
-      tab.term.clearTextureAtlas();
-    } catch {
-      /* canvas renderer */
-    }
-    try {
-      tab.term.refresh(0, Math.max(0, tab.term.rows - 1));
-    } catch {
-      /* ignore */
-    }
-  };
-  fit();
-  requestAnimationFrame(fit);
+function refreshTerminalLayout(tab: TermTab, invalidateAtlas = false) {
+  if (tab.opened) tab.layout.request(invalidateAtlas);
 }
 
 function doResize(tab: TermTab | undefined) {
@@ -325,6 +307,7 @@ export function TerminalPage() {
           patchMeta(tab.id, { status: "connected", authOpen: false, authError: "" });
           if (tab.id === activeTabIdRef.current) tab.term.focus();
           doResize(tab);
+          tab.layout.flush();
           ws.send(JSON.stringify({ op: "resize", rows: tab.term.rows, cols: tab.term.cols }));
         } else if (msg.op === "auth_fail") {
           forgetDevicePassword(tab.deviceId);
@@ -437,7 +420,12 @@ export function TerminalPage() {
         deviceId,
         ws: null,
         term,
-        fitAddon,
+        layout: createTerminalLayout({
+          visible: () => tab.opened && pane.isConnected && !pane.classList.contains("invisible") && pane.clientWidth > 0 && pane.clientHeight > 0,
+          fit: () => fitAddon.fit(),
+          repaint: () => term.refresh(0, Math.max(0, term.rows - 1)),
+          invalidate: () => term.clearTextureAtlas(),
+        }),
         imageWriter: createKittyImageWriter(term),
         decoder: new TextDecoder(),
         status: "disconnected",
@@ -505,6 +493,8 @@ export function TerminalPage() {
           tab.ws.close();
           tab.ws = null;
         }
+        tab.layout.dispose();
+        tab.opened = false;
         tab.term.dispose();
         tab.pane?.remove();
         tabsRef.current.delete(id);
@@ -624,6 +614,8 @@ export function TerminalPage() {
           tab.ws.close();
           tab.ws = null;
         }
+        tab.layout.dispose();
+        tab.opened = false;
         tab.term.dispose();
         tab.pane?.remove();
         tabsRef.current.delete(id);
@@ -710,14 +702,14 @@ export function TerminalPage() {
     }
   }, [devices, searchParams, createTab]);
 
-  /* Window / viewport resize → refit the active terminal. */
+  /* Viewport/font changes can affect every visible split, not just focus. */
   useEffect(() => {
+    let disposed = false;
     const scheduleActiveResize = (delay = 80) => {
+      if (disposed) return;
       window.clearTimeout(resizeTimer.current);
       resizeTimer.current = window.setTimeout(() => {
-        const id = activeTabIdRef.current;
-        const tab = id != null ? tabsRef.current.get(id) : undefined;
-        if (tab) doResize(tab);
+        for (const tab of tabsRef.current.values()) doResize(tab);
       }, delay);
     };
     const onWindowResize = () => scheduleActiveResize(100);
@@ -729,9 +721,13 @@ export function TerminalPage() {
       vp.addEventListener("scroll", onVp);
     }
     if (document.fonts?.ready) {
-      document.fonts.ready.then(() => scheduleActiveResize(0)).catch(() => {});
+      document.fonts.ready.then(() => {
+        if (disposed) return;
+        for (const tab of tabsRef.current.values()) refreshTerminalLayout(tab, true);
+      }).catch(() => {});
     }
     return () => {
+      disposed = true;
       window.removeEventListener("resize", onWindowResize);
       if (vp) {
         vp.removeEventListener("resize", onVp);
@@ -748,7 +744,7 @@ export function TerminalPage() {
       for (const tab of tabsRef.current.values()) {
         tab.term.options.theme = theme;
         tab.term.options.fontFamily = readTerminalFontFamily();
-        refreshTerminalLayout(tab);
+        refreshTerminalLayout(tab, true);
       }
     });
     observer.observe(document.documentElement, {
@@ -770,6 +766,8 @@ export function TerminalPage() {
           tab.ws.close();
           tab.ws = null;
         }
+        tab.layout.dispose();
+        tab.opened = false;
         tab.term.dispose();
       }
       tabsRef.current.clear();
