@@ -7,7 +7,7 @@ import { ImagePreview } from "./image-preview";
 import { JobNotification, parseJobNotification, parseJobNotificationData } from "./job-notification";
 import { useComposerTextDraft } from "./use-composer-text-draft";
 import { useComposerDraft } from "./use-composer-draft";
-import { dispatchSlashCommand } from "./slash-command";
+import { dispatchSlashCommand, matchSlashCommand } from "./slash-command";
 import { parseJobsCommand } from "./jobs-command";
 /* ChatPaneView: one pane of the agent chat — transcript + queue + composer
  * + status strip, extracted from the Agent page so the split-screen layout
@@ -297,9 +297,9 @@ export function ChatPaneView({
     const text = input.trim();
     if (returningQueueRef.current) return;
     if ((!text && pendingImages.length === 0) || !ready || imageReaders.current.size > 0) return;
-    const command = text.match(/^\/(compact|bg|subagent)(?=\s|$)/i)?.[0];
-    if (command && pendingImages.length > 0) {
-      setComposerError(t("agent.commandImagesUnsupported", { command }));
+    const command = matchSlashCommand(text, slashCommands)?.command.name;
+    if (command && command !== "steer" && pendingImages.length > 0) {
+      setComposerError(t("agent.commandImagesUnsupported", { command: `/${command}` }));
       return;
     }
     if (pendingImages.length > 0 && /^\/steer(?:\s|$)/i.test(text)) {
@@ -335,9 +335,9 @@ export function ChatPaneView({
       setComposerError(t("agent.commandRequiresRunning", { command: "/steer" }));
       return;
     }
-    const command = text.match(/^\/(compact|bg|subagent)(?=\s|$)/i)?.[0];
+    const command = matchSlashCommand(text, slashCommands)?.command.name;
     if (command && pendingImages.length > 0) {
-      setComposerError(t("agent.commandImagesUnsupported", { command }));
+      setComposerError(t("agent.commandImagesUnsupported", { command: `/${command}` }));
       return;
     }
     const payload: Record<string, unknown> = { op: "steer", text };

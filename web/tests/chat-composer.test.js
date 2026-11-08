@@ -133,7 +133,7 @@ it("preserves composer intent across modified keys, image loading and thread swi
       expect(props.sink.ops.turnOpen.current).toBe(true);
     }
     props.sink.state.running = false;
-    for (const command of ["/COMPACT", "/bg\necho hi", "/subagent inspect"]) {
+    for (const command of ["/COMPACT", "/bg\necho hi", "/subagent inspect", "/jobs", "/jobs kill all", "/reset", "/new", "/stop"]) {
       props.threadId = `image-command-${command}`;
       await render();
       await act(async () => insertDraft(command));
@@ -145,6 +145,18 @@ it("preserves composer intent across modified keys, image loading and thread swi
       expect(document.querySelectorAll("img")).toHaveLength(1);
       expect(document.querySelector('[role="alert"]').textContent).toBe("agent.commandImagesUnsupported");
     }
+    // Unknown slash text remains ordinary multimodal chat, not a rejected
+    // built-in command; recognition must come from the actual command catalog.
+    props.threadId = "image-custom-command";
+    await render();
+    await act(async () => insertDraft("/custom inspect"));
+    await attach("custom.png");
+    await act(async () => readers.at(-1).finish("data:image/png;base64,YQ=="));
+    await act(async () => sendButton().click());
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({op:"chat",text:"/custom inspect",images:[{name:"custom.png",data:"YQ=="}]});
+    expect(composer.value).toBe("");
+    sent.length = 0;
     for (const [draft, expectedText, slash] of [["", "", false], ["compare this image", "compare this image", false], ["/steer inspect", "inspect", true], ["/steer", "", true]]) {
       props.threadId = `image-steering-${draft}`;
       props.sink.state.running = true;

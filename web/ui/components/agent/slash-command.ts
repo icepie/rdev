@@ -4,6 +4,17 @@ export interface ExecutableSlashCommand {
   run(argument: string): boolean;
 }
 
+/** Shared recognition keeps menu dispatch and attachment validation in sync. */
+export function matchSlashCommand<T extends ExecutableSlashCommand>(
+  text: string,
+  commands: readonly T[],
+): { command: T; argument: string } | null {
+  const match = text.match(/^\/([a-z]+)(?:\s+([\s\S]*))?$/i);
+  if (!match) return null;
+  const command = commands.find(command => command.name === match[1].toLowerCase());
+  return command ? { command, argument: (match[2] ?? "").trim() } : null;
+}
+
 /** A recognized command never falls through to chat, even if sending fails.
  * Keep its draft until the transport accepts it (or validation succeeds). */
 export function dispatchSlashCommand(
@@ -13,14 +24,13 @@ export function dispatchSlashCommand(
   clearDraft: () => void,
   onInactive?: (name: string) => void,
 ): boolean {
-  const match = text.match(/^\/([a-z]+)(?:\s+([\s\S]*))?$/i);
+  const match = matchSlashCommand(text, commands);
   if (!match) return false;
-  const command = commands.find(command => command.name === match[1].toLowerCase());
-  if (!command) return false;
+  const { command, argument } = match;
   if (command.runningOnly && !running) {
     onInactive?.(command.name);
     return true;
   }
-  if (command.run((match[2] ?? "").trim())) clearDraft();
+  if (command.run(argument)) clearDraft();
   return true;
 }
