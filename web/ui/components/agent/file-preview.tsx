@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { File as PierreFile, type FileContents, type FileOptions } from "@pierre/diffs/react";
+import { FileSelectionMenu } from "./file-selection-menu";
 import { CsvFilePreview } from "./csv-preview";
 import { ImageLightbox } from "../image-lightbox";
 import { IMAGE_TRANSPARENCY_CHECKER_STYLE } from "../../lib/image-preview";
@@ -42,7 +43,6 @@ function FilePreviewContent({
   lineRange,
 }: FilePreviewProps) {
   const bodyRef = useRef<HTMLDivElement>(null);
-  const [selMenu, setSelMenu] = useState<{ x: number; y: number; text: string } | null>(null);
   const [wrap, setWrap] = useState(false);
   const [imageOpen, setImageOpen] = useState(false);
   const { dir, base } = splitPath(path);
@@ -70,55 +70,6 @@ function FilePreviewContent({
     () => ({ name: base, contents: state?.content ?? "" }),
     [base, state?.content],
   );
-
-  useEffect(() => { setSelMenu(null); }, [state?.status, state?.content]);
-
-  const captureSelection = () => {
-    if (!onAddToChat) return;
-    const body = bodyRef.current;
-    const sel = window.getSelection();
-    if (!body || !sel || sel.isCollapsed) {
-      setSelMenu(null);
-      return;
-    }
-    const range = sel.rangeCount > 0 ? sel.getRangeAt(0) : null;
-    if (!range || !body.contains(range.commonAncestorContainer)) {
-      setSelMenu(null);
-      return;
-    }
-    const text = sel.toString().replace(/\n+$/, "");
-    if (!text.trim()) {
-      setSelMenu(null);
-      return;
-    }
-    const rect = range.getBoundingClientRect();
-    const host = body.getBoundingClientRect();
-    setSelMenu({
-      x: Math.min(Math.max(rect.right - host.left, 8), host.width - 96),
-      y: rect.bottom - host.top + body.scrollTop + 6,
-      text,
-    });
-  };
-
-  /* Collapse the menu when the selection disappears (click elsewhere,
-   * keyboard), but not while the menu button itself is the target. */
-  useEffect(() => {
-    if (selMenu === null) return;
-    const onDocMouseDown = (e: MouseEvent) => {
-      if (e.target instanceof HTMLElement && e.target.closest("[data-add-to-chat]")) return;
-      setSelMenu(null);
-    };
-    const onSelChange = () => {
-      const sel = window.getSelection();
-      if (!sel || sel.isCollapsed) setSelMenu(null);
-    };
-    document.addEventListener("mousedown", onDocMouseDown);
-    document.addEventListener("selectionchange", onSelChange);
-    return () => {
-      document.removeEventListener("mousedown", onDocMouseDown);
-      document.removeEventListener("selectionchange", onSelChange);
-    };
-  }, [selMenu]);
 
   const headerIconBtn =
     "inline-flex size-5 cursor-pointer items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-state-hover hover:text-foreground [&_svg]:size-3 max-md:pointer-coarse:size-9 max-md:pointer-coarse:[&_svg]:size-5";
@@ -211,8 +162,6 @@ function FilePreviewContent({
           <div
             ref={bodyRef}
             className={`relative min-h-0 flex-1 ${isCSV && viewMode === "preview" ? "overflow-hidden" : "overflow-auto"}`}
-            onMouseUp={captureSelection}
-            onScrollCapture={() => { if (selMenu) setSelMenu(null); }}
           >
             {state.encoding === "base64" && state.mime ? (
               <div className="min-h-full w-full p-4" style={IMAGE_TRANSPARENCY_CHECKER_STYLE}>
@@ -240,23 +189,7 @@ function FilePreviewContent({
                 />
               </div>
             )}
-            {selMenu !== null && (
-              <button
-                type="button"
-                data-add-to-chat
-                className="absolute z-20 inline-flex h-6 cursor-pointer items-center gap-1 rounded-md border border-border bg-background px-2 text-2xs shadow-lift transition-colors hover:bg-state-hover"
-                style={{ left: selMenu.x, top: selMenu.y }}
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={() => {
-                  onAddToChat?.(selMenu.text);
-                  setSelMenu(null);
-                  window.getSelection()?.removeAllRanges();
-                }}
-              >
-                <Icon name="MessageSquarePlus" className="size-3" />
-                {t("agent.addToChat")}
-              </button>
-            )}
+            {onAddToChat && <FileSelectionMenu panelRef={bodyRef} content={state.content} mode={viewMode} onAddToChat={onAddToChat} t={t} />}
           </div>
         </>
       )}
