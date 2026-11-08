@@ -20,7 +20,7 @@ it("isolates detail requests by thread and refreshes on visibility without polli
   const sent = [];
   const props = {
     open: true,
-    onOpenChange: () => {},
+    onOpenChange: (open) => { props.open = open; root.render(createElement(JobsPanel, props)); },
     full: false,
     ready: true,
     threadId: "thread-a",
@@ -52,6 +52,21 @@ it("isolates detail requests by thread and refreshes on visibility without polli
     await act(() =>
       document.querySelector('button[title="job-a: build"]').click(),
     );
+    const trigger = document.querySelector('button[aria-expanded="true"]');
+    const body = document.getElementById(trigger.getAttribute("aria-controls"));
+    expect(body.tagName).toBe("SECTION");
+    const selectedButton = document.querySelector('button[title="job-a: build"]');
+    selectedButton.focus();
+    await act(() => selectedButton.dispatchEvent(new window.KeyboardEvent("keydown", {key:"Escape",bubbles:true,cancelable:true})));
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+    expect(document.activeElement).toBe(trigger);
+    await act(() => trigger.click());
+    const collapse = document.querySelector('button[aria-label="agent.jobs.collapse"]');
+    collapse.focus();
+    await act(() => collapse.click());
+    expect(document.activeElement).toBe(trigger);
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+    await act(() => trigger.click());
     expect(document.querySelector("[class*=select-text]").textContent).toBe("<build>");
     expect(document.querySelector("[class*=select-text]").innerHTML).toContain("var(--ansi-1)");
     expect(document.querySelector("build")).toBeNull();

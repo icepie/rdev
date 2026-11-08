@@ -34,7 +34,7 @@ function parseShellResult(result: string): ShellResult | null {
   // Transport output may contain CRLF (including Windows command results).
   const normalized = result.replace(/\r\n/g, "\n");
   let m: string[] | null =
-    /^([^\n]*)\n<stdout>\n([\s\S]*?)\n<\/stdout>\n<stderr>\n([\s\S]*?)\n<\/stderr>\s*$/.exec(
+    /^([^\n]*)\n<stdout>\n(?:([\s\S]*?)\n)?<\/stdout>\n<stderr>\n(?:([\s\S]*?)\n)?<\/stderr>\s*$/.exec(
       normalized,
     );
   if (!m) {
@@ -55,8 +55,8 @@ function parseShellResult(result: string): ShellResult | null {
   return {
     status: m[1],
     exitCode: code ? Number(code[1]) : null,
-    stdout: m[2],
-    stderr: m[3],
+    stdout: m[2] ?? "",
+    stderr: m[3] ?? "",
   };
 }
 

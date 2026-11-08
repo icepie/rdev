@@ -4,7 +4,7 @@ import { useCopy } from "../../lib/clipboard";
 import { formatDuration } from "./transcript-rows";
 import { Markdown } from "../markdown";
 import { DisclosureBody } from "../disclosure-body";
-import { useEffect, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import type { ThreadSink } from "./thread-sink";
 import type { Translator } from "./types";
 import { Button } from "../button";
@@ -30,6 +30,18 @@ export function JobsPanel({
   t: Translator;
 }) {
   const [copiedId, copy] = useCopy();
+  const bodyId = useId();
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const bodyRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    if (!open && bodyRef.current?.contains(document.activeElement)) {
+      triggerRef.current?.focus();
+    }
+  }, [open]);
+  const collapse = () => {
+    triggerRef.current?.focus();
+    onOpenChange(false);
+  };
   const [selection, setSelection] = useState<{
     thread: string;
     id: string;
@@ -77,30 +89,41 @@ export function JobsPanel({
     ? Math.max(0, (Number.isFinite(finished) ? finished : Date.now()) - started) : null;
   const running = jobs.filter((item) => item.state === "running").length;
   return (
-    <div className="min-w-0" hidden={!jobs.length && !open && !sink.state.jobsError}>
-      <Button
-        variant="ghost"
-        size="sm"
-        className="h-8 gap-1 px-1 text-xs text-muted-foreground max-md:pointer-coarse:h-11"
+    <div className="min-w-0 overflow-hidden rounded-lg border border-border bg-surface-raised-solid" hidden={!jobs.length && !open && !sink.state.jobsError}>
+      <button
+        ref={triggerRef}
+        type="button"
+        className="flex min-h-8 w-full cursor-pointer items-center gap-1.5 px-3 py-1.5 text-left text-xs text-foreground transition-colors hover:bg-background/80 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring max-md:pointer-coarse:min-h-11"
         onClick={() => onOpenChange(!open)}
         aria-expanded={open}
+        aria-controls={bodyId}
       >
-        <Icon name="ListTodo" className="size-3.5" />
-        {t("agent.jobs.title")}
-        {running > 0 && ` (${running})`}
-      </Button>
+        <Icon name="ListTodo" className="size-3.5 shrink-0" />
+        <span className="min-w-0 flex-1 truncate">{t("agent.jobs.title")}</span>
+        {running > 0 && <span className="inline-flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-surface-recessed px-1 text-[10px] tabular-nums text-subtle-foreground">{running}</span>}
+        <Icon name="ChevronDown" className={`size-3.5 shrink-0 text-muted-foreground transition-transform motion-reduce:transition-none ${open ? "rotate-180" : ""}`} />
+      </button>
       {sink.state.jobsError && (
         <p
           role="alert"
-          className="mb-2 break-words text-xs text-destructive-text"
+          className="px-3 pb-2 break-words text-xs text-destructive-text"
         >
           {sink.state.jobsError}
         </p>
       )}
       <DisclosureBody open={open}>
         <section
+          ref={bodyRef}
+          id={bodyId}
+          onKeyDown={event => {
+            if (event.key === "Escape" && !event.defaultPrevented && !event.nativeEvent.isComposing) {
+              event.preventDefault();
+              event.stopPropagation();
+              collapse();
+            }
+          }}
           aria-label={t("agent.jobs.title")}
-          className="mb-2 max-h-72 overflow-auto rounded-lg border border-border bg-background p-2 text-xs"
+          className="max-h-72 overflow-auto border-t border-border-seam p-2 text-xs"
         >
           {!jobs.length && (
             <p className="p-2 text-muted-foreground">{t("agent.jobs.empty")}</p>
@@ -117,7 +140,7 @@ export function JobsPanel({
                 className={`min-w-0 flex-1 cursor-pointer rounded px-1 text-left hover:bg-state-hover ${full ? "whitespace-pre-wrap break-words" : "truncate"} ${selected === item.id ? "bg-state-active" : ""}`}
                 title={`${item.id}: ${item.label}`}
               >
-                {item.kind === "subagent" ? "◈ " : "› "}
+                <Icon name={item.kind === "subagent" ? "UserRoundPlus" : "Terminal"} className="mr-1 inline-block size-3.5 shrink-0 align-text-bottom text-muted-foreground" />
                 {item.label}
               </button>
               <span className="shrink-0 text-muted-foreground">
@@ -172,6 +195,11 @@ export function JobsPanel({
             </div>
           )}
           <JobGuidance job={job} threadId={threadId} ready={ready} ops={sink.ops} sendRaw={sendRaw} t={t} />
+          <button type="button" onClick={collapse} aria-controls={bodyId} aria-expanded={open}
+            aria-label={t("agent.jobs.collapse")}
+            className="mt-1 flex min-h-6 w-full cursor-pointer items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-state-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring max-md:pointer-coarse:min-h-11">
+            <Icon name="ChevronUp" className="size-3.5" />
+          </button>
         </section>
       </DisclosureBody>
     </div>
