@@ -281,7 +281,7 @@ func (h *agentWSHandler) handleJobGuidance(ac *agentConn, request agentMsg) {
 	}
 	reply := agentMsg{Op: "job_steered", Thread: threadID, ID: request.ID, JobID: jobID}
 	var err error
-	if request.ID == "" {
+	if request.ID == "" && !request.RPC {
 		err = fmt.Errorf("guidance request ID is required")
 	} else if jobs == nil {
 		err = fmt.Errorf("unknown thread")
@@ -332,18 +332,7 @@ func (h *agentWSHandler) handleCancelSubagent(ac *agentConn, request agentMsg) {
 	} else if jobs == nil {
 		err = fmt.Errorf("unknown thread")
 	} else {
-		job, readErr := jobs.Read(id)
-		if readErr != nil {
-			err = readErr
-		} else if job.Kind != "subagent" {
-			err = fmt.Errorf("job %q is not a subagent", id)
-		} else if job.State != "running" {
-			// OMP reports false for a completed/non-running subagent.
-			cancelled = false
-		} else {
-			err = jobs.Cancel(id)
-			cancelled = err == nil
-		}
+		cancelled, err = jobs.cancelSubagent(id)
 	}
 	if request.RPC {
 		success := err == nil
@@ -383,10 +372,10 @@ func (h *agentWSHandler) handleGetSubagents(ac *agentConn, request agentMsg) {
 		}
 		h.srv.agentSessionsMu.Unlock()
 	}
-	var subagents []agentJobSnapshot
+	subagents := make([]agentJobSnapshot, 0)
 	if jobs != nil {
 		for _, job := range jobs.List() {
-			if job.Kind == "subagent" && job.State == "running" {
+			if job.Kind == "subagent" && job.State == "running" && !job.CancelRequested {
 				subagents = append(subagents, job)
 			}
 		}
@@ -398,9 +387,13 @@ func (h *agentWSHandler) handleGetSubagents(ac *agentConn, request agentMsg) {
 			reply.Error = "unknown thread"
 			reply.Code = "invalid_request"
 		} else {
+			summaries := make([]ompSubagentSnapshot, 0, len(subagents))
+			for i, job := range subagents {
+				summaries = append(summaries, ompSubagentSnapshot{ID: job.ID, Index: i, Agent: "subagent", AgentSource: "bundled", Status: "running", Task: job.Label, LastUpdate: job.Started.UnixMilli()})
+			}
 			reply.Data, _ = json.Marshal(struct {
-				Subagents []agentJobSnapshot `json:"subagents"`
-			}{subagents})
+				Subagents []ompSubagentSnapshot `json:"subagents"`
+			}{summaries})
 		}
 		ac.writeJSON(reply)
 		return
@@ -425,4 +418,16 @@ func (s *Server) broadcastAgentJobsChanged(entry *agentSessionEntry, thread *age
 	}
 	s.agentBroadcast(entry, agentMsg{Op: "jobs_changed", Thread: thread.id})
 	return true
+}
+
+// Required OMP SubagentSnapshot fields. rdev uses its bundled subagent tool;
+// lastUpdate is the recorded lifecycle timestamp, not a guessed output time.
+type ompSubagentSnapshot struct {
+	ID          string `json:"id"`
+	Index       int    `json:"index"`
+	Agent       string `json:"agent"`
+	AgentSource string `json:"agentSource"`
+	Status      string `json:"status"`
+	Task        string `json:"task,omitempty"`
+	LastUpdate  int64  `json:"lastUpdate"`
 }

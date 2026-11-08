@@ -298,3 +298,23 @@ func (m *agentJobs) RunningCount() int {
 }
 
 func (m *agentJobs) Running() bool { return m.RunningCount() > 0 }
+
+// Atomically test ownership/state and cancel. Repeated or vanished subagents
+// return false; shell jobs are never reachable through the subagent API.
+func (m *agentJobs) cancelSubagent(id string) (bool, error) {
+	m.mu.Lock()
+	job := m.jobs[id]
+	if job != nil && job.snapshot.Kind != "subagent" {
+		m.mu.Unlock()
+		return false, fmt.Errorf("job %q is not a subagent", id)
+	}
+	changed := !m.closed && job != nil && job.requestCancel()
+	if changed {
+		m.revision++
+	}
+	m.mu.Unlock()
+	if changed && m.onChange != nil {
+		m.onChange()
+	}
+	return changed, nil
+}

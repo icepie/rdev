@@ -102,3 +102,11 @@ Agent 草稿、已发送图片及 read_file 图片使用 BB 全屏预览。支�
 - HTML 远端预览加载前通过 HEAD 检查授权/设备响应，失败显示可重试提示；新目录资源服务的 HEAD 只读取有界元信息，不下载 HTML 正文。文件图标沿用 BB 的 160ms 延迟加载动效，并支持 reduced-motion。切换预览/源码保留 iframe，不重复检查；内容或预览 URL 改变时替换 iframe 并取消旧检查。工具栏外部打开和 iframe 共用本地授权 URL 校验，兼容旧单文件及新目录入口。HEAD 与随后 GET 之间的设备状态变化仍可能由 iframe 自身展示错误页。
 
 - 对照 OMP 的 promote_queued_message，运行中的普通排队消息可通过行内“用于指导当前回答”提升到指导队列末尾，保留稳定 ID、图片原字节和已有指导顺序；不会取回或覆盖输入框草稿。操作通过 promote_queue / queue_promoted 和 queueModes 同步到各会话窗格；重复提升仍在队列中的消息不会重复插入。已消费、跨线程、停止后的消息不能提升；会话命令、后台通知、要求切换模型的消息及正在执行命令的轮次保持独立轮次语义。该行为使用 rdev 协议，不表示完整 OMP RPC 兼容。
+
+### OMP 子 Agent 帧适配边界
+
+通过已认证的 rdev `/agent?device=…` WebSocket，可发送原生 OMP 形式 `{"type":"get_subagents","id":"r1"}`、`{"type":"steer_subagent","id":"r2","subagentId":"…","message":"…"}` 和 `{"type":"cancel_subagent","id":"r3","subagentId":"…"}`。可选 `thread` 是 rdev 扩展，省略时使用该连接当前会话。前两轮说明中把 `type:"request",command` 称为 OMP 原生格式不准确；该包装形式只是保留兼容入口。
+
+RPC 结果放在 `data`：列表为 `{subagents:[]}`，取消为 `{cancelled:boolean}`。列表只含当前会话中未请求取消的运行子任务，提供 OMP 必需的 id/index/agent/agentSource/status/lastUpdate；index 是此次列表位置，agent 为内置 subagent，lastUpdate 为已记录的启动时间，不代表实时输出时间。空结果为数组，不能是 null。重复取消及未知任务返回 false，shell 任务拒绝；状态检查与取消在同一锁内完成。OMP 的指导请求允许省略 id，原生浏览器指导仍要求请求 ID。
+
+这三个命令的帧适配不等于完整 OMP 运行时：连接鉴权、会话事件仍为 rdev 协议，没有 OMP stdio 传输、子任务完整 transcript/订阅、注册 agent 文件和扩展命令展开。取消只请求停止，资源名额直到执行清理完成才释放，不宣称 OMP 完整生命周期或持久 tombstone 语义。
