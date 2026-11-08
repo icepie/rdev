@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"fmt"
+	"time"
 )
 
 // rpcTurnCompletion keeps a native RPC request correlated with the one turn
@@ -85,6 +86,14 @@ func (h *agentWSHandler) handleAgentRPCFrame(ac *agentConn, raw []byte) bool {
 		h.handleRPCAvailableCommands(ac, request)
 	case "get_state":
 		h.handleRPCState(ac, request)
+	case "get_available_models":
+		h.handleRPCAvailableModels(ac, request)
+	case "set_model":
+		if err := rpcStringField(fields, "model", &request.Model, true); err != nil {
+			fail("invalid_request", err.Error())
+			return true
+		}
+		h.handleRPCSetModel(ac, request)
 	case "get_subagents":
 		h.handleGetSubagents(ac, request)
 	case "get_subagent_messages":
@@ -163,6 +172,58 @@ func (h *agentWSHandler) handleRPCState(ac *agentConn, request agentMsg) {
 	ac.writeJSON(agentMsg{Type: "response", Command: request.Command, ID: request.ID, Success: &success, Data: data})
 }
 
+func (h *agentWSHandler) handleRPCAvailableModels(ac *agentConn, request agentMsg) {
+	success := true
+	data, _ := json.Marshal(struct {
+		Models []map[string]any `json:"models"`
+	}{h.srv.Agent.Models()})
+	ac.writeJSON(agentMsg{Type: "response", Command: request.Command, ID: request.ID, Success: &success, Data: data})
+}
+
+func (h *agentWSHandler) handleRPCSetModel(ac *agentConn, request agentMsg) {
+	if ac.entry == nil {
+		h.writeRPCError(ac, request, "invalid_request", "unknown thread")
+		return
+	}
+	s := h.srv
+	provider, model, canonical, err := s.Agent.Resolve(request.Model)
+	if err != nil {
+		h.writeRPCError(ac, request, "invalid_request", err.Error())
+		return
+	}
+	threadID := request.Thread
+	if threadID == "" {
+		threadID = ac.current
+	}
+	s.agentSessionsMu.Lock()
+	th := ac.entry.threads[threadID]
+	if th == nil {
+		s.agentSessionsMu.Unlock()
+		h.writeRPCError(ac, request, "invalid_request", "unknown thread")
+		return
+	}
+	if th.running {
+		s.agentSessionsMu.Unlock()
+		h.writeRPCError(ac, request, "invalid_request", "conversation is busy")
+		return
+	}
+	if th.model != canonical {
+		newSession := s.buildAgentSession(ac.entry, th, ac.entry.client, provider, model)
+		newSession.SetHistory(th.session.History())
+		th.session = newSession
+		th.sessionClient = ac.entry.client
+		th.model = canonical
+		ac.entry.model = canonical
+		th.updatedAt = time.Now()
+	}
+	s.agentSessionsMu.Unlock()
+	s.writeAgentPrefs(ac.entry)
+	s.broadcastThreadList(ac.entry)
+	success := true
+	data, _ := json.Marshal(map[string]string{"model": canonical})
+	ac.writeJSON(agentMsg{Type: "response", Command: request.Command, ID: request.ID, Success: &success, Data: data})
+}
+
 func (h *agentWSHandler) handleRPCProtocol(ac *agentConn, request agentMsg) {
 	success := true
 	data, _ := json.Marshal(struct {
@@ -177,6 +238,8 @@ func (h *agentWSHandler) handleRPCAvailableCommands(ac *agentConn, request agent
 	commands := []map[string]any{
 		{"name": "negotiate_protocol"}, {"name": "get_available_commands"},
 		{"name": "get_state", "params": map[string]any{"thread": "string?"}},
+		{"name": "get_available_models"},
+		{"name": "set_model", "params": map[string]any{"model": "string", "thread": "string?"}},
 		{"name": "compact", "params": map[string]any{"customInstructions": "string?"}},
 		{"name": "get_subagents"}, {"name": "get_subagent_messages"},
 		{"name": "steer_subagent", "params": map[string]any{"subagentId": "string", "message": "string"}},

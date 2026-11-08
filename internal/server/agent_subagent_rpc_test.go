@@ -102,6 +102,24 @@ func TestSubagentRPCWireContract(t *testing.T) {
 	if string(state["success"]) != "true" || !strings.Contains(string(state["data"]), `"thread":"`+th.id+`"`) {
 		t.Fatalf("invalid state response: %s", state)
 	}
+	for _, command := range []string{"get_available_models"} {
+		raw, _ := json.Marshal(map[string]any{"type": command, "id": command})
+		sendAgentOp(t, socket, string(raw))
+		models := waitRawMsg(t, rec.msgs, "models response", func(m map[string]json.RawMessage) bool {
+			return string(m["type"]) == `"response"` && string(m["id"]) == `"`+command+`"`
+		})
+		if string(models["success"]) != "true" || !strings.Contains(string(models["data"]), `"p/m1"`) {
+			t.Fatalf("invalid models response: %s", models)
+		}
+	}
+	raw, _ = json.Marshal(map[string]any{"type": "set_model", "id": "model-1", "thread": th.id, "model": "p/m2"})
+	sendAgentOp(t, socket, string(raw))
+	modelReply := waitRawMsg(t, rec.msgs, "set model response", func(m map[string]json.RawMessage) bool {
+		return string(m["type"]) == `"response"` && string(m["id"]) == `"model-1"`
+	})
+	if string(modelReply["success"]) != "true" || string(modelReply["data"]) != `{"model":"p/m2"}` {
+		t.Fatalf("invalid set model response: %s", modelReply)
+	}
 	call("get_subagents", "missing", "", "", false)
 	// Invalid RPC frames must return a correlated failure, not silently fall
 	// into the browser protocol or wait forever for a reply.
