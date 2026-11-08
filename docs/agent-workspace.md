@@ -132,3 +132,5 @@ RPC 帧由独立命令白名单分发，复用设备认证门槛。未知命令�
 接受 `{"type":"compact","id":"request-id","customInstructions":"保留路径"}`（可选 `thread` 指定会话），也保留旧 `type:"request", command:"compact"` 包装。认证、线程存在性和运行中检查通过后执行现有压缩生命周期；不会立即返回 accepted。完成收尾后只向原请求连接发送一次关联 `response`，成功的 `data.summary` 为实际摘要；失败、取消或 reset/delete 使旧轮次失效时返回 `success:false`。浏览器订阅者仍收到线程生命周期及替换后的历史，RPC 回执不会广播。断线不会取消已经接收的压缩，也不提供跨连接回执重放。
 
 这是 OMP 命令帧和完成语义的部分适配：rdev 没有 OMP 持久化 entry ID 和压缩前 token 估算，因此结果不伪造 `firstKeptEntryId` / `tokensBefore`；不能作为完整 `CompactionResult` 的替代。UI 不新增 token 数。
+
+`get_state.hasPendingAsyncWork` 还包括已退出但 completion callback 尚未返回的后台结果递交，避免 worker 标成 completed 后、主会话收到结果前短暂误报 settled。后台任务的 Read/Wait 仍按 worker 终态返回，不额外等待 UI 推送；isSettled 继续同时检查前台和队列。

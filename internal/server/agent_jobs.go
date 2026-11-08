@@ -47,6 +47,7 @@ type agentJobs struct {
 	mu                      sync.Mutex
 	jobs                    map[string]*agentJob
 	closed                  bool
+	pendingDeliveries       int // terminal jobs whose completion callback has not returned
 	onChange                func()
 	onComplete              func(agentJobSnapshot)
 }
@@ -125,14 +126,21 @@ func (m *agentJobs) run(ctx context.Context, job *agentJob, run func(context.Con
 		snapshot := job.snapshot
 		snapshot.PendingGuidance = append([]string(nil), snapshot.PendingGuidance...)
 		notify := !m.closed
+		deliver := notify && m.onComplete != nil
+		if deliver {
+			m.pendingDeliveries++
+		}
 		m.revision++
 		close(job.done)
 		m.mu.Unlock()
+		if deliver {
+			defer func() { m.mu.Lock(); m.pendingDeliveries--; m.mu.Unlock() }()
+		}
 		job.cancel()
 		if notify && m.onChange != nil {
 			m.onChange()
 		}
-		if notify && m.onComplete != nil {
+		if deliver {
 			m.onComplete(snapshot)
 		}
 	}()
@@ -317,4 +325,24 @@ func (m *agentJobs) cancelSubagent(id string) (bool, error) {
 		m.onChange()
 	}
 	return changed, nil
+}
+
+// HasPendingWork includes the handoff after a worker exits but before its
+// result has been admitted into the foreground queue. Never call callbacks
+// while holding this mutex: they may acquire agentSessionsMu.
+func (m *agentJobs) HasPendingWork() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed {
+		return false
+	}
+	if m.pendingDeliveries > 0 {
+		return true
+	}
+	for _, job := range m.jobs {
+		if job.snapshot.State == "running" {
+			return true
+		}
+	}
+	return false
 }

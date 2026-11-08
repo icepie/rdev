@@ -443,22 +443,14 @@ func (h *agentWSHandler) handleRPCState(ac *agentConn, request agentMsg) {
 	}
 	snap := s.threadSnapshotLocked(ac.entry, th)
 	steering, followUp := splitRPCQueue(snap.queue, snap.queueModes)
-	jobsRunning := false
-	if th.jobs != nil {
-		for _, job := range th.jobs.List() {
-			if job.State == "running" {
-				jobsRunning = true
-				break
-			}
-		}
-	}
+	pendingWork := th.jobs != nil && th.jobs.HasPendingWork()
 	state := map[string]any{
 		"thread": threadID, "model": th.model, "isStreaming": snap.running,
 		"thinkingLevel": ac.entry.reasoningLevel,
 		"isCompacting":  snap.running && th.workingTool == "/compact",
 		"messageCount":  len(snap.history), "queuedMessageCount": len(snap.queue),
-		"hasPendingAsyncWork": jobsRunning,
-		"isSettled":           !snap.running && len(snap.queue) == 0 && !jobsRunning,
+		"hasPendingAsyncWork": pendingWork,
+		"isSettled":           !snap.running && len(snap.queue) == 0 && !pendingWork,
 		"queuedMessages":      map[string]any{"followUp": followUp, "steering": steering, "liveSteered": len(steering)},
 		"todoPhases":          th.todoPhases, "todos": snap.todos, "sessionFile": "rdev://thread/" + threadID,
 	}
