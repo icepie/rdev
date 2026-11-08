@@ -17,18 +17,20 @@ const (
 )
 
 type agentJobSnapshot struct {
-	ID       string     `json:"id"`
-	Kind     string     `json:"kind"`
-	Label    string     `json:"label"`
-	State    string     `json:"state"`
-	Output   string     `json:"output,omitempty"`
-	Result   string     `json:"result,omitempty"`
-	Error    string     `json:"error,omitempty"`
-	Started  time.Time  `json:"started"`
-	Finished *time.Time `json:"finished,omitempty"`
+	ID              string     `json:"id"`
+	Kind            string     `json:"kind"`
+	Label           string     `json:"label"`
+	State           string     `json:"state"`
+	Output          string     `json:"output,omitempty"`
+	Result          string     `json:"result,omitempty"`
+	Error           string     `json:"error,omitempty"`
+	Started         time.Time  `json:"started"`
+	Finished        *time.Time `json:"finished,omitempty"`
+	PendingGuidance []string   `json:"pendingGuidance,omitempty"`
 }
 
 type agentJob struct {
+	guidance *agentJobGuidance
 	output   agentJobOutput
 	snapshot agentJobSnapshot
 	cancel   context.CancelFunc
@@ -51,6 +53,10 @@ func newAgentJobs(onComplete func(agentJobSnapshot)) *agentJobs {
 }
 
 func (m *agentJobs) Start(kind, label string, run func(context.Context, func(string)) (string, error)) (agentJobSnapshot, error) {
+	return m.start(kind, label, run, nil)
+}
+
+func (m *agentJobs) start(kind, label string, run func(context.Context, func(string)) (string, error), guidance *agentJobGuidance) (agentJobSnapshot, error) {
 	m.mu.Lock()
 	if m.closed {
 		m.mu.Unlock()
@@ -73,7 +79,7 @@ func (m *agentJobs) Start(kind, label string, run func(context.Context, func(str
 		delete(m.jobs, oldest.snapshot.ID)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	job := &agentJob{snapshot: agentJobSnapshot{ID: generateID(), Kind: kind, Label: label, State: "running", Started: time.Now()}, cancel: cancel, done: make(chan struct{})}
+	job := &agentJob{guidance: guidance, snapshot: agentJobSnapshot{ID: generateID(), Kind: kind, Label: label, State: "running", Started: time.Now()}, cancel: cancel, done: make(chan struct{})}
 	m.jobs[job.snapshot.ID] = job
 	initial := job.snapshot
 	m.mu.Unlock()
@@ -97,6 +103,10 @@ func (m *agentJobs) run(ctx context.Context, job *agentJob, run func(context.Con
 		job.output = agentJobOutput{}
 		job.snapshot.Finished = &finished
 		job.snapshot.Result = agentJobTail(result)
+		if job.guidance != nil {
+			job.guidance.close()
+			job.snapshot.PendingGuidance = job.guidance.snapshot()
+		}
 		switch {
 		case ctx.Err() != nil:
 			job.snapshot.State = "canceled"
@@ -108,6 +118,7 @@ func (m *agentJobs) run(ctx context.Context, job *agentJob, run func(context.Con
 			job.snapshot.State = "completed"
 		}
 		snapshot := job.snapshot
+		snapshot.PendingGuidance = append([]string(nil), snapshot.PendingGuidance...)
 		notify := !m.closed
 		close(job.done)
 		m.mu.Unlock()
@@ -149,6 +160,7 @@ func (m *agentJobs) List() []agentJobSnapshot {
 		snapshot := job.snapshot
 		snapshot.Output = ""
 		snapshot.Result = ""
+		snapshot.PendingGuidance = nil
 		result = append(result, snapshot)
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].Started.Before(result[j].Started) })
@@ -160,8 +172,12 @@ func (m *agentJobs) Read(id string) (agentJobSnapshot, error) {
 	defer m.mu.Unlock()
 	if job := m.jobs[id]; job != nil {
 		snapshot := job.snapshot
+		snapshot.PendingGuidance = append([]string(nil), snapshot.PendingGuidance...)
 		if snapshot.Finished == nil {
 			snapshot.Output = job.output.String()
+			if job.guidance != nil {
+				snapshot.PendingGuidance = job.guidance.snapshot()
+			}
 		}
 		return snapshot, nil
 	}
@@ -175,6 +191,9 @@ func (m *agentJobs) Cancel(id string) error {
 	if job == nil {
 		return fmt.Errorf("unknown job %q in this thread", id)
 	}
+	if job.guidance != nil {
+		job.guidance.close()
+	}
 	job.cancel()
 	return nil
 }
@@ -185,6 +204,9 @@ func (m *agentJobs) CancelAll() {
 	defer m.mu.Unlock()
 	for _, job := range m.jobs {
 		if job.snapshot.State == "running" {
+			if job.guidance != nil {
+				job.guidance.close()
+			}
 			job.cancel()
 		}
 	}
@@ -216,9 +238,13 @@ func (m *agentJobs) wait(ctx context.Context, id string, interrupt <-chan struct
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	snapshot := job.snapshot
+	snapshot.PendingGuidance = append([]string(nil), snapshot.PendingGuidance...)
 	interrupted := snapshot.Finished == nil
 	if interrupted {
 		snapshot.Output = job.output.String()
+		if job.guidance != nil {
+			snapshot.PendingGuidance = job.guidance.snapshot()
+		}
 	}
 	return snapshot, interrupted, nil
 }
@@ -228,6 +254,9 @@ func (m *agentJobs) Close() {
 	defer m.mu.Unlock()
 	m.closed = true
 	for _, job := range m.jobs {
+		if job.guidance != nil {
+			job.guidance.close()
+		}
 		job.cancel()
 	}
 }

@@ -546,3 +546,12 @@ Local fixture only (`@server` on port 19440); no real user history was deleted.
 - Actual ChatPane regression covers uppercase/multiline commands, retained attachments/drafts, thread-switch alert cleanup and failed image reading during a running turn without transcript insertion. Server regression covers all three commands, unchanged history and no tool execution/events.
 - Validation: Web suite 244 tests / 65 files, TypeScript and Vite production build passed. The final focused composer regression passed after adding the running-turn fixture reference. This change has no new real-browser visual acceptance claim.
 - `go test ./...` and focused server command/compaction tests with `-race -count=1` passed after the Web build completed.
+
+### OMP-style running subagent guidance (tool entry point)
+
+- Compared OMP `75e7801` RPC `wire/commands.ts`'s `steer_subagent` contract (running child ID + message). rdev now exposes `jobs` tool `action=steer`, `id`, `message`; this is behavior alignment, not a claim of OMP wire compatibility.
+- Per-child bounded FIFO guidance queues use existing `RunTurnWithSteering` at settled response/tool boundaries. Final admission closes atomically with checking for remaining input. Late accepted guidance starts another turn using the same isolated child session and original granted capabilities, within the existing 30-minute child deadline.
+- Shell jobs, unknown/cross-thread IDs, completed/canceled/closed children reject guidance. Queue limit is 8 messages of at most 4096 bytes each. Cancellation/failure preserves unconsumed guidance in explicit job detail/completion `pendingGuidance`; list summaries omit it. Detail snapshots copy pending strings so callers cannot mutate stored state.
+- Integration tests hold an HTTP provider's first response, submit two actual `jobs` tool requests and verify the next provider requests contain the ordered user guidance in the same history. Both normal MaxTurns=8 and last-boundary MaxTurns=1 cases return the final answer. Separate tests cover completion/admission racing, cancellation retention, limits, shell rejection, cross-thread rejection and snapshot isolation.
+- Direct task-panel guidance input and the OMP RPC endpoint remain outstanding. No live upstream model or real-browser claim is made for this addition.
+- Validation: `go test ./...` passed; focused subagent/guidance/job/cancellation suite with `-race -count=1` passed, then passed again after the final snapshot-copy change and isolation assertion. No Web code changed in this slice.

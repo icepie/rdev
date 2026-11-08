@@ -103,14 +103,15 @@ type jobsTool struct {
 
 func (*jobsTool) Name() string { return "jobs" }
 func (*jobsTool) Description() string {
-	return "List this thread's background commands and subagents, read output, cancel a job, or wait up to 30 seconds. A wait timeout or queued user guidance releases the wait without canceling the job. Results also arrive automatically; avoid repeated polling."
+	return "List this thread's background commands and subagents, read output, cancel a job, steer a running subagent with additional user guidance, or wait up to 30 seconds. A wait timeout or queued user guidance releases the wait without canceling the job. Results also arrive automatically; avoid repeated polling."
 }
 func (*jobsTool) Schema() json.RawMessage {
-	return json.RawMessage(`{"type":"object","properties":{"action":{"type":"string","enum":["list","read","cancel","wait"]},"id":{"type":"string"},"timeout":{"type":"integer","minimum":1,"maximum":30}},"required":["action"],"additionalProperties":false}`)
+	return json.RawMessage(`{"type":"object","properties":{"action":{"type":"string","enum":["list","read","cancel","wait","steer"]},"id":{"type":"string"},"message":{"type":"string","description":"Additional guidance for action=steer; applied at the next settled response/tool boundary"},"timeout":{"type":"integer","minimum":1,"maximum":30}},"required":["action"],"additionalProperties":false}`)
 }
 func (t *jobsTool) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
 	var args struct {
 		Action  string `json:"action"`
+		Message string `json:"message"`
 		ID      string `json:"id"`
 		Timeout int    `json:"timeout"`
 	}
@@ -126,6 +127,14 @@ func (t *jobsTool) Execute(ctx context.Context, raw json.RawMessage) (string, er
 			return "", err
 		}
 		return marshalJobResult(job)
+	case "steer":
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		if err := t.jobs.Steer(args.ID, args.Message); err != nil {
+			return "", err
+		}
+		return "Guidance queued for the subagent; inspect pendingGuidance in job details if execution fails or is canceled.", nil
 	case "cancel":
 		if err := t.jobs.Cancel(args.ID); err != nil {
 			return "", err
