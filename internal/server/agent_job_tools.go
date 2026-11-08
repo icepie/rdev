@@ -352,7 +352,7 @@ func (h *agentWSHandler) handleCancelSubagent(ac *agentConn, request agentMsg) {
 			raw, _ := json.Marshal(struct {
 				Cancelled bool `json:"cancelled"`
 			}{cancelled})
-			reply.Items = raw
+			reply.Data = raw
 		} else {
 			reply.Error = err.Error()
 			reply.Code = "invalid_request"
@@ -366,6 +366,47 @@ func (h *agentWSHandler) handleCancelSubagent(ac *agentConn, request agentMsg) {
 		reply.Message = err.Error()
 	}
 	ac.writeJSON(reply)
+}
+
+// handleGetSubagents exposes only live subagent summaries from the selected
+// thread. It never returns shell jobs or another thread's work.
+func (h *agentWSHandler) handleGetSubagents(ac *agentConn, request agentMsg) {
+	threadID := request.Thread
+	if threadID == "" {
+		threadID = ac.current
+	}
+	var jobs *agentJobs
+	if ac.entry != nil {
+		h.srv.agentSessionsMu.Lock()
+		if th := ac.entry.threads[threadID]; th != nil {
+			jobs = th.jobs
+		}
+		h.srv.agentSessionsMu.Unlock()
+	}
+	var subagents []agentJobSnapshot
+	if jobs != nil {
+		for _, job := range jobs.List() {
+			if job.Kind == "subagent" && job.State == "running" {
+				subagents = append(subagents, job)
+			}
+		}
+	}
+	if request.RPC {
+		success := jobs != nil
+		reply := agentMsg{Type: "response", Command: request.Command, ID: request.ID, Success: &success}
+		if !success {
+			reply.Error = "unknown thread"
+			reply.Code = "invalid_request"
+		} else {
+			reply.Data, _ = json.Marshal(struct {
+				Subagents []agentJobSnapshot `json:"subagents"`
+			}{subagents})
+		}
+		ac.writeJSON(reply)
+		return
+	}
+	raw, _ := json.Marshal(subagents)
+	ac.writeJSON(agentMsg{Op: "subagents", Thread: threadID, Items: raw})
 }
 
 // Send an invalidation, not a captured snapshot. A reset racing this write can

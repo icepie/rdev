@@ -45,6 +45,7 @@ type agentMsg struct {
 	Success       *bool               `json:"success,omitempty"`
 	Error         string              `json:"error,omitempty"`
 	Code          string              `json:"code,omitempty"`
+	Data          json.RawMessage     `json:"data,omitempty"`
 	RPC           bool                `json:"-"`
 	Display       json.RawMessage     `json:"display,omitempty"`
 	ImagePreviews []string            `json:"imagePreviews,omitempty"`
@@ -1341,6 +1342,11 @@ func (h *agentWSHandler) OnMessage(socket *gws.Conn, message *gws.Message) {
 	if msg.Type == "request" && msg.Command != "" {
 		msg.RPC = true
 		msg.Op = msg.Command
+	} else if msg.Type == "steer_subagent" || msg.Type == "cancel_subagent" || msg.Type == "get_subagents" {
+		// OMP's wire command uses the command name directly as `type`.
+		msg.RPC = true
+		msg.Command = msg.Type
+		msg.Op = msg.Type
 	}
 
 	// In-band device password auth (same flow as terminal.go).
@@ -1379,6 +1385,8 @@ func (h *agentWSHandler) OnMessage(socket *gws.Conn, message *gws.Message) {
 		h.handleJobs(ac, msg.Thread, msg.ID, true)
 	case "cancel_subagent":
 		h.handleCancelSubagent(ac, msg)
+	case "get_subagents":
+		h.handleGetSubagents(ac, msg)
 	case "steer_job", "steer_subagent":
 		h.handleJobGuidance(ac, msg)
 	case "chat":

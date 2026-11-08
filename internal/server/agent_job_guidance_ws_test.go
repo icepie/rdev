@@ -62,6 +62,18 @@ func TestJobGuidanceSocketAcknowledgesTargetAndRejectsStaleJobs(t *testing.T) {
 	if got := guidance.snapshot(); len(got) != 1 || got[0] != "check paths" {
 		t.Fatalf("guidance not queued: %v", got)
 	}
+	rpcList, _ := json.Marshal(map[string]any{"type": "request", "id": "rpc-list", "command": "get_subagents", "thread": thread.id})
+	sendAgentOp(t, socket, string(rpcList))
+	listReply := waitAgentMsg(t, rec.msgs, "OMP subagent list", func(m agentMsg) bool { return m.Type == "response" && m.Command == "get_subagents" })
+	if listReply.Success == nil || !*listReply.Success || listReply.ID != "rpc-list" || len(listReply.Data) == 0 {
+		t.Fatalf("invalid OMP subagent list: %+v", listReply)
+	}
+	directList, _ := json.Marshal(map[string]any{"type": "get_subagents", "id": "rpc-direct-list", "thread": thread.id})
+	sendAgentOp(t, socket, string(directList))
+	directReply := waitAgentMsg(t, rec.msgs, "direct OMP subagent list", func(m agentMsg) bool { return m.Type == "response" && m.ID == "rpc-direct-list" })
+	if directReply.Success == nil || !*directReply.Success {
+		t.Fatalf("direct OMP frame rejected: %+v", directReply)
+	}
 	request.Op = "steer_subagent"
 	request.ID = "request-omp-alias"
 	request.JobID = ""
