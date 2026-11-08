@@ -114,9 +114,12 @@ func TestSubagentRPCWireContract(t *testing.T) {
 			}
 			seen := map[string]bool{}
 			for _, item := range catalog.Commands {
+				if (item.Name == "get_jobs" || item.Name == "get_job" || item.Name == "cancel_job") && item.Source != "rdev" {
+					t.Fatalf("rdev extension must be identified: %+v", item)
+				}
 				seen[item.Name] = true
 			}
-			for _, name := range []string{"compact", "prompt", "get_state"} {
+			for _, name := range []string{"compact", "prompt", "get_state", "get_jobs", "get_job", "cancel_job"} {
 				if !seen[name] {
 					t.Fatalf("command catalog missing %q: %s", name, protocol["data"])
 				}

@@ -136,3 +136,5 @@ RPC 帧由独立命令白名单分发，复用设备认证门槛。未知命令�
 `get_state.hasPendingAsyncWork` 还包括已退出但 completion callback 尚未返回的后台结果递交，避免 worker 标成 completed 后、主会话收到结果前短暂误报 settled。后台任务的 Read/Wait 仍按 worker 终态返回，不额外等待 UI 推送；isSettled 继续同时检查前台和队列。
 
 - 服务端会话命令也支持 `/jobs`、`/jobs full` 与 `/jobs kill <id|all>`：直接调用当前线程的任务管理器，不调用模型；full 返回每个任务的有界输出。RPC prompt 仍要求前台空闲；运行中浏览器任务面板可直接查询和取消，RPC 可使用既有 subagent 控制方法。
+
+- rdev 扩展 RPC 支持运行中任务管理：`get_jobs` 返回 `data.jobs` 摘要；`get_job` 接收 `jobId` 并返回 `data.job`（含有界输出）；`cancel_job` 接收 `jobId`，支持 `all`，返回 `data.cancellationRequested`。三个方法均可携带 `thread`，省略时使用当前连接所选线程。请求关联 `id` 与任务 `jobId` 分离；回执仅发给调用连接，任务状态通知仍共享。方法在 `rpcCommands` 中以 `source: "rdev"` 声明，不属于 OMP 标准命令。

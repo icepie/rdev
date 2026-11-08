@@ -119,6 +119,14 @@ func (h *agentWSHandler) handleAgentRPCFrame(ac *agentConn, raw []byte) bool {
 		h.handleRPCAvailableCommands(ac, request)
 	case "get_state":
 		h.handleRPCState(ac, request)
+	case "get_jobs", "get_job", "cancel_job":
+		if request.Command != "get_jobs" {
+			if err := rpcStringField(fields, "jobId", &request.JobID, true); err != nil {
+				fail("invalid_request", err.Error())
+				return true
+			}
+		}
+		h.handleRPCJobs(ac, request)
 	case "get_available_models":
 		h.handleRPCAvailableModels(ac, request)
 	case "set_model":
@@ -572,6 +580,9 @@ func (h *agentWSHandler) handleRPCAvailableCommands(ac *agentConn, request agent
 	// discovery in a separate rdev extension, so palettes never advertise
 	// method names or browser-only controls as runnable prompt commands.
 	commands := []map[string]any{
+		{"name": "get_jobs", "source": "rdev", "params": map[string]any{"thread": "string?"}},
+		{"name": "get_job", "source": "rdev", "params": map[string]any{"thread": "string?", "jobId": "string"}},
+		{"name": "cancel_job", "source": "rdev", "params": map[string]any{"thread": "string?", "jobId": "string|all"}},
 		{"name": "negotiate_protocol"}, {"name": "get_available_commands"},
 		{"name": "get_state", "params": map[string]any{"thread": "string?"}},
 		{"name": "get_available_models"},
