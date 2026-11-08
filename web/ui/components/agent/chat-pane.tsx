@@ -302,6 +302,10 @@ export function ChatPaneView({
       setComposerError(t("agent.commandImagesUnsupported", { command }));
       return;
     }
+    if (pendingImages.length > 0 && /^\/steer(?:\s|$)/i.test(text)) {
+      sendSteer(text);
+      return;
+    }
     if (text.startsWith("/") && pendingImages.length === 0 && runSlashLine(text)) {
       return;
     }
@@ -324,13 +328,26 @@ export function ChatPaneView({
     }
   };
 
-  const sendSteer = () => {
-    const text = input.trim();
-    if (!text || !running || !ready) return;
+  const sendSteer = (draft = input) => {
+    const text = draft.trim().replace(/^\/steer(?:\s+|$)/i, "").trim();
+    if ((!text && pendingImages.length === 0) || !ready || returningQueueRef.current || imageReaders.current.size > 0) return;
+    if (!running) {
+      setComposerError(t("agent.commandRequiresRunning", { command: "/steer" }));
+      return;
+    }
+    const command = text.match(/^\/(compact|bg|subagent)(?=\s|$)/i)?.[0];
+    if (command && pendingImages.length > 0) {
+      setComposerError(t("agent.commandImagesUnsupported", { command }));
+      return;
+    }
     const payload: Record<string, unknown> = { op: "steer", text };
     if (threadId) payload.thread = threadId;
+    if (pendingImages.length) payload.images = pendingImages.map(({ name, mime, data }) => ({ name, mime, data }));
     if (!sendRaw(payload)) return;
+    cancelImageReads();
+    setComposerError("");
     setInput("");
+    setPendingImages(EMPTY_COMPOSER_IMAGES);
   };
 
   const sendStop = useCallback(() => {
@@ -988,9 +1005,9 @@ export function ChatPaneView({
                       variant="ghost"
                       size="icon"
                       aria-label={t("agent.steer")}
-                      disabled={!ready || !input.trim()}
+                      disabled={!ready || returningQueue || readingImages > 0 || (!input.trim() && pendingImages.length === 0)}
                       className={COARSE_POINTER_PROMPT_ICON_ACTION_BUTTON_CLASS}
-                      onClick={sendSteer}
+                      onClick={() => sendSteer()}
                     >
                       <Icon name="Zap" />
                     </Button>

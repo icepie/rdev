@@ -66,7 +66,7 @@ func (s *Session) RunTurnWithSteering(ctx context.Context, userText string, imag
 			return false
 		}
 		s.appendHistory(*message)
-		emit(Event{Type: EventUserInput, Text: message.Content, Display: message.Display})
+		emit(Event{Type: EventUserInput, Text: message.Content, Display: message.Display, Images: message.Images})
 		return true
 	}
 	var total Usage

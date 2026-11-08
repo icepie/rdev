@@ -217,8 +217,8 @@ func parseAgentImages(raw json.RawMessage) ([]agent.MessageImage, error) {
 	return out, nil
 }
 
-// agentImageNames reduces image attachments to their file names (the only
-// part broadcast in turn_start and persisted in history).
+// agentImageNames returns attachment labels for live and replayed user input;
+// image previews travel separately from the original provider payload.
 func agentImageNames(images []agent.MessageImage) []string {
 	if len(images) == 0 {
 		return nil
@@ -1357,7 +1357,7 @@ func (h *agentWSHandler) OnMessage(socket *gws.Conn, message *gws.Message) {
 	case "ask_response":
 		h.handleAskResponse(ac, msg.ID, msg.Answer)
 	case "steer":
-		h.handleSteer(ac, msg.Text, msg.Thread)
+		h.handleSteer(ac, msg.Text, msg.Thread, msg.Images)
 	case "dequeue":
 		h.handleDequeueItem(ac, msg.Thread, msg.Index, msg.QueueID, msg.ID, msg.Restore)
 	case "stop":
@@ -1530,6 +1530,11 @@ func (h *agentWSHandler) handleChat(ac *agentConn, text, modelRef, threadRef str
 		ac.sendError(err.Error())
 		return
 	}
+	h.handleChatWithImages(ac, entry, text, modelRef, threadRef, images)
+}
+
+// Chat and idle steering share admission after decoding attachments once.
+func (h *agentWSHandler) handleChatWithImages(ac *agentConn, entry *agentSessionEntry, text, modelRef, threadRef string, images []agent.MessageImage) {
 	srv := h.srv
 	// One lock hold covers the queue check and the turn start: two chats
 	// arriving together can never both start a turn (one queues).
@@ -1595,9 +1600,14 @@ func (h *agentWSHandler) handleChat(ac *agentConn, text, modelRef, threadRef str
 
 // handleSteer prioritizes input at the next settled model/tool boundary.
 // When idle it behaves like a normal chat; commands stay in the turn queue.
-func (h *agentWSHandler) handleSteer(ac *agentConn, text, threadRef string) {
+func (h *agentWSHandler) handleSteer(ac *agentConn, text, threadRef string, imagesRaw json.RawMessage) {
 	text = strings.TrimSpace(text)
-	if text == "" {
+	images, err := parseAgentImages(imagesRaw)
+	if err != nil {
+		ac.sendError(err.Error())
+		return
+	}
+	if text == "" && len(images) == 0 {
 		return
 	}
 	entry := ac.entry
@@ -1614,7 +1624,7 @@ func (h *agentWSHandler) handleSteer(ac *agentConn, text, threadRef string) {
 	th := entry.threads[threadID]
 	if th == nil || !th.running {
 		srv.agentSessionsMu.Unlock()
-		h.handleChat(ac, text, "", threadRef, nil)
+		h.handleChatWithImages(ac, entry, text, "", threadRef, images)
 		return
 	}
 	// Keep multiple steering messages FIFO, ahead of normal follow-ups.
@@ -1622,7 +1632,7 @@ func (h *agentWSHandler) handleSteer(ac *agentConn, text, threadRef string) {
 	for index < len(th.queue) && th.queue[index].steering {
 		index++
 	}
-	queued := agentQueuedChat{text: text, steering: true, display: json.RawMessage(`{"steering":true}`)}
+	queued := agentQueuedChat{text: text, images: images, steering: true, display: json.RawMessage(`{"steering":true}`)}
 	th.queue = append(th.queue, agentQueuedChat{})
 	copy(th.queue[index+1:], th.queue[index:])
 	th.queue[index] = queued
@@ -2616,7 +2626,7 @@ func (s *Server) runAgentTurn(entry *agentSessionEntry, th *agentThread, turn ag
 		s.agentSessionsMu.Unlock()
 		s.broadcastQueue(entry, th)
 		display, _ := json.Marshal(map[string]any{"steering": true, "time": time.Now().UnixMilli()})
-		return &agent.Message{Role: "user", Content: next.text, Display: display}
+		return &agent.Message{Role: "user", Content: next.text, Images: next.images, Display: display}
 	}
 	historyReplaced, runErr := runAgentConversation(ctx, sess, text, images, emit, takeSteering)
 	outcomeAt := time.Now().UTC().Format(time.RFC3339Nano)

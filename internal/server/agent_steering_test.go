@@ -44,7 +44,7 @@ func TestSteeringReleasesOnlyOwningThreadWaitAndPreservesJob(t *testing.T) {
 			}
 			<-started
 			if alreadyQueued {
-				handler.handleSteer(ac, "new direction", "")
+				handler.handleSteer(ac, "new direction", "", nil)
 			}
 			registered := make(chan struct{})
 			tool := &jobsTool{jobs: jobs, steering: func() <-chan struct{} {
@@ -63,7 +63,7 @@ func TestSteeringReleasesOnlyOwningThreadWaitAndPreservesJob(t *testing.T) {
 			go func() { text, err := tool.Execute(ctx, args); resultCh <- result{text, err} }()
 			<-registered
 			if !alreadyQueued {
-				handler.handleSteer(ac, "new direction", "")
+				handler.handleSteer(ac, "new direction", "", nil)
 			}
 			select {
 			case response := <-resultCh:
@@ -168,7 +168,7 @@ func TestAgentSteeringContinuesAfterBackgroundWait(t *testing.T) {
 		defer srv.agentSessionsMu.Unlock()
 		return th.steeringWake != nil
 	})
-	handler.handleSteer(ac, "change plan", "")
+	handler.handleSteer(ac, "change plan", "", nil)
 	waitFor(t, "steered response finished", func() bool {
 		srv.agentSessionsMu.Lock()
 		defer srv.agentSessionsMu.Unlock()

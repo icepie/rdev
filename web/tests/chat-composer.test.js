@@ -145,6 +145,35 @@ it("preserves composer intent across modified keys, image loading and thread swi
       expect(document.querySelectorAll("img")).toHaveLength(1);
       expect(document.querySelector('[role="alert"]').textContent).toBe("agent.commandImagesUnsupported");
     }
+    for (const [draft, expectedText, slash] of [["", "", false], ["compare this image", "compare this image", false], ["/steer inspect", "inspect", true], ["/steer", "", true]]) {
+      props.threadId = `image-steering-${draft}`;
+      props.sink.state.running = true;
+      await render();
+      if (draft) await act(async () => insertDraft(draft));
+      await attach("guidance.png");
+      const steer = () => document.querySelector('button[aria-label="agent.steer"]');
+      expect(steer().disabled).toBe(true);
+      await act(async () => readers.at(-1).finish("data:image/png;base64,Z3VpZGU="));
+      expect(steer().disabled).toBe(false);
+      const successful = props.sendRaw;
+      props.sendRaw = vi.fn(() => false);
+      await render();
+      const submit = () => act(async () => slash
+        ? composer.dispatchEvent(new dom.window.KeyboardEvent("keydown", {key:"Enter",bubbles:true,cancelable:true}))
+        : steer().click());
+      await submit();
+      expect(props.sendRaw).toHaveBeenCalledOnce();
+      expect(composer.value).toBe(draft);
+      expect(document.querySelectorAll("img")).toHaveLength(1);
+      props.sendRaw = successful;
+      await render();
+      await submit();
+      expect(sent.at(-1)).toEqual({op:"steer",text:expectedText,thread:props.threadId,images:[{name:"guidance.png",mime:"image/png",data:"Z3VpZGU="}]});
+      expect(composer.value).toBe("");
+      expect(document.querySelectorAll("img")).toHaveLength(0);
+      sent.length = 0;
+    }
+    props.sink.state.running = false;
     props.threadId = "thread-a";
     await render();
     expect(document.querySelector('[role="alert"]')).toBeNull();

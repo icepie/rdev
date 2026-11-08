@@ -431,3 +431,13 @@ it('job invalidations trigger refresh without replacing data or closing the acti
   expect(sink.state.jobs[0].output).toBe('keep');
   expect(sink.ops.turnOpen.current).toBe(true);
 });
+
+it('renders image-only guidance with preview while preserving the active turn timer', async () => {
+  await frame({op:'turn_start',text:'inspect',display:{time:1000}});
+  await frame({op:'delta',text:'first response'});
+  const since = sink.state.workingSince;
+  await frame({op:'steering',text:'',images:['guide.png'],imagePreviews:['data:image/png;base64,aW1hZ2U='],display:{steering:true,time:2000}});
+  expect(sink.state.items.at(-1)).toMatchObject({kind:'user',text:'',images:['guide.png'],imagePreviews:['data:image/png;base64,aW1hZ2U='],steering:true});
+  expect(sink.state.running).toBe(true);
+  expect(sink.state.workingSince).toBe(since);
+});

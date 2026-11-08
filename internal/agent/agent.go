@@ -32,6 +32,7 @@ const (
 
 // Event is one streamed unit of agent progress.
 type Event struct {
+	Images     []MessageImage  // user_input: images accompanying queued guidance
 	Display    json.RawMessage // user_input: presentation metadata
 	Type       EventType
 	Text       string          // delta (text_delta/reasoning) or full final text (done)

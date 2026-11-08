@@ -79,8 +79,8 @@ func TestAgentQueueSteerOrdering(t *testing.T) {
 	waitFor(t, "first provider request", func() bool { return hits.Load() == 1 })
 
 	h.handleChat(ac, "one", "", "", nil) // queued behind the running turn
-	h.handleSteer(ac, "two", "")
-	h.handleSteer(ac, "three", "")
+	h.handleSteer(ac, "two", "", nil)
+	h.handleSteer(ac, "three", "", nil)
 	srv.agentSessionsMu.Lock()
 	ctx := entry.threads[entry.current].turnCtx
 	srv.agentSessionsMu.Unlock()

@@ -21,6 +21,10 @@ func (s *Server) emitAgentTurnEvent(entry *agentSessionEntry, th *agentThread, e
 		msg.Op = "assistant_start"
 	case agent.EventUserInput:
 		msg.Op, msg.Text, msg.Display = "steering", event.Text, event.Display
+		msg.ImagePreviews = agentImagePreviews(event.Images)
+		if names := agentImageNames(event.Images); len(names) > 0 {
+			msg.Images, _ = json.Marshal(names)
+		}
 	case agent.EventTextDelta:
 		msg.Op, msg.Text = "delta", event.Text
 	case agent.EventReasoning:
