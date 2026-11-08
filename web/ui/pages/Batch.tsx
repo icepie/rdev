@@ -590,7 +590,7 @@ export function BatchPage() {
           onClick={() => openMobileNav()}
           className={cn(COARSE_POINTER_HEADER_ICON_BUTTON_CLASS, "flex cursor-pointer items-center justify-center self-start text-muted-foreground transition-colors hover:bg-state-hover hover:text-foreground md:hidden")}
         >
-          <Icon name="AlignLeft" className="size-5" />
+          <Icon name="PanelLeft" className="size-5" />
         </button>
         {/* Device selector */}
         <Card>

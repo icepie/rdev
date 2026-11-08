@@ -23,7 +23,6 @@ import { cn } from "../lib/utils";
 import { useMobileViewport } from "../hooks/use-mobile-viewport";
 import { useIsCompactViewport } from "../components/hooks/use-compact-viewport";
 import { useRailControl } from "../lib/rail-control";
-import { COARSE_POINTER_HEADER_ICON_BUTTON_CLASS } from "../components/coarse-pointer-sizing";
 
 /* Vertical icon rail instead of a horizontal top bar: icon-only nav items
  * down the left edge, settings controls pinned to the bottom. */
@@ -130,87 +129,6 @@ function MobileNavLink({
   );
 }
 
-/* Rail bottom buttons (GitHub / theme / language), shared by the desktop
- * rail and the mobile drawer rail — identical controls in both (bb: the
- * drawer keeps the whole sidebar, rail included). */
-function RailFooterButtons({ className }: { className?: string }) {
-  const { t, lang, setLang } = useI18n();
-  const { choice, setChoice } = useTheme();
-  return (
-    <div className={cn("flex flex-col items-center gap-1", className)}>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <a
-            href="https://github.com/icepie/rdev"
-            target="_blank"
-            rel="noreferrer"
-            aria-label="GitHub"
-            className={RAIL_BUTTON_CLASS}
-          >
-            <Icon name="Code" className="size-4.5" />
-          </a>
-        </TooltipTrigger>
-        <TooltipContent side="right">GitHub</TooltipContent>
-      </Tooltip>
-      <DropdownMenu>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <DropdownMenuTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon"
-                aria-label={t("theme.toggle")}
-                className={RAIL_BUTTON_CLASS}
-              >
-                <Icon
-                  name={choice === "light" ? "Sun" : choice === "dark" ? "Moon" : "Monitor"}
-                  className="size-4.5"
-                />
-              </Button>
-            </DropdownMenuTrigger>
-          </TooltipTrigger>
-          <TooltipContent side="right">{t("theme.toggle")}</TooltipContent>
-        </Tooltip>
-        <DropdownMenuContent side="right" align="end">
-          {THEME_CHOICES.map((c) => (
-            <DropdownMenuItem key={c.value} onSelect={() => setChoice(c.value)}>
-              <span className="flex-1">{t(c.key)}</span>
-              {choice === c.value && <Icon name="Check" className="size-4" />}
-            </DropdownMenuItem>
-          ))}
-        </DropdownMenuContent>
-      </DropdownMenu>
-      <DropdownMenu>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <DropdownMenuTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon"
-                aria-label={t("lang.label")}
-                className={RAIL_BUTTON_CLASS}
-              >
-                <Icon name="Globe" className="size-4.5" />
-              </Button>
-            </DropdownMenuTrigger>
-          </TooltipTrigger>
-          <TooltipContent side="right">{t("lang.label")}</TooltipContent>
-        </Tooltip>
-        <DropdownMenuContent side="right" align="end">
-          <DropdownMenuItem onSelect={() => setLang("zh")}>
-            <span className="flex-1">中文</span>
-            {lang === "zh" && <Icon name="Check" className="size-4" />}
-          </DropdownMenuItem>
-          <DropdownMenuItem onSelect={() => setLang("en")}>
-            <span className="flex-1">English</span>
-            {lang === "en" && <Icon name="Check" className="size-4" />}
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
-    </div>
-  );
-}
-
 function RailSettings() {
   const { t, lang, setLang } = useI18n();
   const { choice, setChoice, preset, setPreset } = useTheme();
@@ -233,36 +151,12 @@ function RailSettings() {
   </DropdownMenu>;
 }
 
-/* Drawer rail icon (bb: the drawer keeps the desktop rail column). */
-function DrawerRailLink({ item }: { item: (typeof NAV_ITEMS)[number] }) {
-  const { t } = useI18n();
-  const active = useMatch({
-    path: item.to,
-    end: "end" in item && item.end,
-  });
-  return (
-    <NavLink
-      to={item.to}
-      end={"end" in item && item.end}
-      aria-label={t(item.key)}
-      className={cn(
-        "flex size-8 shrink-0 items-center justify-center rounded-md transition-colors max-md:pointer-coarse:size-9",
-        active
-          ? "bg-state-active text-foreground"
-          : "text-muted-foreground hover:bg-state-hover hover:text-foreground",
-      )}
-    >
-      <Icon name={item.icon} className="size-4" />
-    </NavLink>
-  );
-}
-
 /** Hidden with the owning sidebar; mobile has no persistent navigation rail. */
-export function MobileWorkspaceNavigation() {
+export function MobileWorkspaceNavigation({ onClose }: { onClose?: () => void } = {}) {
   const { t } = useI18n();
   const railControl = useRailControl();
   return <nav aria-label={t("nav.label")} className="absolute inset-y-0 left-0 flex w-12 flex-col items-center gap-0.5 overflow-y-auto border-r border-border-seam bg-sidebar py-2 md:hidden">
-    <button type="button" aria-label={t("rail.collapse")} onClick={railControl?.toggle}
+    <button type="button" aria-label={t("rail.collapse")} onClick={onClose ?? railControl?.toggle}
       className={cn(RAIL_BUTTON_CLASS, "mb-2 shrink-0 cursor-pointer")}>
       <Icon name="PanelLeft" className="size-4.5" />
     </button>
@@ -275,8 +169,7 @@ export function AppShell() {
   const shellRef = useRef<HTMLDivElement>(null);
   const compactViewport = useIsCompactViewport();
   useMobileViewport(shellRef, compactViewport);
-  const { t, lang, setLang } = useI18n();
-  const { choice, setChoice, preset, setPreset } = useTheme();
+  const { t } = useI18n();
   const location = useLocation();
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [drawerSection, setDrawerSection] = useState<ReactNode>(null);
@@ -339,7 +232,7 @@ export function AppShell() {
       </nav>
 
       {/* Mobile (<md): rail hidden; pages open this left drawer from their
-       * own in-flow header trigger (bb mobile sidebar: min(86vw,360px),
+       * own in-flow header trigger (shared 48px rail and sidebar width,
        * backdrop, closes on pick). */}
       <DialogPrimitive.Root open={mobileNavOpen} onOpenChange={setMobileNavOpen}>
         <DialogPrimitive.Portal>
@@ -350,111 +243,18 @@ export function AppShell() {
               event.preventDefault();
               if (navTrigger.current?.isConnected) navTrigger.current.focus();
             }}
-            className="fixed inset-y-0 left-0 z-50 flex w-[min(86vw,360px)] overflow-y-auto border-r border-border-seam bg-sidebar pb-[env(safe-area-inset-bottom)] pt-[env(safe-area-inset-top)] outline-none data-[state=open]:animate-in data-[state=open]:slide-in-from-left data-[state=closed]:animate-out data-[state=closed]:slide-out-to-left duration-[220ms] ease-[cubic-bezier(0.32,0.72,0,1)] motion-reduce:animate-none md:hidden"
+            className="fixed inset-y-0 left-0 z-50 flex w-[min(calc(100vw-48px),360px)] pl-12 overflow-hidden border-r border-border-seam bg-sidebar pb-[env(safe-area-inset-bottom)] pt-[env(safe-area-inset-top)] outline-none data-[state=open]:animate-in data-[state=open]:slide-in-from-left data-[state=closed]:animate-out data-[state=closed]:slide-out-to-left duration-[220ms] ease-[cubic-bezier(0.32,0.72,0,1)] motion-reduce:animate-none md:hidden"
           >
             <DialogPrimitive.Title className="sr-only">{t("nav.label")}</DialogPrimitive.Title>
-        {drawerSection ? (
-          /* bb mobile: the drawer IS the whole sidebar — the nav rail
-           * column on the left, the page's own sidebar filling the rest. */
-          <>
-            <nav
-              aria-label={t("nav.label")}
-              className="flex w-11 shrink-0 flex-col items-center gap-0.5 py-2"
-            >
-              {NAV_ITEMS.map((item) => (
-                <DrawerRailLink key={item.to} item={item} />
-              ))}
-              <RailFooterButtons className="mt-auto" />
-            </nav>
-            <div className="flex min-w-0 flex-1 flex-col border-l border-border-seam">
-              {drawerSection}
+            <MobileWorkspaceNavigation onClose={() => setMobileNavOpen(false)} />
+            <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto">
+              {drawerSection ?? <>
+                <div className="flex h-12 shrink-0 items-center border-b border-border-seam px-3 text-sm font-medium">RDev</div>
+                <nav aria-label={t("nav.label")} className="flex flex-col gap-0.5 p-2">
+                  <MobileNavList />
+                </nav>
+              </>}
             </div>
-          </>
-        ) : (
-          <div className="flex min-w-0 flex-1 flex-col">
-            <div className="flex h-12 shrink-0 items-center gap-2 border-b border-border-seam px-3">
-              <Icon name="Terminal" className="size-4.5 text-foreground" />
-              <span className="flex-1 text-sm font-medium">RDev</span>
-              <button
-                type="button"
-                aria-label={t("common.close")}
-                onClick={() => setMobileNavOpen(false)}
-                className={cn("flex cursor-pointer items-center justify-center text-muted-foreground transition-colors hover:bg-state-hover hover:text-foreground", COARSE_POINTER_HEADER_ICON_BUTTON_CLASS)}
-              >
-                <Icon name="X" className="size-4" />
-              </button>
-            </div>
-            <nav className="flex shrink-0 flex-col gap-0.5 p-2">
-              <MobileNavList />
-            </nav>
-        <div className="mt-auto flex flex-col gap-0.5 border-t border-border-seam p-2">
-          <label className="flex items-center justify-between gap-2 px-2 py-2 text-sm text-muted-foreground">
-            {t("theme.palette")}
-            <select aria-label={t("theme.palette")} value={preset} onChange={(event) => setPreset(event.target.value as ThemePreset)} className="h-10 rounded-md border border-input bg-background px-2 text-foreground">
-              {(Object.keys(themePresets) as ThemePreset[]).map((id) => <option key={id} value={id}>{themePresets[id].label}</option>)}
-            </select>
-          </label>
-          <a
-            href="https://github.com/icepie/rdev"
-            target="_blank"
-            rel="noreferrer"
-            className="flex h-9 items-center gap-2.5 rounded-lg px-2.5 text-sm text-muted-foreground transition-colors hover:bg-state-hover hover:text-foreground"
-          >
-            <Icon name="Code" className="size-4" />
-            GitHub
-          </a>
-          <div className="flex items-center gap-2 px-1 pt-1">
-            <div className="flex flex-1 items-center gap-0.5 rounded-lg border border-border-seam p-0.5">
-              {THEME_CHOICES.map((c) => (
-                <button
-                  key={c.value}
-                  type="button"
-                  aria-label={t(c.key)}
-                  aria-pressed={choice === c.value}
-                  title={t(c.key)}
-                  onClick={() => setChoice(c.value)}
-                  className={cn(
-                    "flex h-7 flex-1 cursor-pointer items-center justify-center rounded-md text-muted-foreground transition-colors",
-                    choice === c.value
-                      ? "bg-state-active text-foreground"
-                      : "hover:text-foreground",
-                  )}
-                >
-                  <Icon
-                    name={
-                      c.value === "light"
-                        ? "Sun"
-                        : c.value === "dark"
-                          ? "Moon"
-                          : "Monitor"
-                    }
-                    className="size-3.5"
-                  />
-                </button>
-              ))}
-            </div>
-            <div className="flex items-center gap-0.5 rounded-lg border border-border-seam p-0.5">
-              {(["zh", "en"] as const).map((l) => (
-                <button
-                  key={l}
-                  type="button"
-                  aria-pressed={lang === l}
-                  onClick={() => setLang(l)}
-                  className={cn(
-                    "flex h-7 cursor-pointer items-center rounded-md px-2 text-xs text-muted-foreground transition-colors",
-                    lang === l
-                      ? "bg-state-active text-foreground"
-                      : "hover:text-foreground",
-                  )}
-                >
-                  {l === "zh" ? "中文" : "EN"}
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
-          </div>
-        )}
           </DialogPrimitive.Content>
         </DialogPrimitive.Portal>
       </DialogPrimitive.Root>

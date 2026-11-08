@@ -597,7 +597,7 @@ export function DashboardPage() {
             onClick={() => openMobileNav()}
             className={cn(COARSE_POINTER_HEADER_ICON_BUTTON_CLASS, "flex shrink-0 cursor-pointer items-center justify-center text-muted-foreground transition-colors hover:bg-state-hover hover:text-foreground md:hidden")}
           >
-            <Icon name="AlignLeft" className="size-5" />
+            <Icon name="PanelLeft" className="size-5" />
           </button>
           <span>
             <span className="text-timeline-accent">RDev</span>{" "}

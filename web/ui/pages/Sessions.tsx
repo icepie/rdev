@@ -1,3 +1,4 @@
+import { COARSE_POINTER_HEADER_ICON_BUTTON_CLASS } from "../components/coarse-pointer-sizing";
 import {
   useCallback,
   useContext,
@@ -939,9 +940,9 @@ export function SessionsPage() {
             type="button"
             aria-label={t("nav.label")}
             onClick={() => openMobileNav()}
-            className="-ml-1 flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-state-hover hover:text-foreground md:hidden"
+            className={cn(COARSE_POINTER_HEADER_ICON_BUTTON_CLASS, "-ml-1 flex shrink-0 cursor-pointer items-center justify-center text-muted-foreground transition-colors hover:bg-state-hover hover:text-foreground md:hidden")}
           >
-            <Icon name="AlignLeft" className="size-4" />
+            <Icon name="PanelLeft" className="size-4" />
           </button>
           <Icon name="ComputerTerminal01" className="size-4 text-muted-foreground" />
           <h2 className="text-sm font-semibold">{t("sessions.active")}</h2>
