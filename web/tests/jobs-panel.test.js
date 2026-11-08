@@ -38,6 +38,7 @@ it("isolates detail requests by thread and refreshes on visibility without polli
             label: "build",
             state: "running",
             kind: "shell",
+            detailState: "running",
             output: "\x1b[31m<build>\x1b[0m",
           },
         ],
@@ -69,6 +70,20 @@ it("isolates detail requests by thread and refreshes on visibility without polli
     expect(result.textContent).toContain("exit code 0");
     expect(result.textContent).not.toContain("<stdout>");
     expect(result.textContent).not.toContain("<stderr>");
+    // A terminal list update is not a final detail reply, even if an earlier
+    // running detail supplied a result field. Keep requesting the selected job.
+    sent.length = 0;
+    await act(async () => vi.advanceTimersByTimeAsync(2000));
+    expect(sent).toContainEqual({op:"get_jobs",thread:"thread-a",id:"job-a"});
+    props.sink.state.jobs[0] = {
+      ...props.sink.state.jobs[0], detailState:"completed", output:"", result:"",
+    };
+    await render();
+    expect(document.body.textContent).toContain("agent.jobs.noOutput");
+    expect(document.body.textContent).not.toContain("agent.jobs.waiting");
+    sent.length = 0;
+    await act(async () => vi.advanceTimersByTimeAsync(6000));
+    expect(sent).toEqual(Array.from({length:3}, () => ({op:"get_jobs",thread:"thread-a"})));
     props.sink.state.jobs[0] = {
       ...props.sink.state.jobs[0], state: "failed", error: "command exited with code 2",
       result: "exit code: 2\n<stdout>\n\n</stdout>\n<stderr>\n\u001b[31mbuild failed\u001b[0m\n</stderr>",

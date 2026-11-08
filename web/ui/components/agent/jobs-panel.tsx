@@ -39,7 +39,7 @@ export function JobsPanel({
       ? selection.id
       : "";
   const selectedJob = sink.state.jobs.find(job => job.id === selected);
-  const detailLoaded = selectedJob?.state !== "running" && selectedJob?.result !== undefined;
+  const detailLoaded = selectedJob?.state !== "running" && selectedJob?.detailState === selectedJob?.state;
   useEffect(() => {
     sink.ops.setJobs([]);
     sink.ops.setJobsError("");
@@ -69,6 +69,7 @@ export function JobsPanel({
   }, [ready, threadId, sendRaw, open, selected, detailLoaded]);
   const jobs = sink.state.jobs;
   const job = jobs.find((item) => item.id === selected);
+  const emptyOutput = t(job?.state === "running" || !detailLoaded ? "agent.jobs.waiting" : "agent.jobs.noOutput");
   const started = Date.parse(job?.started || "");
   const finished = Date.parse(job?.finished || "");
   const duration = Number.isFinite(started)
@@ -153,14 +154,14 @@ export function JobsPanel({
                   key={job.id}
                   tool={{
                     id: job.id, name: "shell", args: "{}", summary: job.label,
-                    result: job.result || job.output || t("agent.jobs.waiting"),
+                    result: job.result || job.output || emptyOutput,
                     diff: "", done: job.state !== "running", isError: job.state === "failed",
                   }}
                   t={t}
                 />
               ) : (
                 <div className="max-h-40 min-w-0 overflow-auto rounded bg-card p-2 text-sm">
-                  <Markdown text={job.result || job.output || t("agent.jobs.waiting")} />
+                  <Markdown text={job.result || job.output || emptyOutput} />
                 </div>
               )}
               {job.error && <p role="alert" className="mt-2 whitespace-pre-wrap break-words text-destructive-text">{job.error}</p>}

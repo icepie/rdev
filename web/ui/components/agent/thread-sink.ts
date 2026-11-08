@@ -45,6 +45,8 @@ export interface AgentJob {
   started?: string;
   finished?: string;
   output?: string;
+  /** State of the last explicit detail reply; list summaries are not details. */
+  detailState?: AgentJob["state"];
   result?: string;
   error?: string;
 }
@@ -421,6 +423,7 @@ export function applyScopedMessage(
         const raw = item && typeof item === "object" ? item as Record<string, unknown> : {};
         return [{
           ...job,
+          detailState: old?.detailState,
           output: typeof raw.output === "string" ? job.output : old?.output,
           result: typeof raw.result === "string" ? job.result : old?.result,
           error: typeof raw.error === "string" ? job.error : old?.error,
@@ -430,6 +433,7 @@ export function applyScopedMessage(
     case "job": {
       ops.setJobsError("");
       const job = parseJob(msg.items);
+      if (job) job.detailState = job.state;
       if (job) ops.setJobs((previous) => previous.some((entry) => entry.id === job.id)
         ? previous.map((entry) => {
             if (entry.id !== job.id) return entry;

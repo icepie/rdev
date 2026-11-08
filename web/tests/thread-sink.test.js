@@ -365,3 +365,20 @@ it('reduces burst commits while preserving the actual thread sink transcript', a
   expect(directCommits).toBe(200);
   expect(renders-start).toBe(1);
 });
+
+
+it.each(['completed', 'failed', 'canceled'])('requires final details after a running job becomes %s', async state => {
+  await frame({op:'job', items:{id:'job',kind:'shell',label:'work',state:'running',output:'partial'}});
+  expect(sink.state.jobs[0].detailState).toBe('running');
+  await frame({op:'jobs', items:[{id:'job',kind:'shell',label:'work',state}]});
+  expect(sink.state.jobs[0]).toMatchObject({state,detailState:'running',output:'partial'});
+  await frame({op:'job', items:{id:'job',kind:'shell',label:'work',state,output:'final'}});
+  expect(sink.state.jobs[0]).toMatchObject({state,detailState:state,output:'final'});
+  await frame({op:'jobs', items:[{id:'job',kind:'shell',label:'work',state}]});
+  expect(sink.state.jobs[0]).toMatchObject({detailState:state,output:'final'});
+});
+
+it('recognizes a loaded terminal detail even when omitempty removed empty result fields', async () => {
+  await frame({op:'job',items:{id:'empty',kind:'subagent',label:'empty',state:'completed'}});
+  expect(sink.state.jobs[0]).toMatchObject({state:'completed',detailState:'completed',output:'',result:''});
+});
