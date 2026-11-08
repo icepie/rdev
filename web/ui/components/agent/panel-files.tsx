@@ -87,6 +87,7 @@ interface FileTask {
 
 interface ListView {
   notice?: string;
+  pageError?: string;
   truncated: boolean;
   shown: number;
   total: number;
@@ -252,6 +253,7 @@ export function PanelFiles({
     (path: string, append = false) => {
       const targetPath = append ? currentPathRef.current : path;
       const offset = append ? listOffsetRef.current : 0;
+      if (append) setListView(previous => ({ ...previous, pageError: undefined }));
       if (!append) {
         setEntries([]);
         listOffsetRef.current = 0;
@@ -541,6 +543,13 @@ export function PanelFiles({
       if (msg.op === "list_result") {
         if (!listingGuard.current.consume(typeof msg.requestId === "string" ? msg.requestId : "")) return;
         if (msg.error) {
+          if (listingGuard.current.offset() > 0) {
+            setListView(previous => ({ ...previous, pageError: String(msg.error) }));
+            return;
+          }
+          listOffsetRef.current = 0;
+          listTotalRef.current = 0;
+          listTruncatedRef.current = false;
           setEntries([]);
           setListView({
             notice: String(msg.error),
@@ -991,6 +1000,7 @@ export function PanelFiles({
             <span className="w-7 shrink-0" />
           </div>
 
+          {listView.pageError && <p role="alert" className="border-b border-border px-2 py-2 text-xs break-words text-destructive-text">{listView.pageError}</p>}
           {listView.notice ? (
             <div className="px-2 py-8 text-center text-xs text-muted-foreground">
               {listView.notice}

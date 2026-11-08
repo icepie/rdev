@@ -232,3 +232,36 @@ it('requires canceling a queued upload before clearing and ignores its later rea
   expect(socket.sent.filter(x=>x instanceof ArrayBuffer)).toEqual([]);
   expect(document.body.textContent).toContain('files.noTasks');
 });
+
+
+it('keeps loaded pages and retries the same offset after a pagination failure', async()=>{
+ const socket=sockets[0];
+ await deliver(socket,reply(socket.sent[0],'first.txt',{total:2,truncated:true}));
+ const more=()=>[...document.querySelectorAll('button')].find(e=>e.textContent==='files.loadMore');
+ await act(async()=>more().click());
+ const failed=socket.sent.at(-1);
+ await deliver(socket,{op:'error',requestId:failed.requestId,message:'temporary read failure'});
+ expect(document.body.textContent).toContain('first.txt');
+ expect(document.querySelector('[role="alert"]').textContent).toBe('temporary read failure');
+ await act(async()=>more().click());
+ const retry=socket.sent.at(-1);
+ expect(retry).toMatchObject({path:'/tmp',offset:1});expect(retry.requestId).not.toBe(failed.requestId);
+ expect(document.querySelector('[role="alert"]')).toBeNull();
+ await deliver(socket,{op:'error',requestId:failed.requestId,message:'late duplicate failure'});
+ await deliver(socket,reply(retry,'second.txt',{total:2,offset:1,truncated:false}));
+ expect(document.body.textContent).toContain('first.txt');expect(document.body.textContent).toContain('second.txt');
+ expect(document.body.textContent).not.toContain('failure');expect(more()).toBeUndefined();
+});
+
+it('resets pagination when a fresh directory request fails', async()=>{
+ const socket=sockets[0];
+ await deliver(socket,reply(socket.sent[0],'first.txt',{total:2,truncated:true}));
+ await act(async()=>document.querySelector('[aria-label="files.refresh"]').click());
+ const request=socket.sent.at(-1);
+ await deliver(socket,{op:'error',requestId:request.requestId,message:'directory gone'});
+ expect(document.body.textContent).not.toContain('first.txt');
+ expect(document.body.textContent).toContain('directory gone');
+ expect(document.body.textContent).not.toContain('files.loadMore');
+ await act(async()=>document.querySelector('[aria-label="files.refresh"]').click());
+ expect(socket.sent.at(-1)).toMatchObject({offset:0});
+});

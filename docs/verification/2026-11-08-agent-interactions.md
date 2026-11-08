@@ -532,3 +532,9 @@ Local fixture only (`@server` on port 19440); no real user history was deleted.
 - SourceBuffer建立后立即调用队列处理，不要求再收到下一包才追加此前排队的数据；addSourceBuffer失败转为界面错误状态，不让浏览器事件抛出未捕获异常。sequence模式不支持时保留原降级行为。
 - 回归用EventTarget模拟浏览器媒体事件，覆盖首批排队数据启动、updateend继续处理、sourceopen一次性行为、替换前后的晚到事件、关闭清理及不支持编码格式的异常路径。241项Web测试、类型检查和Vite构建通过。
 - 本轮未运行硬件GPU视频源或Safari ManagedMediaSource实机验收；这些仍是审计边界，不将事件模拟描述为真实视频播放验证。
+
+## Agent 文件分页失败重试（2026-11-08）
+
+- 对齐独立Files页面的已有行为：Agent文件面板加载下一页失败时保留已加载文件、total/offset和加载更多入口，在列表上方显示错误；重试清理错误并请求相同offset。首次目录加载失败仍清空旧内容及分页ref，避免展示错误目录。
+- 实际PanelFiles DOM/WebSocket模拟回归覆盖首批成功→下一页失败→同offset新请求重试→旧失败重复回包→第二页成功，确认文件完整且没有重复、错误提示清理；另覆盖刷新失败后分页从0开始。
+- 244项Web测试、类型检查及Vite构建通过。本轮未新增真实远端网络故障注入，既有请求归属/设备切换/传输回归继续通过。
