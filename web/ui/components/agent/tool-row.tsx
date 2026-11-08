@@ -342,7 +342,7 @@ export function ToolRow({ tool: originalTool, t, dimmed, onOpenFile, onOpenDiff 
           </span>
         )}
         {runningTool ? (
-          <Icon name="Spinner" className="size-3.5 shrink-0 animate-spin" />
+          <Icon name="Spinner" className="size-3.5 shrink-0 animate-spin motion-reduce:animate-none" />
         ) : tool.isError ? (
           <Icon
             name="CircleX"

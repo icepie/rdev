@@ -296,7 +296,7 @@ export function ImageLightbox({
                 aria-label={t("agent.imageLoading")}
                 className="flex size-32 flex-col items-center justify-center gap-2 rounded-xl bg-black/35 text-sm text-white/60 sm:size-48"
               >
-                <Icon name="Loading" className="size-5 animate-spin" />
+                <Icon name="Loading" className="size-5 animate-spin motion-reduce:animate-none" />
                 <span>{t("agent.imageLoading")}</span>
               </div>
             )}

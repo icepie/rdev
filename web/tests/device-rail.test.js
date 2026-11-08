@@ -7,7 +7,7 @@ let state;
 const refresh = vi.fn();
 vi.mock("../ui/lib/devices", () => ({ useDevices: () => ({ ...state, refresh }) }));
 vi.mock("../ui/lib/i18n", () => ({ useI18n: () => ({ t: (key) => key }) }));
-vi.mock("../ui/components/icon", () => ({ Icon: ({ name }) => createElement("i", { "data-icon": name }) }));
+vi.mock("../ui/components/icon", () => ({ Icon: ({ name, className }) => createElement("i", { "data-icon": name, className }) }));
 vi.mock("../ui/components/os-icon", () => ({ OsIcon: () => createElement("i") }));
 vi.mock("../ui/components/input", () => ({ Input: (props) => createElement("input", props) }));
 import { DeviceRail } from "../ui/components/device-rail";
@@ -35,4 +35,12 @@ it("offers an inline retry for a failed shared device request", async () => {
   expect(button).toBeTruthy();
   await act(() => button.click());
   expect(refresh).toHaveBeenCalled();
+});
+
+it("uses a reduced-motion-safe loading indicator", async () => {
+  state = { devices: [], error: "", loading: true };
+  const { render } = setup();
+  await act(render);
+  const spinner = document.querySelector('[data-icon="Spinner"]');
+  expect(spinner?.className).toContain("motion-reduce:animate-none");
 });
