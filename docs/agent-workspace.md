@@ -138,3 +138,5 @@ RPC 帧由独立命令白名单分发，复用设备认证门槛。未知命令�
 - 服务端会话命令也支持 `/jobs`、`/jobs full` 与 `/jobs kill <id|all>`：直接调用当前线程的任务管理器，不调用模型；full 返回每个任务的有界输出。RPC prompt 仍要求前台空闲；运行中浏览器任务面板可直接查询和取消，RPC 可使用既有 subagent 控制方法。
 
 - rdev 扩展 RPC 支持运行中任务管理：`get_jobs` 返回 `data.jobs` 摘要；`get_job` 接收 `jobId` 并返回 `data.job`（含有界输出）；`cancel_job` 接收 `jobId`，支持 `all`，返回 `data.cancellationRequested`。三个方法均可携带 `thread`，省略时使用当前连接所选线程。请求关联 `id` 与任务 `jobId` 分离；回执仅发给调用连接，任务状态通知仍共享。方法在 `rpcCommands` 中以 `source: "rdev"` 声明，不属于 OMP 标准命令。
+
+- 浏览器支持 `/model` 和 `/models`：无参数打开现有模型选择器；带参数时接受当前模型目录中的完整 ID。未知 ID 保留草稿并提示。此选择与界面选择器一致，是共享的下一条消息偏好，模型 ID 随聊天消息发送；不修改运行中的轮次，不伪装为线程级即时切换。OMP 的模糊 ID、角色别名和 thinking 后缀尚未移植。RPC 客户端仍使用 `get_available_models` / `set_model`。

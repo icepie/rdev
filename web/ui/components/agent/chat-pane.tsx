@@ -365,6 +365,7 @@ export function ChatPaneView({
    * into the input. Unknown slash text falls through as a normal chat. */
   interface SlashCommand {
     name: string;
+    aliases?: readonly string[];
     label: string;
     desc: string;
     icon: string;
@@ -372,11 +373,39 @@ export function ChatPaneView({
     runningOnly?: boolean;
     run: (arg: string) => boolean;
   }
+  const [modelPickerOpen, setModelPickerOpen] = useState(false);
+  useEffect(() => { setModelPickerOpen(false); }, [threadId, ready, models.length]);
   const [jobsOpen, setJobsOpen] = useState(false);
   const [jobsFull, setJobsFull] = useState(false);
   useEffect(() => { setJobsOpen(false); setJobsFull(false); }, [threadId]);
   const slashCommands: SlashCommand[] = useMemo(
     () => [
+      {
+        name: "model",
+        aliases: ["models"],
+        label: t("agent.cmd.model"),
+        desc: t("agent.cmd.modelDesc"),
+        icon: "Settings",
+        run: (arg) => {
+          if (!ready) return false;
+          if (!models.length) {
+            setComposerError(t("agent.cmd.noModels"));
+            return false;
+          }
+          if (!arg) {
+            setComposerError("");
+            setModelPickerOpen(true);
+            return true;
+          }
+          if (!models.some(item => item.id === arg)) {
+            setComposerError(t("agent.cmd.unknownModel", {model: arg}));
+            return false;
+          }
+          onModelChange(arg);
+          setComposerError("");
+          return true;
+        },
+      },
       {
         name: "new",
         label: t("agent.cmd.new"),
@@ -497,7 +526,7 @@ export function ChatPaneView({
         },
       },
     ],
-    [t, sendRaw, threadId, model, sendStop, ops, ready, running],
+    [t, sendRaw, threadId, model, models, onModelChange, sendStop, ops, ready, running],
   );
 
   const slashQuery = (() => {
@@ -510,7 +539,7 @@ export function ChatPaneView({
         ? []
         : slashCommands.filter(
             (c) =>
-              c.name.startsWith(slashQuery) && (!c.runningOnly || running),
+              (c.name.startsWith(slashQuery) || c.aliases?.some(alias => alias.startsWith(slashQuery))) && (!c.runningOnly || running),
           ),
     [slashCommands, slashQuery, running],
   );
@@ -936,6 +965,8 @@ export function ChatPaneView({
                * to confirm the selection); only zero models hides it. */}
               {models.length > 0 && (
                 <Select
+                  open={modelPickerOpen}
+                  onOpenChange={setModelPickerOpen}
                   value={model}
                   disabled={!ready}
                   onValueChange={(id) => {
@@ -945,7 +976,7 @@ export function ChatPaneView({
                   <SelectTrigger className="h-8 w-fit max-w-full min-w-0 items-center justify-start gap-1 border-none bg-transparent px-1 text-xs leading-tight text-muted-foreground shadow-none max-md:pointer-coarse:h-10">
                     <SelectValue />
                   </SelectTrigger>
-                  <SelectContent>
+                  <SelectContent aria-label={t("agent.cmd.model")}>
                     {models.map((m) => (
                       <SelectItem key={m.id} value={m.id}>
                         {(m.name || m.id) + (m.provider ? ` (${m.provider})` : "")}

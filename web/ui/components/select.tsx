@@ -435,7 +435,7 @@ const SelectContent = React.forwardRef<
       <ResponsiveDrawerShell
         open={compact.open}
         onOpenChange={compact.onOpenChange}
-        srLabel={compact.label}
+        srLabel={props["aria-label"] || compact.label}
         onEscapeKeyDown={props.onEscapeKeyDown}
         onPointerDownOutside={props.onPointerDownOutside}
       >

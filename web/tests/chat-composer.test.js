@@ -16,6 +16,7 @@ import { ChatPaneView } from "../ui/components/agent/chat-pane";
 
 it("preserves composer intent across modified keys, image loading and thread switches", async () => {
   const dom = new JSDOM('<div id="root"></div>', { pretendToBeVisual: true });
+  dom.window.HTMLElement.prototype.scrollIntoView = vi.fn();
   const readers = [];
   class Reader {
     abort = vi.fn();
@@ -63,7 +64,47 @@ it("preserves composer intent across modified keys, image loading and thread swi
     props.models = parseModelCatalog([{ id: "model" }]); // old catalogs retain all four choices
     await render();
     expect(document.querySelector('button[aria-label="agent.reasoning"]').textContent).toBe("agent.reasoningOff");
+    props.models = [{id:"model"},{id:"provider/model-b"}];
+    props.onModelChange = vi.fn(id => { props.model = id; });
+    props.threadId = "model-invalid";
+    await render();
+    await act(async () => insertDraft("/model unavailable"));
+    await act(async () => sendButton().click());
+    expect(document.querySelector("textarea").value).toBe("/model unavailable");
+    expect(document.querySelector('[role="alert"]').textContent).toBe("agent.cmd.unknownModel");
+    expect(props.onModelChange).not.toHaveBeenCalled();
+    expect(sent).toEqual([]);
+    props.threadId = "model-valid";
+    await render();
+    await act(async () => insertDraft("/models provider/model-b"));
+    await act(async () => sendButton().click());
+    expect(props.onModelChange).toHaveBeenCalledWith("provider/model-b");
+    expect(document.querySelector("textarea").value).toBe("");
+    expect(sent).toEqual([]);
+    await render();
+    await act(async () => insertDraft("use selected model"));
+    await act(async () => sendButton().click());
+    expect(sent.at(-1)).toMatchObject({op:"chat",model:"provider/model-b",text:"use selected model"});
+    sent.length=0;
+    props.threadId = "model-picker";
+    await render();
+    await act(async () => insertDraft("/models"));
+    await act(async () => sendButton().click());
+    expect(document.querySelector("textarea").value).toBe("");
+    const modelPicker = document.querySelector('[role="listbox"][aria-label="agent.cmd.model"]');
+    expect(modelPicker).not.toBeNull();
+    expect(modelPicker.textContent).toContain("provider/model-b");
+    props.threadId = "model-unavailable";
     props.models = [];
+    await render();
+    expect(document.querySelector('[role="listbox"][aria-label="agent.cmd.model"]')).toBeNull();
+    await act(async () => insertDraft("/model"));
+    await act(async () => sendButton().click());
+    expect(document.querySelector("textarea").value).toBe("/model");
+    expect(document.querySelector('[role="alert"]').textContent).toBe("agent.cmd.noModels");
+    expect(sent).toEqual([]);
+    props.threadId = "thread-a";
+    props.model = "model";
     props.reasoning = "medium";
     await render();
     await act(async () => insertDraft("/reset"));
@@ -133,7 +174,7 @@ it("preserves composer intent across modified keys, image loading and thread swi
       expect(props.sink.ops.turnOpen.current).toBe(true);
     }
     props.sink.state.running = false;
-    for (const command of ["/COMPACT", "/bg\necho hi", "/subagent inspect", "/jobs", "/jobs kill all", "/reset", "/new", "/stop"]) {
+    for (const command of ["/COMPACT", "/bg\necho hi", "/subagent inspect", "/jobs", "/jobs kill all", "/reset", "/new", "/stop", "/model", "/models provider/model-b"]) {
       props.threadId = `image-command-${command}`;
       await render();
       await act(async () => insertDraft(command));

@@ -1,5 +1,6 @@
 export interface ExecutableSlashCommand {
   name: string;
+  aliases?: readonly string[];
   runningOnly?: boolean;
   run(argument: string): boolean;
 }
@@ -11,7 +12,7 @@ export function matchSlashCommand<T extends ExecutableSlashCommand>(
 ): { command: T; argument: string } | null {
   const match = text.match(/^\/([a-z]+)(?:\s+([\s\S]*))?$/i);
   if (!match) return null;
-  const command = commands.find(command => command.name === match[1].toLowerCase());
+  const command = commands.find(command => command.name === match[1].toLowerCase() || command.aliases?.includes(match[1].toLowerCase()));
   return command ? { command, argument: (match[2] ?? "").trim() } : null;
 }
 
