@@ -138,6 +138,7 @@ func TestAgentRPCRequiresAuthentication(t *testing.T) {
 	handler := &agentWSHandler{}
 	for _, frame := range []string{
 		`{"type":"get_subagents"}`,
+		`{"type":"compact","customInstructions":"keep paths"}`,
 		`{"type":"cancel_subagent","subagentId":"child"}`,
 		`{"type":"request","command":"reset"}`,
 	} {

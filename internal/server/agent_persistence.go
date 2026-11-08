@@ -35,6 +35,7 @@ type agentTurnSnapshot struct {
 	session      *agent.Session
 	epoch        int
 	model        string
+	rpc          *rpcTurnCompletion
 }
 
 func snapshotAgentTurnLocked(th *agentThread) agentTurnSnapshot {

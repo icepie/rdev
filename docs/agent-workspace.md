@@ -116,3 +116,9 @@ RPC 结果放在 `data`：列表为 `{subagents:[]}`，取消为 `{cancelled:boo
 这三个命令的帧适配不等于完整 OMP 运行时：连接鉴权、会话事件仍为 rdev 协议，没有 OMP stdio 传输、子任务完整 transcript/订阅、注册 agent 文件和扩展命令展开。取消只请求停止，资源名额直到执行清理完成才释放，不宣称 OMP 完整生命周期或持久 tombstone 语义。
 
 RPC 帧由独立命令白名单分发，复用设备认证门槛。未知命令（含尚未实现的 get_subagent_messages）返回关联的 unsupported_command；字段缺失/类型错误、混合 op 与 type 帧返回 invalid_request。兼容包装的 command 也不能调用 reset 等浏览器操作。子任务日志没有完整 transcript 及稳定字节游标，因此暂不把滚动截断输出伪装成 OMP 消息文件。
+
+### 原生 compact RPC
+
+接受 `{"type":"compact","id":"request-id","customInstructions":"保留路径"}`（可选 `thread` 指定会话），也保留旧 `type:"request", command:"compact"` 包装。认证、线程存在性和运行中检查通过后执行现有压缩生命周期；不会立即返回 accepted。完成收尾后只向原请求连接发送一次关联 `response`，成功的 `data.summary` 为实际摘要；失败、取消或 reset/delete 使旧轮次失效时返回 `success:false`。浏览器订阅者仍收到线程生命周期及替换后的历史，RPC 回执不会广播。断线不会取消已经接收的压缩，也不提供跨连接回执重放。
+
+这是 OMP 命令帧和完成语义的部分适配：rdev 没有 OMP 持久化 entry ID 和压缩前 token 估算，因此结果不伪造 `firstKeptEntryId` / `tokensBefore`；不能作为完整 `CompactionResult` 的替代。UI 不新增 token 数。

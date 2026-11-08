@@ -40,43 +40,44 @@ import (
 // device, not by a browser connection: events are broadcast to every
 // attached socket and a reopened tab reattaches mid-run (auth_ok.running).
 type agentMsg struct {
-	Type          string              `json:"type,omitempty"`
-	Command       string              `json:"command,omitempty"`
-	Success       *bool               `json:"success,omitempty"`
-	Error         string              `json:"error,omitempty"`
-	Code          string              `json:"code,omitempty"`
-	Data          json.RawMessage     `json:"data,omitempty"`
-	RPC           bool                `json:"-"`
-	Display       json.RawMessage     `json:"display,omitempty"`
-	ImagePreviews []string            `json:"imagePreviews,omitempty"`
-	Compacted     bool                `json:"compacted,omitempty"`
-	Op            string              `json:"op"`
-	Password      string              `json:"password,omitempty"`
-	Text          string              `json:"text,omitempty"`
-	Device        string              `json:"device,omitempty"`
-	Model         string              `json:"model,omitempty"`
-	ModelName     string              `json:"modelName,omitempty"`
-	Models        []map[string]any    `json:"models,omitempty"`
-	Message       string              `json:"message,omitempty"`
-	History       []agentHistoryEntry `json:"history,omitempty"`
-	Running       bool                `json:"running,omitempty"`
-	ID            string              `json:"id,omitempty"`
-	JobID         string              `json:"jobId,omitempty"`
-	SubagentID    string              `json:"subagentId,omitempty"`
-	Name          string              `json:"name,omitempty"`
-	Args          string              `json:"args,omitempty"`
-	Result        string              `json:"result,omitempty"`
-	IsError       bool                `json:"isError,omitempty"`
-	Usage         *agentUsage         `json:"usage,omitempty"`
-	Summary       string              `json:"summary,omitempty"`
-	Diff          string              `json:"diff,omitempty"`
-	Reasoning     string              `json:"reasoning,omitempty"`
-	Thread        string              `json:"thread,omitempty"`
-	Threads       []agentThreadInfo   `json:"threads,omitempty"`
-	Todos         []todoItem          `json:"todos,omitempty"`
-	QueueModes    []string            `json:"queueModes,omitempty"`
-	QueueIDs      []string            `json:"queueIds,omitempty"`
-	Queue         []string            `json:"queue,omitempty"`
+	Type               string              `json:"type,omitempty"`
+	Command            string              `json:"command,omitempty"`
+	Success            *bool               `json:"success,omitempty"`
+	Error              string              `json:"error,omitempty"`
+	Code               string              `json:"code,omitempty"`
+	Data               json.RawMessage     `json:"data,omitempty"`
+	RPC                bool                `json:"-"`
+	Display            json.RawMessage     `json:"display,omitempty"`
+	ImagePreviews      []string            `json:"imagePreviews,omitempty"`
+	Compacted          bool                `json:"compacted,omitempty"`
+	Op                 string              `json:"op"`
+	Password           string              `json:"password,omitempty"`
+	Text               string              `json:"text,omitempty"`
+	Device             string              `json:"device,omitempty"`
+	Model              string              `json:"model,omitempty"`
+	ModelName          string              `json:"modelName,omitempty"`
+	Models             []map[string]any    `json:"models,omitempty"`
+	Message            string              `json:"message,omitempty"`
+	History            []agentHistoryEntry `json:"history,omitempty"`
+	Running            bool                `json:"running,omitempty"`
+	ID                 string              `json:"id,omitempty"`
+	JobID              string              `json:"jobId,omitempty"`
+	SubagentID         string              `json:"subagentId,omitempty"`
+	CustomInstructions string              `json:"customInstructions,omitempty"`
+	Name               string              `json:"name,omitempty"`
+	Args               string              `json:"args,omitempty"`
+	Result             string              `json:"result,omitempty"`
+	IsError            bool                `json:"isError,omitempty"`
+	Usage              *agentUsage         `json:"usage,omitempty"`
+	Summary            string              `json:"summary,omitempty"`
+	Diff               string              `json:"diff,omitempty"`
+	Reasoning          string              `json:"reasoning,omitempty"`
+	Thread             string              `json:"thread,omitempty"`
+	Threads            []agentThreadInfo   `json:"threads,omitempty"`
+	Todos              []todoItem          `json:"todos,omitempty"`
+	QueueModes         []string            `json:"queueModes,omitempty"`
+	QueueIDs           []string            `json:"queueIds,omitempty"`
+	Queue              []string            `json:"queue,omitempty"`
 	// Live carries the marshaled frames of the in-flight turn in auth_ok and
 	// thread_switched so the browser replays mid-turn UI state; each element
 	// is a complete tagged frame (turn_start/delta/tool_*/approval_request…).
@@ -2600,10 +2601,23 @@ func (s *Server) startAgentTurn(entry *agentSessionEntry, th *agentThread, text 
 func (s *Server) runAgentTurn(entry *agentSessionEntry, th *agentThread, turn agentTurnSnapshot, text string, images []agent.MessageImage) {
 	ctx, sess, cancel := turn.ctx, turn.session, turn.cancel
 	startEpoch, turnModel := turn.epoch, turn.model
+	// A reset/delete or panic must also settle the originating RPC exactly once.
+	var rpcData any
+	rpcErr := fmt.Errorf("conversation was canceled or replaced")
+	defer func() {
+		if turn.rpc != nil {
+			if rpcErr != nil {
+				turn.rpc.write(false, nil, "execution_error", rpcErr.Error())
+			} else {
+				turn.rpc.write(true, rpcData, "", "")
+			}
+		}
+	}()
 	// A panic anywhere in the turn must not wedge the thread: without this,
 	// th.running would stay true forever, rejecting every future chat.
 	defer func() {
 		if r := recover(); r != nil {
+			rpcErr = fmt.Errorf("internal error: %v", r)
 			log.Printf("PANIC in agent turn for %s/%s: %v", entry.deviceID, th.id, r)
 			s.agentSessionsMu.Lock()
 			current := th.epoch == startEpoch && entry.threads[th.id] == th && th.turnCtx == ctx
@@ -2731,6 +2745,15 @@ func (s *Server) runAgentTurn(entry *agentSessionEntry, th *agentThread, turn ag
 		terminal = agentMsg{Op: "stopped", Thread: th.id, Canceled: true}
 	default:
 		terminal = agentMsg{Op: "error", Thread: th.id, Message: runErr.Error()}
+	}
+	if turn.rpc != nil {
+		rpcErr = runErr
+		if historyReplaced && runErr == nil {
+			history := sess.History()
+			// rdev has no persistent OMP entry IDs or pre-compaction token
+			// estimate; do not fabricate those fields.
+			rpcData = map[string]any{"summary": strings.TrimPrefix(history[0].Content, "Context from earlier conversation (summary):\n\n")}
+		}
 	}
 	terminal.Display = timing
 	var terminalData []byte

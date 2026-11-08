@@ -5,6 +5,30 @@ import (
 	"fmt"
 )
 
+// rpcTurnCompletion keeps a native RPC request correlated with the one turn
+// that fulfills it. It is intentionally connection-scoped: turn frames are
+// broadcast, but the RPC response must never leak to another browser.
+type rpcTurnCompletion struct {
+	conn    *agentConn
+	request agentMsg
+}
+
+func (r *rpcTurnCompletion) write(ok bool, data any, code, message string) {
+	if r == nil || r.conn == nil {
+		return
+	}
+	var success = ok
+	frame := agentMsg{Type: "response", Command: r.request.Command, ID: r.request.ID, Success: &success}
+	if ok {
+		if raw, err := json.Marshal(data); err == nil {
+			frame.Data = raw
+		}
+	} else {
+		frame.Code, frame.Error = code, message
+	}
+	r.conn.writeJSON(frame)
+}
+
 // Keep RPC commands separate from browser operations. In particular, an
 // unsupported RPC name must not fall through to a mutating browser operation
 // that neither validates OMP fields nor returns a correlated RPC response.
@@ -71,10 +95,55 @@ func (h *agentWSHandler) handleAgentRPCFrame(ac *agentConn, raw []byte) bool {
 		} else {
 			h.handleCancelSubagent(ac, request)
 		}
+	case "compact":
+		if err := rpcStringField(fields, "customInstructions", &request.CustomInstructions, false); err != nil {
+			fail("invalid_request", err.Error())
+			return true
+		}
+		h.handleRPCCompact(ac, request)
 	default:
 		fail("unsupported_command", fmt.Sprintf("unsupported RPC command %q", request.Command))
 	}
 	return true
+}
+
+func (h *agentWSHandler) handleRPCCompact(ac *agentConn, request agentMsg) {
+	threadID := request.Thread
+	if threadID == "" {
+		threadID = ac.current
+	}
+	if ac.entry == nil {
+		h.writeRPCError(ac, request, "invalid_request", "unknown thread")
+		return
+	}
+	s := h.srv
+	s.agentSessionsMu.Lock()
+	th := ac.entry.threads[threadID]
+	if th == nil {
+		s.agentSessionsMu.Unlock()
+		h.writeRPCError(ac, request, "invalid_request", "unknown thread")
+		return
+	}
+	if th.running {
+		s.agentSessionsMu.Unlock()
+		h.writeRPCError(ac, request, "invalid_request", "conversation is busy")
+		return
+	}
+	text := "/compact"
+	if request.CustomInstructions != "" {
+		text += " " + request.CustomInstructions
+	}
+	start := s.startAgentTurnLocked(ac.entry, th, text, nil)
+	turn := snapshotAgentTurnLocked(th)
+	turn.rpc = &rpcTurnCompletion{conn: ac, request: request}
+	s.agentSessionsMu.Unlock()
+	s.agentBroadcastTurn(ac.entry, th, start)
+	s.goAgent(func() { s.runAgentTurn(ac.entry, th, turn, text, nil) })
+}
+
+func (h *agentWSHandler) writeRPCError(ac *agentConn, request agentMsg, code, message string) {
+	success := false
+	ac.writeJSON(agentMsg{Type: "response", Command: request.Command, ID: request.ID, Success: &success, Code: code, Error: message})
 }
 
 func rpcStringField(fields map[string]json.RawMessage, key string, dest *string, required bool) error {
