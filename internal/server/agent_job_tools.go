@@ -271,18 +271,36 @@ func (h *agentWSHandler) handleJobGuidance(ac *agentConn, request agentMsg) {
 		}
 	}
 	s.agentSessionsMu.Unlock()
-	reply := agentMsg{Op: "job_steered", Thread: threadID, ID: request.ID, JobID: request.JobID}
+	jobID := request.JobID
+	if jobID == "" {
+		jobID = request.SubagentID
+	}
+	text := request.Text
+	if text == "" {
+		text = request.Message
+	}
+	reply := agentMsg{Op: "job_steered", Thread: threadID, ID: request.ID, JobID: jobID}
 	var err error
 	if request.ID == "" {
 		err = fmt.Errorf("guidance request ID is required")
 	} else if jobs == nil {
 		err = fmt.Errorf("unknown thread")
 	} else {
-		err = jobs.Steer(request.JobID, request.Text)
+		err = jobs.Steer(jobID, text)
 	}
 	if err != nil {
 		reply.IsError = true
 		reply.Message = err.Error()
+	}
+	if request.RPC {
+		reply.Type = "response"
+		reply.Command = request.Command
+		success := !reply.IsError
+		reply.Success = &success
+		reply.Error = reply.Message
+		if reply.IsError {
+			reply.Code = "invalid_request"
+		}
 	}
 	ac.writeJSON(reply)
 }

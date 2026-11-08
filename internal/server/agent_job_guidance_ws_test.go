@@ -49,7 +49,11 @@ func TestJobGuidanceSocketAcknowledgesTargetAndRejectsStaleJobs(t *testing.T) {
 		raw, _ := json.Marshal(request)
 		sendAgentOp(t, socket, string(raw))
 		reply := waitAgentMsg(t, rec.msgs, "guidance receipt", func(m agentMsg) bool { return m.Op == "job_steered" })
-		if reply.ID != request.ID || reply.JobID != request.JobID || reply.Thread != request.Thread || reply.IsError != reject || (reject && reply.Message == "") {
+		expectedJob := request.JobID
+		if expectedJob == "" {
+			expectedJob = request.SubagentID
+		}
+		if reply.ID != request.ID || reply.JobID != expectedJob || reply.Thread != request.Thread || reply.IsError != reject || (reject && reply.Message == "") {
 			t.Fatalf("unattributable receipt: %+v for %+v", reply, request)
 		}
 	}
@@ -58,6 +62,19 @@ func TestJobGuidanceSocketAcknowledgesTargetAndRejectsStaleJobs(t *testing.T) {
 	if got := guidance.snapshot(); len(got) != 1 || got[0] != "check paths" {
 		t.Fatalf("guidance not queued: %v", got)
 	}
+	request.Op = "steer_subagent"
+	request.ID = "request-omp-alias"
+	request.JobID = ""
+	request.SubagentID = job.ID
+	request.Text = ""
+	request.Message = "inspect tests"
+	send(request, false)
+	if got := guidance.snapshot(); len(got) != 2 || got[1] != "inspect tests" {
+		t.Fatalf("OMP alias not queued: %v", got)
+	}
+	request.Op = "steer_job"
+	request.SubagentID = ""
+	request.Message = ""
 	request.ID = "request-2"
 	request.Thread = "other-thread"
 	send(request, true)
@@ -80,7 +97,7 @@ func TestJobGuidanceSocketAcknowledgesTargetAndRejectsStaleJobs(t *testing.T) {
 	}
 	request.ID = "request-4"
 	send(request, true)
-	if got := guidance.snapshot(); len(got) != 1 {
+	if got := guidance.snapshot(); len(got) != 2 {
 		t.Fatalf("rejected request mutated queue: %v", got)
 	}
 	srv.agentSessionsMu.Lock()

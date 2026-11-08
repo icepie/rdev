@@ -40,6 +40,12 @@ import (
 // device, not by a browser connection: events are broadcast to every
 // attached socket and a reopened tab reattaches mid-run (auth_ok.running).
 type agentMsg struct {
+	Type          string              `json:"type,omitempty"`
+	Command       string              `json:"command,omitempty"`
+	Success       *bool               `json:"success,omitempty"`
+	Error         string              `json:"error,omitempty"`
+	Code          string              `json:"code,omitempty"`
+	RPC           bool                `json:"-"`
 	Display       json.RawMessage     `json:"display,omitempty"`
 	ImagePreviews []string            `json:"imagePreviews,omitempty"`
 	Compacted     bool                `json:"compacted,omitempty"`
@@ -55,6 +61,7 @@ type agentMsg struct {
 	Running       bool                `json:"running,omitempty"`
 	ID            string              `json:"id,omitempty"`
 	JobID         string              `json:"jobId,omitempty"`
+	SubagentID    string              `json:"subagentId,omitempty"`
 	Name          string              `json:"name,omitempty"`
 	Args          string              `json:"args,omitempty"`
 	Result        string              `json:"result,omitempty"`
@@ -1331,6 +1338,10 @@ func (h *agentWSHandler) OnMessage(socket *gws.Conn, message *gws.Message) {
 	if err := json.Unmarshal(message.Bytes(), &msg); err != nil {
 		return
 	}
+	if msg.Type == "request" && msg.Command != "" {
+		msg.RPC = true
+		msg.Op = msg.Command
+	}
 
 	// In-band device password auth (same flow as terminal.go).
 	if !ac.authed {
@@ -1366,7 +1377,7 @@ func (h *agentWSHandler) OnMessage(socket *gws.Conn, message *gws.Message) {
 		h.handleJobs(ac, msg.Thread, msg.ID, false)
 	case "cancel_job":
 		h.handleJobs(ac, msg.Thread, msg.ID, true)
-	case "steer_job":
+	case "steer_job", "steer_subagent":
 		h.handleJobGuidance(ac, msg)
 	case "chat":
 		h.handleChat(ac, msg.Text, msg.Model, msg.Thread, msg.Images)
