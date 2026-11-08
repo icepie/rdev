@@ -120,7 +120,7 @@ func TestSubagentRPCWireContract(t *testing.T) {
 				}
 				seen[item.Name] = true
 			}
-			for _, name := range []string{"compact", "prompt", "get_state", "get_jobs", "get_job", "cancel_job"} {
+			for _, name := range []string{"compact", "prompt", "get_state", "get_jobs", "get_job", "cancel_job", "get_available_thinking_levels", "cycle_thinking_level"} {
 				if !seen[name] {
 					t.Fatalf("command catalog missing %q: %s", name, protocol["data"])
 				}
