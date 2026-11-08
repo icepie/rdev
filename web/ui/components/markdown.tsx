@@ -174,8 +174,8 @@ const markdownComponents: Components = {
   h4: (props) => <h4 className="mt-3 mb-1 text-sm font-semibold first:mt-0" {...props} />,
   hr: () => <hr className="my-3 border-border-seam" />,
   table: (props) => (
-    <div className="my-2 overflow-x-auto">
-      <table className="w-full border-collapse text-xs" {...props} />
+    <div className="my-2 max-w-full overflow-x-auto">
+      <table className="min-w-max border-collapse text-xs" {...props} />
     </div>
   ),
   th: (props) => (

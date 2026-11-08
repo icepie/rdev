@@ -37,7 +37,7 @@ export function ContextWindowIndicator({
         <button
           type="button"
           aria-label={t("agent.contextWindowUsed", { pct })}
-          className="inline-flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-state-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          className="inline-flex size-6 max-md:pointer-coarse:size-11 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-state-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
           <svg aria-hidden="true" viewBox="0 0 16 16" className={cn("size-4 shrink-0", tone)}>
             <circle
@@ -67,11 +67,12 @@ export function ContextWindowIndicator({
         side="top"
         align="end"
         sideOffset={8}
-        className="w-auto border-0 bg-transparent p-0 shadow-none"
+        mobileTitle={t("agent.estimatedContext")}
+        className="w-auto border-0 bg-transparent p-0 shadow-none max-md:p-0"
       >
-        <div className="w-56 rounded-md border bg-popover p-2 text-popover-foreground shadow-md">
-          <div className="flex flex-col gap-2">
-            <div className="flex items-baseline justify-between gap-2 text-xs">
+        <div className="w-56 rounded-md border bg-popover p-2 text-popover-foreground shadow-md max-md:w-full max-md:rounded-none max-md:border-0 max-md:bg-transparent max-md:px-4 max-md:pt-2 max-md:pb-[max(1rem,env(safe-area-inset-bottom))] max-md:shadow-none">
+          <div className="flex flex-col gap-2 max-md:gap-3">
+            <div className="flex items-baseline justify-between gap-2 text-xs max-md:pointer-coarse:text-sm">
               <span className="text-muted-foreground">
                 {t("agent.estimatedContext")}
               </span>
@@ -79,13 +80,13 @@ export function ContextWindowIndicator({
                 {t("agent.usageUsed", { pct })}
               </span>
             </div>
-            <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-border">
+            <div className="relative h-1.5 max-md:pointer-coarse:h-2 w-full overflow-hidden rounded-full bg-border">
               <div
                 className={cn("h-full rounded-full bg-current", tone)}
                 style={{ width: pct + "%" }}
               />
             </div>
-            <div className="flex items-baseline justify-between gap-2 text-xs tabular-nums text-muted-foreground">
+            <div className="flex items-baseline justify-between gap-2 text-xs max-md:pointer-coarse:text-sm tabular-nums text-muted-foreground">
               <span>{t("agent.usageLeft", { pct: left })}</span>
             </div>
             {onCompact && <button type="button" disabled={busy} onClick={onCompact}
