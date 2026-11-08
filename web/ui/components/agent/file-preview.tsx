@@ -1,3 +1,4 @@
+import { useFileLineReveal } from "./file-line-reveal";
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { File as PierreFile, type FileContents, type FileOptions } from "@pierre/diffs/react";
 import { FileSelectionMenu } from "./file-selection-menu";
@@ -59,6 +60,7 @@ function FilePreviewContent({
     hasPreview && !lineRange ? "preview" : "source",
   );
   useEffect(() => { if (lineRange) setViewMode("source"); }, [lineRange?.start, lineRange?.end]);
+  const onPostRender = useFileLineReveal(bodyRef, lineRange, visible && viewMode === "source");
   const themeType = useThemeType();
   const fileOptions = useMemo<FileOptions<undefined, undefined>>(
     () => ({
@@ -67,8 +69,9 @@ function FilePreviewContent({
       themeType,
       theme: DIFF_THEME,
       enableLineSelection: lineRange != null,
+      onPostRender,
     }),
-    [wrap, themeType, lineRange],
+    [wrap, themeType, lineRange, onPostRender],
   );
   const fileContents = useMemo<FileContents>(
     () => ({ name: base, contents: state?.content ?? "" }),
