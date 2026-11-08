@@ -59,3 +59,24 @@ it('memoizes raw ANSI conversion and preserves a reader position across output u
   await act(async()=>root.unmount());host.remove();delete globalThis.IS_REACT_ACT_ENVIRONMENT;
  }
 });
+
+it.each([true, false])('opens completed output at the start and follows live output (done=%s)',async done=>{
+ globalThis.IS_REACT_ACT_ENVIRONMENT=true;
+ const host=document.createElement('div');document.body.append(host);
+ const root=createRoot(host);
+ const height=vi.spyOn(HTMLElement.prototype,'scrollHeight','get').mockReturnValue(1000);
+ const tool={id:'initial',name:'shell',done,args:'{}',result:'first\n'.repeat(900)+'LATEST'};
+ const render=next=>act(async()=>root.render(createElement(CommandOutputBody,{tool:next,t:key=>key})));
+ try {
+  await render(tool);
+  const scroll=host.querySelector('.select-text');
+  expect(scroll.scrollTop).toBe(done ? 0 : 1000);
+  height.mockReturnValue(1200);
+  await render({...tool,done:true,result:`exit code: 0\n<stdout>\n${tool.result}\nFINAL\n</stdout>\n<stderr>\n\n</stderr>`});
+  expect(host.querySelector('.select-text')).toBe(scroll);
+  expect(scroll.scrollTop).toBe(done ? 0 : 1200);
+  expect(host.textContent).toContain('FINAL');
+ } finally {
+  await act(async()=>root.unmount());host.remove();height.mockRestore();delete globalThis.IS_REACT_ACT_ENVIRONMENT;
+ }
+});

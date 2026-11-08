@@ -80,7 +80,10 @@ export function CommandOutputBody({
   t: Translator;
 }) {
   const outputRef = useRef<HTMLDivElement>(null);
-  const following = useRef(true);
+  // BB useStickyBottomScroll initially attaches only streaming output.
+  // Opening a completed command starts at its header; a live command keeps
+  // following through completion unless the reader has scrolled away.
+  const following = useRef(!tool.done);
   useEffect(() => {
     const node = outputRef.current;
     if (node && following.current) node.scrollTop = node.scrollHeight;
