@@ -94,6 +94,8 @@ func (h *agentWSHandler) handleAgentRPCFrame(ac *agentConn, raw []byte) bool {
 			return true
 		}
 		h.handleRPCSetModel(ac, request)
+	case "abort":
+		h.handleRPCAbort(ac, request)
 	case "get_subagents":
 		h.handleGetSubagents(ac, request)
 	case "get_subagent_messages":
@@ -138,6 +140,43 @@ func (h *agentWSHandler) handleAgentRPCFrame(ac *agentConn, raw []byte) bool {
 		fail("unsupported_command", fmt.Sprintf("unsupported RPC command %q", request.Command))
 	}
 	return true
+}
+
+func (h *agentWSHandler) handleRPCAbort(ac *agentConn, request agentMsg) {
+	if ac.entry == nil {
+		h.writeRPCError(ac, request, "invalid_request", "unknown thread")
+		return
+	}
+	threadID := request.Thread
+	if threadID == "" {
+		threadID = ac.current
+	}
+	s := h.srv
+	s.agentSessionsMu.Lock()
+	th := ac.entry.threads[threadID]
+	if th == nil {
+		s.agentSessionsMu.Unlock()
+		h.writeRPCError(ac, request, "invalid_request", "unknown thread")
+		return
+	}
+	cancel := th.cancel
+	if cancel != nil {
+		th.queue = nil
+		denyApprovalsLocked(th)
+	}
+	s.agentSessionsMu.Unlock()
+	if cancel == nil {
+		// OMP treats abort as idempotent when no turn is active.
+		success := true
+		ac.writeJSON(agentMsg{Type: "response", Command: request.Command, ID: request.ID, Success: &success, Data: json.RawMessage(`{"aborted":false}`)})
+		return
+	}
+	cancel()
+	s.broadcastQueue(ac.entry, th)
+	// The browser terminal is authoritative; this response acknowledges the
+	// cancellation request while the stopped frame settles the running turn.
+	success := true
+	ac.writeJSON(agentMsg{Type: "response", Command: request.Command, ID: request.ID, Success: &success, Data: json.RawMessage(`{"aborted":true}`)})
 }
 
 func (h *agentWSHandler) handleRPCState(ac *agentConn, request agentMsg) {
@@ -240,6 +279,7 @@ func (h *agentWSHandler) handleRPCAvailableCommands(ac *agentConn, request agent
 		{"name": "get_state", "params": map[string]any{"thread": "string?"}},
 		{"name": "get_available_models"},
 		{"name": "set_model", "params": map[string]any{"model": "string", "thread": "string?"}},
+		{"name": "abort", "params": map[string]any{"thread": "string?"}},
 		{"name": "compact", "params": map[string]any{"customInstructions": "string?"}},
 		{"name": "get_subagents"}, {"name": "get_subagent_messages"},
 		{"name": "steer_subagent", "params": map[string]any{"subagentId": "string", "message": "string"}},

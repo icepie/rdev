@@ -120,6 +120,14 @@ func TestSubagentRPCWireContract(t *testing.T) {
 	if string(modelReply["success"]) != "true" || string(modelReply["data"]) != `{"model":"p/m2"}` {
 		t.Fatalf("invalid set model response: %s", modelReply)
 	}
+	raw, _ = json.Marshal(map[string]any{"type": "abort", "id": "abort-1", "thread": th.id})
+	sendAgentOp(t, socket, string(raw))
+	abortReply := waitRawMsg(t, rec.msgs, "abort response", func(m map[string]json.RawMessage) bool {
+		return string(m["type"]) == `"response"` && string(m["id"]) == `"abort-1"`
+	})
+	if string(abortReply["success"]) != "true" || string(abortReply["data"]) != `{"aborted":false}` {
+		t.Fatalf("invalid idle abort response: %s", abortReply)
+	}
 	call("get_subagents", "missing", "", "", false)
 	// Invalid RPC frames must return a correlated failure, not silently fall
 	// into the browser protocol or wait forever for a reply.
