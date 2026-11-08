@@ -96,6 +96,12 @@ func (h *agentWSHandler) handleAgentRPCFrame(ac *agentConn, raw []byte) bool {
 		h.handleRPCSetModel(ac, request)
 	case "abort":
 		h.handleRPCAbort(ac, request)
+	case "prompt":
+		if err := rpcStringField(fields, "message", &request.Message, true); err != nil {
+			fail("invalid_request", err.Error())
+			return true
+		}
+		h.handleRPCPrompt(ac, request)
 	case "get_subagents":
 		h.handleGetSubagents(ac, request)
 	case "get_subagent_messages":
@@ -140,6 +146,36 @@ func (h *agentWSHandler) handleAgentRPCFrame(ac *agentConn, raw []byte) bool {
 		fail("unsupported_command", fmt.Sprintf("unsupported RPC command %q", request.Command))
 	}
 	return true
+}
+
+func (h *agentWSHandler) handleRPCPrompt(ac *agentConn, request agentMsg) {
+	if ac.entry == nil {
+		h.writeRPCError(ac, request, "invalid_request", "unknown thread")
+		return
+	}
+	s := h.srv
+	threadID := request.Thread
+	if threadID == "" {
+		threadID = ac.current
+	}
+	s.agentSessionsMu.Lock()
+	th := ac.entry.threads[threadID]
+	if th == nil {
+		s.agentSessionsMu.Unlock()
+		h.writeRPCError(ac, request, "invalid_request", "unknown thread")
+		return
+	}
+	if th.running {
+		s.agentSessionsMu.Unlock()
+		h.writeRPCError(ac, request, "busy", "conversation is busy")
+		return
+	}
+	start := s.startAgentTurnLocked(ac.entry, th, request.Message, nil)
+	turn := snapshotAgentTurnLocked(th)
+	turn.rpc = &rpcTurnCompletion{conn: ac, request: request}
+	s.agentSessionsMu.Unlock()
+	s.agentBroadcastTurn(ac.entry, th, start)
+	s.goAgent(func() { s.runAgentTurn(ac.entry, th, turn, request.Message, nil) })
 }
 
 func (h *agentWSHandler) handleRPCAbort(ac *agentConn, request agentMsg) {
@@ -280,6 +316,7 @@ func (h *agentWSHandler) handleRPCAvailableCommands(ac *agentConn, request agent
 		{"name": "get_available_models"},
 		{"name": "set_model", "params": map[string]any{"model": "string", "thread": "string?"}},
 		{"name": "abort", "params": map[string]any{"thread": "string?"}},
+		{"name": "prompt", "params": map[string]any{"message": "string", "thread": "string?"}},
 		{"name": "compact", "params": map[string]any{"customInstructions": "string?"}},
 		{"name": "get_subagents"}, {"name": "get_subagent_messages"},
 		{"name": "steer_subagent", "params": map[string]any{"subagentId": "string", "message": "string"}},

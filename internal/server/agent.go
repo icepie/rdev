@@ -2750,6 +2750,9 @@ func (s *Server) runAgentTurn(entry *agentSessionEntry, th *agentThread, turn ag
 	}
 	if turn.rpc != nil {
 		rpcErr = runErr
+		if runErr == nil && !historyReplaced {
+			rpcData = map[string]any{"thread": th.id, "status": "completed"}
+		}
 		if historyReplaced && runErr == nil {
 			history := sess.History()
 			// rdev has no persistent OMP entry IDs or pre-compaction token
