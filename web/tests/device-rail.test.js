@@ -59,3 +59,13 @@ it("supports keyboard navigation across filtered device rows", async () => {
   await act(() => rows[2].dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true })));
   expect(document.activeElement).toBe(rows[1]);
 });
+
+it("keeps the selected device visible as offline after a settled refresh", async () => {
+  state = { devices: [], error: "", loading: false };
+  const { root, render } = setup();
+  await act(() => root.render(createElement(DeviceRail, { selectedDevice: "laptop", onPick: () => {} })));
+  const status = document.querySelector('[role="status"]');
+  expect(status?.textContent).toContain("laptop");
+  expect(status?.textContent).toContain("rail.selectedOffline");
+  expect(document.querySelectorAll("button[draggable]")).toHaveLength(0);
+});

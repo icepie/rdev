@@ -29,6 +29,9 @@ export function DeviceRail({
   const visibleDevices = devices.filter((device) =>
     device.id.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()),
   );
+  const selectedOffline = Boolean(
+    selectedDevice && !loading && !error && !devices.some((device) => device.id === selectedDevice),
+  );
   return (
     <div className="flex h-full min-h-0 flex-col bg-sidebar">
       <div className="flex min-h-12 shrink-0 flex-wrap items-center gap-1 border-b border-border-seam px-2 py-2">
@@ -137,6 +140,20 @@ export function DeviceRail({
             )}
           </button>
         ))}
+        {selectedOffline && (
+          <div
+            role="status"
+            aria-label={`${selectedDevice}: ${t("rail.selectedOffline")}`}
+            className={cn(
+              SIDEBAR_ROW_CLASS,
+              "mb-0.5 cursor-default bg-state-active/60 text-muted-foreground",
+            )}
+          >
+            <span className="size-1.5 shrink-0 rounded-full bg-muted-foreground/50" aria-hidden="true" />
+            <span className="min-w-0 flex-1 truncate">{selectedDevice}</span>
+            <span className="shrink-0 text-2xs">{t("rail.selectedOffline")}</span>
+          </div>
+        )}
         {visibleDevices.length === 0 && !error && !loading && (
           <div className="px-2 py-3 text-center text-xs text-muted-foreground">
             {t(query.trim() ? "rail.noMatches" : "rail.empty")}
