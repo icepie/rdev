@@ -4,7 +4,7 @@ import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vitest";
 vi.mock("../ui/components/icon", () => ({ Icon: () => null }));
 vi.mock("../ui/components/agent/panel-terminal", () => ({ PanelTerminal: () => null }));
-vi.mock("../ui/components/agent/panel-desktop", () => ({ PanelDesktop: () => null }));
+vi.mock("../ui/components/agent/panel-desktop", () => ({ PanelDesktop: ({visible}) => createElement("div", {"data-desktop-visible": String(visible)}) }));
 vi.mock("../ui/components/agent/panel-files", () => ({ PanelFiles: () => null }));
 vi.mock("../ui/components/agent/diff-view", () => ({ DIFF_THEME: {}, DIFF_VIEW_STYLE: {}, useThemeType: () => "dark", PierreFileDiff: () => null }));
 vi.mock("@pierre/diffs/react", () => ({ File: () => null, MultiFileDiff: () => null }));
@@ -165,4 +165,28 @@ it("resets project search on a confirmed cwd change and ignores the previous pro
     vi.useRealTimers();
     delete globalThis.IS_REACT_ACT_ENVIRONMENT;
   }
+});
+
+
+it("deactivates a persistent desktop tab when its containing panel closes", async () => {
+ globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+ vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
+ const key="device:visibility-test";
+ localStorage.setItem("rdev.agent.panel.tabs",JSON.stringify({[key]:{tabs:[{kind:"desktop"}],active:{kind:"desktop"},recent:[]}}));
+ const host=document.createElement("div");document.body.append(host);const root=createRoot(host);
+ const noop=()=>{};
+ const render=visible=>act(async()=>root.render(createElement(TooltipProvider,null,createElement(AgentRightPanel,{
+  visible,changes:null,diffs:{},connected:true,threadKey:key,info:{device:"device",thread:"visibility-test",cwd:"/repo"},
+  fileStates:{},onRefresh:noop,onRequestDiff:noop,onRequestFile:noop,onSearchFiles:async()=>[],onAddToChat:noop,onHide:noop,
+ }))));
+ try {
+  await render(true);
+  const desktop=host.querySelector('[data-desktop-visible]');
+  expect(desktop.dataset.desktopVisible).toBe('true');
+  await render(false);
+  expect(host.querySelector('[data-desktop-visible]')).toBe(desktop);
+  expect(desktop.dataset.desktopVisible).toBe('false');
+  await render(true);
+  expect(desktop.dataset.desktopVisible).toBe('true');
+ } finally {await act(async()=>root.unmount());host.remove();localStorage.clear();vi.unstubAllGlobals();delete globalThis.IS_REACT_ACT_ENVIRONMENT;}
 });

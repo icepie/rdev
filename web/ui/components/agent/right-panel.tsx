@@ -719,6 +719,7 @@ export function AgentRightPanel({
   diffs,
   info,
   connected,
+  visible = true,
   className,
   threadKey,
   fileStates,
@@ -739,6 +740,7 @@ export function AgentRightPanel({
   diffs: Record<string, DiffState>;
   info: RightPanelInfo;
   connected: boolean;
+  visible?: boolean;
   /* aside wrapper classes: inline panel vs. narrow-screen fixed drawer. */
   className?: string;
   /* `device:thread` scoping the persisted strip; "" while none selected. */
@@ -1247,6 +1249,7 @@ export function AgentRightPanel({
           path={active.slice(5)}
           state={fileStates[active.slice(5)]}
           connected={connected}
+          visible={visible}
           onRefresh={() => onRequestFile(active.slice(5))}
           t={t}
           onAddToChat={onAddToChat}
@@ -1315,20 +1318,20 @@ export function AgentRightPanel({
             {tab.kind === "terminal" ? (
               <PanelTerminal
                 device={info.device}
-                visible={active === tabId(tab)}
+                visible={visible && active === tabId(tab)}
                 t={t}
               />
             ) : tab.kind === "files" ? (
               <PanelFiles
                 device={info.device}
-                visible={active === tabId(tab)}
+                visible={visible && active === tabId(tab)}
                 t={t}
                 onOpenFile={openFileTab}
               />
             ) : (
               <PanelDesktop
                 device={info.device}
-                visible={active === tabId(tab)}
+                visible={visible && active === tabId(tab)}
                 t={t}
               />
             )}

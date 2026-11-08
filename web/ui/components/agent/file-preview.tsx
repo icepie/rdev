@@ -25,6 +25,7 @@ type FilePreviewProps = {
   path: string;
   state: FilePreviewState | undefined;
   connected: boolean;
+  visible?: boolean;
   onRefresh: () => void;
   t: Translator;
   onAddToChat?: (text: string) => void;
@@ -39,6 +40,7 @@ function FilePreviewContent({
   path,
   state,
   connected,
+  visible = true,
   onRefresh,
   t,
   onAddToChat,
@@ -168,7 +170,7 @@ function FilePreviewContent({
           >
             {isHTML && state.encoding !== "base64" && <HtmlFilePreview content={state.content} name={base} hidden={viewMode !== "preview"} />}
             {state.encoding === "url" && state.mime?.startsWith("video/") ? (
-              <VideoFilePreview key={state.content} src={state.content} name={base} t={t} />
+              <VideoFilePreview key={state.content} src={state.content} name={base} visible={visible} t={t} />
             ) : isHTML && state.encoding !== "base64" && viewMode === "preview" ? null : state.encoding === "base64" && state.mime ? (
               <div className="min-h-full w-full p-4" style={IMAGE_TRANSPARENCY_CHECKER_STYLE}>
                 <button type="button" className="block w-full cursor-zoom-in" aria-label={t("agent.openImagePreview", { name: base })} onClick={() => setImageOpen(true)}>

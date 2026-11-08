@@ -136,6 +136,8 @@ it("previews HTML in an isolated frame, preserves it across source toggles and r
 });
 
 it("renders native video controls without treating the media URL as file text", async () => {
+ vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(() => {});
+ vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
  const state = { ...ready('/api/media/fixture'), encoding:'url', mime:'video/mp4' };
  const {host, render, dispose} = await mount({path:'/clip.mp4', state});
  try {
@@ -152,4 +154,34 @@ it("renders native video controls without treating the media URL as file text", 
   expect(host.querySelector('video')).not.toBe(video);
   expect(host.querySelector('[role="status"]')).toBeNull();
  } finally {await dispose();}
+});
+
+
+it("releases hidden media and restores its position without autoplay", async () => {
+ const load = vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(() => {});
+ const pause = vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
+ const play = vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue();
+ const props = {path:'/clip.mp4',state:{...ready('/api/media/fixture'),encoding:'url',mime:'video/mp4'}};
+ const {host,render,dispose} = await mount({...props,visible:false});
+ const video = host.querySelector('video');
+ try {
+  expect(video.hasAttribute('src')).toBe(false);
+  expect(load).not.toHaveBeenCalled();
+  await render({...props,visible:true});
+  expect(video.getAttribute('src')).toBe('/api/media/fixture');
+  video.currentTime=6;
+  await render({...props,visible:false});
+  expect(pause).toHaveBeenCalledOnce();
+  expect(video.hasAttribute('src')).toBe(false);
+  expect(load).toHaveBeenCalledTimes(2);
+  video.currentTime=0;
+  Object.defineProperty(video,'duration',{configurable:true,value:8});
+  await render({...props,visible:true});
+  await act(async()=>video.dispatchEvent(new Event('loadedmetadata')));
+  expect(video.currentTime).toBe(6);
+  expect(play).not.toHaveBeenCalled();
+ } finally {await dispose();}
+ expect(video.hasAttribute('src')).toBe(false);
+ expect(pause).toHaveBeenCalledTimes(2);
+ expect(load).toHaveBeenCalledTimes(4);
 });

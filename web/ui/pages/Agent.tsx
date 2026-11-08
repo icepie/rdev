@@ -1889,6 +1889,7 @@ export function AgentPage() {
   /* Shared between the inline resizable panel and the narrow-screen drawer
    * (never mounted at the same time). */
   const rightPanelProps = {
+    visible: panelOpen,
     changes,
     diffs,
     connected: ready,
