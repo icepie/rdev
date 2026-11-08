@@ -1,3 +1,4 @@
+import { MobileWorkspaceNavigation } from "../shell/AppShell";
 import { createFileReadRequests } from "../components/agent/file-read-requests";
 import { useThreadModels } from "../components/agent/use-thread-models";
 import { createStreamBatch } from "../components/agent/stream-batch";
@@ -2378,6 +2379,7 @@ export function AgentPage() {
         )}
       >
         <div className="flex h-full min-h-0 w-full shrink-0 flex-col md:w-[var(--sidebar-w)]">
+          <MobileWorkspaceNavigation />
           {/* bb sidebar navigation rows: primary actions + device panels as
            * full-width rows above the threads section. */}
           <div className="flex min-h-12 shrink-0 flex-wrap items-center gap-1 border-b border-border-seam px-2 py-2">
@@ -2730,6 +2732,11 @@ export function AgentPage() {
       {/* Slim header: sidebar toggle + status + thread title | device */}
       <div className="flex h-12 shrink-0 items-center gap-x-2 border-b border-border-seam px-3 text-xs text-muted-foreground select-none">
 
+        <Button variant="ghost" size="icon" aria-label={t("rail.expand")} aria-expanded={sidebarOpen}
+          onClick={() => setSidebarOpen(true)}
+          className={cn(COARSE_POINTER_HEADER_ICON_BUTTON_CLASS, "shrink-0 md:hidden")}>
+          <Icon name="PanelLeft" />
+        </Button>
         <span
           className={cn(
             "size-2 shrink-0 rounded-full",

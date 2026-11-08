@@ -1,3 +1,7 @@
+import { MobileWorkspaceNavigation } from "../shell/AppShell";
+import { Button } from "./button";
+import { Icon } from "./icon";
+import { COARSE_POINTER_HEADER_ICON_BUTTON_CLASS } from "./coarse-pointer-sizing";
 import {
   useEffect,
   useLayoutEffect,
@@ -127,9 +131,11 @@ export function SplitPageShell({
         aria-hidden={!open}
         inert={!open}
         data-open={open}
-        className="workspace-device-sidebar relative shrink-0 overflow-hidden bg-sidebar outline-none"
+        className="workspace-device-sidebar relative flex shrink-0 flex-col overflow-hidden bg-sidebar outline-none"
         style={{ width: compact ? undefined : open ? width : 0 }}
       >
+        <MobileWorkspaceNavigation />
+        <div className="min-h-0 flex-1 overflow-hidden">
         <DeviceRail
           selectedDevice={selectedDevice}
           onPick={(id) => {
@@ -137,6 +143,7 @@ export function SplitPageShell({
             if (compact) setMobileOpen(false);
           }}
         />
+        </div>
       </aside>
       <div
         ref={separatorRef}
@@ -199,10 +206,16 @@ export function SplitPageShell({
         <div
           ref={contentRef}
           tabIndex={-1}
-          className="h-full min-h-0 outline-none"
+          className="flex h-full min-h-0 flex-col outline-none"
           inert={compact && mobileOpen}
         >
-          {children}
+          <div className="flex h-12 shrink-0 items-center border-b border-border-seam px-3 md:hidden">
+            <Button variant="ghost" size="icon" className={COARSE_POINTER_HEADER_ICON_BUTTON_CLASS}
+              aria-label={t("rail.expand")} aria-expanded={mobileOpen} onClick={() => setMobileOpen(true)}>
+              <Icon name="PanelLeft" />
+            </Button>
+          </div>
+          <div className="min-h-0 flex-1">{children}</div>
         </div>
         {compact && mobileOpen && (
           <button

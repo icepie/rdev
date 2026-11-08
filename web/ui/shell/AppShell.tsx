@@ -257,6 +257,15 @@ function DrawerRailLink({ item }: { item: (typeof NAV_ITEMS)[number] }) {
   );
 }
 
+/** Hidden with the owning sidebar; mobile has no persistent navigation rail. */
+export function MobileWorkspaceNavigation() {
+  const { t } = useI18n();
+  return <nav aria-label={t("nav.label")} className="flex shrink-0 flex-wrap items-center gap-1 border-b border-border-seam p-2 md:hidden">
+    {NAV_ITEMS.map(item => <RailLink key={item.to} item={item} label={t(item.key)} />)}
+    <RailSettings />
+  </nav>;
+}
+
 export function AppShell() {
   const shellRef = useRef<HTMLDivElement>(null);
   const compactViewport = useIsCompactViewport();
@@ -264,7 +273,6 @@ export function AppShell() {
   const { t, lang, setLang } = useI18n();
   const { choice, setChoice, preset, setPreset } = useTheme();
   const location = useLocation();
-  const isWorkspacePage = ["/agent", "/terminal", "/files", "/remote-desktop"].includes(location.pathname);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [drawerSection, setDrawerSection] = useState<ReactNode>(null);
   const railControl = useRailControl();
@@ -288,10 +296,10 @@ export function AppShell() {
 
   return (
     <div ref={shellRef} className="relative flex h-full min-h-0 flex-row overflow-hidden max-md:pt-[env(safe-area-inset-top)] max-md:pr-[env(safe-area-inset-right)] max-md:pb-[var(--app-safe-area-bottom,env(safe-area-inset-bottom))] max-md:pl-[env(safe-area-inset-left)]">
-      {/* Agent keeps its navigation rail beside the thread list at every width. */}
+      {/* Compact workspaces expose navigation only inside their sidebar. */}
       <nav
         aria-label={t("nav.label")}
-        className={cn("flex w-12 shrink-0 flex-col items-center gap-0.5 overflow-y-auto border-r border-border-seam bg-sidebar py-2 select-none", !isWorkspacePage && "max-md:hidden")}
+        className="hidden w-12 shrink-0 flex-col items-center gap-0.5 overflow-y-auto border-r border-border-seam bg-sidebar py-2 select-none md:flex"
       >
         {railControl ? (
           <Tooltip>

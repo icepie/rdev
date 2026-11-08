@@ -3,6 +3,7 @@ import { act, createElement, useEffect } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vitest";
 
+vi.mock("../ui/shell/AppShell", () => ({ MobileWorkspaceNavigation: () => null }));
 let compact = false;
 let control;
 vi.mock("../ui/components/hooks/use-compact-viewport", () => ({
@@ -76,11 +77,12 @@ it("preserves a live workspace across collapse and breakpoints and persists boun
     document.querySelector("aside").focus();
     compact = true;
     await act(render);
-    expect(document.activeElement).toBe(pane.parentElement);
+    expect(document.activeElement).toBe(pane.closest("[tabindex]"));
     expect(document.activeElement.closest("[inert]")).toBeNull();
-    const toggle = document.getElementById("toggle");
+    const toggle = document.querySelector('button[aria-label="rail.expand"]');
+    expect(toggle).not.toBeNull();
     toggle.focus();
-    await act(() => control.toggle());
+    await act(() => toggle.click());
     expect(document.activeElement).toBe(document.querySelector("aside"));
     expect(pane.closest("[inert]")).not.toBeNull();
     await act(() =>
@@ -97,7 +99,7 @@ it("preserves a live workspace across collapse and breakpoints and persists boun
     separator.focus();
     compact = true;
     await act(render);
-    expect(document.activeElement).toBe(pane.parentElement);
+    expect(document.activeElement).toBe(pane.closest("[tabindex]"));
     expect(document.querySelector("textarea")).toBe(pane);
     expect({ mounts, unmounts }).toEqual({ mounts: 1, unmounts: 0 });
   } finally {
