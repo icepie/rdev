@@ -51,3 +51,30 @@ it("keeps gallery selection stable when images change and closes on trigger repl
   expect(document.querySelector('[role="dialog"]').textContent).not.toMatch(/\d+ \/ 0/);
  } finally {await act(async()=>root.unmount());host.remove();delete globalThis.IS_REACT_ACT_ENVIRONMENT;}
 });
+
+it("retries broken thumbnails without opening a dialog and resets errors for replacement images", async () => {
+ globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+ const host = document.createElement("div"); document.body.append(host);
+ const root = createRoot(host);
+ const first = {src:"data:image/png;base64,YQ==", name:"broken.png"};
+ const second = {src:"data:image/png;base64,Yg==", name:"replacement.png"};
+ const render = props => act(async () => root.render(createElement(ImagePreview, props)));
+ const fail = () => act(async () => host.querySelector("img").dispatchEvent(new Event("error")));
+ try {
+  await render(first);
+  const original = host.querySelector("img");
+  await fail();
+  expect(host.querySelector('[role="status"]')).not.toBeNull();
+  expect(host.querySelector("img")).toBeNull();
+  await act(async () => host.querySelector("button").click());
+  expect(document.querySelector('[role="dialog"]')).toBeNull();
+  expect(host.querySelector("img")).not.toBe(original);
+  expect(host.querySelector("img").getAttribute("src")).toBe(first.src);
+  await fail();
+  await render(second);
+  expect(host.querySelector('[role="status"]')).toBeNull();
+  expect(host.querySelector("img").getAttribute("src")).toBe(second.src);
+  await act(async () => host.querySelector("button").click());
+  expect(document.querySelector('[role="dialog"] img').getAttribute("src")).toBe(second.src);
+ } finally {await act(async () => root.unmount());host.remove();delete globalThis.IS_REACT_ACT_ENVIRONMENT;}
+});

@@ -1,4 +1,6 @@
 import { useEffect, useState } from "react";
+import { useI18n } from "../../lib/i18n";
+import { Icon } from "../icon";
 import { ImageLightbox } from "../image-lightbox";
 import { getWrappedImageIndex, IMAGE_TRANSPARENCY_CHECKER_STYLE } from "../../lib/image-preview";
 import { cn } from "../../lib/utils";
@@ -8,9 +10,12 @@ const isPreviewSource = (src: string) => /^data:image\/(?:png|jpeg|jpg|gif|webp|
 
 // Shared by composer attachments, sent messages and remote read_file results.
 export function ImagePreview({ src, name, className, gallery }: PreviewImage & { className?: string; gallery?: PreviewImage[] }) {
+  const { t } = useI18n();
+  const [failed, setFailed] = useState(false);
+  const [attempt, setAttempt] = useState(0);
   const [open, setOpen] = useState(false);
   const [selected, setSelected] = useState<PreviewImage | null>(null);
-  useEffect(() => { setOpen(false); setSelected(null); }, [src, name]);
+  useEffect(() => { setOpen(false); setSelected(null); setFailed(false); setAttempt(0); }, [src, name]);
   if (!isPreviewSource(src)) return null;
   const images = gallery?.filter(image => isPreviewSource(image.src)) ?? [{ src, name }];
   // The trigger must remain reachable even if a partially restored gallery
@@ -25,11 +30,21 @@ export function ImagePreview({ src, name, className, gallery }: PreviewImage & {
     return images[getWrappedImageIndex({ currentIndex: previousIndex < 0 ? triggerIndex : previousIndex, direction, itemCount: images.length })];
   });
   return <>
-    <button type="button" aria-label={name} onClick={() => {
+    <button type="button" aria-label={failed ? `${t("agent.imageRetry")}: ${name}` : name}
+      title={failed ? t("agent.imageLoadFailed") : undefined} onClick={() => {
+      if (failed) {
+        setFailed(false);
+        setAttempt(value => value + 1);
+        return;
+      }
       setSelected({ src, name });
       setOpen(true);
-    }} className="block max-w-full cursor-zoom-in overflow-hidden rounded-md border border-border bg-surface-recessed focus-visible:ring-2 focus-visible:ring-ring">
-      <img src={src} alt={name} loading="lazy" decoding="async" style={IMAGE_TRANSPARENCY_CHECKER_STYLE} className={cn("max-h-64 max-w-full object-contain", className)} />
+    }} className={cn("block max-w-full overflow-hidden rounded-md border border-border bg-surface-recessed focus-visible:ring-2 focus-visible:ring-ring", failed ? "cursor-pointer" : "cursor-zoom-in")}>
+      {failed ? <span role="status" className={cn("flex min-h-16 flex-col items-center justify-center gap-1 p-2 text-xs text-muted-foreground", className)}>
+        <Icon name="Image" className="size-4 shrink-0" />
+        <span className="sr-only">{t("agent.imageLoadFailed")}</span>
+        <span>{t("agent.imageRetry")}</span>
+      </span> : <img key={`${src}:${attempt}`} onError={() => setFailed(true)} src={src} alt={name} loading="lazy" decoding="async" style={IMAGE_TRANSPARENCY_CHECKER_STYLE} className={cn("max-h-64 max-w-full object-contain", className)} />}
     </button>
     <ImageLightbox isOpen={open} imageSrc={current.src} imageAlt={current.name} title={current.name}
       hasMultipleImages={images.length > 1} navigationStatus={images.length > 1 ? `${index + 1} / ${images.length}` : undefined}
