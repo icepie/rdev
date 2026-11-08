@@ -1207,6 +1207,10 @@ func (c *Client) handleManagedDownloadStart(msg *protocol.Message) {
 		return
 	}
 	offset := msg.Offset
+	if msg.Length < 0 || (msg.Length > 0 && (offset < 0 || offset > st.Size())) {
+		c.sendFileTransferError(taskID, path, "invalid download range")
+		return
+	}
 	if offset < 0 || offset > st.Size() {
 		offset = 0
 	}
@@ -1228,8 +1232,18 @@ func (c *Client) handleManagedDownloadStart(msg *protocol.Message) {
 		}
 		c.mu.Unlock()
 	}()
-	c.send(&protocol.Message{Type: protocol.MsgFileDownloadStart, TaskID: taskID, Path: path, Name: filepath.Base(path), Size: st.Size(), Offset: offset, ModTime: st.ModTime().Format(time.RFC3339)})
-	buf := make([]byte, 512*1024)
+	length := st.Size() - offset
+	if msg.Length > 0 {
+		length = min(length, msg.Length)
+	}
+	if err := c.send(&protocol.Message{Type: protocol.MsgFileDownloadStart, TaskID: taskID, Path: path, Name: filepath.Base(path), Size: st.Size(), Offset: offset, Length: length, ModTime: st.ModTime().Format(time.RFC3339)}); err != nil {
+		return
+	}
+	var reader io.Reader = f
+	if msg.Length > 0 {
+		reader = io.LimitReader(f, length)
+	}
+	buf := make([]byte, max(1, min(int64(512*1024), length)))
 	cur := offset
 	for {
 		select {
@@ -1237,7 +1251,7 @@ func (c *Client) handleManagedDownloadStart(msg *protocol.Message) {
 			return
 		default:
 		}
-		n, readErr := f.Read(buf)
+		n, readErr := reader.Read(buf)
 		if n > 0 {
 			select {
 			case <-cancel:
@@ -1250,6 +1264,10 @@ func (c *Client) handleManagedDownloadStart(msg *protocol.Message) {
 			cur += int64(n)
 		}
 		if readErr == io.EOF {
+			if msg.Length > 0 && cur-offset != length {
+				c.sendFileTransferError(taskID, path, "file changed during range download")
+				return
+			}
 			c.sendBinaryOffset(protocol.BinFileTransferEnd, taskID, cur, nil)
 			c.send(&protocol.Message{Type: protocol.MsgFileTransferEnd, TaskID: taskID, Path: path, Size: st.Size(), Offset: cur, Success: true})
 			return

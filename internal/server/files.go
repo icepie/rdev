@@ -26,6 +26,7 @@ type fileMsg struct {
 	Name       string               `json:"name,omitempty"`
 	Size       int64                `json:"size,omitempty"`
 	Offset     int64                `json:"offset,omitempty"`
+	Length     int64                `json:"length,omitempty"`
 	Limit      int                  `json:"limit,omitempty"`
 	Total      int                  `json:"total,omitempty"`
 	ModTime    string               `json:"modTime,omitempty"`
@@ -269,7 +270,7 @@ func (h *filesWSHandler) handleDownloadStart(socket *fileSocket, msg fileMsg) {
 		return
 	}
 	h.srv.registerFileTask(msg.TaskID, socket, msg.DeviceID)
-	if err := client.Send(&protocol.Message{Type: protocol.MsgFileDownloadStart, TaskID: msg.TaskID, Path: msg.Path, Offset: msg.Offset}); err != nil {
+	if err := client.Send(&protocol.Message{Type: protocol.MsgFileDownloadStart, TaskID: msg.TaskID, Path: msg.Path, Offset: msg.Offset, Length: msg.Length}); err != nil {
 		h.srv.removeFileTask(msg.TaskID)
 		socket.writeText(fileMsg{Op: "error", DeviceID: msg.DeviceID, TaskID: msg.TaskID, Message: "failed to reach device"})
 	}
@@ -411,7 +412,7 @@ func (s *Server) handleFileManagerMessage(msg *protocol.Message) {
 		s.forwardFileOpResult(msg, "copy_result")
 	case protocol.MsgFileDownloadStart:
 		if route := s.getFileTask(msg.TaskID); route != nil {
-			route.socket.writeText(fileMsg{Op: "download_start", TaskID: msg.TaskID, Path: msg.Path, Name: msg.Name, Size: msg.Size, Offset: msg.Offset, ModTime: msg.ModTime})
+			route.socket.writeText(fileMsg{Op: "download_start", TaskID: msg.TaskID, Path: msg.Path, Name: msg.Name, Size: msg.Size, Offset: msg.Offset, Length: msg.Length, ModTime: msg.ModTime})
 		}
 	case protocol.MsgFileTransferEnd:
 		if route := s.getFileTask(msg.TaskID); route != nil {

@@ -158,6 +158,7 @@ type Message struct {
 	Name        string      `json:"name,omitempty"`
 	Size        int64       `json:"size,omitempty"`
 	Offset      int64       `json:"offset,omitempty"`
+	Length      int64       `json:"length,omitempty"` // download byte limit; zero preserves whole-file/resume behavior
 	ModTime     string      `json:"modTime,omitempty"`
 	IsDir       bool        `json:"isDir,omitempty"`
 	Truncated   bool        `json:"truncated,omitempty"`
