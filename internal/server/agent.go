@@ -1377,6 +1377,8 @@ func (h *agentWSHandler) OnMessage(socket *gws.Conn, message *gws.Message) {
 		h.handleJobs(ac, msg.Thread, msg.ID, false)
 	case "cancel_job":
 		h.handleJobs(ac, msg.Thread, msg.ID, true)
+	case "cancel_subagent":
+		h.handleCancelSubagent(ac, msg)
 	case "steer_job", "steer_subagent":
 		h.handleJobGuidance(ac, msg)
 	case "chat":

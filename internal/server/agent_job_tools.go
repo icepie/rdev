@@ -305,6 +305,69 @@ func (h *agentWSHandler) handleJobGuidance(ac *agentConn, request agentMsg) {
 	ac.writeJSON(reply)
 }
 
+// handleCancelSubagent adapts OMP's command to the thread-scoped job manager.
+// Only subagent jobs are reachable through this name; shell jobs must continue
+// to use the native cancel_job operation.
+func (h *agentWSHandler) handleCancelSubagent(ac *agentConn, request agentMsg) {
+	threadID := request.Thread
+	if threadID == "" {
+		threadID = ac.current
+	}
+	id := request.SubagentID
+	if id == "" {
+		id = request.JobID
+	}
+	var jobs *agentJobs
+	if ac.entry != nil {
+		h.srv.agentSessionsMu.Lock()
+		if th := ac.entry.threads[threadID]; th != nil {
+			jobs = th.jobs
+		}
+		h.srv.agentSessionsMu.Unlock()
+	}
+	cancelled := false
+	var err error
+	if id == "" {
+		err = fmt.Errorf("subagentId is required")
+	} else if jobs == nil {
+		err = fmt.Errorf("unknown thread")
+	} else {
+		job, readErr := jobs.Read(id)
+		if readErr != nil {
+			err = readErr
+		} else if job.Kind != "subagent" {
+			err = fmt.Errorf("job %q is not a subagent", id)
+		} else if job.State != "running" {
+			// OMP reports false for a completed/non-running subagent.
+			cancelled = false
+		} else {
+			err = jobs.Cancel(id)
+			cancelled = err == nil
+		}
+	}
+	if request.RPC {
+		success := err == nil
+		reply := agentMsg{Type: "response", Command: request.Command, ID: request.ID, Success: &success}
+		if success {
+			raw, _ := json.Marshal(struct {
+				Cancelled bool `json:"cancelled"`
+			}{cancelled})
+			reply.Items = raw
+		} else {
+			reply.Error = err.Error()
+			reply.Code = "invalid_request"
+		}
+		ac.writeJSON(reply)
+		return
+	}
+	reply := agentMsg{Op: "job_cancelled", Thread: threadID, ID: request.ID, JobID: id, Value: cancelled}
+	if err != nil {
+		reply.IsError = true
+		reply.Message = err.Error()
+	}
+	ac.writeJSON(reply)
+}
+
 // Send an invalidation, not a captured snapshot. A reset racing this write can
 // only cause a fresh read of the current manager, never restore an old job.
 func (s *Server) broadcastAgentJobsChanged(entry *agentSessionEntry, thread *agentThread, owner *agentJobs) bool {

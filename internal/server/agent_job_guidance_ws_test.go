@@ -100,6 +100,12 @@ func TestJobGuidanceSocketAcknowledgesTargetAndRejectsStaleJobs(t *testing.T) {
 	if got := guidance.snapshot(); len(got) != 2 {
 		t.Fatalf("rejected request mutated queue: %v", got)
 	}
+	rpcCancel, _ := json.Marshal(map[string]any{"type": "request", "id": "rpc-cancel", "command": "cancel_subagent", "subagentId": job.ID})
+	sendAgentOp(t, socket, string(rpcCancel))
+	cancelReply := waitAgentMsg(t, rec.msgs, "OMP cancellation response", func(m agentMsg) bool { return m.Type == "response" && m.Command == "cancel_subagent" })
+	if cancelReply.Success == nil || !*cancelReply.Success || cancelReply.ID != "rpc-cancel" {
+		t.Fatalf("invalid OMP cancellation response: %+v", cancelReply)
+	}
 	srv.agentSessionsMu.Lock()
 	running := thread.running
 	srv.agentSessionsMu.Unlock()
