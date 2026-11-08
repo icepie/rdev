@@ -1,3 +1,4 @@
+import { needsAttachmentRaster, rasterizeAttachment } from "./attachment-raster";
 import { settledAskCardKeys } from "./transcript-rows";
 import { observeTranscriptResize } from "./transcript-resize";
 import { clearQueueReturns, requestQueueRemoval } from "./queue-actions";
@@ -163,10 +164,13 @@ export function ChatPaneView({
   const [input, setInput] = useComposerTextDraft(draftKey);
   const [pendingImages, setPendingImages] = useComposerDraft(draftKey, EMPTY_COMPOSER_IMAGES);
   const imageReaders = useRef(new Map<FileReader, PendingImage | null | undefined>());
+  const imageConversion = useRef(new AbortController());
   const [readingImages, setReadingImages] = useState(0);
   const cancelImageReads = useCallback(() => {
     const readers = [...imageReaders.current.keys()];
     imageReaders.current.clear();
+    imageConversion.current.abort();
+    imageConversion.current = new AbortController();
     setReadingImages(0);
     for (const reader of readers) reader.abort();
   }, []);
@@ -261,14 +265,22 @@ export function ChatPaneView({
         if (settle(null)) ops.pushBubble("error", t("agent.imageReadFailed", { name: f.name }));
       };
       reader.onerror = readFailed;
-      reader.onload = () => {
+      reader.onload = async () => {
         if (!imageReaders.current.has(reader) || imageReaders.current.get(reader) !== undefined) return;
-        const url = String(reader.result || "");
+        let url = String(reader.result || "");
+        let mime = f.type || "image/png";
+        if (needsAttachmentRaster(mime)) {
+          try {
+            url = await rasterizeAttachment(url, imageConversion.current.signal);
+            mime = "image/png";
+          } catch { readFailed(); return; }
+          if (!imageReaders.current.has(reader)) return;
+        }
         const img: PendingImage = {
           name:
             f.name ||
             `pasted-${nextKey()}.${(f.type.split("/")[1] || "png").replace(/[^a-z0-9]/gi, "")}`,
-          mime: f.type || "image/png",
+          mime,
           data: url.slice(url.indexOf(",") + 1),
           preview: url,
         };
