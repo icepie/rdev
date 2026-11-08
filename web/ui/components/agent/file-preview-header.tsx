@@ -14,8 +14,8 @@ function Action({ label, icon, ...props }: ComponentProps<typeof Button> & { lab
 
 // BB f51e6b0 FilePreviewHeader / FilePreviewChrome: use actual pane width,
 // keeping view modes visible and moving secondary actions into a narrow menu.
-export function FilePreviewHeader({ path, name, content, loading, connected, hasPreview, viewMode, onViewModeChange, wrap, onWrapChange, onRefresh, t }: {
-  path: string; name: string; content: string | null; loading: boolean; connected: boolean;
+export function FilePreviewHeader({ path, name, externalUrl, content, loading, connected, hasPreview, viewMode, onViewModeChange, wrap, onWrapChange, onRefresh, t }: {
+  path: string; name: string; externalUrl?: string; content: string | null; loading: boolean; connected: boolean;
   hasPreview: boolean; viewMode: "preview" | "source"; onViewModeChange: (mode: "preview" | "source") => void;
   wrap: boolean; onWrapChange: (wrap: boolean) => void; onRefresh: () => void; t: Translator;
 }) {
@@ -63,6 +63,12 @@ export function FilePreviewHeader({ path, name, content, loading, connected, has
             <Action label={refreshLabel} icon="Refresh" disabled={!connected || loading} onClick={onRefresh} />
             {content !== null && <Action label={contentLabel} icon={copyStatus === "content" ? "Check" : "Copy"} onClick={() => void copy("content", content)} />}
           </>}
+          {externalUrl && /^\/api\/media\/[a-f0-9]{64}$/.test(externalUrl) && <Tooltip><TooltipTrigger asChild>
+            <a href={externalUrl} target="_blank" rel="noopener noreferrer" aria-label={t("agent.openExternalPreview")}
+              className={`${iconClass} inline-flex items-center justify-center focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring`}>
+              <Icon name="Globe" />
+            </a>
+          </TooltipTrigger><TooltipContent side="bottom">{t("agent.openExternalPreview")}</TooltipContent></Tooltip>}
         </div>
         <div className="ml-auto flex shrink-0 items-center gap-1">
           {showWrap && !narrow && <Action label={t("agent.toggleWrap")} icon="TextWrap" aria-pressed={wrap} onClick={() => onWrapChange(!wrap)} />}

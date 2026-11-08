@@ -10,6 +10,7 @@ it('rejects obsolete, closed, other-device and unrelated preview replies', () =>
 });
 it('preserves bounded text and image metadata and reports read failures', () => {
   const reply = {op:'file_content',requestId:'id',deviceId:'one'};
+  expect(readFilePreviewReply('id','one',{...reply,previewUrl:'/api/media/ticket'})).toMatchObject({previewUrl:'/api/media/ticket'});
   expect(readFilePreviewReply('id','one',{...reply,content:'text',truncated:true})).toMatchObject({status:'ready',content:'text',truncated:true});
   expect(readFilePreviewReply('id','one',{...reply,content:'aW1hZ2U=',encoding:'base64',mime:'image/png'})).toMatchObject({status:'ready',encoding:'base64',mime:'image/png'});
   expect(readFilePreviewReply('id','one',{...reply,message:'binary file'})).toMatchObject({status:'error',message:'binary file'});

@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -37,9 +38,18 @@ func videoMIME(path string) string {
 	return ""
 }
 
+func isHTMLPreviewPath(path string) bool {
+	ext := strings.ToLower(filepath.Ext(path))
+	return ext == ".html" || ext == ".htm"
+}
+
+// Header sandbox applies to top-level documents as well as iframes. Never
+// rely on an HTML-authored meta policy to isolate a new browser tab.
+const htmlPreviewPolicy = "sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; media-src data: blob:; font-src data:; connect-src 'none'; form-action 'none'; base-uri 'none'"
+
 // Called only after the owning Agent/Files socket has authorized this device.
 // The bearer grants one file, expires, and is invalidated by password changes.
-func (s *Server) grantMedia(client *ClientConn, path string) (string, error) {
+func (s *Server) grantFilePreview(client *ClientConn, path string) (string, error) {
 	token := make([]byte, 32)
 	if _, err := rand.Read(token); err != nil {
 		return "", err
@@ -107,6 +117,24 @@ func (s *Server) HandleMedia(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
+	w.Header().Set("Cache-Control", "private, no-store")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Referrer-Policy", "no-referrer")
+	if isHTMLPreviewPath(grant.path) {
+		reader := &readFileTool{srv: s, client: client}
+		content, err := reader.download(ctx, grant.path, agentFileReadCap)
+		if err != nil {
+			http.Error(w, "cannot read HTML preview: "+err.Error(), http.StatusBadGateway)
+			return
+		}
+		w.Header().Set("Content-Security-Policy", htmlPreviewPolicy)
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Content-Length", strconv.Itoa(len(content)))
+		if r.Method != http.MethodHead {
+			_, _ = w.Write(content)
+		}
+		return
+	}
 	_, meta, err := s.readMediaRange(ctx, client, grant.path, 0, 1)
 	if err != nil {
 		http.Error(w, "cannot read media: "+err.Error(), 502)

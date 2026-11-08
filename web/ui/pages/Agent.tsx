@@ -908,6 +908,7 @@ export function AgentPage() {
                 message: "",
                 encoding: asString(msg.encoding) || undefined,
                 mime: asString(msg.mime) || undefined,
+                previewUrl: asString(msg.previewUrl) || undefined,
               },
         }));
         break;

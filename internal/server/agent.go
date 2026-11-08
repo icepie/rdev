@@ -119,10 +119,11 @@ type agentMsg struct {
 	// Content and Truncated carry the file_read reply (op "file_content");
 	// Message holds the error text when the read failed. Encoding/Mime mark
 	// image replies: Content is base64 and the browser renders <img>.
-	Content   string `json:"content,omitempty"`
-	Truncated bool   `json:"truncated,omitempty"`
-	Encoding  string `json:"encoding,omitempty"`
-	Mime      string `json:"mime,omitempty"`
+	Content    string `json:"content,omitempty"`
+	Truncated  bool   `json:"truncated,omitempty"`
+	Encoding   string `json:"encoding,omitempty"`
+	Mime       string `json:"mime,omitempty"`
+	PreviewURL string `json:"previewUrl,omitempty"`
 	// Parent, Entries and Roots carry the dir_list reply (op "dir_entries")
 	// for the create-project path browser; Message holds the error text.
 	Parent  string          `json:"parent,omitempty"`
@@ -2169,7 +2170,7 @@ func (h *agentWSHandler) handleFileRead(ac *agentConn, path, requestID string) {
 				reply.Message = "device offline"
 				break
 			}
-			url, err := srv.grantMedia(client, resolveDevicePath(clientOS(client), cwd, path))
+			url, err := srv.grantFilePreview(client, resolveDevicePath(clientOS(client), cwd, path))
 			if err != nil {
 				reply.Message = err.Error()
 			} else {
@@ -2194,6 +2195,11 @@ func (h *agentWSHandler) handleFileRead(ac *agentConn, path, requestID string) {
 			default:
 				reply.Content = content
 				reply.Truncated = truncated
+				if isHTMLPreviewPath(path) && !truncated {
+					if client, ok := srv.GetClient(entry.deviceID); ok {
+						reply.PreviewURL, _ = srv.grantFilePreview(client, resolveDevicePath(clientOS(client), cwd, path))
+					}
+				}
 			}
 		}
 		ac.writeJSON(reply)

@@ -77,7 +77,7 @@ function FilePreviewContent({
 
   return (
     <div className="flex h-full min-w-0 flex-col">
-      <FilePreviewHeader path={path} name={base} content={state?.status === "ready" && !state.encoding ? state.content : null}
+      <FilePreviewHeader path={path} name={base} externalUrl={state?.status === "ready" ? state.previewUrl : undefined} content={state?.status === "ready" && !state.encoding ? state.content : null}
         loading={!state || state.status === "loading"} connected={connected} hasPreview={hasPreview}
         viewMode={viewMode} onViewModeChange={setViewMode} wrap={wrap} onWrapChange={setWrap} onRefresh={onRefresh} t={t} />
       {state === undefined || state.status === "loading" ? (

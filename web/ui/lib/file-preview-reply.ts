@@ -12,5 +12,6 @@ export function readFilePreviewReply(id: string, device: string, msg: Record<str
     truncated: msg.truncated === true,
     encoding: typeof msg.encoding === "string" ? msg.encoding : undefined,
     mime: typeof msg.mime === "string" ? msg.mime : undefined,
+    previewUrl: typeof msg.previewUrl === "string" ? msg.previewUrl : undefined,
   };
 }

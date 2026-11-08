@@ -140,4 +140,5 @@ export interface FilePreviewState {
    * plain-text reads. */
   encoding?: string;
   mime?: string;
+  previewUrl?: string;
 }

@@ -14,6 +14,7 @@ import (
 
 type fileMsg struct {
 	Content    string               `json:"content,omitempty"`
+	PreviewURL string               `json:"previewUrl,omitempty"`
 	Encoding   string               `json:"encoding,omitempty"`
 	Mime       string               `json:"mime,omitempty"`
 	Op         string               `json:"op"`
@@ -526,7 +527,7 @@ func (h *filesWSHandler) handleRead(socket *fileSocket, msg fileMsg) {
 		reply := fileMsg{Op: "file_content", DeviceID: client.ID, RequestID: msg.RequestID, Path: msg.Path}
 		var err error
 		if mime := videoMIME(msg.Path); mime != "" {
-			reply.Content, err = h.srv.grantMedia(client, msg.Path)
+			reply.Content, err = h.srv.grantFilePreview(client, msg.Path)
 			reply.Encoding, reply.Mime = "url", mime
 		} else if mime := imageMIME(msg.Path); mime != "" {
 			reply.Content, err = h.srv.probeReadImage(client.ID, ".", msg.Path)
@@ -536,6 +537,8 @@ func (h *filesWSHandler) handleRead(socket *fileSocket, msg fileMsg) {
 		}
 		if err != nil {
 			reply.Message = err.Error()
+		} else if isHTMLPreviewPath(msg.Path) && !reply.Truncated {
+			reply.PreviewURL, _ = h.srv.grantFilePreview(client, msg.Path)
 		}
 		socket.writeText(reply)
 	})

@@ -472,3 +472,12 @@ Local fixture only (`@server` on port 19440); no real user history was deleted.
 - Tests cover559/560px resize, segmented state, keyboard menu opening, menu copy and disabled refresh while loading, copy rejection and stale completion ordering. Existing media-error assertions now target the media region rather than the newly added clipboard live region. All213 Web tests, TypeScript, Vite and final embedded server build passed (`/tmp/rdev-file-header-web.log`, `/tmp/rdev-file-header-final-build.log`, `/tmp/rdev-file-header-final`).
 - Real Files HTML preview at1440x1000 light had its desktop screenshot inspected. At390x844 dark the menu opened as a nested drawer, copying reported success, and the parent file drawer stayed open while the menu became closed/aria-hidden. A narrow screenshot tool call stalled and was terminated; narrow evidence uses rendered DOM measurements and native interactions. Touch emulation confirmed pointer:coarse,36px segment heights,40x40px action button and no document overflow. The final tiny icon adjustment restores BB's3.5-size preview glyph; final build passed after that adjustment.
 - This aligns the existing file-header actions; external-browser/open-in-editor actions and HTML relative-resource serving remain separate incomplete capabilities.
+
+## HTML 外部浏览器预览（2026-11-08）
+
+- 参照 BB f51e6b0 的 FilePreview 外部 URL 分支，仅为完整 HTML/HTM 增加浏览器图标；Agent 和 Files 共用工具栏，窄面板保留入口。
+- 服务端单文件授权 URL 返回 CSP 响应头 sandbox allow-scripts，禁止 same-origin、网络和表单提交；链接 noopener/noreferrer。超限文件拒绝返回，不渲染截断网页。
+- 真实设备客户端与嵌入前端服务验证：Files 原生点击链接打开独立标签页；页面记录 openerAbsent=true，storage/cookies/network 均 blocked。键盘 Tab/Enter 将页面计数器从 0 改为 1，证明内联脚本正常运行。DevTools 点击该沙盒页面按钮超时，键盘操作成功；不把该点击路径记为通过。
+- 父页面预览保留；390px 暗色视口文档宽度仍为390px，浏览器入口位于 x=233、宽20px，未溢出。桌面1440px亮色入口已实际打开。此轮窄屏不含真实触屏验收。
+- 213 Web 测试、TypeScript、Vite build、go test ./... 和服务端全量 race 通过；测试包含 GET/HEAD、精确 HTML 正文、沙盒响应头、超限取消与任务清理、URL 过滤及窄宽布局。
+- 边界：仅单文件内联资源；相对路径/远程资源仍不提供，未实现打开编辑器。授权链接一小时后过期，可刷新获取。
