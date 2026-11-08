@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"image"
@@ -14,6 +15,8 @@ import (
 	"time"
 
 	"github.com/lxzan/gws"
+
+	"rdev/internal/agent"
 )
 
 func TestRPCQueueAdmissionAndImages(t *testing.T) {
@@ -104,5 +107,86 @@ func TestRPCQueueAdmissionAndImages(t *testing.T) {
 	image := th.queue[1].images
 	if len(image) != 1 || image[0].Mime != "image/png" || image[0].Data != pngData || !strings.HasPrefix(image[0].Preview, "data:image/png;base64,") {
 		t.Fatalf("image was lost: %+v", image)
+	}
+}
+
+func TestRPCAbortAndRestoreQueueReturnsUserMessages(t *testing.T) {
+	srv := newPrefsTestServer(t)
+	entry, err := srv.agentSessionFor(agentServerDeviceID, &ClientConn{ID: agentServerDeviceID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	th := entry.threads[entry.current]
+	image := []agent.MessageImage{{Name: "queued.png", Mime: "image/png", Data: "cG5n"}}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	srv.agentSessionsMu.Lock()
+	th.running = true
+	th.cancel = cancel
+	foreign := srv.newAgentThreadLocked(entry, newAgentThreadID(), nil, "", "")
+	entry.threads[foreign.id] = foreign
+	foreign.queue = []agentQueuedChat{{text: "keep foreign"}}
+	th.queue = []agentQueuedChat{{text: "guide", steering: true, display: json.RawMessage(`{"steering":true}`)}, {text: "next", images: image}, {text: "system", display: json.RawMessage(`{"job":{}}`)}}
+	srv.agentSessionsMu.Unlock()
+	httpSrv := httptest.NewServer(http.HandlerFunc(srv.HandleAgentWS))
+	defer httpSrv.Close()
+	rec := &agentWSRecorder{msgs: make(chan agentMsg, 64)}
+	socket, _, err := gws.NewClient(rec, &gws.ClientOption{Addr: "ws" + strings.TrimPrefix(httpSrv.URL, "http") + "/agent?device=%40server", HandshakeTimeout: time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	go socket.ReadLoop()
+	defer socket.WriteClose(1000, nil)
+	waitAgentMsg(t, rec.msgs, "auth", func(m agentMsg) bool { return m.Op == "auth_ok" })
+	sendAgentOp(t, socket, `{"type":"abort_and_restore_queue","id":"invalid","thread":"missing"}`)
+	invalid := waitAgentMsg(t, rec.msgs, "invalid restore", func(m agentMsg) bool { return m.Type == "response" })
+	if invalid.Success == nil || *invalid.Success || ctx.Err() != nil {
+		t.Fatalf("invalid restore affected running work: %+v", invalid)
+	}
+	sendAgentOp(t, socket, `{"type":"abort_and_restore_queue","id":"restore","thread":"`+th.id+`"}`)
+	reply := waitAgentMsg(t, rec.msgs, "restore response", func(m agentMsg) bool { return m.Type == "response" && m.ID == "restore" })
+	if reply.Success == nil || !*reply.Success {
+		t.Fatalf("restore failed: %+v", reply)
+	}
+	var result rpcAbortRestoreQueueResult
+	if err := json.Unmarshal(reply.Data, &result); err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Steering) != 1 || result.Steering[0].Text != "guide" || len(result.FollowUp) != 1 || result.FollowUp[0].Text != "next" || len(result.FollowUp[0].Images) != 1 {
+		t.Fatalf("unexpected restored queue: %+v", result)
+	}
+	if !reflect.DeepEqual(result.FollowUp[0].Images, rpcImageContents(image)) || ctx.Err() != context.Canceled {
+		t.Fatal("original image or cancellation lost")
+	}
+	sendAgentOp(t, socket, `{"type":"abort_and_restore_queue","id":"again","thread":"`+th.id+`"}`)
+	again := waitAgentMsg(t, rec.msgs, "repeat restore", func(m agentMsg) bool { return m.Type == "response" && m.ID == "again" })
+	if string(again.Data) != `{"steering":[],"followUp":[]}` {
+		t.Fatalf("restored a message twice: %s", again.Data)
+	}
+	srv.agentSessionsMu.Lock()
+	if len(th.queue) != 0 {
+		srv.agentSessionsMu.Unlock()
+		t.Fatalf("queue not cleared: %+v", th.queue)
+	}
+	if len(foreign.queue) != 1 || foreign.queue[0].text != "keep foreign" {
+		srv.agentSessionsMu.Unlock()
+		t.Fatal("restore crossed threads")
+	}
+	// An oversized reply must neither lose the queue nor cancel the active turn.
+	largeCtx, largeCancel := context.WithCancel(context.Background())
+	defer largeCancel()
+	th.cancel = largeCancel
+	largeText := strings.Repeat("x", 16*1024*1024)
+	th.queue = []agentQueuedChat{{text: largeText}}
+	srv.agentSessionsMu.Unlock()
+	sendAgentOp(t, socket, `{"type":"abort_and_restore_queue","id":"large","thread":"`+th.id+`"}`)
+	large := waitAgentMsg(t, rec.msgs, "oversized restore", func(m agentMsg) bool { return m.Type == "response" && m.ID == "large" })
+	if large.Success == nil || *large.Success || large.Code != "response_too_large" || largeCtx.Err() != nil {
+		t.Fatalf("oversized restore changed the turn: %+v", large)
+	}
+	srv.agentSessionsMu.Lock()
+	defer srv.agentSessionsMu.Unlock()
+	if len(th.queue) != 1 || th.queue[0].text != largeText {
+		t.Fatal("oversized restore lost queued input")
 	}
 }

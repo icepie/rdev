@@ -150,6 +150,8 @@ func (h *agentWSHandler) handleAgentRPCFrame(ac *agentConn, raw []byte) bool {
 		h.handleRPCSetTodos(ac, request, fields["phases"])
 	case "abort":
 		h.handleRPCAbort(ac, request)
+	case "abort_and_restore_queue":
+		h.handleRPCAbortAndRestoreQueue(ac, request)
 	case "prompt":
 		if err := rpcStringField(fields, "message", &request.Message, false); err != nil {
 			fail("invalid_request", err.Error())
@@ -447,6 +449,69 @@ func (h *agentWSHandler) handleRPCAbort(ac *agentConn, request agentMsg) {
 	ac.writeJSON(agentMsg{Type: "response", Command: request.Command, ID: request.ID, Success: &success, Data: json.RawMessage(`{"aborted":true}`)})
 }
 
+type rpcRestoredQueuedMessage struct {
+	Text   string            `json:"text"`
+	Images []rpcImageContent `json:"images,omitempty"`
+}
+
+type rpcAbortRestoreQueueResult struct {
+	Steering []rpcRestoredQueuedMessage `json:"steering"`
+	FollowUp []rpcRestoredQueuedMessage `json:"followUp"`
+}
+
+// OMP's interrupt path withdraws user-authored queued input before aborting.
+// System notifications are cleared with the interrupted queue, as for abort,
+// but are not returned as editable prompts. Job records remain available.
+func (h *agentWSHandler) handleRPCAbortAndRestoreQueue(ac *agentConn, request agentMsg) {
+	if ac.entry == nil {
+		h.writeRPCError(ac, request, "invalid_request", "unknown thread")
+		return
+	}
+	threadID := request.Thread
+	if threadID == "" {
+		threadID = ac.current
+	}
+	s := h.srv
+	s.agentSessionsMu.Lock()
+	th := ac.entry.threads[threadID]
+	if th == nil {
+		s.agentSessionsMu.Unlock()
+		h.writeRPCError(ac, request, "invalid_request", "unknown thread")
+		return
+	}
+	result := rpcAbortRestoreQueueResult{Steering: []rpcRestoredQueuedMessage{}, FollowUp: []rpcRestoredQueuedMessage{}}
+	for _, item := range th.queue {
+		if !item.steering && len(item.display) > 0 {
+			continue
+		}
+		message := rpcRestoredQueuedMessage{Text: item.text, Images: rpcImageContents(item.images)}
+		if item.steering {
+			result.Steering = append(result.Steering, message)
+		} else {
+			result.FollowUp = append(result.FollowUp, message)
+		}
+	}
+	// Refuse before mutation if the restored payload cannot fit a bounded reply.
+	// Unlike a lossy truncation, this leaves every queued text/image recoverable
+	// through remove_queued_message before retrying the interruption.
+	raw, err := json.Marshal(result)
+	if err != nil || len(raw) > 16*1024*1024 {
+		s.agentSessionsMu.Unlock()
+		h.writeRPCError(ac, request, "response_too_large", "restore queue exceeds 16 MiB; remove individual queued messages first")
+		return
+	}
+	th.queue = nil
+	denyApprovalsLocked(th)
+	cancel := th.cancel
+	if cancel != nil {
+		cancel()
+	}
+	s.agentSessionsMu.Unlock()
+	s.broadcastQueue(ac.entry, th)
+	success := true
+	ac.writeJSON(agentMsg{Type: "response", Command: request.Command, ID: request.ID, Success: &success, Data: raw})
+}
+
 func (h *agentWSHandler) handleRPCState(ac *agentConn, request agentMsg) {
 	threadID := request.Thread
 	if threadID == "" {
@@ -671,6 +736,7 @@ func (h *agentWSHandler) handleRPCAvailableCommands(ac *agentConn, request agent
 		{"name": "set_thinking_level", "params": map[string]any{"level": "off|low|medium|high"}},
 		{"name": "set_todos", "params": map[string]any{"phases": "TodoPhase[]"}},
 		{"name": "abort", "params": map[string]any{"thread": "string?"}},
+		{"name": "abort_and_restore_queue", "params": map[string]any{"thread": "string?"}},
 		{"name": "prompt", "params": map[string]any{"message": "string", "thread": "string?"}},
 		{"name": "steer", "params": map[string]any{"message": "string", "thread": "string?"}},
 		{"name": "follow_up", "params": map[string]any{"message": "string", "thread": "string?"}},
