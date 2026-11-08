@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 
 func TestJobLifecycleInvalidatesBothSubscribersAndIgnoresOldManager(t *testing.T) {
 	srv := newPrefsTestServer(t)
+	t.Cleanup(srv.waitAgentWork)
 	entry, err := srv.agentSessionFor(agentServerDeviceID, &ClientConn{ID: agentServerDeviceID})
 	if err != nil {
 		t.Fatal(err)
@@ -93,5 +95,91 @@ func TestJobLifecycleInvalidatesBothSubscribersAndIgnoresOldManager(t *testing.T
 		if string(msg.Items) != "[]" {
 			t.Fatalf("old jobs restored after reset: %s", msg.Items)
 		}
+	}
+}
+
+func TestSlowSubscriberDoesNotBlockJobAdmissionOrCancellation(t *testing.T) {
+	srv := newPrefsTestServer(t)
+	t.Cleanup(srv.waitAgentWork)
+	entry, err := srv.agentSessionFor(agentServerDeviceID, &ClientConn{ID: agentServerDeviceID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	thread := entry.threads[entry.current]
+	jobs := thread.jobs
+	finishedCallback := make(chan struct{})
+	jobs.onComplete = func(agentJobSnapshot) { close(finishedCallback) }
+	defer jobs.Close()
+	server := httptest.NewServer(http.HandlerFunc(srv.HandleAgentWS))
+	defer server.Close()
+	rec := &agentWSRecorder{msgs: make(chan agentMsg, 64)}
+	socket, _, err := gws.NewClient(rec, &gws.ClientOption{Addr: "ws" + strings.TrimPrefix(server.URL, "http") + "/agent?device=%40server", HandshakeTimeout: time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer socket.WriteClose(1000, nil)
+	go socket.ReadLoop()
+	waitAgentMsg(t, rec.msgs, "auth", func(m agentMsg) bool { return m.Op == "auth_ok" })
+	var subscriber *agentConn
+	srv.agentSessionsMu.Lock()
+	for connection := range entry.subs {
+		raw, _ := connection.Session().Load("agentConn")
+		subscriber = raw.(*agentConn)
+	}
+	srv.agentSessionsMu.Unlock()
+	if subscriber == nil {
+		t.Fatal("no subscriber")
+	}
+	// Hold the actual connection write lock to model a browser write that
+	// cannot finish. Keep it held until both lifecycle calls have returned.
+	subscriber.writeMu.Lock()
+	var unlockOnce sync.Once
+	unlock := func() { unlockOnce.Do(subscriber.writeMu.Unlock) }
+	defer unlock()
+	type admission struct {
+		job agentJobSnapshot
+		err error
+	}
+	admitted := make(chan admission, 1)
+	go func() {
+		job, err := jobs.Start("shell", "slow subscriber", func(ctx context.Context, _ func(string)) (string, error) { <-ctx.Done(); return "", ctx.Err() })
+		admitted <- admission{job, err}
+	}()
+	var job agentJobSnapshot
+	select {
+	case result := <-admitted:
+		if result.err != nil {
+			t.Fatal(result.err)
+		}
+		job = result.job
+	case <-time.After(time.Second):
+		t.Fatal("slow subscriber blocked job admission")
+	}
+	canceled := make(chan error, 1)
+	go func() { canceled <- jobs.Cancel(job.ID) }()
+	select {
+	case err := <-canceled:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("slow subscriber blocked cancellation")
+	}
+	select {
+	case <-finishedCallback:
+	case <-time.After(time.Second):
+		t.Fatal("worker completion blocked by subscriber")
+	}
+	unlock()
+	srv.waitAgentWork()
+	raw, _ := json.Marshal(agentMsg{Op: "get_jobs", Thread: thread.id, ID: job.ID})
+	sendAgentOp(t, socket, string(raw))
+	reply := waitAgentMsg(t, rec.msgs, "final job", func(m agentMsg) bool { return m.Op == "job" })
+	var snapshot agentJobSnapshot
+	if err := json.Unmarshal(reply.Items, &snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.State != "canceled" {
+		t.Fatalf("latest state lost after blocked writes: %+v", snapshot)
 	}
 }

@@ -578,10 +578,12 @@ func (h *agentWSHandler) OnOpen(socket *gws.Conn) {
 func (s *Server) buildAgentSession(entry *agentSessionEntry, th *agentThread, client *ClientConn, provider *AgentProvider, model *AgentModelConfig) *agent.Session {
 	if th.jobs == nil {
 		jobs := newAgentJobs(nil)
-		jobs.onChange = func() {
-			s.broadcastAgentJobsChanged(entry, th, jobs)
-			s.broadcastThreadList(entry)
-		}
+		updates := &agentJobUpdates{launch: s.goAgent, publish: func() {
+			if s.broadcastAgentJobsChanged(entry, th, jobs) {
+				s.broadcastThreadList(entry)
+			}
+		}}
+		jobs.onChange = updates.Notify
 		jobs.onComplete = func(job agentJobSnapshot) { s.deliverAgentJob(entry, th, jobs, job) }
 		th.jobs = jobs
 	}

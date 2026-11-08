@@ -15,6 +15,7 @@ import (
 
 func TestDeleteRunningConversationCancelsWorkAndCannotResurrectHistory(t *testing.T) {
 	srv := newPrefsTestServer(t)
+	t.Cleanup(srv.waitAgentWork)
 	entry, err := srv.agentSessionFor(agentServerDeviceID, &ClientConn{ID: agentServerDeviceID})
 	if err != nil {
 		t.Fatal(err)

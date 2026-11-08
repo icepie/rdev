@@ -289,11 +289,18 @@ func (h *agentWSHandler) handleJobGuidance(ac *agentConn, request agentMsg) {
 
 // Send an invalidation, not a captured snapshot. A reset racing this write can
 // only cause a fresh read of the current manager, never restore an old job.
-func (s *Server) broadcastAgentJobsChanged(entry *agentSessionEntry, thread *agentThread, owner *agentJobs) {
+func (s *Server) broadcastAgentJobsChanged(entry *agentSessionEntry, thread *agentThread, owner *agentJobs) bool {
 	s.agentSessionsMu.Lock()
 	current := entry.threads[thread.id] == thread && thread.jobs == owner
 	s.agentSessionsMu.Unlock()
 	if current {
-		s.agentBroadcast(entry, agentMsg{Op: "jobs_changed", Thread: thread.id})
+		owner.mu.Lock()
+		current = !owner.closed
+		owner.mu.Unlock()
 	}
+	if !current {
+		return false
+	}
+	s.agentBroadcast(entry, agentMsg{Op: "jobs_changed", Thread: thread.id})
+	return true
 }

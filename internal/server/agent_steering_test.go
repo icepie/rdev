@@ -152,6 +152,7 @@ func TestAgentSteeringContinuesAfterBackgroundWait(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(srv.waitAgentWork)
 	th := entry.threads[entry.current]
 	defer th.jobs.Close()
 	job, err := th.jobs.Start("shell", "long build", func(ctx context.Context, _ func(string)) (string, error) { <-ctx.Done(); return "", ctx.Err() })
