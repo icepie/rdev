@@ -83,6 +83,8 @@ func (h *agentWSHandler) handleAgentRPCFrame(ac *agentConn, raw []byte) bool {
 		h.handleRPCProtocol(ac, request)
 	case "get_available_commands":
 		h.handleRPCAvailableCommands(ac, request)
+	case "get_state":
+		h.handleRPCState(ac, request)
 	case "get_subagents":
 		h.handleGetSubagents(ac, request)
 	case "get_subagent_messages":
@@ -129,6 +131,38 @@ func (h *agentWSHandler) handleAgentRPCFrame(ac *agentConn, raw []byte) bool {
 	return true
 }
 
+func (h *agentWSHandler) handleRPCState(ac *agentConn, request agentMsg) {
+	threadID := request.Thread
+	if threadID == "" {
+		threadID = ac.current
+	}
+	if ac.entry == nil {
+		h.writeRPCError(ac, request, "invalid_request", "unknown thread")
+		return
+	}
+	s := h.srv
+	s.agentSessionsMu.Lock()
+	th := ac.entry.threads[threadID]
+	if th == nil {
+		s.agentSessionsMu.Unlock()
+		h.writeRPCError(ac, request, "invalid_request", "unknown thread")
+		return
+	}
+	snap := s.threadSnapshotLocked(ac.entry, th)
+	state := map[string]any{
+		"thread": threadID, "model": th.model, "isStreaming": snap.running,
+		"isCompacting": snap.running && th.turnCommand,
+		"messageCount": len(snap.history), "queuedMessageCount": len(snap.queue),
+		"isSettled":      !snap.running && len(snap.queue) == 0,
+		"queuedMessages": map[string]any{"followUp": snap.queue, "steering": []string{}},
+		"todoPhases":     snap.todos, "sessionFile": "rdev://thread/" + threadID,
+	}
+	s.agentSessionsMu.Unlock()
+	success := true
+	data, _ := json.Marshal(state)
+	ac.writeJSON(agentMsg{Type: "response", Command: request.Command, ID: request.ID, Success: &success, Data: data})
+}
+
 func (h *agentWSHandler) handleRPCProtocol(ac *agentConn, request agentMsg) {
 	success := true
 	data, _ := json.Marshal(struct {
@@ -142,6 +176,7 @@ func (h *agentWSHandler) handleRPCAvailableCommands(ac *agentConn, request agent
 	// palette, and unsupported OMP commands must remain visible as unsupported.
 	commands := []map[string]any{
 		{"name": "negotiate_protocol"}, {"name": "get_available_commands"},
+		{"name": "get_state", "params": map[string]any{"thread": "string?"}},
 		{"name": "compact", "params": map[string]any{"customInstructions": "string?"}},
 		{"name": "get_subagents"}, {"name": "get_subagent_messages"},
 		{"name": "steer_subagent", "params": map[string]any{"subagentId": "string", "message": "string"}},

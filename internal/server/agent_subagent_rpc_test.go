@@ -94,6 +94,14 @@ func TestSubagentRPCWireContract(t *testing.T) {
 			t.Fatalf("invalid %s response: %s", command, protocol)
 		}
 	}
+	raw, _ := json.Marshal(map[string]any{"type": "get_state", "id": "state-1", "thread": th.id})
+	sendAgentOp(t, socket, string(raw))
+	state := waitRawMsg(t, rec.msgs, "state response", func(m map[string]json.RawMessage) bool {
+		return string(m["type"]) == `"response"` && string(m["id"]) == `"state-1"`
+	})
+	if string(state["success"]) != "true" || !strings.Contains(string(state["data"]), `"thread":"`+th.id+`"`) {
+		t.Fatalf("invalid state response: %s", state)
+	}
 	call("get_subagents", "missing", "", "", false)
 	// Invalid RPC frames must return a correlated failure, not silently fall
 	// into the browser protocol or wait forever for a reply.
@@ -119,8 +127,8 @@ func TestSubagentRPCWireContract(t *testing.T) {
 	}
 	// Transcript reads use the bounded rdev output window and remain a normal
 	// correlated RPC response even before the subagent has produced output.
-	raw, _ := json.Marshal(map[string]any{"type": "get_subagent_messages", "id": "messages-1", "thread": th.id, "subagentId": child.ID, "fromByte": 0})
-	sendAgentOp(t, socket, string(raw))
+	transcriptRaw, _ := json.Marshal(map[string]any{"type": "get_subagent_messages", "id": "messages-1", "thread": th.id, "subagentId": child.ID, "fromByte": 0})
+	sendAgentOp(t, socket, string(transcriptRaw))
 	messages := waitRawMsg(t, rec.msgs, "subagent messages", func(m map[string]json.RawMessage) bool { return string(m["type"]) == `"response"` })
 	if string(messages["success"]) != "true" || !strings.Contains(string(messages["data"]), `"sessionFile":"rdev://subagent/`) {
 		t.Fatalf("invalid transcript response: %s", messages)
