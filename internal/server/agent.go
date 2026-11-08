@@ -338,8 +338,9 @@ func queueTexts(q []agentQueuedChat) []string {
 // history, todo list, message queue and (at most one) in-flight turn.
 // Guarded by Server.agentSessionsMu.
 type agentThread struct {
-	turnDisplay json.RawMessage
-	turnCommand bool // compact/tool commands do not consume model-boundary steering
+	pendingReasoning bool // rebuild at the next turn boundary after an effort change
+	turnDisplay      json.RawMessage
+	turnCommand      bool // compact/tool commands do not consume model-boundary steering
 	// Acquire before agentSessionsMu; disk I/O never holds the global lock.
 	persistMu     sync.Mutex
 	jobs          *agentJobs
@@ -646,6 +647,7 @@ func (s *Server) buildAgentSession(entry *agentSessionEntry, th *agentThread, cl
 		jobs: th.jobs, config: cfg,
 		tools: func() []agent.Tool { return s.agentBaseTools(entry, client, cwd) },
 	})
+	th.pendingReasoning = false
 	return agent.New(cfg)
 }
 
@@ -1540,6 +1542,7 @@ func (h *agentWSHandler) handleSetReasoningLevel(ac *agentConn, level string) {
 	entry.reasoningLevel = level
 	for _, th := range entry.threads {
 		if th.running {
+			th.pendingReasoning = true
 			continue
 		}
 		// Each thread keeps its own model across the rebuild.
@@ -2536,6 +2539,14 @@ func (h *agentWSHandler) handleDirMkdir(ac *agentConn, path, requestID string) {
 // and returns the turn_start frame to broadcast after unlocking. Caller
 // must hold agentSessionsMu.
 func (s *Server) startAgentTurnLocked(entry *agentSessionEntry, th *agentThread, text string, images []agent.MessageImage, display ...json.RawMessage) agentMsg {
+	if th.pendingReasoning {
+		if provider, model, err := s.resolveAgentModel(th.model); err == nil {
+			session := s.buildAgentSession(entry, th, entry.client, provider, model)
+			session.SetHistory(th.session.History())
+			th.session = session
+			th.sessionClient = entry.client
+		}
+	}
 	th.running = true
 	command, _ := splitAgentCommand(text)
 	th.turnCommand = command == "/compact" || command == "/bg" || command == "/subagent"

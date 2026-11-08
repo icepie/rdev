@@ -127,6 +127,12 @@ func (h *agentWSHandler) handleAgentRPCFrame(ac *agentConn, raw []byte) bool {
 			return true
 		}
 		h.handleRPCSetModel(ac, request)
+	case "set_thinking_level":
+		if err := rpcStringField(fields, "level", &request.Level, true); err != nil {
+			fail("invalid_request", err.Error())
+			return true
+		}
+		h.handleRPCSetThinkingLevel(ac, request)
 	case "abort":
 		h.handleRPCAbort(ac, request)
 	case "prompt":
@@ -378,8 +384,9 @@ func (h *agentWSHandler) handleRPCState(ac *agentConn, request agentMsg) {
 	}
 	state := map[string]any{
 		"thread": threadID, "model": th.model, "isStreaming": snap.running,
-		"isCompacting": snap.running && th.workingTool == "/compact",
-		"messageCount": len(snap.history), "queuedMessageCount": len(snap.queue),
+		"thinkingLevel": ac.entry.reasoningLevel,
+		"isCompacting":  snap.running && th.workingTool == "/compact",
+		"messageCount":  len(snap.history), "queuedMessageCount": len(snap.queue),
 		"hasPendingAsyncWork": jobsRunning,
 		"isSettled":           !snap.running && len(snap.queue) == 0 && !jobsRunning,
 		"queuedMessages":      map[string]any{"followUp": followUp, "steering": steering, "liveSteered": len(steering)},
@@ -460,6 +467,26 @@ func (h *agentWSHandler) handleRPCSetModel(ac *agentConn, request agentMsg) {
 	ac.writeJSON(agentMsg{Type: "response", Command: request.Command, ID: request.ID, Success: &success, Data: data})
 }
 
+func (h *agentWSHandler) handleRPCSetThinkingLevel(ac *agentConn, request agentMsg) {
+	if ac.entry == nil {
+		h.writeRPCError(ac, request, "invalid_request", "unknown thread")
+		return
+	}
+	if request.Thread != "" {
+		h.writeRPCError(ac, request, "invalid_request", "thinking level is device-scoped; omit thread")
+		return
+	}
+	if !validReasoningLevel(request.Level) {
+		h.writeRPCError(ac, request, "invalid_request", "unknown thinking level "+request.Level)
+		return
+	}
+	// The existing browser handler updates the shared preference and rebuilds
+	// idle sessions; running turns keep their snapshot and apply the level next.
+	h.handleSetReasoningLevel(ac, request.Level)
+	success := true
+	ac.writeJSON(agentMsg{Type: "response", Command: request.Command, ID: request.ID, Success: &success})
+}
+
 func (h *agentWSHandler) handleRPCProtocol(ac *agentConn, request agentMsg) {
 	success := true
 	data, _ := json.Marshal(struct {
@@ -476,6 +503,7 @@ func (h *agentWSHandler) handleRPCAvailableCommands(ac *agentConn, request agent
 		{"name": "get_state", "params": map[string]any{"thread": "string?"}},
 		{"name": "get_available_models"},
 		{"name": "set_model", "params": map[string]any{"model": "string", "thread": "string?"}},
+		{"name": "set_thinking_level", "params": map[string]any{"level": "off|low|medium|high"}},
 		{"name": "abort", "params": map[string]any{"thread": "string?"}},
 		{"name": "prompt", "params": map[string]any{"message": "string", "thread": "string?"}},
 		{"name": "steer", "params": map[string]any{"message": "string", "thread": "string?"}},

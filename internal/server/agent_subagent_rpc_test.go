@@ -120,6 +120,14 @@ func TestSubagentRPCWireContract(t *testing.T) {
 	if string(modelReply["success"]) != "true" || string(modelReply["data"]) != `{"model":"p/m2"}` {
 		t.Fatalf("invalid set model response: %s", modelReply)
 	}
+	thinkingRaw, _ := json.Marshal(map[string]any{"type": "set_thinking_level", "id": "thinking-1", "level": "low"})
+	sendAgentOp(t, socket, string(thinkingRaw))
+	thinkingReply := waitRawMsg(t, rec.msgs, "thinking response", func(m map[string]json.RawMessage) bool {
+		return string(m["type"]) == `"response"` && string(m["id"]) == `"thinking-1"`
+	})
+	if string(thinkingReply["success"]) != "true" || len(thinkingReply["data"]) != 0 {
+		t.Fatalf("invalid thinking response: %s", thinkingReply)
+	}
 	raw, _ = json.Marshal(map[string]any{"type": "abort", "id": "abort-1", "thread": th.id})
 	sendAgentOp(t, socket, string(raw))
 	abortReply := waitRawMsg(t, rec.msgs, "abort response", func(m map[string]json.RawMessage) bool {
@@ -159,6 +167,10 @@ func TestSubagentRPCWireContract(t *testing.T) {
 	// into the browser protocol or wait forever for a reply.
 	for _, raw := range []string{
 		`{"type":"does_not_exist","id":"bad-1"}`,
+		`{"type":"set_thinking_level","id":"bad-1","level":"ultra"}`,
+		`{"type":"set_thinking_level","id":"bad-1","level":null}`,
+		`{"type":"set_thinking_level","id":"bad-1"}`,
+		`{"type":"set_thinking_level","id":"bad-1","level":"high","thread":"missing"}`,
 		`{"type":"get_subagent_messages","id":"bad-1"}`,
 		`{"type":"request","command":"reset","id":"bad-1"}`,
 		`{"type":null,"id":"bad-1"}`,
@@ -172,6 +184,12 @@ func TestSubagentRPCWireContract(t *testing.T) {
 		if string(bad["id"]) != `"bad-1"` || string(bad["success"]) != "false" || len(bad["error"]) == 0 {
 			t.Fatalf("invalid RPC was not rejected: %s", bad)
 		}
+	}
+	srv.agentSessionsMu.Lock()
+	level := entry.reasoningLevel
+	srv.agentSessionsMu.Unlock()
+	if level != "low" {
+		t.Fatalf("invalid RPC changed thinking preference: %s", level)
 	}
 	call("steer_subagent", th.id, child.ID, "inspect tests", true)
 	if got := guidance.snapshot(); len(got) != 1 || got[0] != "inspect tests" {
@@ -217,6 +235,7 @@ func TestAgentRPCRequiresAuthentication(t *testing.T) {
 	for _, frame := range []string{
 		`{"type":"get_subagents"}`,
 		`{"type":"compact","customInstructions":"keep paths"}`,
+		`{"type":"set_thinking_level","level":"high"}`,
 		`{"type":"remove_queued_message","queue":"steering","message":"x"}`,
 		`{"type":"cancel_subagent","subagentId":"child"}`,
 		`{"type":"request","command":"reset"}`,
