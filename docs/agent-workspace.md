@@ -125,7 +125,7 @@ RPC 结果放在 `data`：列表为 `{subagents:[]}`，取消为 `{cancelled:boo
 
 这三个命令的帧适配不等于完整 OMP 运行时：连接鉴权、会话事件仍为 rdev 协议，没有 OMP stdio 传输、子任务完整 transcript/订阅、注册 agent 文件和扩展命令展开。取消只请求停止，资源名额直到执行清理完成才释放，不宣称 OMP 完整生命周期或持久 tombstone 语义。
 
-RPC 帧由独立命令白名单分发，复用设备认证门槛。未知命令（含尚未实现的 get_subagent_messages）返回关联的 unsupported_command；字段缺失/类型错误、混合 op 与 type 帧返回 invalid_request。兼容包装的 command 也不能调用 reset 等浏览器操作。子任务日志没有完整 transcript 及稳定字节游标，因此暂不把滚动截断输出伪装成 OMP 消息文件。
+RPC 帧由独立命令白名单分发，复用设备认证门槛。未知命令返回关联的 unsupported_command；字段缺失/类型错误、混合 op 与 type 帧返回 invalid_request。兼容包装的 command 也不能调用 reset 等浏览器操作。子任务日志没有完整 transcript 及稳定字节游标，因此暂不把滚动截断输出伪装成 OMP 消息文件。
 
 ### 原生 compact RPC
 
@@ -140,3 +140,5 @@ RPC 帧由独立命令白名单分发，复用设备认证门槛。未知命令�
 - rdev 扩展 RPC 支持运行中任务管理：`get_jobs` 返回 `data.jobs` 摘要；`get_job` 接收 `jobId` 并返回 `data.job`（含有界输出）；`cancel_job` 接收 `jobId`，支持 `all`，返回 `data.cancellationRequested`。三个方法均可携带 `thread`，省略时使用当前连接所选线程。请求关联 `id` 与任务 `jobId` 分离；回执仅发给调用连接，任务状态通知仍共享。方法在 `rpcCommands` 中以 `source: "rdev"` 声明，不属于 OMP 标准命令。
 
 - 浏览器支持 `/model` 和 `/models`：无参数打开现有模型选择器；带参数时接受当前模型目录中的完整 ID。未知 ID 保留草稿并提示。此选择与界面选择器一致，是按线程隔离的下一条消息偏好，模型 ID 随聊天消息发送；切换窗格不互相覆盖，正在运行的旧轮次完成不会覆盖新选择。线程删除会清理草稿选择，重新认证或切换设备后以服务端线程模型为准。推理强度和权限模式仍为设备级设置。OMP 的模糊 ID、角色别名和 thinking 后缀尚未移植。RPC 客户端仍使用 `get_available_models` / `set_model`。OMP 格式的 `set_model` 成功回执直接返回与列表一致的模型描述；旧 `model` 参数请求保留 `{model: "provider/model"}` 回执。描述只公开已配置的名称、API、推理标志和已知上下文/输出上限，不虚构价格、输入模态或其他 OMP catalog 能力，因此尚非完整 OMP Model 对象。浏览器 `auth_ok.models` 仍保持原来的规范 ID 目录。
+
+`get_subagent_messages` 同时携带 `subagentId` 和 `sessionFile` 时，两者必须指向同一个子任务；`fromByte` 只能是非负整数，不能是 null、字符串或小数。单独使用任一标识仍受当前线程范围限制。

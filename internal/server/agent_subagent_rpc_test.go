@@ -332,6 +332,33 @@ func TestSubagentRPCWireContract(t *testing.T) {
 	}
 	// Transcript reads use the bounded rdev output window and remain a normal
 	// correlated RPC response even before the subagent has produced output.
+	for _, selector := range []map[string]any{
+		{"subagentId": child.ID, "sessionFile": "rdev://subagent/other"},
+		{"subagentId": child.ID, "fromByte": nil},
+		{"subagentId": child.ID, "fromByte": -1},
+		{"subagentId": child.ID, "fromByte": 1.5},
+		{"subagentId": child.ID, "fromByte": "0"},
+	} {
+		selector["type"], selector["id"] = "get_subagent_messages", "invalid-messages"
+		raw, _ := json.Marshal(selector)
+		sendAgentOp(t, socket, string(raw))
+		reply := waitRawMsg(t, rec.msgs, "invalid message selector", func(m map[string]json.RawMessage) bool { return string(m["id"]) == `"invalid-messages"` })
+		if string(reply["success"]) != "false" || string(reply["code"]) != `"invalid_request"` || len(reply["data"]) != 0 {
+			t.Fatalf("invalid selector exposed data: %s", reply)
+		}
+	}
+	for _, selector := range []map[string]any{
+		{"sessionFile": "rdev://subagent/" + child.ID},
+		{"subagentId": child.ID, "sessionFile": "rdev://subagent/" + child.ID},
+	} {
+		selector["type"], selector["id"] = "get_subagent_messages", "valid-messages"
+		raw, _ := json.Marshal(selector)
+		sendAgentOp(t, socket, string(raw))
+		reply := waitRawMsg(t, rec.msgs, "valid message selector", func(m map[string]json.RawMessage) bool { return string(m["id"]) == `"valid-messages"` })
+		if string(reply["success"]) != "true" {
+			t.Fatalf("valid selector rejected: %s", reply)
+		}
+	}
 	transcriptRaw, _ := json.Marshal(map[string]any{"type": "get_subagent_messages", "id": "messages-1", "thread": th.id, "subagentId": child.ID, "fromByte": 0})
 	sendAgentOp(t, socket, string(transcriptRaw))
 	messages := waitRawMsg(t, rec.msgs, "subagent messages", func(m map[string]json.RawMessage) bool { return string(m["type"]) == `"response"` })

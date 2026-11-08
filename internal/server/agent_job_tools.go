@@ -465,6 +465,10 @@ func (h *agentWSHandler) handleGetSubagentMessages(ac *agentConn, request agentM
 	if threadID == "" {
 		threadID = ac.current
 	}
+	if request.SubagentID != "" && request.SessionFile != "" && request.SessionFile != "rdev://subagent/"+request.SubagentID {
+		h.writeRPCError(ac, request, "invalid_request", "subagentId and sessionFile must identify the same subagent")
+		return
+	}
 	if request.SubagentID == "" && request.SessionFile == "" {
 		h.writeRPCError(ac, request, "invalid_request", "subagentId or sessionFile is required")
 		return

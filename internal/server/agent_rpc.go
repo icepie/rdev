@@ -214,7 +214,7 @@ func (h *agentWSHandler) handleAgentRPCFrame(ac *agentConn, raw []byte) bool {
 		}
 		if raw, ok := fields["fromByte"]; ok {
 			var value int64
-			if json.Unmarshal(raw, &value) != nil || value < 0 {
+			if string(raw) == "null" || json.Unmarshal(raw, &value) != nil || value < 0 {
 				fail("invalid_request", "fromByte must be a non-negative integer")
 				return true
 			}
@@ -677,7 +677,7 @@ func (h *agentWSHandler) handleRPCAvailableCommands(ac *agentConn, request agent
 		{"name": "remove_queued_message", "params": map[string]any{"message": "string", "queue": "steering|followUp", "queueId": "string?"}},
 		{"name": "promote_queued_message", "params": map[string]any{"message": "string", "queueId": "string?"}},
 		{"name": "compact", "params": map[string]any{"customInstructions": "string?"}},
-		{"name": "get_subagents"}, {"name": "get_subagent_messages"},
+		{"name": "get_subagents"}, {"name": "get_subagent_messages", "params": map[string]any{"subagentId": "string?", "sessionFile": "string?", "fromByte": "non-negative integer?", "thread": "string?"}},
 		{"name": "steer_subagent", "params": map[string]any{"subagentId": "string", "message": "string"}},
 		{"name": "cancel_subagent", "params": map[string]any{"subagentId": "string"}},
 	}
