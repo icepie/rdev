@@ -51,9 +51,13 @@ func (s *Server) removeAgentFileReq(requestID string) {
 }
 
 func (s *Server) registerAgentFileTask(taskID string) *agentFileTask {
+	return s.registerBufferedFileTask(taskID, 64)
+}
+
+func (s *Server) registerBufferedFileTask(taskID string, chunks int) *agentFileTask {
 	task := &agentFileTask{
 		events: make(chan *protocol.Message, 8),
-		chunks: make(chan agentChunk, 64),
+		chunks: make(chan agentChunk, chunks),
 	}
 	s.agentFileMu.Lock()
 	s.agentFileTasks[taskID] = task

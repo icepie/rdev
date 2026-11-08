@@ -134,3 +134,22 @@ it("previews HTML in an isolated frame, preserves it across source toggles and r
   expect(host.querySelector('[data-source]').textContent).toBe('<h1>Other</h1>');
  } finally {await dispose();}
 });
+
+it("renders native video controls without treating the media URL as file text", async () => {
+ const state = { ...ready('/api/media/fixture'), encoding:'url', mime:'video/mp4' };
+ const {host, render, dispose} = await mount({path:'/clip.mp4', state});
+ try {
+  const video = host.querySelector('video');
+  expect(video.getAttribute('src')).toBe('/api/media/fixture');
+  expect(video.controls).toBe(true);
+  expect(video.preload).toBe('metadata');
+  expect(host.querySelector('[data-source]')).toBeNull();
+  expect(button(host,'Copy file contents')).toBeUndefined();
+  expect(button(host,'Toggle line wrap')).toBeUndefined();
+  await act(async () => video.dispatchEvent(new Event('error')));
+  expect(host.querySelector('[role="status"]').textContent).toContain('Unable to play video');
+  await render({path:'/clip.mp4',state:{...state,content:'/api/media/refreshed'}});
+  expect(host.querySelector('video')).not.toBe(video);
+  expect(host.querySelector('[role="status"]')).toBeNull();
+ } finally {await dispose();}
+});

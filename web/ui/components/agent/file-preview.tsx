@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { File as PierreFile, type FileContents, type FileOptions } from "@pierre/diffs/react";
 import { FileSelectionMenu } from "./file-selection-menu";
+import { VideoFilePreview } from "./video-file-preview";
 import { HtmlFilePreview } from "./html-file-preview";
 import { CsvFilePreview } from "./csv-preview";
 import { ImageLightbox } from "../image-lightbox";
@@ -111,7 +112,7 @@ function FilePreviewContent({
             </button>
           )}
           {(viewMode === "source" || !hasPreview) &&
-            state?.encoding !== "base64" && (
+            !state?.encoding && (
             <button
               type="button"
               className={headerIconBtn}
@@ -124,7 +125,7 @@ function FilePreviewContent({
               <Icon name="TextWrap" />
             </button>
           )}
-          {state?.status === "ready" && state.encoding !== "base64" && (
+          {state?.status === "ready" && !state.encoding && (
             <button type="button" className={headerIconBtn}
               title={t("agent.copyFileContents")} aria-label={t("agent.copyFileContents")}
               onClick={() => void copyText(state.content)}>
@@ -166,7 +167,9 @@ function FilePreviewContent({
             className={`relative min-h-0 flex-1 ${(isCSV || isHTML) && viewMode === "preview" ? "overflow-hidden" : "overflow-auto"}`}
           >
             {isHTML && state.encoding !== "base64" && <HtmlFilePreview content={state.content} name={base} hidden={viewMode !== "preview"} />}
-            {isHTML && state.encoding !== "base64" && viewMode === "preview" ? null : state.encoding === "base64" && state.mime ? (
+            {state.encoding === "url" && state.mime?.startsWith("video/") ? (
+              <VideoFilePreview key={state.content} src={state.content} name={base} t={t} />
+            ) : isHTML && state.encoding !== "base64" && viewMode === "preview" ? null : state.encoding === "base64" && state.mime ? (
               <div className="min-h-full w-full p-4" style={IMAGE_TRANSPARENCY_CHECKER_STYLE}>
                 <button type="button" className="block w-full cursor-zoom-in" aria-label={t("agent.openImagePreview", { name: base })} onClick={() => setImageOpen(true)}>
                   <img src={`data:${state.mime};base64,${state.content}`} alt={base}

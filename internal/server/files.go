@@ -497,7 +497,10 @@ func (h *filesWSHandler) handleRead(socket *fileSocket, msg fileMsg) {
 	h.srv.goAgent(func() {
 		reply := fileMsg{Op: "file_content", DeviceID: client.ID, RequestID: msg.RequestID, Path: msg.Path}
 		var err error
-		if mime := imageMIME(msg.Path); mime != "" {
+		if mime := videoMIME(msg.Path); mime != "" {
+			reply.Content, err = h.srv.grantMedia(client, msg.Path)
+			reply.Encoding, reply.Mime = "url", mime
+		} else if mime := imageMIME(msg.Path); mime != "" {
 			reply.Content, err = h.srv.probeReadImage(client.ID, ".", msg.Path)
 			reply.Encoding, reply.Mime = "base64", mime
 		} else {

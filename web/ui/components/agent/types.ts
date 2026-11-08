@@ -136,7 +136,7 @@ export interface FilePreviewState {
   truncated: boolean;
   /* Error message from the file_content frame (missing/binary/offline). */
   message: string;
-  /* Image previews: content is base64, mime is the <img> type. Absent for
+  /* Images use base64; video uses url with a scoped media endpoint. Absent for
    * plain-text reads. */
   encoding?: string;
   mime?: string;

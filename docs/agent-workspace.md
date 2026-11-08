@@ -48,7 +48,7 @@ Agent 的 write_file/edit 使用按设备与路径隔离、可取消的写入锁
 
 - 提供方/模型配置的 `api` 支持 `openai-completions`（默认）、`openai-responses` 和 `anthropic-messages`。Responses SSE 保留文本、推理摘要、函数调用、usage 和图片输入；使用 `store:false` 并持久化原始输出条目，限定同提供方/地址/模型回放。失败或取消后不保留可执行的未完成调用或原始回放条目；压缩与 subagent 继承所选协议。原始加密推理不会发送给浏览器，也不写入 chat-completions 请求。Anthropic 原生 Messages 支持文本/工具/图片及带签名和隐藏思考块，使用独立的同路由回放状态；模型的 `maxTokens`、`thinking.mode`、可选 `budgetTokens`/`supportsDisplay` 规则见 README。协议范围不包括 Responses WebSocket、供应商托管工具、Anthropic OAuth/Bedrock/Vertex 或 OMP RPC 全量兼容。
 
-- 独立 Files 页与 Agent 共用文件预览：点击文件名预览文本、Markdown、HTML、CSV 表格或图片，下载使用独立按钮；窄屏使用抽屉，提供刷新、下载和关闭。`/files` 的 `read` 请求携带 `deviceId`、`requestId`、`path`，返回 `file_content`，包含 `content`、`truncated`、可选 `encoding`/`mime` 或 `message`。沿用设备鉴权，不依赖 Agent 模型配置；过期响应不会替换当前预览。HTML/HTM 默认以隔离 iframe 预览，支持内联脚本/样式和嵌入资源；切换源码保留交互状态，刷新替换文档，暂不提供相对/远程资源加载。CSV 默认显示 BB 样式虚拟表格（前 500 数据行、100 列），可切换源码或复制已加载文本；图片可进入共用全屏缩放预览。切换文件清理预览/选区状态，桌面弹窗及窄屏抽屉内的图片关闭后都返回原预览。
+- 独立 Files 页与 Agent 共用文件预览：点击文件名预览文本、Markdown、HTML、CSV 表格、视频或图片，下载使用独立按钮；窄屏使用抽屉，提供刷新、下载和关闭。`/files` 的 `read` 请求携带 `deviceId`、`requestId`、`path`，返回 `file_content`，包含 `content`、`truncated`、可选 `encoding`/`mime` 或 `message`。沿用设备鉴权，不依赖 Agent 模型配置；过期响应不会替换当前预览。HTML/HTM 默认以隔离 iframe 预览，支持内联脚本/样式和嵌入资源；切换源码保留交互状态，刷新替换文档，暂不提供相对/远程资源加载。CSV 默认显示 BB 样式虚拟表格（前 500 数据行、100 列），可切换源码或复制已加载文本；图片可进入共用全屏缩放预览。切换文件清理预览/选区状态，桌面弹窗及窄屏抽屉内的图片关闭后都返回原预览。
 
 - 工具失败状态保存并恢复；chat-completions/Responses 不新增此字段，Anthropic 将其映射为原生 tool_result.is_error；旧记录未保存该状态时不根据结果文字猜测。历史结果按所属助手响应匹配，避免调用 ID 跨轮复用串结果；仅含思考内容的消息也保留。
 
@@ -89,3 +89,5 @@ Agent 的 write_file/edit 使用按设备与路径隔离、可取消的写入锁
 Agent 草稿、已发送图片及 read_file 图片使用 BB 全屏预览。支持滚轮/触控缩放、放大后拖动、适应屏幕、Esc 关闭；同一条消息或草稿有多张图时支持左右按钮/方向键循环切换。关闭恢复触发缩略图的焦点。缩放上限 8 倍，切图重置视图；透明图片显示跟随主题的棋盘格。
 
 - 工具参数按声明的 JSON Schema 校验：直接模型调用在审批/执行前检查必填字段、类型、枚举和范围；错误作为配对工具结果返回，模型可在下一轮修正。服务端模式的 device_tool 在执行所选内层工具前也校验其参数。write_file 缺少 content 或传 null 会失败，明确传空字符串仍表示写入空文件。不会自动改写参数或套用 OMP 的参数修复规则。
+
+- 视频预览支持浏览器可解码的 MP4/M4V/WebM/OGV/MOV，使用原生控制条和 HTTP Range，无需整文件下载到内存。需要支持 `length` 下载范围的设备客户端；旧客户端会提示播放失败。预览地址只授权单个设备文件，有效一小时，设备密码变更或服务端重启后失效，刷新可重新获取。每次设备读取最多512KiB、超时15秒，最多16个并发 HTTP 媒体请求；不提供转码。

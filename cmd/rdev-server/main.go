@@ -409,6 +409,7 @@ Examples:
 	mux.HandleFunc("/gpu-desktop/", srv.HandleGPUDesktopProxy)
 	mux.HandleFunc("/session", srv.HandleSessionAttachWS)
 	mux.HandleFunc("/batch", splitPageAndWebSocket(srv.StaticPageHandler("app.html"), srv.HandleBatchWS))
+	mux.HandleFunc("/api/media/", srv.HandleMedia)
 	mux.HandleFunc("/files", splitPageAndWebSocket(srv.StaticPageHandler("app.html"), srv.HandleFilesWS))
 	mux.HandleFunc("/agent", splitPageAndWebSocket(srv.StaticPageHandler("app.html"), srv.HandleAgentWS))
 	mux.HandleFunc("/sessions", srv.StaticPageHandler("app.html"))

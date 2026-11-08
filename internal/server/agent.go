@@ -2163,6 +2163,18 @@ func (h *agentWSHandler) handleFileRead(ac *agentConn, path, requestID string) {
 		switch {
 		case cwd == "":
 			reply.Message = "no working directory"
+		case videoMIME(path) != "":
+			client, ok := srv.GetClient(entry.deviceID)
+			if !ok {
+				reply.Message = "device offline"
+				break
+			}
+			url, err := srv.grantMedia(client, resolveDevicePath(clientOS(client), cwd, path))
+			if err != nil {
+				reply.Message = err.Error()
+			} else {
+				reply.Content, reply.Encoding, reply.Mime = url, "url", videoMIME(path)
+			}
 		case imageMIME(path) != "":
 			/* Image preview: base64-encoded body + mime; the browser renders
 			 * an <img> instead of the text view. */

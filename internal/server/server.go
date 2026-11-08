@@ -568,6 +568,9 @@ type Server struct {
 	fileResults        map[string]chan *protocol.Message
 	fileRequests       map[string]*fileSocket
 	fileTasks          map[string]*fileTaskRoute
+	mediaMu            sync.Mutex
+	mediaGrants        map[string]mediaGrant
+	mediaSlots         chan struct{}
 	fileMu             sync.RWMutex
 	agentFileReqs      map[string]chan *protocol.Message
 	agentFileTasks     map[string]*agentFileTask
