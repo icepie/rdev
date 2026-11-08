@@ -54,6 +54,7 @@ type agentMsg struct {
 	History       []agentHistoryEntry `json:"history,omitempty"`
 	Running       bool                `json:"running,omitempty"`
 	ID            string              `json:"id,omitempty"`
+	JobID         string              `json:"jobId,omitempty"`
 	Name          string              `json:"name,omitempty"`
 	Args          string              `json:"args,omitempty"`
 	Result        string              `json:"result,omitempty"`
@@ -1342,6 +1343,8 @@ func (h *agentWSHandler) OnMessage(socket *gws.Conn, message *gws.Message) {
 		h.handleJobs(ac, msg.Thread, msg.ID, false)
 	case "cancel_job":
 		h.handleJobs(ac, msg.Thread, msg.ID, true)
+	case "steer_job":
+		h.handleJobGuidance(ac, msg)
 	case "chat":
 		h.handleChat(ac, msg.Text, msg.Model, msg.Thread, msg.Images)
 	case "approve":

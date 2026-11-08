@@ -254,3 +254,35 @@ func (h *agentWSHandler) handleJobs(ac *agentConn, threadID, id string, cancel b
 		ac.writeJSON(agentMsg{Op: "jobs", Thread: threadID, Items: raw})
 	}
 }
+
+// Acknowledge only the requesting socket; guidance is not a foreground turn.
+// ID identifies the request, JobID the target. A rejection never clears a draft.
+func (h *agentWSHandler) handleJobGuidance(ac *agentConn, request agentMsg) {
+	s := h.srv
+	s.agentSessionsMu.Lock()
+	threadID := request.Thread
+	if threadID == "" {
+		threadID = ac.current
+	}
+	var jobs *agentJobs
+	if ac.entry != nil {
+		if thread := ac.entry.threads[threadID]; thread != nil {
+			jobs = thread.jobs
+		}
+	}
+	s.agentSessionsMu.Unlock()
+	reply := agentMsg{Op: "job_steered", Thread: threadID, ID: request.ID, JobID: request.JobID}
+	var err error
+	if request.ID == "" {
+		err = fmt.Errorf("guidance request ID is required")
+	} else if jobs == nil {
+		err = fmt.Errorf("unknown thread")
+	} else {
+		err = jobs.Steer(request.JobID, request.Text)
+	}
+	if err != nil {
+		reply.IsError = true
+		reply.Message = err.Error()
+	}
+	ac.writeJSON(reply)
+}

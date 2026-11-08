@@ -49,13 +49,14 @@ export interface AgentJob {
   detailState?: AgentJob["state"];
   result?: string;
   error?: string;
+  pendingGuidance?: string[];
 }
 
 function parseJob(value: unknown): AgentJob | null {
   if (!value || typeof value !== "object") return null;
   const job = value as Record<string, unknown>;
   if (typeof job.id !== "string" || !["running", "completed", "failed", "canceled"].includes(String(job.state))) return null;
-  return { started: asString(job.started), finished: asString(job.finished), id: job.id, kind: asString(job.kind), label: asString(job.label), state: job.state as AgentJob["state"], output: asString(job.output), result: asString(job.result), error: asString(job.error) };
+  return { pendingGuidance: parseStringArray(job.pendingGuidance), started: asString(job.started), finished: asString(job.finished), id: job.id, kind: asString(job.kind), label: asString(job.label), state: job.state as AgentJob["state"], output: asString(job.output), result: asString(job.result), error: asString(job.error) };
 }
 
 export interface ThreadSinkState {
@@ -84,6 +85,7 @@ interface TurnCompletion {
 }
 
 export interface ThreadSinkOps {
+  jobGuidanceReplies: RefObject<Map<string, (reply: Record<string, unknown> | null) => void>>;
   setJobsError: Dispatch<SetStateAction<string>>;
   setJobs: Dispatch<SetStateAction<AgentJob[]>>;
   setItems: Dispatch<SetStateAction<TranscriptItem[]>>;
@@ -135,6 +137,7 @@ export function setLiveReplay(v: boolean): void {
 }
 
 export function useThreadSink(): ThreadSink {
+  const jobGuidanceReplies = useRef(new Map<string, (reply: Record<string, unknown> | null) => void>());
   const [jobsError, setJobsError] = useState("");
   const [jobs, setJobs] = useState<AgentJob[]>([]);
   const [items, setItems] = useState<TranscriptItem[]>([]);
@@ -306,6 +309,9 @@ export function useThreadSink(): ThreadSink {
   );
 
   const resetTransient = useCallback(() => {
+    const pendingGuidance = [...jobGuidanceReplies.current.values()];
+    jobGuidanceReplies.current.clear();
+    pendingGuidance.forEach(reply => reply(null));
     turnOpen.current = false;
     openToolIds.current.clear();
     setCurrentTool("");
@@ -330,6 +336,7 @@ export function useThreadSink(): ThreadSink {
 
   const ops = useMemo<ThreadSinkOps>(
     () => ({
+      jobGuidanceReplies,
       setJobs,
       setJobsError,
       setItems,
@@ -412,6 +419,13 @@ export function applyScopedMessage(
   t: Translator,
 ): void {
   switch (String(msg.op)) {
+    case "job_steered": {
+      const id = asString(msg.id);
+      const reply = ops.jobGuidanceReplies.current.get(id);
+      ops.jobGuidanceReplies.current.delete(id);
+      reply?.(msg);
+      return;
+    }
     case "job_error":
       ops.setJobsError(asString(msg.message) || t("common.error"));
       return;
@@ -424,6 +438,7 @@ export function applyScopedMessage(
         return [{
           ...job,
           detailState: old?.detailState,
+          pendingGuidance: old?.pendingGuidance,
           output: typeof raw.output === "string" ? job.output : old?.output,
           result: typeof raw.result === "string" ? job.result : old?.result,
           error: typeof raw.error === "string" ? job.error : old?.error,

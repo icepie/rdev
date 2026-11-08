@@ -1,3 +1,4 @@
+import { JobGuidance } from "./job-guidance";
 import { CommandOutputBody, commandOutputText } from "./command-output";
 import { useCopy } from "../../lib/clipboard";
 import { formatDuration } from "./transcript-rows";
@@ -75,9 +76,8 @@ export function JobsPanel({
   const duration = Number.isFinite(started)
     ? Math.max(0, (Number.isFinite(finished) ? finished : Date.now()) - started) : null;
   const running = jobs.filter((item) => item.state === "running").length;
-  if (!jobs.length && !open && !sink.state.jobsError) return null;
   return (
-    <div className="min-w-0">
+    <div className="min-w-0" hidden={!jobs.length && !open && !sink.state.jobsError}>
       <Button
         variant="ghost"
         size="sm"
@@ -164,9 +164,14 @@ export function JobsPanel({
                   <Markdown text={job.result || job.output || emptyOutput} />
                 </div>
               )}
+              {!!job.pendingGuidance?.length && <div className="mt-2 text-xs text-muted-foreground">
+                <p>{t("agent.jobs.guidancePending")}</p>
+                <ul className="list-disc space-y-1 pl-4">{job.pendingGuidance.map((text, index) => <li key={index} className="whitespace-pre-wrap break-words">{text}</li>)}</ul>
+              </div>}
               {job.error && <p role="alert" className="mt-2 whitespace-pre-wrap break-words text-destructive-text">{job.error}</p>}
             </div>
           )}
+          <JobGuidance job={job} threadId={threadId} ready={ready} ops={sink.ops} sendRaw={sendRaw} t={t} />
         </section>
       </DisclosureBody>
     </div>
