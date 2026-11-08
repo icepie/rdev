@@ -526,3 +526,38 @@ func (h *agentWSHandler) handleGetSubagentMessages(ac *agentConn, request agentM
 	raw, _ := json.Marshal(data)
 	ac.writeJSON(agentMsg{Type: "response", Command: request.Command, ID: request.ID, Success: &success, Data: raw})
 }
+
+// Native browser cancellation uses distinct request and job identities. The
+// legacy id-as-job-id operation remains available for older clients.
+func (h *agentWSHandler) handleCancelJob(ac *agentConn, request agentMsg) {
+	threadID := request.Thread
+	if threadID == "" {
+		threadID = ac.current
+	}
+	reply := agentMsg{Op: "job_cancelled", Thread: threadID, ID: request.ID, JobID: request.JobID}
+	var jobs *agentJobs
+	if ac.entry != nil {
+		h.srv.agentSessionsMu.Lock()
+		if th := ac.entry.threads[threadID]; th != nil {
+			jobs = th.jobs
+		}
+		h.srv.agentSessionsMu.Unlock()
+	}
+	var err error
+	switch {
+	case request.ID == "":
+		err = fmt.Errorf("cancellation request ID is required")
+	case jobs == nil:
+		err = fmt.Errorf("unknown thread")
+	case request.JobID == "all":
+		jobs.CancelAll()
+	default:
+		err = jobs.Cancel(request.JobID)
+	}
+	if err != nil {
+		reply.IsError, reply.Message = true, err.Error()
+	} else {
+		reply.Value = true // Request accepted, not proof that the worker exited.
+	}
+	ac.writeJSON(reply)
+}

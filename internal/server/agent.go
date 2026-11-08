@@ -1382,7 +1382,11 @@ func (h *agentWSHandler) OnMessage(socket *gws.Conn, message *gws.Message) {
 	case "get_jobs":
 		h.handleJobs(ac, msg.Thread, msg.ID, false)
 	case "cancel_job":
-		h.handleJobs(ac, msg.Thread, msg.ID, true)
+		if msg.JobID != "" {
+			h.handleCancelJob(ac, msg)
+		} else {
+			h.handleJobs(ac, msg.Thread, msg.ID, true)
+		}
 	case "cancel_subagent":
 		h.handleCancelSubagent(ac, msg)
 	case "get_subagents":

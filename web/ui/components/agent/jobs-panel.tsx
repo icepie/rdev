@@ -1,3 +1,4 @@
+import { JobCancel } from "./job-cancel";
 import { JobGuidance } from "./job-guidance";
 import { CommandOutputBody, commandOutputText } from "./command-output";
 import { useCopy } from "../../lib/clipboard";
@@ -147,16 +148,8 @@ export function JobsPanel({
                 {t(item.state === "running" && item.cancelRequested ? "agent.jobs.canceling" : `agent.jobs.${item.state}`)}
               </span>
               {item.state === "running" && (
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  disabled={!ready || item.cancelRequested}
-                  onClick={() =>
-                    sendRaw({ op: "cancel_job", thread: threadId, id: item.id })
-                  }
-                >
-                  {t("agent.cmd.stop")}
-                </Button>
+                <JobCancel key={`${threadId}:${item.id}`} job={item} threadId={threadId}
+                  ready={ready} ops={sink.ops} sendRaw={sendRaw} t={t} />
               )}
             </div>
           ))}

@@ -51,7 +51,7 @@ export function JobGuidance({ job, threadId, ready, ops, sendRaw, t }: {
       if (!pending.current.delete(id)) return;
       inFlight.current.delete(key);
       window.clearTimeout(timer);
-      ops.jobGuidanceReplies.current.delete(id);
+      ops.jobActionReplies.current.delete(id);
       const accepted = reply?.jobId === target && reply?.thread === threadId && reply?.isError !== true;
       setDraft(previous => ({
         ...previous,
@@ -62,7 +62,7 @@ export function JobGuidance({ job, threadId, ready, ops, sendRaw, t }: {
       }));
     };
     pending.current.set(id, () => settle(null));
-    ops.jobGuidanceReplies.current.set(id, settle);
+    ops.jobActionReplies.current.set(id, settle);
     timer = window.setTimeout(() => settle(null), 15000);
     if (!sendRaw({ op: "steer_job", id, jobId: target, thread: threadId, text })) settle(null);
   };

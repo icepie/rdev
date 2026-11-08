@@ -383,21 +383,21 @@ it('recognizes a loaded terminal detail even when omitempty removed empty result
   expect(sink.state.jobs[0]).toMatchObject({state:'completed',detailState:'completed',output:'',result:''});
 });
 
-it('routes guidance receipts without closing the foreground turn and settles on disconnect', async () => {
+it.each(['job_steered','job_cancelled'])('routes %s receipts without closing the foreground turn and settles on disconnect', async (op) => {
   const replies = [];
-  sink.ops.jobGuidanceReplies.current.set('guidance-1', message => replies.push(message));
+  sink.ops.jobActionReplies.current.set('guidance-1', message => replies.push(message));
   await frame({op:'turn_start',text:'task'});
   await frame({op:'delta',text:'before'});
-  await frame({op:'job_steered',id:'unknown',thread:'a',jobId:'child'});
+  await frame({op,id:'unknown',thread:'a',jobId:'child'});
   expect(replies).toEqual([]);
-  await frame({op:'job_steered',id:'guidance-1',thread:'a',jobId:'child'});
+  await frame({op,id:'guidance-1',thread:'a',jobId:'child'});
   expect(replies).toMatchObject([{id:'guidance-1',jobId:'child'}]);
-  expect(sink.ops.jobGuidanceReplies.current.size).toBe(0);
+  expect(sink.ops.jobActionReplies.current.size).toBe(0);
   expect(sink.ops.turnOpen.current).toBe(true);
-  sink.ops.jobGuidanceReplies.current.set('guidance-2', message => replies.push(message));
+  sink.ops.jobActionReplies.current.set('guidance-2', message => replies.push(message));
   await act(async () => sink.ops.resetTransient());
   expect(replies.at(-1)).toBeNull();
-  expect(sink.ops.jobGuidanceReplies.current.size).toBe(0);
+  expect(sink.ops.jobActionReplies.current.size).toBe(0);
 });
 
 it('retains pending guidance on summaries and replaces it on explicit details', async () => {

@@ -13,7 +13,7 @@ it('correlates replies, retains drafts across targets and failures, and cleans u
   const callbacks = new Map();
   const sent = [];
   const props = {job:{id:'a',kind:'subagent',state:'running'}, threadId:'thread-a', ready:true,
-    ops:{jobGuidanceReplies:{current:callbacks}}, sendRaw:payload => {sent.push(payload);return true;}, t:key=>key};
+    ops:{jobActionReplies:{current:callbacks}}, sendRaw:payload => {sent.push(payload);return true;}, t:key=>key};
   const render = () => act(async () => root.render(createElement(JobGuidance,props)));
   const input = () => host.querySelector('textarea');
   const type = text => act(async () => {

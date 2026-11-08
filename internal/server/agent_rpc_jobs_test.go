@@ -91,6 +91,24 @@ func TestJobsRPCDuringForegroundTurn(t *testing.T) {
 	call("get_jobs", "", "missing-thread", false)
 	call("cancel_job", "", th.id, false)
 	call("cancel_job", other.ID, th.id, false)
+	// The browser uses a native receipt with separate request/job identities.
+	for _, target := range []string{other.ID, job.ID} {
+		raw, _ := json.Marshal(map[string]any{"op": "cancel_job", "id": "native-cancel", "jobId": target, "thread": th.id})
+		sendAgentOp(t, socket, string(raw))
+		receipt := waitRawMsg(t, rec.msgs, "native cancel receipt", func(m map[string]json.RawMessage) bool {
+			return string(m["op"]) == `"job_cancelled"`
+		})
+		if string(receipt["id"]) != `"native-cancel"` || string(receipt["jobId"]) != `"`+target+`"` || string(receipt["thread"]) != `"`+th.id+`"` {
+			t.Fatalf("uncorrelated cancellation: %s", receipt)
+		}
+		if target == other.ID {
+			if string(receipt["isError"]) != "true" {
+				t.Fatalf("cross-thread cancellation accepted: %s", receipt)
+			}
+		} else if string(receipt["value"]) != "true" || string(receipt["isError"]) == "true" {
+			t.Fatalf("local cancellation rejected: %s", receipt)
+		}
+	}
 	reply = call("cancel_job", job.ID, th.id, true)
 	if string(reply["data"]) != `{"cancellationRequested":true}` {
 		t.Fatalf("wrong cancellation acknowledgement: %s", reply)
@@ -114,6 +132,9 @@ func TestJobsRPCDuringForegroundTurn(t *testing.T) {
 	// all earlier frames are inspected, and none may contain the caller's reply.
 	sendAgentOp(t, observerSocket, `{"type":"get_jobs","id":"observer-barrier"}`)
 	waitRawMsg(t, observer.msgs, "observer barrier", func(frame map[string]json.RawMessage) bool {
+		if string(frame["op"]) == `"job_cancelled"` {
+			t.Fatalf("native receipt leaked: %s", frame)
+		}
 		if string(frame["type"]) != `"response"` {
 			return false
 		}

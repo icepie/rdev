@@ -203,6 +203,7 @@ export const THREAD_SCOPED_OPS: Record<string, true> = {
   job: true,
   job_error: true,
   job_steered: true,
+  job_cancelled: true,
   changes: true,
   diff: true,
   thread_meta: true,
@@ -239,6 +240,7 @@ export const TRANSCRIPT_OPS: Record<string, true> = {
   job: true,
   job_error: true,
   job_steered: true,
+  job_cancelled: true,
 };
 
 /* auth_ok / thread_switched / thread_peeked history → transcript items,

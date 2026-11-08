@@ -90,7 +90,7 @@ interface TurnCompletion {
 
 export interface ThreadSinkOps {
   setJobsRevision: Dispatch<SetStateAction<number>>;
-  jobGuidanceReplies: RefObject<Map<string, (reply: Record<string, unknown> | null) => void>>;
+  jobActionReplies: RefObject<Map<string, (reply: Record<string, unknown> | null) => void>>;
   setJobsError: Dispatch<SetStateAction<string>>;
   setJobs: Dispatch<SetStateAction<AgentJob[]>>;
   setItems: Dispatch<SetStateAction<TranscriptItem[]>>;
@@ -144,7 +144,7 @@ export function setLiveReplay(v: boolean): void {
 }
 
 export function useThreadSink(): ThreadSink {
-  const jobGuidanceReplies = useRef(new Map<string, (reply: Record<string, unknown> | null) => void>());
+  const jobActionReplies = useRef(new Map<string, (reply: Record<string, unknown> | null) => void>());
   const [jobsError, setJobsError] = useState("");
   const [jobsRevision, setJobsRevision] = useState(0);
   const [jobs, setJobs] = useState<AgentJob[]>([]);
@@ -319,9 +319,9 @@ export function useThreadSink(): ThreadSink {
   );
 
   const resetTransient = useCallback(() => {
-    const pendingGuidance = [...jobGuidanceReplies.current.values()];
-    jobGuidanceReplies.current.clear();
-    pendingGuidance.forEach(reply => reply(null));
+    const pendingActions = [...jobActionReplies.current.values()];
+    jobActionReplies.current.clear();
+    pendingActions.forEach(reply => reply(null));
     turnOpen.current = false;
     openToolIds.current.clear();
     setCurrentTool("");
@@ -348,7 +348,7 @@ export function useThreadSink(): ThreadSink {
 
   const ops = useMemo<ThreadSinkOps>(
     () => ({
-      jobGuidanceReplies,
+      jobActionReplies,
       setJobsRevision,
       setJobs,
       setJobsError,
@@ -437,10 +437,11 @@ export function applyScopedMessage(
     case "jobs_changed":
       ops.setJobsRevision(previous => previous + 1);
       return;
+    case "job_cancelled":
     case "job_steered": {
       const id = asString(msg.id);
-      const reply = ops.jobGuidanceReplies.current.get(id);
-      ops.jobGuidanceReplies.current.delete(id);
+      const reply = ops.jobActionReplies.current.get(id);
+      ops.jobActionReplies.current.delete(id);
       reply?.(msg);
       return;
     }
