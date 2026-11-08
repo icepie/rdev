@@ -61,6 +61,7 @@ function parseJob(value: unknown): AgentJob | null {
 }
 
 export interface ThreadSinkState {
+  jobsRevision: number;
   jobs: AgentJob[];
   jobsError: string;
   items: TranscriptItem[];
@@ -86,6 +87,7 @@ interface TurnCompletion {
 }
 
 export interface ThreadSinkOps {
+  setJobsRevision: Dispatch<SetStateAction<number>>;
   jobGuidanceReplies: RefObject<Map<string, (reply: Record<string, unknown> | null) => void>>;
   setJobsError: Dispatch<SetStateAction<string>>;
   setJobs: Dispatch<SetStateAction<AgentJob[]>>;
@@ -140,6 +142,7 @@ export function setLiveReplay(v: boolean): void {
 export function useThreadSink(): ThreadSink {
   const jobGuidanceReplies = useRef(new Map<string, (reply: Record<string, unknown> | null) => void>());
   const [jobsError, setJobsError] = useState("");
+  const [jobsRevision, setJobsRevision] = useState(0);
   const [jobs, setJobs] = useState<AgentJob[]>([]);
   const [items, setItems] = useState<TranscriptItem[]>([]);
   const [todos, setTodos] = useState<TodoItem[]>([]);
@@ -338,6 +341,7 @@ export function useThreadSink(): ThreadSink {
   const ops = useMemo<ThreadSinkOps>(
     () => ({
       jobGuidanceReplies,
+      setJobsRevision,
       setJobs,
       setJobsError,
       setItems,
@@ -376,8 +380,8 @@ export function useThreadSink(): ThreadSink {
   );
 
   const state = useMemo<ThreadSinkState>(
-    () => ({ jobs, jobsError, items, todos, queue, queueIds, running, stopping, turnUsage, currentTool, workingSince }),
-    [jobs, jobsError, items, todos, queue, queueIds, running, stopping, turnUsage, currentTool, workingSince],
+    () => ({ jobsRevision, jobs, jobsError, items, todos, queue, queueIds, running, stopping, turnUsage, currentTool, workingSince }),
+    [jobsRevision, jobs, jobsError, items, todos, queue, queueIds, running, stopping, turnUsage, currentTool, workingSince],
   );
 
   return useMemo(() => ({ state, ops }), [state, ops]);
@@ -420,6 +424,9 @@ export function applyScopedMessage(
   t: Translator,
 ): void {
   switch (String(msg.op)) {
+    case "jobs_changed":
+      ops.setJobsRevision(previous => previous + 1);
+      return;
     case "job_steered": {
       const id = asString(msg.id);
       const reply = ops.jobGuidanceReplies.current.get(id);

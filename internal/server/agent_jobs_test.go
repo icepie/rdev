@@ -362,3 +362,36 @@ func TestCancellationPendingRemainsVisibleUntilWorkersExit(t *testing.T) {
 		}
 	}
 }
+
+func TestCancellationNotifiesOutsideLockOnlyOnce(t *testing.T) {
+	jobs := newAgentJobs(nil)
+	defer jobs.Close()
+	release := make(chan struct{})
+	defer close(release)
+	changes := make(chan []agentJobSnapshot, 4)
+	jobs.onChange = func() { changes <- jobs.List() }
+	job, err := jobs.Start("shell", "cleanup", func(ctx context.Context, _ func(string)) (string, error) {
+		<-ctx.Done()
+		<-release
+		return "", ctx.Err()
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-changes // admission
+	if err := jobs.Cancel(job.ID); err != nil {
+		t.Fatal(err)
+	}
+	if snapshot := <-changes; len(snapshot) != 1 || !snapshot[0].CancelRequested {
+		t.Fatal("cancellation change was not readable")
+	}
+	if err := jobs.Cancel(job.ID); err != nil {
+		t.Fatal(err)
+	}
+	jobs.CancelAll()
+	select {
+	case <-changes:
+		t.Fatal("repeated cancellation published duplicate changes")
+	default:
+	}
+}

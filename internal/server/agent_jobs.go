@@ -188,34 +188,44 @@ func (m *agentJobs) Read(id string) (agentJobSnapshot, error) {
 
 func (m *agentJobs) Cancel(id string) error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	job := m.jobs[id]
 	if job == nil {
+		m.mu.Unlock()
 		return fmt.Errorf("unknown job %q in this thread", id)
 	}
-	job.requestCancel()
+	changed := job.requestCancel() && !m.closed
+	m.mu.Unlock()
+	if changed && m.onChange != nil {
+		m.onChange()
+	}
 	return nil
 }
 
 // Called with the manager lock held. Requesting cancellation does not free a
 // running slot: the worker must actually exit before completion is published.
-func (job *agentJob) requestCancel() {
+func (job *agentJob) requestCancel() bool {
 	if job.snapshot.State != "running" || job.snapshot.CancelRequested {
-		return
+		return false
 	}
 	job.snapshot.CancelRequested = true
 	if job.guidance != nil {
 		job.guidance.close()
 	}
 	job.cancel()
+	return true
 }
 
 // CancelAll affects only this thread's jobs, atomically with job admission.
 func (m *agentJobs) CancelAll() {
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	changed := false
 	for _, job := range m.jobs {
-		job.requestCancel()
+		changed = job.requestCancel() || changed
+	}
+	changed = changed && !m.closed
+	m.mu.Unlock()
+	if changed && m.onChange != nil {
+		m.onChange()
 	}
 }
 

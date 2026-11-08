@@ -67,7 +67,7 @@ export function JobsPanel({
       window.clearInterval(timer);
       document.removeEventListener("visibilitychange", syncVisibility);
     };
-  }, [ready, threadId, sendRaw, open, selected, detailLoaded]);
+  }, [ready, threadId, sendRaw, open, selected, detailLoaded, sink.state.jobsRevision]);
   const jobs = sink.state.jobs;
   const job = jobs.find((item) => item.id === selected);
   const emptyOutput = t(job?.state === "running" || !detailLoaded ? "agent.jobs.waiting" : "agent.jobs.noOutput");

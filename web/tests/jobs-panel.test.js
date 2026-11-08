@@ -60,6 +60,10 @@ it("isolates detail requests by thread and refreshes on visibility without polli
       thread: "thread-a",
       id: "job-a",
     });
+    sent.length = 0;
+    props.sink.state.jobsRevision = 1;
+    await render();
+    expect(sent).toEqual([{op:'get_jobs',thread:'thread-a'},{op:'get_jobs',thread:'thread-a',id:'job-a'}]);
     props.sink.state.jobs[0] = {...props.sink.state.jobs[0], cancelRequested: true};
     await render();
     const stoppingButton = [...document.querySelectorAll('button')].find(button => button.textContent === 'agent.cmd.stop');
@@ -118,6 +122,9 @@ it("isolates detail requests by thread and refreshes on visibility without polli
     await act(() => document.dispatchEvent(new window.Event("visibilitychange")));
     expect(vi.getTimerCount()).toBe(0);
     sent.length = 0;
+    props.sink.state.jobsRevision = 2;
+    await render();
+    expect(sent).toEqual([]);
     await act(async () => vi.advanceTimersByTimeAsync(20000));
     expect(sent).toEqual([]);
     Object.defineProperty(document, "hidden", { configurable: true, value: false });

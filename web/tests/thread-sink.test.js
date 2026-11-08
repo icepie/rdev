@@ -420,3 +420,14 @@ it('tracks cancellation requests from detail and list snapshots until a terminal
   await frame({op:'job',items:{...job,state:'canceled'}});
   expect(sink.state.jobs[0]).toMatchObject({state:'canceled',cancelRequested:false});
 });
+
+it('job invalidations trigger refresh without replacing data or closing the active turn', async () => {
+  await frame({op:'job',items:{id:'work',kind:'shell',label:'work',state:'running',output:'keep'}});
+  await frame({op:'turn_start',text:'foreground'});
+  await frame({op:'delta',text:'ongoing'});
+  const revision = sink.state.jobsRevision;
+  await frame({op:'jobs_changed',thread:'thread-a'});
+  expect(sink.state.jobsRevision).toBe(revision+1);
+  expect(sink.state.jobs[0].output).toBe('keep');
+  expect(sink.ops.turnOpen.current).toBe(true);
+});
