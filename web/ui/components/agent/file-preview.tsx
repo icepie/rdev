@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { File as PierreFile, type FileContents, type FileOptions } from "@pierre/diffs/react";
 import { FileSelectionMenu } from "./file-selection-menu";
+import { HtmlFilePreview } from "./html-file-preview";
 import { CsvFilePreview } from "./csv-preview";
 import { ImageLightbox } from "../image-lightbox";
 import { IMAGE_TRANSPARENCY_CHECKER_STYLE } from "../../lib/image-preview";
@@ -49,8 +50,9 @@ function FilePreviewContent({
   const ext = base.includes(".") ? (base.split(".").pop() ?? "").toLowerCase() : "";
   const isMarkdown = ext === "md" || ext === "markdown";
   const isCSV = ext === "csv";
-  const hasPreview = isMarkdown || isCSV;
-  /* BB renders Markdown and CSV previews by default. */
+  const isHTML = ext === "html" || ext === "htm";
+  const hasPreview = isMarkdown || isCSV || isHTML;
+  /* BB renders Markdown, CSV and HTML previews by default. */
   const [viewMode, setViewMode] = useState<"preview" | "source">(
     hasPreview && !lineRange ? "preview" : "source",
   );
@@ -161,9 +163,10 @@ function FilePreviewContent({
           )}
           <div
             ref={bodyRef}
-            className={`relative min-h-0 flex-1 ${isCSV && viewMode === "preview" ? "overflow-hidden" : "overflow-auto"}`}
+            className={`relative min-h-0 flex-1 ${(isCSV || isHTML) && viewMode === "preview" ? "overflow-hidden" : "overflow-auto"}`}
           >
-            {state.encoding === "base64" && state.mime ? (
+            {isHTML && state.encoding !== "base64" && <HtmlFilePreview content={state.content} name={base} hidden={viewMode !== "preview"} />}
+            {isHTML && state.encoding !== "base64" && viewMode === "preview" ? null : state.encoding === "base64" && state.mime ? (
               <div className="min-h-full w-full p-4" style={IMAGE_TRANSPARENCY_CHECKER_STYLE}>
                 <button type="button" className="block w-full cursor-zoom-in" aria-label={t("agent.openImagePreview", { name: base })} onClick={() => setImageOpen(true)}>
                   <img src={`data:${state.mime};base64,${state.content}`} alt={base}

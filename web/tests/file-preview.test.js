@@ -101,3 +101,36 @@ it("keeps nested desktop image previews interactive and closes only the top laye
   expect(document.activeElement).toBe(opener);
  } finally {await dispose();}
 });
+
+it("previews HTML in an isolated frame, preserves it across source toggles and replaces refreshed content", async () => {
+ const content = '<!doctype html><html lang="en"><head><title>Counter</title><style>body{margin:0}</style></head><body><input value="draft"><button onclick="this.textContent=2">1</button></body></html>';
+ const {host, render, dispose} = await mount({path:"/counter.html",state:ready(content)});
+ try {
+  const frame = host.querySelector('iframe');
+  expect(frame.title).toBe('counter.html');
+  expect(frame.getAttribute('sandbox')).toBe('allow-scripts');
+  expect(frame.getAttribute('referrerpolicy')).toBe('no-referrer');
+  const doc = new DOMParser().parseFromString(frame.srcdoc, 'text/html');
+  expect(doc.head.firstElementChild.httpEquiv).toBe('Content-Security-Policy');
+  expect(doc.head.firstElementChild.content).toContain("connect-src 'none'");
+  expect(doc.documentElement.lang).toBe('en');
+  expect(doc.querySelector('button').getAttribute('onclick')).toBe('this.textContent=2');
+  expect(doc.querySelector('style').textContent).toBe('body{margin:0}');
+  await act(async () => button(host, 'Show source').click());
+  expect(host.querySelector('iframe')).toBe(frame);
+  expect(frame.hidden).toBe(true);
+  expect(frame.hasAttribute('inert')).toBe(true);
+  expect(host.querySelector('[data-source]').textContent).toBe(content);
+  await act(async () => button(host, 'Copy file contents').click());
+  expect(copyText).toHaveBeenLastCalledWith(content);
+  await act(async () => button(host, 'Show preview').click());
+  expect(host.querySelector('iframe')).toBe(frame);
+  expect(frame.hidden).toBe(false);
+  await render({path:'/counter.html',state:ready('<h1>Updated</h1>')});
+  expect(frame.srcdoc).toContain('<h1>Updated</h1>');
+  await render({path:'/other.htm',state:ready('<h1>Other</h1>'),lineRange:{start:1,end:1}});
+  expect(host.querySelector('iframe')).not.toBe(frame);
+  expect(host.querySelector('iframe').hidden).toBe(true);
+  expect(host.querySelector('[data-source]').textContent).toBe('<h1>Other</h1>');
+ } finally {await dispose();}
+});
