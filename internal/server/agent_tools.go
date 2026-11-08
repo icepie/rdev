@@ -145,6 +145,9 @@ func (s *Server) routeAgentFileBinary(raw []byte) bool {
 // newDeviceTools builds the tool set bound to one device connection and one
 // thread working directory ("" = device default).
 func newDeviceTools(srv *Server, client *ClientConn, cwd string) []agent.Tool {
+	if client == nil {
+		return nil
+	}
 	shell := &shellTool{srv: srv, client: client, Cwd: cwd}
 	reader := &readFileTool{srv: srv, client: client, cwd: cwd}
 	writer := &writeFileTool{srv: srv, client: client, cwd: cwd}

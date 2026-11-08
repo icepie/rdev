@@ -40,6 +40,8 @@ import (
 // device, not by a browser connection: events are broadcast to every
 // attached socket and a reopened tab reattaches mid-run (auth_ok.running).
 type agentMsg struct {
+	Offline            bool                `json:"offline,omitempty"`
+	OfflineConfirmed   bool                `json:"offlineConfirmed,omitempty"`
 	Type               string              `json:"type,omitempty"`
 	Command            string              `json:"command,omitempty"`
 	Success            *bool               `json:"success,omitempty"`
@@ -114,10 +116,13 @@ type agentMsg struct {
 	Images  json.RawMessage `json:"images,omitempty"`
 	Working *agentWorking   `json:"working,omitempty"`
 	// Index is the dequeue payload: position of the queued follow-up to drop.
-	Index   int    `json:"index,omitempty"`
-	QueueID string `json:"queueId,omitempty"`
-	Restore bool   `json:"restore,omitempty"`
-	Removed bool   `json:"removed,omitempty"`
+	Index            int      `json:"index,omitempty"`
+	QueueID          string   `json:"queueId,omitempty"`
+	ExpectedText     *string  `json:"expectedText,omitempty"`
+	ExpectedQueueIDs []string `json:"expectedQueueIds,omitempty"`
+	BeforeID         string   `json:"beforeId,omitempty"`
+	Restore          bool     `json:"restore,omitempty"`
+	Removed          bool     `json:"removed,omitempty"`
 	// Canceled marks stopped frames: true when a running turn was canceled,
 	// false for the idle-stop ack.
 	Canceled bool `json:"canceled,omitempty"`
@@ -564,8 +569,8 @@ func (h *agentWSHandler) OnOpen(socket *gws.Conn) {
 		client = &ClientConn{ID: agentServerDeviceID}
 		ok = true
 	}
-	if !ok {
-		// 1013 signals a temporary service condition, allowing clients to retry.
+	if !ok && !h.adminBypass {
+		// Offline history needs admin authorization: device passwords cannot be checked without a live device.
 		socket.WriteClose(1013, []byte("device is temporarily offline"))
 		return
 	}
@@ -579,7 +584,7 @@ func (h *agentWSHandler) OnOpen(socket *gws.Conn) {
 		return
 	}
 
-	if client.Password != "" && !h.adminBypass {
+	if client != nil && client.Password != "" && !h.adminBypass {
 		ac.writeJSON(agentMsg{Op: "auth", Message: "Device '" + deviceID + "' requires password"})
 		return
 	}
@@ -605,9 +610,9 @@ func (s *Server) buildAgentSession(entry *agentSessionEntry, th *agentThread, cl
 		th.jobs = jobs
 	}
 	tools := s.agentBaseTools(entry, client, th.cwd)
-	if entry.deviceID != agentServerDeviceID {
+	if entry.deviceID != agentServerDeviceID && client != nil {
 		tools = append(tools, &backgroundTool{jobs: th.jobs, shell: &shellTool{srv: s, client: client, Cwd: th.cwd}})
-	} else {
+	} else if entry.deviceID == agentServerDeviceID {
 		tools = append(tools, &backgroundTool{jobs: th.jobs, resolveShell: func(device string) (*shellTool, error) {
 			tool, err := s.resolveDeviceTool(device, "shell")
 			if err != nil {
@@ -648,6 +653,10 @@ func (s *Server) buildAgentSession(entry *agentSessionEntry, th *agentThread, cl
 		jobs: th.jobs, config: cfg,
 		tools: func() []agent.Tool { return s.agentBaseTools(entry, client, cwd) },
 	})
+	if entry.deviceID != agentServerDeviceID && client == nil {
+		cfg.Tools = nil
+		cfg.SystemPrompt = "The device is offline. Discuss the existing conversation and historical context only. No tools are available. Do not claim to inspect or execute anything on the device. Historical observations may be outdated."
+	}
 	th.pendingReasoning = false
 	return agent.New(cfg)
 }
@@ -1278,6 +1287,7 @@ func (h *agentWSHandler) establish(ac *agentConn, client *ClientConn) {
 	}
 	ac.writeJSON(agentMsg{
 		Op:             "auth_ok",
+		Offline:        ac.deviceID != agentServerDeviceID && client == nil,
 		Device:         ac.deviceID,
 		Model:          model,
 		ModelName:      modelName,
@@ -1378,6 +1388,12 @@ func (h *agentWSHandler) OnMessage(socket *gws.Conn, message *gws.Message) {
 		return
 	}
 
+	if ac.deviceID != agentServerDeviceID {
+		if _, online := h.srv.GetClient(ac.deviceID); !online && (msg.Op == "steer" || msg.Op == "promote_queue" || msg.Op == "steer_job" || msg.Op == "steer_subagent") {
+			ac.sendErrorThread(msg.Thread, "Device offline: guidance and device jobs are unavailable")
+			return
+		}
+	}
 	switch msg.Op {
 	case "get_jobs":
 		h.handleJobs(ac, msg.Thread, msg.ID, false)
@@ -1394,6 +1410,26 @@ func (h *agentWSHandler) OnMessage(socket *gws.Conn, message *gws.Message) {
 	case "steer_job", "steer_subagent":
 		h.handleJobGuidance(ac, msg)
 	case "chat":
+		if ac.deviceID != agentServerDeviceID {
+			live, online := h.srv.GetClient(ac.deviceID)
+			if !online && (!msg.OfflineConfirmed || strings.HasPrefix(strings.TrimSpace(msg.Text), "/")) {
+				ac.sendErrorThread(msg.Thread, "Device offline: confirm historical-context chat first; device commands are unavailable")
+				return
+			}
+			h.srv.agentSessionsMu.Lock()
+			threadID := msg.Thread
+			if threadID == "" {
+				threadID = ac.current
+			}
+			if th := ac.entry.threads[threadID]; !online && th != nil && th.running {
+				h.srv.agentSessionsMu.Unlock()
+				ac.sendErrorThread(threadID, "Wait for the active turn to finish before starting offline discussion")
+				return
+			}
+			ac.entry.client = live
+			h.srv.rebindAgentSessionLocked(ac.entry)
+			h.srv.agentSessionsMu.Unlock()
+		}
 		h.handleChat(ac, msg.Text, msg.Model, msg.Thread, msg.Images)
 	case "approve":
 		h.handleApprove(ac, msg.ID, msg.Allow, msg.Always)
@@ -1401,6 +1437,8 @@ func (h *agentWSHandler) OnMessage(socket *gws.Conn, message *gws.Message) {
 		h.handleAskResponse(ac, msg.ID, msg.Answer)
 	case "steer":
 		h.handleSteer(ac, msg.Text, msg.Thread, msg.Images)
+	case "update_queue", "reorder_queue":
+		h.handleQueueMutation(ac, msg)
 	case "promote_queue":
 		h.handlePromoteQueued(ac, msg.Thread, msg.QueueID)
 	case "dequeue":
@@ -2789,7 +2827,7 @@ func (s *Server) runAgentTurn(entry *agentSessionEntry, th *agentThread, turn ag
 	var next agentQueuedChat
 	var nextFrame agentMsg
 	var nextTurn agentTurnSnapshot
-	hasNext := len(th.queue) > 0
+	hasNext := len(th.queue) > 0 && (entry.deviceID == agentServerDeviceID || entry.client != nil)
 	prefsDirty := false
 	if hasNext {
 		next = takeQueuedChat(&th.queue, 0)

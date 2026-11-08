@@ -669,6 +669,10 @@ export function applyScopedMessage(
     case "todo":
       ops.setTodos(parseTodos(msg.items));
       return;
+    case "queue_updated":
+      acceptQueueRemoval(ops.queueReturns.current, { ...msg, removed: msg.success === true, text: "" });
+      ops.setQueueError(msg.isError === true ? asString(msg.message) : "");
+      return;
     case "queue_promoted":
       ops.setQueueError(msg.isError === true ? asString(msg.message) || t("agent.queuePromoteFailed") : "");
       return;

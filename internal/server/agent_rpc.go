@@ -112,6 +112,16 @@ func (h *agentWSHandler) handleAgentRPCFrame(ac *agentConn, raw []byte) bool {
 		fail("invalid_request", "RPC frames must not contain op")
 		return true
 	}
+	if ac.deviceID != agentServerDeviceID {
+		if _, online := h.srv.GetClient(ac.deviceID); !online {
+			switch request.Command {
+			case "get_state", "get_messages", "get_models", "get_available_models", "get_commands", "get_session_stats":
+			default:
+				fail("device_offline", "Offline execution requires confirmation in the conversation UI")
+				return true
+			}
+		}
+	}
 	switch request.Command {
 	case "negotiate_protocol":
 		h.handleRPCProtocol(ac, request)

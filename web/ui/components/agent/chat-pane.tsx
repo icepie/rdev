@@ -2,7 +2,7 @@ import { useComposerAutosize } from "./use-composer-autosize";
 import { needsAttachmentRaster, rasterizeAttachment } from "./attachment-raster";
 import { settledAskCardKeys } from "./transcript-rows";
 import { observeTranscriptResize } from "./transcript-resize";
-import { clearQueueReturns, requestQueueRemoval } from "./queue-actions";
+import { clearQueueReturns, requestQueueMutation, requestQueueRemoval } from "./queue-actions";
 import { ThreadNavigation } from "./thread-navigation";
 import { ImagePreview } from "./image-preview";
 import { JobNotification, parseJobNotification, parseJobNotificationData } from "./job-notification";
@@ -89,6 +89,7 @@ export interface ChatPaneViewProps {
   threadId: string;
   sendRaw: (payload: Record<string, unknown>) => boolean;
   ready: boolean;
+  offline?: boolean;
   emptyHint: string;
   copiedId: string | null;
   onCopy: (id: string, text: string) => void;
@@ -127,7 +128,8 @@ export function ChatPaneView({
   t,
   threadId,
   sendRaw,
-  ready,
+  ready: connectionReady,
+  offline = false,
   emptyHint,
   copiedId,
   onCopy,
@@ -151,6 +153,9 @@ export function ChatPaneView({
   onOpenFile,
   onOpenDiff,
 }: ChatPaneViewProps) {
+  const [offlineConfirmed, setOfflineConfirmed] = useState(false);
+  useEffect(() => setOfflineConfirmed(false), [device, threadId, offline]);
+  const ready = connectionReady && (!offline || (offlineConfirmed && !sink.state.running));
   const modelReasoningLevels = models.find((item) => item.id === model)?.reasoningLevels;
   const supportedReasoning = REASONING_LEVELS.filter((item) => !modelReasoningLevels || modelReasoningLevels.includes(item.level));
   const reasoningOptions = supportedReasoning.length ? supportedReasoning : REASONING_LEVELS;
@@ -158,8 +163,9 @@ export function ChatPaneView({
   const { state, ops } = sink;
   const { items, todos, queue, queueIds, queueModes = [], queueError = "", running, stopping, turnUsage, currentTool, workingSince } = state;
 
-  const [returningQueue, setReturningQueue] = useState(false);
-  const returningQueueRef = useRef(false);
+  const [queueEdit, setQueueEdit] = useState<{ id: string; original: string; text: string } | null>(null);
+  const [queueSaving, setQueueSaving] = useState(false);
+  useEffect(() => setQueueEdit(null), [device, threadId]);
   const draftKey = JSON.stringify([device, threadId]);
   useEffect(() => () => clearQueueReturns(ops.queueReturns.current), [draftKey, ops.queueReturns]);
   const [input, setInput] = useComposerTextDraft(draftKey);
@@ -234,7 +240,6 @@ export function ChatPaneView({
    * file as a data URL: full URL for the chip thumbnail, base64 payload for
    * the chat message. */
   const addImageFiles = (filesIn: File[]) => {
-    if (returningQueueRef.current) return;
     const files = filesIn.filter((f) => f.type.startsWith("image/"));
     if (!files.length) return;
     setComposerError("");
@@ -298,7 +303,6 @@ export function ChatPaneView({
 
   const sendChat = () => {
     const text = input.trim();
-    if (returningQueueRef.current) return;
     if ((!text && pendingImages.length === 0) || !ready || imageReaders.current.size > 0) return;
     const command = matchSlashCommand(text, slashCommands)?.command.name;
     if (command && command !== "steer" && pendingImages.length > 0) {
@@ -312,7 +316,7 @@ export function ChatPaneView({
     if (text.startsWith("/") && pendingImages.length === 0 && runSlashLine(text)) {
       return;
     }
-    const payload: Record<string, unknown> = { op: "chat", text };
+    const payload: Record<string, unknown> = { op: "chat", text, ...(offline ? { offlineConfirmed } : {}) };
     if (threadId) payload.thread = threadId;
     if (model) payload.model = model;
     if (pendingImages.length) {
@@ -333,7 +337,7 @@ export function ChatPaneView({
 
   const sendSteer = (draft = input) => {
     const text = draft.trim().replace(/^\/steer(?:\s+|$)/i, "").trim();
-    if ((!text && pendingImages.length === 0) || !ready || returningQueueRef.current || imageReaders.current.size > 0) return;
+    if ((!text && pendingImages.length === 0) || !ready || imageReaders.current.size > 0) return;
     if (!running) {
       setComposerError(t("agent.commandRequiresRunning", { command: "/steer" }));
       return;
@@ -773,11 +777,10 @@ export function ChatPaneView({
         onClick={() => ops.scrollDown(true)}
       />
 
-      {/* Queue: each row can be taken back into the composer (click) or
-       * dropped entirely (✕); both go through the dequeue op so every
-       * pane sees the rebroadcast list. */}
+      {/* Queue edits preserve identity, ordering and attachments; server
+       * acknowledgements settle the editor and broadcasts update all panes. */}
       {(queue.length > 0 || queueError) && (
-        <div className="shrink-0 border-t border-border-seam px-3.5 py-1.5">
+        <div className="max-h-[40dvh] shrink-0 overflow-y-auto border-t border-border-seam px-3.5 py-1.5">
           <div className="mx-auto flex w-full max-w-[760px] flex-col gap-0.5">
             <div className="flex items-center gap-1.5 text-2xs tracking-wide text-muted-foreground uppercase">
               <Icon name="Rows2" className="size-3 shrink-0" />
@@ -786,6 +789,19 @@ export function ChatPaneView({
                 ({queue.length})
               </span>
             </div>
+            {queueEdit && <div className="flex flex-col gap-2 rounded-md border border-border p-2">
+              <Textarea aria-label={t("agent.queueEdit")} value={queueEdit.text} disabled={queueSaving}
+                onChange={event => setQueueEdit({ ...queueEdit, text: event.target.value })} />
+              <div className="flex justify-end gap-2">
+                <Button size="sm" variant="ghost" disabled={queueSaving} onClick={() => setQueueEdit(null)}>{t("common.cancel")}</Button>
+                <Button size="sm" disabled={!ready || queueSaving || !queueIds.includes(queueEdit.id)} onClick={() => {
+                  setQueueSaving(true);
+                  requestQueueMutation(ops.queueReturns.current, sendRaw, { op: "update_queue", thread: threadId,
+                    queueId: queueEdit.id, expectedText: queueEdit.original, text: queueEdit.text },
+                    () => setQueueEdit(null), () => setQueueSaving(false));
+                }}>{t("common.save")}</Button>
+              </div>
+            </div>}
             {queueError && <p role="alert" className="text-xs text-destructive-text">{queueError}</p>}
             {queue.map((q, i) => (
               <div
@@ -797,25 +813,20 @@ export function ChatPaneView({
                 </span>
                 <button
                   type="button"
-                  title={t(pendingImages.length > 0 || readingImages > 0 ? "agent.queueEditImagesHint" : "agent.queueEditHint")}
-                  disabled={!ready || !queueIds[i] || returningQueue || pendingImages.length > 0 || readingImages > 0}
+                  title={t("agent.queueEditHint")}
+                  disabled={!ready || !queueIds[i] || queueSaving || queueModes[i] === "steer" || queueModes[i] === "notification"}
                   className="min-w-0 flex-1 cursor-pointer truncate text-left transition-colors hover:text-foreground"
-                  onClick={() => {
-                    if (returningQueueRef.current || pendingImages.length || imageReaders.current.size) return;
-                    returningQueueRef.current = true;
-                    setReturningQueue(true);
-                    const settled = () => { returningQueueRef.current = false; setReturningQueue(false); };
-                    if (!requestQueueRemoval(ops.queueReturns.current, sendRaw, threadId, queueIds[i], (text, images) => {
-                      if (text) addToChat(text);
-                      setPendingImages(images);
-                    }, settled)) settled();
-                  }}
+                  onClick={() => setQueueEdit({ id: queueIds[i], original: q, text: q })}
                 >
                   {q || t("agent.queuedImages")}
                 </button>
+                {i > 0 && queueModes[i] !== "steer" && queueModes[i] !== "notification" && queueModes[i - 1] !== "steer" && queueModes[i - 1] !== "notification" && <button
+                  type="button" aria-label={t("agent.queueMoveUp")} disabled={!ready || queueSaving}
+                  onClick={() => sendRaw({ op: "reorder_queue", thread: threadId, queueId: queueIds[i], beforeId: queueIds[i - 1], expectedQueueIds: queueIds })}
+                  className="shrink-0 rounded p-1 hover:bg-state-hover"><Icon name="ArrowUp" className="size-3.5" /></button>}
                 {queueModes[i] === "follow_up" && running && <button type="button"
                   aria-label={t("agent.queuePromote")} title={t("agent.queuePromote")}
-                  disabled={!ready || !queueIds[i] || returningQueue}
+                  disabled={!ready || !queueIds[i]}
                   className="shrink-0 cursor-pointer rounded p-0.5 text-subtle-foreground/75 opacity-0 transition-opacity group-hover/queue:opacity-100 group-focus-within/queue:opacity-100 pointer-coarse:opacity-100 max-md:pointer-coarse:min-h-9 max-md:pointer-coarse:min-w-9 hover:text-foreground disabled:pointer-events-none"
                   onClick={() => { if (!sendRaw({ op: "promote_queue", thread: threadId, queueId: queueIds[i] })) setComposerError(t("agent.queuePromoteFailed")); }}>
                   <Icon name="CornerDownRight" className="size-3.5" />
@@ -838,6 +849,12 @@ export function ChatPaneView({
         </div>
       )}
 
+      {offline && <div className="mx-auto flex w-full max-w-[760px] items-center gap-2 px-4 py-2 text-xs text-muted-foreground">
+        <span className="flex-1">{t(offlineConfirmed ? "agent.offlineChatEnabled" : "agent.offlineHistory")}</span>
+        {!offlineConfirmed && <Button size="sm" variant="outline" disabled={!connectionReady} onClick={() => {
+          if (window.confirm(t("agent.offlineConfirm"))) setOfflineConfirmed(true);
+        }}>{t("agent.offlineContinue")}</Button>}
+      </div>}
       {/* Composer (bb footer: same 760px column and padding as the content) */}
       <div className="mx-auto w-full max-w-[760px] shrink-0 px-4 pb-2">
         <JobsPanel open={jobsOpen} onOpenChange={setJobsOpen} full={jobsFull} sink={sink} threadId={threadId} ready={ready} sendRaw={sendRaw} t={t} />
@@ -883,7 +900,6 @@ export function ChatPaneView({
               ))}
             </div>
           )}
-          {returningQueue && <p role="status" className="px-4 pt-2 text-xs text-muted-foreground">{t("agent.queueReturning")}</p>}
           {composerError && <p role="alert" className="px-4 pt-2 text-xs text-destructive-text">{composerError}</p>}
           {readingImages > 0 && (
             <p role="status" className="px-4 pt-2 text-xs text-muted-foreground">
@@ -1032,7 +1048,7 @@ export function ChatPaneView({
                     variant="ghost"
                     size="icon"
                     aria-label={t("agent.attachImages")}
-                    disabled={!ready || returningQueue}
+                    disabled={!ready}
                     className={cn(COARSE_POINTER_PROMPT_ICON_ACTION_BUTTON_CLASS, "shrink-0 text-subtle-foreground/75 hover:text-muted-foreground")}
                     onClick={() => fileInputRef.current?.click()}
                   >
@@ -1061,7 +1077,7 @@ export function ChatPaneView({
                       variant="ghost"
                       size="icon"
                       aria-label={t("agent.steer")}
-                      disabled={!ready || returningQueue || readingImages > 0 || (!input.trim() && pendingImages.length === 0)}
+                      disabled={!ready || readingImages > 0 || (!input.trim() && pendingImages.length === 0)}
                       className={COARSE_POINTER_PROMPT_ICON_ACTION_BUTTON_CLASS}
                       onClick={() => sendSteer()}
                     >
@@ -1078,7 +1094,7 @@ export function ChatPaneView({
                       variant="secondary"
                       size="icon"
                       aria-label={t("agent.stop")}
-                      disabled={!ready || !running || stopping}
+                      disabled={!connectionReady || !running || stopping}
                       aria-busy={stopping}
                       className={cn(COARSE_POINTER_PROMPT_ICON_ACTION_BUTTON_CLASS, "[&_[data-icon-root]]:size-3.5")}
                       onClick={sendStop}
@@ -1095,7 +1111,7 @@ export function ChatPaneView({
                     <Button
                       size="sm"
                       aria-label={t("agent.queued")}
-                      disabled={!ready || returningQueue || readingImages > 0 || (!input.trim() && pendingImages.length === 0)}
+                      disabled={!ready || readingImages > 0 || (!input.trim() && pendingImages.length === 0)}
                       className={cn(COARSE_POINTER_PROMPT_ACTION_BUTTON_CLASS, "gap-1.5 px-2.5")}
                       onClick={sendChat}
                     >
@@ -1110,7 +1126,7 @@ export function ChatPaneView({
                   <TooltipTrigger asChild>
                     <Button
                       aria-label={t("agent.send")}
-                      disabled={!ready || returningQueue || readingImages > 0 || (!input.trim() && pendingImages.length === 0)}
+                      disabled={!ready || readingImages > 0 || (!input.trim() && pendingImages.length === 0)}
                       className={cn(COARSE_POINTER_PROMPT_ACTION_BUTTON_CLASS, "ml-1")}
                       onClick={sendChat}
                     >

@@ -102,6 +102,9 @@ type ClientConn struct {
 // falling back to the desktop capability platform for clients that predate
 // the clientOS field (e.g. the Android APK).
 func clientOS(c *ClientConn) string {
+	if c == nil {
+		return ""
+	}
 	if c.OS != "" {
 		return c.OS
 	}

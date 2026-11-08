@@ -1832,6 +1832,7 @@ export function AgentPage() {
       t,
       sendRaw,
       ready,
+      offline: device !== SERVER_AGENT_ID && !connectedDevices.some((item) => item.id === device),
       emptyHint: !device ? t("agent.selectDevice")
         : !ready ? (reconnecting ? t("agent.reconnecting") : t(`agent.status.${status}`))
         : device === SERVER_AGENT_ID ? t("agent.serverEmpty") : t("agent.empty"),
@@ -2640,7 +2641,7 @@ export function AgentPage() {
               <DropdownMenuContent side="top" align="start">
                 <DropdownMenuItem onSelect={() => updateSidebarView({ deviceFilter: "" })}>{t("agent.allThreads")}</DropdownMenuItem>
                 <DropdownMenuSeparator />
-                {sidebarDevices.map((d) => <DropdownMenuItem key={d.id} disabled={!d.online} onSelect={() => { updateSidebarView({ deviceFilter: "" }); setDevice(d.id); }}><OsIcon os={d.os} className="size-3.5" /><span className="max-w-64 truncate">{d.id === SERVER_AGENT_ID ? t("agent.server") : d.id}</span>{d.id === device && <Icon name="Check" className="size-3.5" />}</DropdownMenuItem>)}
+                {sidebarDevices.map((d) => <DropdownMenuItem key={d.id} onSelect={() => { updateSidebarView({ deviceFilter: "" }); setDevice(d.id); }}><OsIcon os={d.os} className="size-3.5" /><span className="max-w-64 truncate">{d.id === SERVER_AGENT_ID ? t("agent.server") : d.id}</span>{d.id === device && <Icon name="Check" className="size-3.5" />}</DropdownMenuItem>)}
               </DropdownMenuContent>
             </DropdownMenu>
           </div>

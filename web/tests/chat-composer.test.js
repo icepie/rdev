@@ -52,6 +52,27 @@ it("preserves composer intent across modified keys, image loading and thread swi
   const sendButton = () => document.querySelector('button[aria-label="agent.send"]');
   try {
     await render();
+    props.offline = true;
+    await render();
+    expect(document.querySelector('textarea[role="combobox"]').disabled).toBe(true);
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    const unlock = () => [...document.querySelectorAll("button")].find(button => button.textContent === "agent.offlineContinue");
+    await act(async () => unlock().click());
+    expect(document.querySelector('textarea[role="combobox"]').disabled).toBe(true);
+    confirm.mockReturnValue(true);
+    await act(async () => unlock().click());
+    expect(document.querySelector('textarea[role="combobox"]').disabled).toBe(false);
+    await act(async () => insertDraft("discuss history"));
+    await act(async () => sendButton().click());
+    expect(sent.at(-1)).toMatchObject({ op: "chat", offlineConfirmed: true, text: "discuss history" });
+    props.threadId = "different-offline-thread";
+    await render();
+    expect(document.querySelector('textarea[role="combobox"]').disabled).toBe(true);
+    props.offline = false;
+    props.threadId = "thread-a";
+    sent.length = 0;
+    confirm.mockRestore();
+    await render();
     props.models = parseModelCatalog([null, { name: "invalid" }, { id: "model", reasoningLevels: ["low", "medium", "high", "invalid", null] }]);
     expect(props.models).toHaveLength(1);
     props.reasoning = "off"; // legacy preference under an adaptive-only model
@@ -296,18 +317,12 @@ it("preserves composer intent across modified keys, image loading and thread swi
     expect(document.querySelector('button[title="agent.queueEditHint"]').textContent).toBe("agent.queuedImages");
     await act(async () => document.querySelector('button[title="agent.queueEditHint"]').click());
     const removal = sent.at(-1);
-    expect(removal).toMatchObject({ op: "dequeue", queueId: "image-row", restore: true });
-    expect(sendButton().disabled).toBe(true);
-    await attach("blocked-during-return.png");
-    expect(readers).toHaveLength(2);
-    await act(async () => acceptQueueRemoval(props.sink.ops.queueReturns.current, {
-      id: removal.id, removed: true, text: "queued image",
-      images: [{ name: "original.png", mime: "image/png", data: "b3JpZ2luYWw=" }],
-    }));
-    expect(document.querySelector('img').getAttribute('src')).toBe("data:image/png;base64,b3JpZ2luYWw=");
-    expect(document.querySelector('button[title="agent.queueEditImagesHint"]').disabled).toBe(true);
-    await act(async () => sendButton().click());
-    expect(sent.at(-1)).toMatchObject({ op: "chat", text: "queued image", images: [{ name: "original.png", mime: "image/png", data: "b3JpZ2luYWw=" }] });
+    expect(removal).not.toMatchObject({ op: "dequeue", queueId: "image-row" });
+    const queuedEditor = document.querySelector('textarea[aria-label="agent.queueEdit"]');
+    expect(queuedEditor).not.toBeNull();
+    expect(document.querySelector('textarea[role="combobox"]').value).toBe("");
+    await act(async () => [...document.querySelectorAll("button")].find(button => button.textContent === "common.cancel").click());
+    expect(document.querySelector('textarea[aria-label="agent.queueEdit"]')).toBeNull();
     props.sink.state.running = true;
     await render();
     await attach("unreadable.png");

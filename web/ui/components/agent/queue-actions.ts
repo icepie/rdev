@@ -48,3 +48,14 @@ export function acceptQueueRemoval(pending: QueueReturns, message: Record<string
     if (message.removed === true && typeof message.text === "string") callback.restore(message.text, returnedImages(message.images));
   } finally { callback.settled?.(); }
 }
+
+
+export function requestQueueMutation(pending: QueueReturns, send: (payload: Record<string, unknown>) => boolean,
+  payload: Record<string, unknown>, success: () => void, settled: () => void): boolean {
+  const id = `queue_mutation_${++sequence}`;
+  pending.set(id, { restore: success, settled });
+  if (send({ ...payload, id })) return true;
+  pending.delete(id);
+  settled();
+  return false;
+}
