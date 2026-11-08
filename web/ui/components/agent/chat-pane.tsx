@@ -651,9 +651,9 @@ export function ChatPaneView({
                 >
                   {item.steering && <span className="mb-1 flex items-center gap-1 text-xs text-muted-foreground"><Icon name="CornerDownRight" className="size-3" />Steer</span>}
                   {item.images && item.images.length > 0 && (
-                    <div className="mb-1 flex max-w-full flex-wrap justify-end gap-1">
+                    <div className="mb-1 flex max-w-full flex-wrap justify-end gap-2">
                       {item.images.map((name, i) => item.imagePreviews?.[i] ? (
-                        <ImagePreview key={i} src={item.imagePreviews[i]} name={name} gallery={imageGallery} className="h-24 w-32" />
+                        <ImagePreview key={i} src={item.imagePreviews[i]} name={name} gallery={imageGallery} sent className="h-20 max-w-36 object-cover" />
                       ) : (
                         <span
                           key={i}
@@ -893,20 +893,24 @@ export function ChatPaneView({
               {pendingImages.map((img, i) => (
                 <span
                   key={i}
-                  className="flex items-center gap-1.5 rounded-md border border-border bg-surface-recessed py-1 pr-1.5 pl-1 text-xs text-muted-foreground"
+                  className="relative shrink-0"
                 >
                   <ImagePreview src={img.preview} name={img.name} gallery={pendingImageGallery} className="h-16 w-24 object-cover" />
-                  <span className="max-w-32 truncate">{img.name}</span>
                   <button
                     type="button"
-                    aria-label={t("common.cancel")}
-                    className="shrink-0 transition-colors hover:text-foreground"
+                    aria-label={t("agent.removeImage", { name: img.name })}
+                    title={t("agent.removeImage", { name: img.name })}
+                    onMouseDown={event => event.preventDefault()}
+                    className="group/attachment-remove-image absolute right-1 top-1 z-10 inline-flex size-4 items-center justify-center rounded-full text-white focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring max-md:pointer-coarse:-right-1 max-md:pointer-coarse:-top-1 max-md:pointer-coarse:size-7"
                     onClick={() => {
                       setComposerError("");
                       setPendingImages((prev) => prev.filter((_, j) => j !== i));
+                      composerRef.current?.focus({ preventScroll: true });
                     }}
                   >
-                    <Icon name="X" className="size-3.5" />
+                    <span className="inline-flex size-4 items-center justify-center rounded-full bg-black/55 transition-colors group-hover/attachment-remove-image:bg-black/70">
+                      <Icon name="X" className="size-3" />
+                    </span>
                   </button>
                 </span>
               ))}

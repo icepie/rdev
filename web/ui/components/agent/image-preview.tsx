@@ -9,7 +9,7 @@ type PreviewImage = { src: string; name: string };
 const isPreviewSource = (src: string) => /^data:image\/(?:png|jpeg|jpg|gif|webp|avif|bmp);base64,/.test(src);
 
 // Shared by composer attachments, sent messages and remote read_file results.
-export function ImagePreview({ src, name, className, gallery }: PreviewImage & { className?: string; gallery?: PreviewImage[] }) {
+export function ImagePreview({ src, name, className, gallery, sent = false }: PreviewImage & { className?: string; gallery?: PreviewImage[]; sent?: boolean }) {
   const { t } = useI18n();
   const [failed, setFailed] = useState(false);
   const [attempt, setAttempt] = useState(0);
@@ -32,7 +32,7 @@ export function ImagePreview({ src, name, className, gallery }: PreviewImage & {
   });
   return <>
     <button type="button" aria-label={failed ? `${t("agent.imageRetry")}: ${name}` : name}
-      title={failed ? t("agent.imageLoadFailed") : undefined} onClick={() => {
+      title={failed ? t("agent.imageLoadFailed") : name} onClick={() => {
       if (failed) {
         setFailed(false);
         setAttempt(value => value + 1);
@@ -40,7 +40,7 @@ export function ImagePreview({ src, name, className, gallery }: PreviewImage & {
       }
       setSelected({ src, name });
       setOpen(true);
-    }} className={cn("block max-w-full overflow-hidden rounded-md border border-border bg-surface-recessed focus-visible:ring-2 focus-visible:ring-ring", failed ? "cursor-pointer" : "cursor-zoom-in")}>
+    }} className={cn("block max-w-full overflow-hidden rounded-md border focus-visible:ring-2 focus-visible:ring-ring", sent ? "border-surface-selected-border bg-surface-raised" : "border-border bg-surface-recessed", failed ? "cursor-pointer" : "cursor-zoom-in")}>
       {failed ? <span role="status" className={cn("flex min-h-16 flex-col items-center justify-center gap-1 p-2 text-xs text-muted-foreground", className)}>
         <Icon name="Image" className="size-4 shrink-0" />
         <span className="sr-only">{t("agent.imageLoadFailed")}</span>

@@ -329,6 +329,18 @@ it("preserves composer intent across modified keys, image loading and thread swi
     expect([...document.querySelectorAll("img")].map(image => image.alt)).toEqual(["surviving-later.png"]);
     await act(async () => sendButton().click());
     expect(sent.at(-1).images.map(image => image.name)).toEqual(["surviving-later.png"]);
+    await attach(["remove-me.png", "keep-me.png"]);
+    await act(async () => {
+      readers.at(-2).finish("data:image/png;base64,YQ==");
+      readers.at(-1).finish("data:image/png;base64,Yg==");
+    });
+    const remove = document.querySelector('button[aria-label="agent.removeImage"]');
+    remove.focus();
+    await act(async () => remove.click());
+    expect(document.activeElement).toBe(document.querySelector("textarea"));
+    expect([...document.querySelectorAll("img")].map(image => image.alt)).toEqual(["keep-me.png"]);
+    await act(async () => sendButton().click());
+    expect(sent.at(-1).images.map(image => image.name)).toEqual(["keep-me.png"]);
     await attach("sync-failure.png");
     expect(document.querySelector('[role="status"]')).toBeNull();
     expect(sendButton().disabled).toBe(true);
