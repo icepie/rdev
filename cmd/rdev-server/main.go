@@ -415,6 +415,7 @@ Examples:
 	mux.HandleFunc("/sessions", srv.StaticPageHandler("app.html"))
 	mux.HandleFunc("/remote-desktop", srv.StaticPageHandler("app.html"))
 	mux.HandleFunc("/api/clients", srv.HandleAPI)
+	mux.HandleFunc("/api/clients/events", srv.HandleDeviceEvents)
 	mux.HandleFunc("/api/sessions", srv.HandleSessionsAPI)
 	mux.HandleFunc("/api/devices", srv.HandleTerminalAPI)
 	// Security: batch device listing requires the admin token like every

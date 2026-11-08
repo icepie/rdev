@@ -1174,7 +1174,7 @@ export function AgentPage() {
         setAuthed(false);
         setStatus("disconnected");
         setReconnecting(false);
-        setAuthError(asString(msg.message) || t("common.error"));
+        setAuthError(msg.code === "offline_admin_required" ? t("agent.offlineAdminRequired") : asString(msg.message) || t("common.error"));
         clearPing();
         ws.close();
         return;

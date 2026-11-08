@@ -562,6 +562,7 @@ func (f *ReverseForward) Result() (uint32, string) {
 // Server manages WebSocket clients and SSH proxy
 type Server struct {
 	clients            map[string]*ClientConn
+	deviceWatchers     map[chan struct{}]struct{}
 	mu                 sync.RWMutex
 	sessions           map[string]*ProxySession
 	sessMu             sync.RWMutex
@@ -923,6 +924,7 @@ func (s *Server) registerClient(client *ClientConn) (*ClientConn, string, bool) 
 			if old.InstanceID == client.InstanceID {
 				client.ID = id
 				s.clients[id] = client
+				s.notifyDeviceWatchersLocked()
 				return old, id, id != requestedID
 			}
 		}
@@ -931,12 +933,14 @@ func (s *Server) registerClient(client *ClientConn) (*ClientConn, string, bool) 
 	if old := s.clients[requestedID]; old == nil || (client.InstanceID != "" && old.InstanceID == client.InstanceID) {
 		client.ID = requestedID
 		s.clients[requestedID] = client
+		s.notifyDeviceWatchersLocked()
 		return old, requestedID, false
 	}
 
 	assignedID := s.nextAvailableClientID(requestedID)
 	client.ID = assignedID
 	s.clients[assignedID] = client
+	s.notifyDeviceWatchersLocked()
 	return nil, assignedID, true
 }
 
@@ -961,6 +965,7 @@ func (s *Server) unregisterClient(id string, conn *gws.Conn) (*ClientConn, bool)
 		return nil, false
 	}
 	delete(s.clients, id)
+	s.notifyDeviceWatchersLocked()
 	return client, true
 }
 
@@ -972,6 +977,7 @@ func (s *Server) unregisterClientTransport(id string, transport DeviceTransport)
 		return nil, false
 	}
 	delete(s.clients, id)
+	s.notifyDeviceWatchersLocked()
 	return client, true
 }
 

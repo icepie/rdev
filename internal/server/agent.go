@@ -571,6 +571,8 @@ func (h *agentWSHandler) OnOpen(socket *gws.Conn) {
 	}
 	if !ok && !h.adminBypass {
 		// Offline history needs admin authorization: device passwords cannot be checked without a live device.
+		payload, _ := json.Marshal(agentMsg{Op: "error", Code: "offline_admin_required", Message: "Offline history requires a server administrator token; the device password cannot be verified until the device reconnects."})
+		_ = socket.WriteMessage(gws.OpcodeText, payload)
 		socket.WriteClose(1013, []byte("device is temporarily offline"))
 		return
 	}

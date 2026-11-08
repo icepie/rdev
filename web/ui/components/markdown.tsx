@@ -184,7 +184,7 @@ const markdownComponents: Components = {
   td: (props) => (
     <td className="border border-border-seam px-2 py-1 text-left" {...props} />
   ),
-  img: (props) => <img className="max-w-full rounded-md" {...props} />,
+  img: (props) => <img loading="lazy" decoding="async" className="max-w-full rounded-md" {...props} />,
 };
 
 export const Markdown = memo(function Markdown({
