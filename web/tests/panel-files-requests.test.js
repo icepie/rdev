@@ -265,3 +265,41 @@ it('resets pagination when a fresh directory request fails', async()=>{
  await act(async()=>document.querySelector('[aria-label="files.refresh"]').click());
  expect(socket.sent.at(-1)).toMatchObject({offset:0});
 });
+
+it('fails new offline transfers without replaying them when the socket reconnects', async () => {
+  const old = sockets[0];
+  await deliver(old, reply(old.sent[0], 'offline.txt'));
+  old.readyState = 3;
+  const before = old.sent.length;
+  await act(async () => document.querySelector('[aria-label="files.download offline.txt"]').click());
+  await pickFile('offline-upload.txt');
+  const tasks = () => JSON.parse(localStorage.getItem('rdevFileTasks.one'));
+  expect(tasks()).toHaveLength(2);
+  expect(tasks().every(task => task.status === 'failed' && task.message === 'files.connectionLost')).toBe(true);
+  expect(old.sent).toHaveLength(before);
+  await act(async () => old.onclose());
+  expect(document.body.textContent).toContain('files.connectionLost');
+  await act(async () => vi.advanceTimersByTime(2000));
+  const current = sockets.at(-1);
+  await act(async () => current.onopen());
+  expect(current.sent.some(message => message.op === 'download_start' || message.op === 'upload_start')).toBe(false);
+  await act(async () => document.querySelector('[aria-label="files.resume offline-upload.txt"]').click());
+  expect(current.sent.filter(message => message.op === 'upload_start')).toHaveLength(1);
+});
+
+it('keeps an existing download resumable while waiting for reconnect', async () => {
+  const old = sockets[0];
+  await deliver(old, reply(old.sent[0], 'running.bin'));
+  await act(async () => document.querySelector('[aria-label="files.download running.bin"]').click());
+  const original = old.sent.at(-1);
+  await act(async () => { old.readyState = 3; old.onclose(); vi.advanceTimersByTime(2000); });
+  const current = sockets.at(-1);
+  current.readyState = 0;
+  await act(async () => vi.advanceTimersByTime(60_000));
+  expect(current.sent).toEqual([]);
+  expect(JSON.parse(localStorage.getItem('rdevFileTasks.one'))[0].status).toBe('running');
+  await act(async () => { current.readyState = 1; current.onopen(); });
+  const resumed = current.sent.filter(message => message.op === 'download_start');
+  expect(resumed).toHaveLength(1);
+  expect(resumed[0].taskId).not.toBe(original.taskId);
+});

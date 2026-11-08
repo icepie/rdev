@@ -195,7 +195,6 @@ export function PanelFiles({
 
   /* Refs: mutable transfer/listing state shared with WS handlers. */
   const wsRef = useRef<WebSocket | null>(null);
-  const sendQueueRef = useRef<string[]>([]);
   const reconnectDelayRef = useRef(1000);
   const reconnectTimerRef = useRef(0);
   const tasksRef = useRef<Map<string, FileTask> | null>(null);
@@ -241,16 +240,30 @@ export function PanelFiles({
   /* ── WS plumbing ── */
 
   const send = useCallback((msg: Record<string, unknown>) => {
-    const payload = JSON.stringify(msg);
     const ws = wsRef.current;
-    if (ws && ws.readyState === WebSocket.OPEN) ws.send(payload);
-    else sendQueueRef.current.push(payload);
+    if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+    ws.send(JSON.stringify(msg));
+    return true;
   }, []);
+
+  const sendTransfer = useCallback((task: FileTask, message: Record<string, unknown>) => {
+    if (send(message)) return;
+    transferAttempts.current.remove(task.id);
+    task.status = "failed";
+    task.message = tRef.current("files.connectionLost");
+    saveTasks();
+    bump();
+  }, [send, saveTasks, bump]);
 
   /* ── Directory listing ── */
 
   const list = useCallback(
     (path: string, append = false) => {
+      if (wsRef.current?.readyState !== WebSocket.OPEN) {
+        listingGuard.current.invalidate();
+        setListView(previous => ({ ...previous, notice: tRef.current("files.connectionLost") }));
+        return;
+      }
       const targetPath = append ? currentPathRef.current : path;
       const offset = append ? listOffsetRef.current : 0;
       if (append) setListView(previous => ({ ...previous, pageError: undefined }));
@@ -299,7 +312,7 @@ export function PanelFiles({
       task.message = message || "";
       task.lastRequested = Date.now();
       saveTasks();
-      send({
+      sendTransfer(task, {
         op: "download_start",
         deviceId: task.device,
         taskId: transferAttempts.current.begin(task.id),
@@ -308,7 +321,7 @@ export function PanelFiles({
       });
       bump();
     },
-    [saveTasks, send, bump],
+    [saveTasks, sendTransfer, bump],
   );
 
   const finishDownload = useCallback(
@@ -377,7 +390,7 @@ export function PanelFiles({
       tasksRef.current!.set(task.id, task);
       saveTasks();
       bump();
-      send({
+      sendTransfer(task, {
         op: "download_start",
         deviceId: activeDevice,
         taskId: transferAttempts.current.begin(task.id),
@@ -385,7 +398,7 @@ export function PanelFiles({
         offset: 0,
       });
     },
-    [saveTasks, send, bump],
+    [saveTasks, sendTransfer, bump],
   );
 
   /* ── Uploads ── */
@@ -417,7 +430,7 @@ export function PanelFiles({
             return ack.promise;
           },
         });
-        if (complete && !controller.signal.aborted && transferAttempts.current.current(task.id) === wireId && task.status === "running") send({ op: "upload_end", taskId: wireId, path: task.path, size: file.size });
+        if (complete && !controller.signal.aborted && transferAttempts.current.current(task.id) === wireId && task.status === "running") sendTransfer(task, { op: "upload_end", taskId: wireId, path: task.path, size: file.size });
       } catch (error) {
         if (!controller.signal.aborted) {
           task.status = "failed";
@@ -432,13 +445,13 @@ export function PanelFiles({
         }
       }
     },
-    [saveTasks, send, bump, stopUpload],
+    [saveTasks, sendTransfer, bump, stopUpload],
   );
 
   const sendUploadStart = useCallback(
     (task: FileTask, modTime?: string) => {
       stopUpload(task);
-      send({
+      sendTransfer(task, {
         op: "upload_start",
         deviceId: task.device,
         taskId: transferAttempts.current.begin(task.id),
@@ -448,7 +461,7 @@ export function PanelFiles({
         ...(modTime ? { modTime } : {}),
       });
     },
-    [send, stopUpload],
+    [sendTransfer, stopUpload],
   );
 
   const startUpload = useCallback(
@@ -714,7 +727,6 @@ export function PanelFiles({
     listOffsetRef.current = 0;
     listTotalRef.current = 0;
     listTruncatedRef.current = false;
-    sendQueueRef.current = [];
     reconnectDelayRef.current = 1000;
     pendingPwRef.current = "";
     closeAuth();
@@ -744,9 +756,6 @@ export function PanelFiles({
       ws.onopen = () => {
         if (wsRef.current !== ws) return;
         reconnectDelayRef.current = 1000;
-        const queue = sendQueueRef.current;
-        while (queue.length && ws.readyState === WebSocket.OPEN)
-          ws.send(queue.shift()!);
         /* With a remembered password, authenticate first and defer the
          * resume/list to auth_ok so resumed transfers don't bounce off
          * auth_required; otherwise optimistically resume and let the server
@@ -779,6 +788,8 @@ export function PanelFiles({
         tasksRef.current!.forEach(stopUpload);
         wsRef.current = null;
         if (disposed) return;
+        listingGuard.current.invalidate();
+        setListView(previous => ({ ...previous, notice: tRef.current("files.connectionLost") }));
         window.clearTimeout(reconnectTimerRef.current);
         reconnectTimerRef.current = window.setTimeout(connect, nextDelay());
       };
@@ -808,6 +819,7 @@ export function PanelFiles({
       tasksRef.current!.forEach((task) => {
         if (task.status === "running") updateSpeed(task);
         if (
+          wsRef.current?.readyState === WebSocket.OPEN &&
           task.dir === "download" &&
           task.status === "running" &&
           !task.saved &&
@@ -905,7 +917,10 @@ export function PanelFiles({
   const submitAuth = (password: string) => {
     if (!password) return;
     pendingPwRef.current = password;
-    send({ op: "auth", deviceId: deviceRef.current, password });
+    if (!send({ op: "auth", deviceId: deviceRef.current, password })) {
+      pendingPwRef.current = "";
+      setAuthError(tRef.current("files.connectionLost"));
+    }
   };
 
   /* ── Render ── */
