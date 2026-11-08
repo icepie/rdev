@@ -568,8 +568,9 @@ func (h *agentWSHandler) handleRPCProtocol(ac *agentConn, request agentMsg) {
 }
 
 func (h *agentWSHandler) handleRPCAvailableCommands(ac *agentConn, request agentMsg) {
-	// Keep this list explicit and stable: clients use it to gate their command
-	// palette, and unsupported OMP commands must remain visible as unsupported.
+	// OMP commands are slash commands accepted by prompt. Keep RPC method
+	// discovery in a separate rdev extension, so palettes never advertise
+	// method names or browser-only controls as runnable prompt commands.
 	commands := []map[string]any{
 		{"name": "negotiate_protocol"}, {"name": "get_available_commands"},
 		{"name": "get_state", "params": map[string]any{"thread": "string?"}},
@@ -590,8 +591,16 @@ func (h *agentWSHandler) handleRPCAvailableCommands(ac *agentConn, request agent
 	}
 	success := true
 	data, _ := json.Marshal(struct {
-		Commands []map[string]any `json:"commands"`
-	}{commands})
+		RPCCommands []map[string]any `json:"rpcCommands"`
+		Commands    []map[string]any `json:"commands"`
+	}{
+		RPCCommands: commands,
+		Commands: []map[string]any{
+			{"name": "compact", "description": "Compact the current conversation context.", "input": map[string]any{"hint": "custom instructions?"}, "source": "builtin"},
+			{"name": "bg", "description": "Run a command in the background.", "input": map[string]any{"hint": "[--device <id>] command"}, "source": "builtin"},
+			{"name": "subagent", "description": "Start a background subagent task.", "input": map[string]any{"hint": "task"}, "source": "builtin"},
+		},
+	})
 	ac.writeJSON(agentMsg{Type: "response", Command: request.Command, ID: request.ID, Success: &success, Data: data})
 }
 

@@ -93,6 +93,50 @@ func TestSubagentRPCWireContract(t *testing.T) {
 		if string(protocol["success"]) != "true" || len(protocol["data"]) == 0 {
 			t.Fatalf("invalid %s response: %s", command, protocol)
 		}
+		if command == "get_available_commands" {
+			var catalog struct {
+				Commands []struct {
+					Name        string `json:"name"`
+					Description string `json:"description"`
+					Source      string `json:"source"`
+				} `json:"rpcCommands"`
+				SlashCommands []struct {
+					Name        string `json:"name"`
+					Description string `json:"description"`
+					Source      string `json:"source"`
+					Input       struct {
+						Hint string `json:"hint"`
+					} `json:"input"`
+				} `json:"commands"`
+			}
+			if err := json.Unmarshal(protocol["data"], &catalog); err != nil {
+				t.Fatalf("invalid command catalog: %v", err)
+			}
+			seen := map[string]bool{}
+			for _, item := range catalog.Commands {
+				seen[item.Name] = true
+			}
+			for _, name := range []string{"compact", "prompt", "get_state"} {
+				if !seen[name] {
+					t.Fatalf("command catalog missing %q: %s", name, protocol["data"])
+				}
+			}
+			slashSeen := map[string]bool{}
+			if len(catalog.SlashCommands) != 3 {
+				t.Fatalf("unexpected prompt command set: %s", protocol["data"])
+			}
+			for _, item := range catalog.SlashCommands {
+				if slashSeen[item.Name] || item.Description == "" || item.Source != "builtin" || item.Input.Hint == "" {
+					t.Fatalf("invalid slash command metadata: %+v", item)
+				}
+				slashSeen[item.Name] = true
+			}
+			for _, name := range []string{"compact", "bg", "subagent"} {
+				if !slashSeen[name] {
+					t.Fatalf("slash catalog missing %q: %s", name, protocol["data"])
+				}
+			}
+		}
 	}
 	raw, _ := json.Marshal(map[string]any{"type": "get_state", "id": "state-1", "thread": th.id})
 	sendAgentOp(t, socket, string(raw))
