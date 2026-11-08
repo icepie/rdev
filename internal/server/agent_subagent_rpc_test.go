@@ -85,6 +85,24 @@ func TestSubagentRPCWireContract(t *testing.T) {
 		t.Fatal("wrong status")
 	}
 	call("get_subagents", "missing", "", "", false)
+	// Invalid RPC frames must return a correlated failure, not silently fall
+	// into the browser protocol or wait forever for a reply.
+	for _, raw := range []string{
+		`{"type":"does_not_exist","id":"bad-1"}`,
+		`{"type":"get_subagent_messages","id":"bad-1"}`,
+		`{"type":"request","command":"reset","id":"bad-1"}`,
+		`{"type":null,"id":"bad-1"}`,
+		`{"type":"get_subagents","thread":42,"id":"bad-1"}`,
+		`{"type":"steer_subagent","id":"bad-1","subagentId":42,"message":"test"}`,
+		`{"type":"cancel_subagent","id":"bad-1","subagentId":null}`,
+		`{"type":"get_subagents","id":"bad-1","op":"reset"}`,
+	} {
+		sendAgentOp(t, socket, raw)
+		bad := waitRawMsg(t, rec.msgs, "invalid RPC response", func(m map[string]json.RawMessage) bool { return string(m["type"]) == `"response"` })
+		if string(bad["id"]) != `"bad-1"` || string(bad["success"]) != "false" || len(bad["error"]) == 0 {
+			t.Fatalf("invalid RPC was not rejected: %s", bad)
+		}
+	}
 	call("steer_subagent", th.id, child.ID, "inspect tests", true)
 	if got := guidance.snapshot(); len(got) != 1 || got[0] != "inspect tests" {
 		t.Fatal(got)
@@ -113,5 +131,23 @@ func TestSubagentRPCWireContract(t *testing.T) {
 	alive, _ := jobs.Read(shell.ID)
 	if alive.CancelRequested {
 		t.Fatal("subagent cancellation affected shell")
+	}
+}
+
+func TestAgentRPCRequiresAuthentication(t *testing.T) {
+	handler := &agentWSHandler{}
+	for _, frame := range []string{
+		`{"type":"get_subagents"}`,
+		`{"type":"cancel_subagent","subagentId":"child"}`,
+		`{"type":"request","command":"reset"}`,
+	} {
+		// No socket or server is supplied: an unauthenticated RPC must neither
+		// dispatch an operation nor send a privileged response.
+		if !handler.handleAgentRPCFrame(&agentConn{}, []byte(frame)) {
+			t.Fatalf("RPC fell through auth gate: %s", frame)
+		}
+	}
+	if handler.handleAgentRPCFrame(&agentConn{}, []byte(`{"op":"auth","password":"fixture"}`)) {
+		t.Fatal("native authentication frame intercepted")
 	}
 }

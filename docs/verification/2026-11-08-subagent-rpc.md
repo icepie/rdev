@@ -11,3 +11,5 @@ agent_subagent_rpc_test.go 通过真实已认证 WebSocket 发送原生 JSON 帧
 - 取消不影响同线程 shell。
 
 全量 go test ./... 通过；包含新增原生帧测试的定向 go test -race 通过。未验证完整 OMP 客户端启动/订阅/事件序列；实现边界见 agent-workspace.md 的子 Agent 帧适配章节。
+
+补充 RPC 分发回归：原生帧和旧包装统一进入白名单；未知命令、get_subagent_messages、错误 subagentId/thread 类型、null type 及混合 op 被明确拒绝；包装 reset 不清空会话。未认证帧不调用处理器或发送私有结果，原生 auth 仍进入浏览器鉴权流程。真实 WebSocket 错误回执与定向 race 已通过。

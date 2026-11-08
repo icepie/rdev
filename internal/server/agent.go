@@ -1335,18 +1335,12 @@ func (h *agentWSHandler) OnMessage(socket *gws.Conn, message *gws.Message) {
 	}
 	ac := acRaw.(*agentConn)
 
+	if h.handleAgentRPCFrame(ac, message.Bytes()) {
+		return
+	}
 	var msg agentMsg
 	if err := json.Unmarshal(message.Bytes(), &msg); err != nil {
 		return
-	}
-	if msg.Type == "request" && msg.Command != "" {
-		msg.RPC = true
-		msg.Op = msg.Command
-	} else if msg.Type == "steer_subagent" || msg.Type == "cancel_subagent" || msg.Type == "get_subagents" {
-		// OMP's wire command uses the command name directly as `type`.
-		msg.RPC = true
-		msg.Command = msg.Type
-		msg.Op = msg.Type
 	}
 
 	// In-band device password auth (same flow as terminal.go).

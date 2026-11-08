@@ -110,3 +110,5 @@ Agent 草稿、已发送图片及 read_file 图片使用 BB 全屏预览。支�
 RPC 结果放在 `data`：列表为 `{subagents:[]}`，取消为 `{cancelled:boolean}`。列表只含当前会话中未请求取消的运行子任务，提供 OMP 必需的 id/index/agent/agentSource/status/lastUpdate；index 是此次列表位置，agent 为内置 subagent，lastUpdate 为已记录的启动时间，不代表实时输出时间。空结果为数组，不能是 null。重复取消及未知任务返回 false，shell 任务拒绝；状态检查与取消在同一锁内完成。OMP 的指导请求允许省略 id，原生浏览器指导仍要求请求 ID。
 
 这三个命令的帧适配不等于完整 OMP 运行时：连接鉴权、会话事件仍为 rdev 协议，没有 OMP stdio 传输、子任务完整 transcript/订阅、注册 agent 文件和扩展命令展开。取消只请求停止，资源名额直到执行清理完成才释放，不宣称 OMP 完整生命周期或持久 tombstone 语义。
+
+RPC 帧由独立命令白名单分发，复用设备认证门槛。未知命令（含尚未实现的 get_subagent_messages）返回关联的 unsupported_command；字段缺失/类型错误、混合 op 与 type 帧返回 invalid_request。兼容包装的 command 也不能调用 reset 等浏览器操作。子任务日志没有完整 transcript 及稳定字节游标，因此暂不把滚动截断输出伪装成 OMP 消息文件。
