@@ -122,7 +122,7 @@ func TestSubagentRPCWireContract(t *testing.T) {
 				}
 			}
 			slashSeen := map[string]bool{}
-			if len(catalog.SlashCommands) != 3 {
+			if len(catalog.SlashCommands) != 4 {
 				t.Fatalf("unexpected prompt command set: %s", protocol["data"])
 			}
 			for _, item := range catalog.SlashCommands {
@@ -131,7 +131,7 @@ func TestSubagentRPCWireContract(t *testing.T) {
 				}
 				slashSeen[item.Name] = true
 			}
-			for _, name := range []string{"compact", "bg", "subagent"} {
+			for _, name := range []string{"compact", "bg", "subagent", "jobs"} {
 				if !slashSeen[name] {
 					t.Fatalf("slash catalog missing %q: %s", name, protocol["data"])
 				}

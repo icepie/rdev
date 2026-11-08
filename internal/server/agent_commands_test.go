@@ -93,6 +93,9 @@ func TestExplicitCommandArguments(t *testing.T) {
 		{"/bg", "--device\u00a0machine-a\u2003echo hi", "bg", `{"command":"echo hi","device":"machine-a"}`},
 		{"/bg", "--device-name echo hi", "bg", `{"command":"--device-name echo hi"}`},
 		{"/subagent", "inspect\nthen report", "subagent", `{"task":"inspect\nthen report"}`},
+		{"/jobs", "", "jobs", `{"action":"list"}`},
+		{"/jobs", "full", "jobs", `{"action":"list","full":true}`},
+		{"/jobs", "kill\nall", "jobs", `{"action":"cancel","id":"all"}`},
 	} {
 		name, raw, err := agentCommandTool(tc.command, tc.argument)
 		if err != nil || name != tc.name || string(raw) != tc.expected {
@@ -130,7 +133,7 @@ func TestConversationDispatchesExplicitCommandWithoutModel(t *testing.T) {
 }
 
 func TestExplicitCommandsRejectImagesWithoutMutatingHistory(t *testing.T) {
-	for _, command := range []string{" /COMPACT\nretain paths", "/bg echo hi", "/subagent inspect"} {
+	for _, command := range []string{" /COMPACT\nretain paths", "/bg echo hi", "/subagent inspect", "/jobs full"} {
 		t.Run(command, func(t *testing.T) {
 			tool := &commandDispatchTool{}
 			session := agent.New(agent.Config{Tools: []agent.Tool{tool}})
@@ -144,5 +147,53 @@ func TestExplicitCommandsRejectImagesWithoutMutatingHistory(t *testing.T) {
 				t.Fatal("rejected command changed history or ran a tool")
 			}
 		})
+	}
+}
+
+// Use real job managers and no provider: these commands must execute locally,
+// and "all" must never cross the conversation's manager boundary.
+func TestJobsCommandsWithoutModelAndThreadIsolation(t *testing.T) {
+	local, other := newAgentJobs(nil), newAgentJobs(nil)
+	defer local.Close()
+	defer other.Close()
+	worker := func(ctx context.Context, output func(string)) (string, error) {
+		output("visible output")
+		<-ctx.Done()
+		return "", ctx.Err()
+	}
+	job, err := local.Start("shell", "local task", worker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foreign, err := other.Start("shell", "other task", worker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "job output", func() bool { snapshot, _ := local.Read(job.ID); return snapshot.Output != "" })
+	session := agent.New(agent.Config{Tools: []agent.Tool{&jobsTool{jobs: local}}})
+	for _, command := range []string{"/jobs", "/jobs full"} {
+		if replaced, err := runAgentConversation(t.Context(), session, command, nil, nil); err != nil || replaced {
+			t.Fatalf("%s: replaced=%v err=%v", command, replaced, err)
+		}
+	}
+	history := session.History()
+	raw, _ := json.Marshal(history)
+	if !strings.Contains(string(raw), "visible output") || strings.Contains(string(raw), foreign.ID) {
+		t.Fatalf("missing output or cross-thread leak: %s", raw)
+	}
+	before := session.History()
+	if _, err := runAgentConversation(t.Context(), session, "/jobs kill all extra", nil, nil); err == nil {
+		t.Fatal("invalid jobs command accepted")
+	}
+	if !reflect.DeepEqual(before, session.History()) {
+		t.Fatal("invalid command changed history")
+	}
+	if _, err := runAgentConversation(t.Context(), session, "/jobs kill all", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, _ := local.Read(job.ID)
+	untouched, _ := other.Read(foreign.ID)
+	if !snapshot.CancelRequested || untouched.CancelRequested || untouched.State != "running" {
+		t.Fatalf("wrong cancellation scope: local=%+v other=%+v", snapshot, untouched)
 	}
 }

@@ -2551,7 +2551,7 @@ func (s *Server) startAgentTurnLocked(entry *agentSessionEntry, th *agentThread,
 	}
 	th.running = true
 	command, _ := splitAgentCommand(text)
-	th.turnCommand = command == "/compact" || command == "/bg" || command == "/subagent"
+	th.turnCommand = isAgentSessionCommand(command)
 	th.lastOutcome = ""
 	th.turnFiles = nil
 	th.toolPaths = make(map[string]string)

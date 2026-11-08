@@ -596,6 +596,7 @@ func (h *agentWSHandler) handleRPCAvailableCommands(ac *agentConn, request agent
 	}{
 		RPCCommands: commands,
 		Commands: []map[string]any{
+			{"name": "jobs", "description": "Inspect or cancel this thread's background jobs.", "input": map[string]any{"hint": "[full|kill <id>|kill all]"}, "source": "builtin"},
 			{"name": "compact", "description": "Compact the current conversation context.", "input": map[string]any{"hint": "custom instructions?"}, "source": "builtin"},
 			{"name": "bg", "description": "Run a command in the background.", "input": map[string]any{"hint": "[--device <id>] command"}, "source": "builtin"},
 			{"name": "subagent", "description": "Start a background subagent task.", "input": map[string]any{"hint": "task"}, "source": "builtin"},

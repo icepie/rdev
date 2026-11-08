@@ -13,7 +13,7 @@
 - `bg`：在远程设备上运行后台 shell，立即返回任务 ID。任务默认运行至实际完成；可设置 0–86400 秒超时，0 表示不设期限。非零退出码记为失败。
 - `jobs`：列出、读取、等待或取消本会话任务，也可用 `action="steer", id, message` 向运行中的 subagent 追加指导。单次等待最多 30 秒，等待超时不取消任务。
 - Subagent 指导在模型响应或工具批次结束后按 FIFO 接入；最后一次边界之后收到的指导继续在同一子会话执行，不会复用主会话历史或扩大已授予的工具权限。每条最多 4096 字节，最多待处理 8 条。完成、取消或关闭后拒绝新指导；取消/失败时未消费的指导可通过 `jobs read` 的 `pendingGuidance` 查看。入口包括 Agent 的 `jobs` 工具及任务面板的“追加指导”。面板使用线程隔离的 `steer_job` / `job_steered` 请求回执，仅确认接收后清空未修改的草稿；拒绝、15 秒未确认或断线时保留内容。切换任务保留本面板内的草稿，任务结束后可复制，刷新页面不保证恢复这些任务草稿。兼容 OMP RPC 的 `get_subagents`、`get_subagent_messages`、`steer_subagent` 和 `cancel_subagent` 接口，接受 OMP 的 `type` 命令帧及 `subagentId`/`message`/`fromByte` 字段，返回标准 `response`/`success`/`data`/`error` 回执；消息读取返回 `rdev://subagent/<id>` 有界输出窗口，游标超出窗口时将 `reset` 置为 true，不伪装成 OMP 持久化 session 文件。
-- OMP RPC 还提供 `negotiate_protocol`（当前版本 2）与 `get_available_commands`，其中 `commands` 按 OMP 语义返回可通过 `prompt.message` 执行的 slash 命令（compact/bg/subagent），包含 description、source 与 input.hint；rdev 扩展字段 `rpcCommands` 单独列出 RPC 方法及参数。旧客户端若依赖原先的 RPC 方法列表，应改读 `rpcCommands`。浏览器专用的 jobs/new/reset/stop/steer 控件不冒充 prompt slash 命令。
+- OMP RPC 还提供 `negotiate_protocol`（当前版本 2）与 `get_available_commands`，其中 `commands` 按 OMP 语义返回可通过 `prompt.message` 执行的 slash 命令（compact/bg/subagent/jobs），包含 description、source 与 input.hint；rdev 扩展字段 `rpcCommands` 单独列出 RPC 方法及参数。旧客户端若依赖原先的 RPC 方法列表，应改读 `rpcCommands`。浏览器专用的 new/reset/stop/steer 控件不冒充 prompt slash 命令。
 - `get_state` 返回指定线程的模型、流式/压缩状态、分开的 steering/follow-up 队列、后台任务 pending 状态、settled 状态、待办和 rdev 线程 URI；它读取服务端线程快照，不创建第二份会话状态。
 - `get_available_models` 返回配置中的规范 `provider/model` 列表；`set_model` 在目标线程空闲时切换模型并保留历史，运行中或未知线程/模型返回标准错误，避免把切换伪装成排队消息。
 - `set_thinking_level` 接受 `off`/`low`/`medium`/`high`，复用浏览器的设备级设置路径（影响该设备的所有线程；拒绝非空 `thread`，不伪装成线程独立设置）：空闲线程立即重建会话，运行线程在下一轮生效，并返回标准 response。
@@ -134,3 +134,5 @@ RPC 帧由独立命令白名单分发，复用设备认证门槛。未知命令�
 这是 OMP 命令帧和完成语义的部分适配：rdev 没有 OMP 持久化 entry ID 和压缩前 token 估算，因此结果不伪造 `firstKeptEntryId` / `tokensBefore`；不能作为完整 `CompactionResult` 的替代。UI 不新增 token 数。
 
 `get_state.hasPendingAsyncWork` 还包括已退出但 completion callback 尚未返回的后台结果递交，避免 worker 标成 completed 后、主会话收到结果前短暂误报 settled。后台任务的 Read/Wait 仍按 worker 终态返回，不额外等待 UI 推送；isSettled 继续同时检查前台和队列。
+
+- 服务端会话命令也支持 `/jobs`、`/jobs full` 与 `/jobs kill <id|all>`：直接调用当前线程的任务管理器，不调用模型；full 返回每个任务的有界输出。RPC prompt 仍要求前台空闲；运行中浏览器任务面板可直接查询和取消，RPC 可使用既有 subagent 控制方法。

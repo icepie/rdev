@@ -22,10 +22,10 @@ func runAgentConversation(ctx context.Context, sess *agent.Session, text string,
 		}
 	}()
 	command, argument := splitAgentCommand(text)
-	if len(images) > 0 && (command == "/compact" || command == "/bg" || command == "/subagent") {
+	if len(images) > 0 && isAgentSessionCommand(command) {
 		return false, fmt.Errorf("%s does not accept images; remove the attachments or change the message", command)
 	}
-	if command == "/bg" || command == "/subagent" {
+	if command == "/bg" || command == "/subagent" || command == "/jobs" {
 		name, args, err := agentCommandTool(command, argument)
 		if err != nil {
 			return false, err
@@ -51,6 +51,15 @@ func runAgentConversation(ctx context.Context, sess *agent.Session, text string,
 	return true, nil
 }
 
+func isAgentSessionCommand(command string) bool {
+	switch command {
+	case "/compact", "/bg", "/subagent", "/jobs":
+		return true
+	default:
+		return false
+	}
+}
+
 func splitAgentCommand(text string) (string, string) {
 	text = strings.TrimSpace(text)
 	if i := strings.IndexFunc(text, unicode.IsSpace); i >= 0 {
@@ -62,7 +71,7 @@ func splitAgentCommand(text string) (string, string) {
 // /bg --device <id> <command> makes the target explicit in server mode.
 // Everything after the optional target is preserved as shell text.
 func agentCommandTool(command, argument string) (string, json.RawMessage, error) {
-	args := map[string]string{}
+	args := map[string]any{}
 	switch command {
 	case "/bg":
 		optionEnd := strings.IndexFunc(argument, unicode.IsSpace)
@@ -81,10 +90,22 @@ func agentCommandTool(command, argument string) (string, json.RawMessage, error)
 		args["command"] = argument
 	case "/subagent":
 		args["task"] = argument
+	case "/jobs":
+		parts := strings.Fields(argument)
+		switch {
+		case len(parts) == 0:
+			args["action"] = "list"
+		case len(parts) == 1 && parts[0] == "full":
+			args["action"], args["full"] = "list", true
+		case len(parts) == 2 && parts[0] == "kill":
+			args["action"], args["id"] = "cancel", parts[1]
+		default:
+			return "", nil, fmt.Errorf("usage: /jobs [full|kill <id>|kill all]")
+		}
 	default:
 		return "", nil, fmt.Errorf("unknown command %s", command)
 	}
-	if argument == "" {
+	if argument == "" && command != "/jobs" {
 		return "", nil, fmt.Errorf("%s requires an argument", command)
 	}
 	raw, err := json.Marshal(args)

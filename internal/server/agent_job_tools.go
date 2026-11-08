@@ -106,11 +106,12 @@ func (*jobsTool) Description() string {
 	return "List this thread's background commands and subagents, read output, cancel a job, steer a running subagent with additional user guidance, or wait up to 30 seconds. A wait timeout or queued user guidance releases the wait without canceling the job. Results also arrive automatically; avoid repeated polling."
 }
 func (*jobsTool) Schema() json.RawMessage {
-	return json.RawMessage(`{"type":"object","properties":{"action":{"type":"string","enum":["list","read","cancel","wait","steer"]},"id":{"type":"string"},"message":{"type":"string","description":"Additional guidance for action=steer; applied at the next settled response/tool boundary"},"timeout":{"type":"integer","minimum":1,"maximum":30}},"required":["action"],"additionalProperties":false}`)
+	return json.RawMessage(`{"type":"object","properties":{"action":{"type":"string","enum":["list","read","cancel","wait","steer"]},"id":{"type":"string","description":"Job ID; action=cancel also accepts all for this thread"},"full":{"type":"boolean","description":"Include bounded output for every listed job"},"message":{"type":"string","description":"Additional guidance for action=steer; applied at the next settled response/tool boundary"},"timeout":{"type":"integer","minimum":1,"maximum":30}},"required":["action"],"additionalProperties":false}`)
 }
 func (t *jobsTool) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
 	var args struct {
 		Action  string `json:"action"`
+		Full    bool   `json:"full"`
 		Message string `json:"message"`
 		ID      string `json:"id"`
 		Timeout int    `json:"timeout"`
@@ -120,7 +121,15 @@ func (t *jobsTool) Execute(ctx context.Context, raw json.RawMessage) (string, er
 	}
 	switch args.Action {
 	case "list":
-		return marshalJobResult(t.jobs.List())
+		items := t.jobs.List()
+		if args.Full {
+			for i := range items {
+				if detail, err := t.jobs.Read(items[i].ID); err == nil {
+					items[i] = detail
+				}
+			}
+		}
+		return marshalJobResult(items)
 	case "read":
 		job, err := t.jobs.Read(args.ID)
 		if err != nil {
@@ -136,6 +145,13 @@ func (t *jobsTool) Execute(ctx context.Context, raw json.RawMessage) (string, er
 		}
 		return "Guidance queued for the subagent; inspect pendingGuidance in job details if execution fails or is canceled.", nil
 	case "cancel":
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		if args.ID == "all" {
+			t.jobs.CancelAll()
+			return "Cancellation requested for all jobs in this thread.", nil
+		}
 		if err := t.jobs.Cancel(args.ID); err != nil {
 			return "", err
 		}
