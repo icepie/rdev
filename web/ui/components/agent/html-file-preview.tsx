@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 
 // Remote files must not inherit the application's origin or access its APIs.
 // Keep authored HTML/styles intact, unlike the theme-injected canvas surface.
@@ -9,11 +9,17 @@ export function htmlPreviewDocument(content: string): string {
   return `<!doctype html><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; media-src data: blob:; font-src data:; connect-src 'none'; form-action 'none'; base-uri 'none'">${content}`;
 }
 
-export function HtmlFilePreview({ content, name, hidden }: {
-  content: string; name: string; hidden: boolean;
+export function HtmlFilePreview({ content, name, hidden, previewUrl }: {
+  content: string; name: string; hidden: boolean; previewUrl?: string;
 }) {
   const document = useMemo(() => htmlPreviewDocument(content), [content]);
-  return <iframe title={name} srcDoc={document} sandbox="allow-scripts" referrerPolicy="no-referrer"
+  const frame = useRef<HTMLIFrameElement>(null);
+  const previousContent = useRef(content);
+  useEffect(() => {
+    if (previousContent.current !== content && previewUrl && frame.current) frame.current.src = previewUrl;
+    previousContent.current = content;
+  }, [content, previewUrl]);
+  return <iframe ref={frame} title={name} src={previewUrl} srcDoc={previewUrl ? undefined : document} sandbox="allow-scripts" referrerPolicy="no-referrer"
     hidden={hidden} inert={hidden}
     className={hidden ? "hidden" : "absolute inset-0 h-full w-full border-0 bg-white"} />;
 }

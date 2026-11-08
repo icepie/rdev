@@ -106,7 +106,8 @@ type Message struct {
 
 	// Client registration identity. InstanceID is a stable per-process token used
 	// to distinguish duplicate IDs from reconnects of the same running client.
-	InstanceID string `json:"instanceId,omitempty"`
+	InstanceID        string `json:"instanceId,omitempty"`
+	ConfinedDownloads bool   `json:"confinedDownloads,omitempty"` // device enforces DownloadRoot
 
 	// Session creation
 	Subsystem string           `json:"subsystem,omitempty"` // "", "sftp"
@@ -151,19 +152,21 @@ type Message struct {
 	Success  bool   `json:"success,omitempty"`
 
 	// File manager
-	RequestID   string      `json:"requestId,omitempty"`
-	TaskID      string      `json:"taskId,omitempty"`
-	Path        string      `json:"path,omitempty"`
-	ParentPath  string      `json:"parentPath,omitempty"`
-	Name        string      `json:"name,omitempty"`
-	Size        int64       `json:"size,omitempty"`
-	Offset      int64       `json:"offset,omitempty"`
-	Length      int64       `json:"length,omitempty"` // download byte limit; zero preserves whole-file/resume behavior
-	ModTime     string      `json:"modTime,omitempty"`
-	IsDir       bool        `json:"isDir,omitempty"`
-	Truncated   bool        `json:"truncated,omitempty"`
-	HomePath    string      `json:"homePath,omitempty"`
-	FileEntries []FileEntry `json:"entries,omitempty"`
+	RequestID string `json:"requestId,omitempty"`
+	TaskID    string `json:"taskId,omitempty"`
+	Path      string `json:"path,omitempty"`
+	// DownloadRoot confines preview reads on the device. The start reply must echo it.
+	DownloadRoot string      `json:"downloadRoot,omitempty"`
+	ParentPath   string      `json:"parentPath,omitempty"`
+	Name         string      `json:"name,omitempty"`
+	Size         int64       `json:"size,omitempty"`
+	Offset       int64       `json:"offset,omitempty"`
+	Length       int64       `json:"length,omitempty"` // download byte limit; zero preserves whole-file/resume behavior
+	ModTime      string      `json:"modTime,omitempty"`
+	IsDir        bool        `json:"isDir,omitempty"`
+	Truncated    bool        `json:"truncated,omitempty"`
+	HomePath     string      `json:"homePath,omitempty"`
+	FileEntries  []FileEntry `json:"entries,omitempty"`
 
 	// Session management
 	SessionType string        `json:"sessionType,omitempty"` // "shell", "exec", "sftp"

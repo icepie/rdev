@@ -130,3 +130,46 @@ func TestManagedDownloadRangeCancelAndTruncation(t *testing.T) {
 		})
 	}
 }
+
+func TestConfinedPreviewDownload(t *testing.T) {
+	root := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "outside.css")
+	if err := os.WriteFile(outside, []byte("outside secret"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "style.css"), []byte("body{color:red}"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name, path string
+		allowed    bool
+	}{
+		{"inside", "style.css", true}, {"parent", "../outside.css", false}, {"absolute", outside, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tr := &downloadRecordingTransport{}
+			c := NewClient("", "preview-test", "", "")
+			c.transport = tr
+			c.handleManagedDownloadStart(&protocol.Message{TaskID: "preview", Path: tc.path, DownloadRoot: root, Length: 20})
+			if tc.allowed {
+				if len(tr.messages) != 2 || tr.messages[0].DownloadRoot != root || len(tr.frames) == 0 {
+					t.Fatalf("missing confined download: %+v", tr.messages)
+				}
+			} else if len(tr.messages) != 1 || tr.messages[0].Type != protocol.MsgFileTransferError || len(tr.frames) != 0 {
+				t.Fatalf("escaped root: %+v", tr.messages)
+			}
+		})
+	}
+	t.Run("symlink escape", func(t *testing.T) {
+		if err := os.Symlink(outside, filepath.Join(root, "escape.css")); err != nil {
+			t.Skipf("symlinks unavailable: %v", err)
+		}
+		tr := &downloadRecordingTransport{}
+		c := NewClient("", "preview-test", "", "")
+		c.transport = tr
+		c.handleManagedDownloadStart(&protocol.Message{TaskID: "escape", Path: "escape.css", DownloadRoot: root, Length: 20})
+		if len(tr.messages) != 1 || tr.messages[0].Type != protocol.MsgFileTransferError || len(tr.frames) != 0 {
+			t.Fatalf("symlink escaped root: %+v", tr.messages)
+		}
+	})
+}

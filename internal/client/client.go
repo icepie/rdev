@@ -400,6 +400,7 @@ func (h *wsEventHandler) OnOpen(socket *gws.Conn) {
 		Password:            h.client.password,
 		DesktopCapabilities: desktopCapabilities(),
 		LogSupported:        true,
+		ConfinedDownloads:   true,
 	}); err != nil {
 		log.Printf("register send error: %v", err)
 		return
@@ -800,6 +801,7 @@ func (c *Client) connectStream(kind, endpoint string) error {
 		Password:            c.password,
 		DesktopCapabilities: desktopCapabilities(),
 		LogSupported:        true,
+		ConfinedDownloads:   true,
 	}); err != nil {
 		conn.Close()
 		return err
@@ -1082,7 +1084,13 @@ func (c *Client) handleManagedDownloadStart(msg *protocol.Message) {
 	if taskID == "" || path == "" {
 		return
 	}
-	f, err := os.Open(path)
+	var f *os.File
+	var err error
+	if msg.DownloadRoot != "" {
+		f, err = os.OpenInRoot(msg.DownloadRoot, path)
+	} else {
+		f, err = os.Open(path)
+	}
 	if err != nil {
 		c.sendFileTransferError(taskID, path, err.Error())
 		return
@@ -1093,8 +1101,8 @@ func (c *Client) handleManagedDownloadStart(msg *protocol.Message) {
 		c.sendFileTransferError(taskID, path, err.Error())
 		return
 	}
-	if st.IsDir() {
-		c.sendFileTransferError(taskID, path, "cannot download directory")
+	if st.IsDir() || (msg.DownloadRoot != "" && !st.Mode().IsRegular()) {
+		c.sendFileTransferError(taskID, path, "cannot download non-regular file")
 		return
 	}
 	offset := msg.Offset
@@ -1127,7 +1135,7 @@ func (c *Client) handleManagedDownloadStart(msg *protocol.Message) {
 	if msg.Length > 0 {
 		length = min(length, msg.Length)
 	}
-	if err := c.send(&protocol.Message{Type: protocol.MsgFileDownloadStart, TaskID: taskID, Path: path, Name: filepath.Base(path), Size: st.Size(), Offset: offset, Length: length, ModTime: st.ModTime().Format(time.RFC3339)}); err != nil {
+	if err := c.send(&protocol.Message{Type: protocol.MsgFileDownloadStart, TaskID: taskID, Path: path, Name: filepath.Base(path), DownloadRoot: msg.DownloadRoot, Size: st.Size(), Offset: offset, Length: length, ModTime: st.ModTime().Format(time.RFC3339)}); err != nil {
 		return
 	}
 	var reader io.Reader = f

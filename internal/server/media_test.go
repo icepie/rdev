@@ -16,6 +16,8 @@ type mediaTestTransport struct {
 	data           []byte
 	old, stall     bool
 	reads, cancels int
+	noRoot         bool
+	lastRead       protocol.Message
 }
 
 func (t *mediaTestTransport) WriteJSON(raw []byte) error {
@@ -31,6 +33,7 @@ func (t *mediaTestTransport) WriteJSON(raw []byte) error {
 		return nil
 	}
 	t.reads++
+	t.lastRead = m
 	if t.stall {
 		return nil
 	}
@@ -38,7 +41,10 @@ func (t *mediaTestTransport) WriteJSON(raw []byte) error {
 	if m.Length > 0 {
 		n = min(m.Length, n)
 	}
-	meta := &protocol.Message{Type: protocol.MsgFileDownloadStart, TaskID: m.TaskID, Size: int64(len(t.data)), Offset: m.Offset, Length: n, ModTime: "2026-11-08T00:00:00Z"}
+	meta := &protocol.Message{Type: protocol.MsgFileDownloadStart, TaskID: m.TaskID, DownloadRoot: m.DownloadRoot, Size: int64(len(t.data)), Offset: m.Offset, Length: n, ModTime: "2026-11-08T00:00:00Z"}
+	if t.noRoot {
+		meta.DownloadRoot = ""
+	}
 	if t.old {
 		meta.Length = 0
 	}
@@ -57,7 +63,7 @@ func newMediaTestServer(t *testing.T) (*Server, *ClientConn, *mediaTestTransport
 	s := newPrefsTestServer(t)
 	s.agentFileTasks = make(map[string]*agentFileTask)
 	tr := &mediaTestTransport{srv: s, data: bytes.Repeat([]byte("0123456789"), 100000)}
-	c := &ClientConn{ID: "media", Password: "device-password", Transport: tr}
+	c := &ClientConn{ID: "media", Password: "device-password", ConfinedDownloads: true, Transport: tr}
 	s.clients = map[string]*ClientConn{c.ID: c}
 	return s, c, tr
 }
@@ -162,7 +168,7 @@ func TestHTMLPreviewResponseSandboxAndSizeLimit(t *testing.T) {
 			t.Fatal(w.Code, w.Header())
 		}
 		policy := w.Header().Get("Content-Security-Policy")
-		if !strings.Contains(policy, "sandbox allow-scripts;") || strings.Contains(policy, "allow-same-origin") || !strings.Contains(policy, "connect-src 'none'") {
+		if !strings.Contains(policy, "sandbox allow-scripts;") || strings.Contains(policy, "allow-same-origin") || !strings.Contains(policy, "connect-src example.com/api/media/") {
 			t.Fatal("unsafe standalone HTML policy", policy)
 		}
 		if method == "GET" && !bytes.Equal(w.Body.Bytes(), tr.data) {

@@ -80,21 +80,22 @@ var (
 
 // ClientConn represents a connected client device
 type ClientConn struct {
-	ID           string
-	RequestedID  string
-	InstanceID   string
-	Version      string
-	OS           string
-	Conn         *gws.Conn
-	Transport    DeviceTransport
-	ConnectedAt  time.Time
-	Password     string
-	Sessions     map[string]*ProxySession
-	Forwards     map[string]*ProxyForward
-	Desktop      *protocol.DesktopCapabilities
-	LogSupported bool
-	writeMu      sync.Mutex
-	mu           sync.Mutex
+	ID                string
+	RequestedID       string
+	InstanceID        string
+	Version           string
+	OS                string
+	Conn              *gws.Conn
+	Transport         DeviceTransport
+	ConnectedAt       time.Time
+	Password          string
+	Sessions          map[string]*ProxySession
+	Forwards          map[string]*ProxyForward
+	Desktop           *protocol.DesktopCapabilities
+	ConfinedDownloads bool
+	LogSupported      bool
+	writeMu           sync.Mutex
+	mu                sync.Mutex
 }
 
 // clientOS reports the device's operating system as sent at registration,
@@ -810,19 +811,20 @@ func (h *wsHandler) handleRegister(socket *gws.Conn, msg *protocol.Message) {
 	}
 	instanceID := strings.TrimSpace(msg.InstanceID)
 	client := &ClientConn{
-		ID:           clientID,
-		RequestedID:  clientID,
-		InstanceID:   instanceID,
-		Version:      msg.ClientVersion,
-		OS:           msg.ClientOS,
-		Conn:         socket,
-		Transport:    &wsDeviceTransport{conn: socket},
-		ConnectedAt:  time.Now(),
-		Password:     msg.Password,
-		Desktop:      cloneDesktopCapabilities(msg.DesktopCapabilities),
-		LogSupported: msg.LogSupported,
-		Sessions:     make(map[string]*ProxySession),
-		Forwards:     make(map[string]*ProxyForward),
+		ID:                clientID,
+		RequestedID:       clientID,
+		InstanceID:        instanceID,
+		Version:           msg.ClientVersion,
+		OS:                msg.ClientOS,
+		Conn:              socket,
+		Transport:         &wsDeviceTransport{conn: socket},
+		ConnectedAt:       time.Now(),
+		Password:          msg.Password,
+		Desktop:           cloneDesktopCapabilities(msg.DesktopCapabilities),
+		LogSupported:      msg.LogSupported,
+		ConfinedDownloads: msg.ConfinedDownloads,
+		Sessions:          make(map[string]*ProxySession),
+		Forwards:          make(map[string]*ProxyForward),
 	}
 
 	socket.Session().Store("clientID", clientID)
@@ -1125,18 +1127,19 @@ func (s *Server) registerStreamClient(transport DeviceTransport, msg *protocol.M
 	}
 	instanceID := strings.TrimSpace(msg.InstanceID)
 	client := &ClientConn{
-		ID:           clientID,
-		RequestedID:  clientID,
-		InstanceID:   instanceID,
-		Version:      msg.ClientVersion,
-		OS:           msg.ClientOS,
-		Transport:    transport,
-		ConnectedAt:  time.Now(),
-		Password:     msg.Password,
-		Desktop:      cloneDesktopCapabilities(msg.DesktopCapabilities),
-		LogSupported: msg.LogSupported,
-		Sessions:     make(map[string]*ProxySession),
-		Forwards:     make(map[string]*ProxyForward),
+		ID:                clientID,
+		RequestedID:       clientID,
+		InstanceID:        instanceID,
+		Version:           msg.ClientVersion,
+		OS:                msg.ClientOS,
+		Transport:         transport,
+		ConnectedAt:       time.Now(),
+		Password:          msg.Password,
+		Desktop:           cloneDesktopCapabilities(msg.DesktopCapabilities),
+		LogSupported:      msg.LogSupported,
+		ConfinedDownloads: msg.ConfinedDownloads,
+		Sessions:          make(map[string]*ProxySession),
+		Forwards:          make(map[string]*ProxyForward),
 	}
 	old, assignedID, duplicate := s.registerClient(client)
 	if old != nil && old.Transport != transport {

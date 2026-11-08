@@ -220,3 +220,24 @@ it("retains independent preview/source reading positions, lazily mounts source a
   expect(host.querySelector('[data-source]')).toBeNull();
  } finally {await dispose();}
 });
+
+it("uses the authorized HTML resource URL, retains its frame across modes, and reloads changed content", async () => {
+ const previewUrl='/api/media/ticket/index.html';
+ const props={path:'/site/index.html',state:{...ready('<link rel="stylesheet" href="style.css">'),previewUrl}};
+ const {host,render,dispose}=await mount(props);
+ try {
+  const frame=host.querySelector('iframe');
+  expect(frame.getAttribute('src')).toBe(previewUrl);
+  expect(frame.hasAttribute('srcdoc')).toBe(false);
+  expect(frame.getAttribute('sandbox')).toBe('allow-scripts');
+  await act(async()=>button(host,'Show source').click());
+  await act(async()=>button(host,'Show preview').click());
+  expect(host.querySelector('iframe')).toBe(frame);
+  const srcSetter=vi.spyOn(frame,'src','set');
+  await render({...props,state:{...props.state,content:'<h1>Refreshed</h1>'}});
+  expect(srcSetter).toHaveBeenCalledOnce();
+  expect(srcSetter).toHaveBeenCalledWith(previewUrl);
+  await render({...props,state:{...props.state,content:'<h1>Refreshed</h1>'},visible:false});
+  expect(srcSetter).toHaveBeenCalledOnce();
+ } finally {await dispose();}
+});

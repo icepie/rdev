@@ -139,7 +139,7 @@ function FilePreviewContent({
             ) : (
               <>
                 {isHTML ? (
-                  <HtmlFilePreview content={state.content} name={base} hidden={viewMode !== "preview"} />
+                  <HtmlFilePreview content={state.content} name={base} hidden={viewMode !== "preview"} previewUrl={state.previewUrl} />
                 ) : hasPreview && (
                   <FileViewPane active={viewMode === "preview"} mode="preview">
                     {isCSV ? <CsvFilePreview name={base} content={state.content} t={t} /> : (

@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	pathpkg "path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -22,6 +24,7 @@ const mediaChunkSize = 512 * 1024
 type mediaGrant struct {
 	device, path, password string
 	expires                time.Time
+	scoped                 bool
 }
 
 func videoMIME(path string) string {
@@ -48,21 +51,23 @@ func isHTMLPreviewPath(path string) bool {
 const htmlPreviewPolicy = "sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; media-src data: blob:; font-src data:; connect-src 'none'; form-action 'none'; base-uri 'none'"
 
 // Called only after the owning Agent/Files socket has authorized this device.
-// The bearer grants one file, expires, and is invalidated by password changes.
+// The bearer grants one media file, or an HTML directory on capable devices.
+// It expires and is invalidated by password changes.
 func (s *Server) grantFilePreview(client *ClientConn, path string) (string, error) {
 	token := make([]byte, 32)
 	if _, err := rand.Read(token); err != nil {
 		return "", err
 	}
 	now := time.Now()
+	scoped := isHTMLPreviewPath(path) && client.ConfinedDownloads
 	s.mediaMu.Lock()
 	defer s.mediaMu.Unlock()
 	if s.mediaGrants == nil {
 		s.mediaGrants = make(map[string]mediaGrant)
 	}
 	for key, g := range s.mediaGrants {
-		if g.device == client.ID && g.path == path && g.password == passwordFingerprint(client.Password) && g.expires.Sub(now) > 5*time.Minute {
-			return "/api/media/" + key, nil
+		if g.device == client.ID && g.path == path && g.scoped == scoped && g.password == passwordFingerprint(client.Password) && g.expires.Sub(now) > 5*time.Minute {
+			return filePreviewURL(key, path, scoped), nil
 		}
 		if !now.Before(g.expires) {
 			delete(s.mediaGrants, key)
@@ -72,8 +77,16 @@ func (s *Server) grantFilePreview(client *ClientConn, path string) (string, erro
 		return "", errors.New("too many active media previews")
 	}
 	key := hex.EncodeToString(token)
-	s.mediaGrants[key] = mediaGrant{client.ID, path, passwordFingerprint(client.Password), now.Add(time.Hour)}
-	return "/api/media/" + key, nil
+	s.mediaGrants[key] = mediaGrant{device: client.ID, path: path, password: passwordFingerprint(client.Password), expires: now.Add(time.Hour), scoped: scoped}
+	return filePreviewURL(key, path, scoped), nil
+}
+
+func filePreviewURL(key, path string, scoped bool) string {
+	base := "/api/media/" + key
+	if scoped {
+		return base + "/" + url.PathEscape(pathpkg.Base(strings.ReplaceAll(path, "\\", "/")))
+	}
+	return base
 }
 
 // ServeContent implements Range/HEAD/If-Range without buffering entire media.
@@ -84,10 +97,10 @@ func (s *Server) HandleMedia(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", 405)
 		return
 	}
-	if !requireOrigin(w, r) {
+	if r.Header.Get("Origin") != "null" && !requireOrigin(w, r) {
 		return
 	}
-	key := strings.TrimPrefix(r.URL.Path, "/api/media/")
+	key, resource, scoped := strings.Cut(strings.TrimPrefix(r.URL.Path, "/api/media/"), "/")
 	s.mediaMu.Lock()
 	grant, ok := s.mediaGrants[key]
 	if s.mediaSlots == nil {
@@ -108,6 +121,15 @@ func (s *Server) HandleMedia(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	if scoped != grant.scoped || (scoped && !client.ConfinedDownloads) {
+		http.NotFound(w, r)
+		return
+	}
+	// Opaque sandbox origins may fetch only directory-scoped preview grants.
+	if r.Header.Get("Origin") == "null" && !scoped {
+		http.Error(w, "forbidden origin", http.StatusForbidden)
+		return
+	}
 	select {
 	case slots <- struct{}{}:
 		defer func() { <-slots }()
@@ -120,6 +142,10 @@ func (s *Server) HandleMedia(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "private, no-store")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Referrer-Policy", "no-referrer")
+	if scoped {
+		s.servePreviewResource(w, r, ctx, client, grant, key, resource)
+		return
+	}
 	if isHTMLPreviewPath(grant.path) {
 		reader := &readFileTool{srv: s, client: client}
 		content, err := reader.download(ctx, grant.path, agentFileReadCap)
@@ -154,6 +180,7 @@ type mediaReader struct {
 	client       *ClientConn
 	ctx          context.Context
 	path         string
+	root         string
 	size, offset int64
 	modTime      string
 	pending      []byte
@@ -186,7 +213,7 @@ func (r *mediaReader) Read(p []byte) (int, error) {
 		return 0, io.EOF
 	}
 	if len(r.pending) == 0 {
-		data, meta, err := r.srv.readMediaRange(r.ctx, r.client, r.path, r.offset, min(mediaChunkSize, r.size-r.offset))
+		data, meta, err := r.srv.readMediaRangeInRoot(r.ctx, r.client, r.root, r.path, r.offset, min(mediaChunkSize, r.size-r.offset))
 		if err != nil {
 			return 0, err
 		}
@@ -205,6 +232,10 @@ func (r *mediaReader) Read(p []byte) (int, error) {
 }
 
 func (s *Server) readMediaRange(ctx context.Context, client *ClientConn, path string, offset, length int64) ([]byte, *protocol.Message, error) {
+	return s.readMediaRangeInRoot(ctx, client, "", path, offset, length)
+}
+
+func (s *Server) readMediaRangeInRoot(ctx context.Context, client *ClientConn, root, path string, offset, length int64) ([]byte, *protocol.Message, error) {
 	if offset < 0 || length <= 0 || length > mediaChunkSize {
 		return nil, nil, errors.New("invalid media range")
 	}
@@ -214,7 +245,7 @@ func (s *Server) readMediaRange(ctx context.Context, client *ClientConn, path st
 	task := s.registerBufferedFileTask(id, 2)
 	defer s.removeAgentFileTask(id)
 	defer func() { _ = client.Send(&protocol.Message{Type: protocol.MsgFileTransferCancel, TaskID: id}) }()
-	if err := client.Send(&protocol.Message{Type: protocol.MsgFileDownloadStart, TaskID: id, Path: path, Offset: offset, Length: length}); err != nil {
+	if err := client.Send(&protocol.Message{Type: protocol.MsgFileDownloadStart, TaskID: id, Path: path, DownloadRoot: root, Offset: offset, Length: length}); err != nil {
 		return nil, nil, err
 	}
 	var meta *protocol.Message
@@ -247,6 +278,9 @@ func (s *Server) readMediaRange(ctx context.Context, client *ClientConn, path st
 		case msg := <-task.events:
 			switch msg.Type {
 			case protocol.MsgFileDownloadStart:
+				if msg.DownloadRoot != root {
+					return nil, nil, errors.New("device does not support confined preview reads; update client")
+				}
 				if meta != nil || msg.Size < 0 || msg.Offset != offset || offset > msg.Size || msg.Length != min(length, msg.Size-offset) {
 					return nil, nil, errors.New("device does not support bounded media reads; update client")
 				}
