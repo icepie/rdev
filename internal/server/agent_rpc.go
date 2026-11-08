@@ -133,6 +133,8 @@ func (h *agentWSHandler) handleAgentRPCFrame(ac *agentConn, raw []byte) bool {
 			return true
 		}
 		h.handleRPCSetThinkingLevel(ac, request)
+	case "set_todos":
+		h.handleRPCSetTodos(ac, request, fields["phases"])
 	case "abort":
 		h.handleRPCAbort(ac, request)
 	case "prompt":
@@ -229,6 +231,69 @@ func (h *agentWSHandler) handleAgentRPCFrame(ac *agentConn, raw []byte) bool {
 		fail("unsupported_command", fmt.Sprintf("unsupported RPC command %q", request.Command))
 	}
 	return true
+}
+
+type rpcTodoPhase struct {
+	Name  string        `json:"name"`
+	Tasks []rpcTodoTask `json:"tasks"`
+}
+type rpcTodoTask struct {
+	Content string `json:"content"`
+	Status  string `json:"status"`
+	Blocker string `json:"blocker,omitempty"`
+	Details string `json:"details,omitempty"`
+}
+
+func (h *agentWSHandler) handleRPCSetTodos(ac *agentConn, request agentMsg, raw json.RawMessage) {
+	if ac.entry == nil {
+		h.writeRPCError(ac, request, "invalid_request", "unknown thread")
+		return
+	}
+	var phases []rpcTodoPhase
+	if len(raw) == 0 || json.Unmarshal(raw, &phases) != nil {
+		h.writeRPCError(ac, request, "invalid_request", "phases must be an array")
+		return
+	}
+	flat := make([]todoItem, 0)
+	for pi, phase := range phases {
+		if strings.TrimSpace(phase.Name) == "" {
+			h.writeRPCError(ac, request, "invalid_request", fmt.Sprintf("phase %d name is required", pi))
+			return
+		}
+		for ti, task := range phase.Tasks {
+			if strings.TrimSpace(task.Content) == "" {
+				h.writeRPCError(ac, request, "invalid_request", fmt.Sprintf("phase %d task %d content is required", pi, ti))
+				return
+			}
+			switch task.Status {
+			case "pending", "in_progress", "completed", "abandoned", "blocked":
+			default:
+				h.writeRPCError(ac, request, "invalid_request", fmt.Sprintf("phase %d task %d has invalid status", pi, ti))
+				return
+			}
+			flat = append(flat, todoItem{Content: phase.Name + ": " + task.Content, Status: task.Status})
+		}
+	}
+	threadID := request.Thread
+	if threadID == "" {
+		threadID = ac.current
+	}
+	s := h.srv
+	s.agentSessionsMu.Lock()
+	th := ac.entry.threads[threadID]
+	if th == nil {
+		s.agentSessionsMu.Unlock()
+		h.writeRPCError(ac, request, "invalid_request", "unknown thread")
+		return
+	}
+	th.todos = flat
+	th.todoPhases = phases
+	s.agentSessionsMu.Unlock()
+	rawItems, _ := json.Marshal(flat)
+	s.agentBroadcast(ac.entry, agentMsg{Op: "todo", Thread: threadID, Items: rawItems})
+	success := true
+	data, _ := json.Marshal(map[string]any{"todoPhases": phases})
+	ac.writeJSON(agentMsg{Type: "response", Command: request.Command, ID: request.ID, Success: &success, Data: data})
 }
 
 func (h *agentWSHandler) handleRPCPrompt(ac *agentConn, request agentMsg) {
@@ -390,7 +455,7 @@ func (h *agentWSHandler) handleRPCState(ac *agentConn, request agentMsg) {
 		"hasPendingAsyncWork": jobsRunning,
 		"isSettled":           !snap.running && len(snap.queue) == 0 && !jobsRunning,
 		"queuedMessages":      map[string]any{"followUp": followUp, "steering": steering, "liveSteered": len(steering)},
-		"todoPhases":          snap.todos, "sessionFile": "rdev://thread/" + threadID,
+		"todoPhases":          th.todoPhases, "todos": snap.todos, "sessionFile": "rdev://thread/" + threadID,
 	}
 	s.agentSessionsMu.Unlock()
 	success := true
@@ -504,6 +569,7 @@ func (h *agentWSHandler) handleRPCAvailableCommands(ac *agentConn, request agent
 		{"name": "get_available_models"},
 		{"name": "set_model", "params": map[string]any{"model": "string", "thread": "string?"}},
 		{"name": "set_thinking_level", "params": map[string]any{"level": "off|low|medium|high"}},
+		{"name": "set_todos", "params": map[string]any{"phases": "TodoPhase[]"}},
 		{"name": "abort", "params": map[string]any{"thread": "string?"}},
 		{"name": "prompt", "params": map[string]any{"message": "string", "thread": "string?"}},
 		{"name": "steer", "params": map[string]any{"message": "string", "thread": "string?"}},

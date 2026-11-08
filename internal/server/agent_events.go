@@ -50,6 +50,7 @@ func (s *Server) emitAgentTurnEvent(entry *agentSessionEntry, th *agentThread, e
 		var items []todoItem
 		if json.Unmarshal([]byte(event.ToolResult), &items) == nil {
 			th.todos = items
+			th.todoPhases = nil
 			msg.Op, msg.Items = "todo", json.RawMessage(event.ToolResult)
 		}
 	case agent.EventDone:

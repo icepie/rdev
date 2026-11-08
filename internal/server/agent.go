@@ -362,6 +362,7 @@ type agentThread struct {
 	epoch        int
 	queue        []agentQueuedChat // chat messages received while running
 	todos        []todoItem        // latest todo_write list
+	todoPhases   []rpcTodoPhase    // OMP phase-shaped view, when set through RPC
 	alwaysAllow  map[string]bool   // tool names approved "always" in this thread
 	aprSeq       int               // approval/question id counter
 	approvals    map[string]chan approvalDecision
@@ -1762,6 +1763,7 @@ func (h *agentWSHandler) handleReset(ac *agentConn, threadRef string) {
 	th.session = srv.buildAgentSession(entry, th, entry.client, provider, model)
 	th.sessionClient = entry.client
 	th.todos = nil
+	th.todoPhases = nil
 	th.turnFiles = nil
 	th.queue = nil
 	th.lastUsage = nil

@@ -128,6 +128,22 @@ func TestSubagentRPCWireContract(t *testing.T) {
 	if string(thinkingReply["success"]) != "true" || len(thinkingReply["data"]) != 0 {
 		t.Fatalf("invalid thinking response: %s", thinkingReply)
 	}
+	todosRaw := `{"type":"set_todos","id":"todos-1","phases":[{"name":"Release","tasks":[{"content":"run tests","status":"in_progress"}]}]}`
+	sendAgentOp(t, socket, todosRaw)
+	todosReply := waitRawMsg(t, rec.msgs, "todos response", func(m map[string]json.RawMessage) bool {
+		return string(m["type"]) == `"response"` && string(m["id"]) == `"todos-1"`
+	})
+	if string(todosReply["success"]) != "true" || !strings.Contains(string(todosReply["data"]), `"todoPhases"`) {
+		t.Fatalf("invalid todo response: %s", todosReply)
+	}
+	stateRaw, _ := json.Marshal(map[string]any{"type": "get_state", "id": "state-todos"})
+	sendAgentOp(t, socket, string(stateRaw))
+	stateTodos := waitRawMsg(t, rec.msgs, "todo state", func(m map[string]json.RawMessage) bool {
+		return string(m["type"]) == `"response"` && string(m["id"]) == `"state-todos"`
+	})
+	if !strings.Contains(string(stateTodos["data"]), `"todoPhases":[{"name":"Release"`) {
+		t.Fatalf("state lost phase shape: %s", stateTodos)
+	}
 	raw, _ = json.Marshal(map[string]any{"type": "abort", "id": "abort-1", "thread": th.id})
 	sendAgentOp(t, socket, string(raw))
 	abortReply := waitRawMsg(t, rec.msgs, "abort response", func(m map[string]json.RawMessage) bool {
