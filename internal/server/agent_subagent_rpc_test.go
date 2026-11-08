@@ -16,6 +16,7 @@ import (
 // agentMsg silently discard or substitute incompatible response fields.
 func TestSubagentRPCWireContract(t *testing.T) {
 	srv := newPrefsTestServer(t)
+	srv.Agent.Providers[0].Models = append(srv.Agent.Providers[0].Models, AgentModelConfig{ID: "family/model", API: "openai-responses", ContextWindow: 32000, MaxTokens: 4000})
 	entry, err := srv.agentSessionFor(agentServerDeviceID, &ClientConn{ID: agentServerDeviceID})
 	if err != nil {
 		t.Fatal(err)
@@ -157,6 +158,36 @@ func TestSubagentRPCWireContract(t *testing.T) {
 		})
 		if string(models["success"]) != "true" || !strings.Contains(string(models["data"]), `"p/m1"`) {
 			t.Fatalf("invalid models response: %s", models)
+		}
+		var catalog struct {
+			Models []rpcModel `json:"models"`
+		}
+		if err := json.Unmarshal(models["data"], &catalog); err != nil || len(catalog.Models) != 3 {
+			t.Fatalf("invalid RPC catalog: %s", models["data"])
+		}
+		for _, model := range catalog.Models {
+			if model.CanonicalID != model.Provider+"/"+model.ID || strings.HasPrefix(model.ID, model.Provider+"/") {
+				t.Fatalf("model id cannot round-trip through OMP selector: %+v", model)
+			}
+			if model.ID == "family/model" && (model.API != "openai-responses" || model.ContextWindow != 32000 || model.MaxTokens != 4000) {
+				t.Fatalf("lost configured model metadata: %+v", model)
+			}
+			selector, _ := json.Marshal(map[string]any{"type": "set_model", "id": "catalog-select", "provider": model.Provider, "modelId": model.ID})
+			sendAgentOp(t, socket, string(selector))
+			selected := waitRawMsg(t, rec.msgs, "catalog selection", func(m map[string]json.RawMessage) bool { return string(m["id"]) == `"catalog-select"` })
+			var selectedModel rpcModel
+			if err := json.Unmarshal(selected["data"], &selectedModel); err != nil || string(selected["success"]) != "true" || selectedModel != model {
+				t.Fatalf("catalog/set_model mismatch: %s", selected)
+			}
+			sendAgentOp(t, socket, `{"type":"get_state","id":"selected-state"}`)
+			state := waitRawMsg(t, rec.msgs, "selected model state", func(m map[string]json.RawMessage) bool { return string(m["id"]) == `"selected-state"` })
+			var current struct {
+				Model    rpcModel `json:"model"`
+				ModelRef string   `json:"modelRef"`
+			}
+			if err := json.Unmarshal(state["data"], &current); err != nil || current.Model != model || current.ModelRef != model.CanonicalID {
+				t.Fatalf("catalog/get_state mismatch: %s", state)
+			}
 		}
 	}
 	raw, _ = json.Marshal(map[string]any{"type": "set_model", "id": "model-1", "thread": th.id, "model": "p/m2"})

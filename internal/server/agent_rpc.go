@@ -134,7 +134,8 @@ func (h *agentWSHandler) handleAgentRPCFrame(ac *agentConn, raw []byte) bool {
 			fail("invalid_request", err.Error())
 			return true
 		}
-		h.handleRPCSetModel(ac, request)
+		_, ompSelector := fields["provider"]
+		h.handleRPCSetModel(ac, request, ompSelector)
 	case "set_thinking_level":
 		if err := rpcStringField(fields, "level", &request.Level, true); err != nil {
 			fail("invalid_request", err.Error())
@@ -462,8 +463,13 @@ func (h *agentWSHandler) handleRPCState(ac *agentConn, request agentMsg) {
 	snap := s.threadSnapshotLocked(ac.entry, th)
 	steering, followUp := splitRPCQueue(snap.queue, snap.queueModes)
 	pendingWork := th.jobs != nil && th.jobs.HasPendingWork()
+	var modelInfo *rpcModel
+	if provider, model, _, err := s.Agent.Resolve(th.model); err == nil {
+		descriptor := describeRPCModel(provider, model)
+		modelInfo = &descriptor
+	}
 	state := map[string]any{
-		"thread": threadID, "model": th.model, "isStreaming": snap.running,
+		"thread": threadID, "model": modelInfo, "modelRef": th.model, "isStreaming": snap.running,
 		"thinkingLevel": ac.entry.reasoningLevel,
 		"isCompacting":  snap.running && th.workingTool == "/compact",
 		"messageCount":  len(snap.history), "queuedMessageCount": len(snap.queue),
@@ -496,14 +502,21 @@ func splitRPCQueue(items, modes []string) (steering, followUp []string) {
 }
 
 func (h *agentWSHandler) handleRPCAvailableModels(ac *agentConn, request agentMsg) {
+	models := make([]rpcModel, 0)
+	for i := range h.srv.Agent.Providers {
+		provider := &h.srv.Agent.Providers[i]
+		for j := range provider.Models {
+			models = append(models, describeRPCModel(provider, &provider.Models[j]))
+		}
+	}
 	success := true
 	data, _ := json.Marshal(struct {
-		Models []map[string]any `json:"models"`
-	}{h.srv.Agent.Models()})
+		Models []rpcModel `json:"models"`
+	}{models})
 	ac.writeJSON(agentMsg{Type: "response", Command: request.Command, ID: request.ID, Success: &success, Data: data})
 }
 
-func (h *agentWSHandler) handleRPCSetModel(ac *agentConn, request agentMsg) {
+func (h *agentWSHandler) handleRPCSetModel(ac *agentConn, request agentMsg, ompSelector bool) {
 	if ac.entry == nil {
 		h.writeRPCError(ac, request, "invalid_request", "unknown thread")
 		return
@@ -543,7 +556,11 @@ func (h *agentWSHandler) handleRPCSetModel(ac *agentConn, request agentMsg) {
 	s.writeAgentPrefs(ac.entry)
 	s.broadcastThreadList(ac.entry)
 	success := true
-	data, _ := json.Marshal(map[string]string{"model": canonical})
+	var result any = map[string]string{"model": canonical}
+	if ompSelector {
+		result = describeRPCModel(provider, model)
+	}
+	data, _ := json.Marshal(result)
 	ac.writeJSON(agentMsg{Type: "response", Command: request.Command, ID: request.ID, Success: &success, Data: data})
 }
 
