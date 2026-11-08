@@ -59,25 +59,26 @@ export function ThreadNavigation({ items, scrollRef, t }: {
   const rail = users.length <= 20 ? users : Array.from({ length: 20 }, (_, index) =>
     users[Math.round(index * (users.length - 1) / 19)]);
   const activeUser = users.filter(item => active === null || item.key <= active).at(-1)?.key;
-  return <div className="group/toc absolute right-0 top-4 z-10 w-8"
+  return <div className="group/toc absolute inset-y-0 right-0 z-10 flex w-8 items-center pointer-events-none [container-type:size]">
+    <div className="relative max-h-full w-full pointer-events-auto"
     onMouseEnter={() => setOpen(true)} onMouseLeave={event => {
       if (!event.currentTarget.contains(document.activeElement)) setOpen(false);
     }} onFocusCapture={() => setOpen(true)} onBlurCapture={event => {
       if (!event.currentTarget.contains(event.relatedTarget as Node)) setOpen(false);
     }} onKeyDown={event => { if (event.key === "Escape") { event.stopPropagation(); trigger.current?.focus(); setOpen(false); } }}>
     <button ref={trigger} type="button" aria-label={t("agent.navigation.title")} aria-expanded={open} aria-controls={id}
-      onClick={() => setOpen(true)} className="flex max-h-64 w-8 cursor-pointer flex-col items-center gap-2 overflow-hidden py-2">
+      onClick={() => setOpen(true)} className="flex max-h-[min(16rem,100cqh)] w-8 cursor-pointer flex-col items-center gap-2 overflow-y-auto scrollbar-none py-2">
       {rail.map(item => <span key={item.key} aria-hidden className={cn("h-[3px] shrink-0 rounded-full transition-all duration-150", item.key === activeUser ? "w-5 bg-foreground/30 group-hover/toc:bg-foreground/70" : "w-3 bg-foreground/5 group-hover/toc:bg-foreground/20")} />)}
     </button>
-    {open && <div id={id} className="absolute right-full top-0 w-[18.25rem] max-w-[calc(100vw-3rem)] pr-1">
-      <div className="rounded-lg border border-border bg-popover p-1 shadow-lg">
-        <div role="group" aria-label={t("agent.navigation.title")} className="flex gap-1 pb-1">
+    {open && <div id={id} className="absolute right-full top-1/2 -translate-y-1/2 w-[18.25rem] max-w-[calc(100vw-3rem)] pr-1">
+      <div className="flex max-h-[calc(100cqh-1rem)] flex-col overflow-hidden rounded-lg border border-border bg-popover p-1 shadow-lg">
+        <div role="group" aria-label={t("agent.navigation.title")} className="flex shrink-0 gap-1 pb-1">
           {(["turn", "user"] as const).map(kind => <button key={kind} type="button" aria-pressed={tab === kind} onClick={() => setTab(kind)}
             className={cn("flex-1 cursor-pointer rounded-md px-2 py-1.5 text-xs", tab === kind ? "bg-state-hover text-foreground" : "text-muted-foreground hover:bg-state-hover")}>
             {t(kind === "turn" ? "agent.navigation.agent" : "agent.navigation.user")}
           </button>)}
         </div>
-        <ul className="max-h-64 overflow-y-auto overflow-x-hidden">
+        <ul className="min-h-0 max-h-64 overflow-y-auto overflow-x-hidden">
           {messages.filter(item => item.kind === tab).map(item => <li key={item.key}>
             <button type="button" aria-current={active === item.key ? "true" : undefined}
               onClick={() => { const root = scrollRef.current;
@@ -90,5 +91,6 @@ export function ThreadNavigation({ items, scrollRef, t }: {
         </ul>
       </div>
     </div>}
+    </div>
   </div>;
 }
