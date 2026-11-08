@@ -250,6 +250,15 @@ func truncateToolOutput(s string) string {
 // Preserve shell stream boundaries during model-context reduction. The same
 // stored result is replayed to the UI, which needs the complete envelope.
 func mapShellStreams(s string, transform func(string) string) (string, bool) {
+	prefix := ""
+	for _, cause := range []string{"context canceled", "context deadline exceeded", "error: context canceled", "error: context deadline exceeded"} {
+		candidate := cause + "; partial output:\n"
+		if strings.HasPrefix(s, candidate+"exit code: unknown (interrupted)\n<stdout>\n") {
+			prefix = candidate
+			s = strings.TrimPrefix(s, candidate)
+			break
+		}
+	}
 	status, body, ok := strings.Cut(s, "\n<stdout>\n")
 	if !ok || !strings.HasPrefix(status, "exit code: ") || strings.Contains(status, "\n") {
 		return "", false
@@ -259,7 +268,7 @@ func mapShellStreams(s string, transform func(string) string) (string, bool) {
 		return "", false
 	}
 	stderr := strings.TrimSuffix(rest, "\n</stderr>")
-	return status + "\n<stdout>\n" + transform(stdout) + "\n</stdout>\n<stderr>\n" + transform(stderr) + "\n</stderr>", true
+	return prefix + status + "\n<stdout>\n" + transform(stdout) + "\n</stdout>\n<stderr>\n" + transform(stderr) + "\n</stderr>", true
 }
 
 func truncateOutputText(s string, limit, head, tail int) string {

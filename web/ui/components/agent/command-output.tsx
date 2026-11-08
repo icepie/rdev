@@ -22,6 +22,7 @@ function commandOf(tool: ToolItem): string {
  * (internal/server/agent_tools.go runShell). Parse it back apart so the
  * markers never reach the screen; unparseable results render raw. */
 interface ShellResult {
+  interruption: string;
   status: string;
   exitCode: number | null;
   stdout: string;
@@ -30,7 +31,11 @@ interface ShellResult {
 
 function parseShellResult(result: string): ShellResult | null {
   // Transport output may contain CRLF (including Windows command results).
-  const normalized = result.replace(/\r\n/g, "\n");
+  let normalized = result.replace(/\r\n/g, "\n");
+  // runShellReporting preserves partial streams in cancellation errors.
+  const interrupted = /^(?:error: )?context (?:canceled|deadline exceeded); partial output:\n(?=exit code: unknown \(interrupted\)\n<stdout>\n)/.exec(normalized);
+  const interruption = interrupted ? interrupted[0].trimEnd() : "";
+  if (interrupted) normalized = normalized.slice(interrupted[0].length);
   let m: string[] | null =
     /^([^\n]*)\n<stdout>\n(?:([\s\S]*?)\n)?<\/stdout>\n<stderr>\n(?:([\s\S]*?)\n)?<\/stderr>\s*$/.exec(
       normalized,
@@ -51,6 +56,7 @@ function parseShellResult(result: string): ShellResult | null {
   }
   const code = /^exit code: (-?\d+)$/.exec(m[1]);
   return {
+    interruption,
     status: m[1],
     exitCode: code ? Number(code[1]) : null,
     stdout: m[2] ?? "",
@@ -61,7 +67,7 @@ function parseShellResult(result: string): ShellResult | null {
 export function commandOutputText(result: string): string {
   const parsed = parseShellResult(result);
   if (!parsed) return result;
-  return [parsed.stdout, parsed.stderr, parsed.status].filter(Boolean).join("\n");
+  return [parsed.interruption, parsed.stdout, parsed.stderr, parsed.status].filter(Boolean).join("\n");
 }
 
 /* Shell tool body (bb TerminalOutputBlock): `$ <command>` header, ANSI
@@ -127,7 +133,7 @@ export function CommandOutputBody({
   }
 
   const failed =
-    tool.isError || (parsed.exitCode !== null && parsed.exitCode !== 0);
+    tool.isError || !!parsed.interruption || (parsed.exitCode !== null && parsed.exitCode !== 0);
   return (
     <div
       className={cn(
@@ -141,6 +147,7 @@ export function CommandOutputBody({
             $ <SyntaxCode code={command} language="shell" />
           </div>
         )}
+        {parsed.interruption && <div className="mt-1.5 text-destructive-text">{parsed.interruption}</div>}
         {stdoutHtml && (
           /* bb AnsiBlock: stdout scrolls horizontally (whitespace-pre). */
           <div

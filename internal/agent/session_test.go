@@ -808,41 +808,53 @@ func TestRunTurnLaterRoundFailureKeepsUserMessage(t *testing.T) {
 }
 
 func TestShellStreamsSurviveTruncationAndHistoryCompaction(t *testing.T) {
-	for _, streams := range [][2]string{
-		{strings.Repeat("界", 9000), "warning tail"},
-		{strings.Repeat("stdout\n", 2000), strings.Repeat("stderr\n", 2000)},
-	} {
-		original := "exit code: 1\n<stdout>\n" + streams[0] + "\n</stdout>\n<stderr>\n" + streams[1] + "\n</stderr>"
-		reduced := truncateToolOutput(original)
-		if len(reduced) > toolOutputMax {
-			t.Fatalf("output exceeds budget: %d", len(reduced))
-		}
-		if _, ok := mapShellStreams(reduced, func(s string) string { return s }); !ok {
-			t.Fatal("truncation damaged stream boundaries")
-		}
-		if strings.ContainsRune(reduced, '\uFFFD') {
-			t.Fatal("truncation split unicode")
-		}
-		sess := New(testConfig("http://unused", nil))
-		history := []Message{{Role: "tool", Content: reduced}}
-		for range compactKeepRecent {
-			history = append(history, Message{Role: "user", Content: "recent"})
-		}
-		sess.SetHistory(history)
-		sess.compactToolOutputs()
-		compacted := sess.History()[0].Content
-		if len(compacted) > compactMaxLen {
-			t.Fatalf("compacted streams exceed budget: %d", len(compacted))
-		}
-		if _, ok := mapShellStreams(compacted, func(s string) string { return s }); !ok {
-			t.Fatal("history compaction damaged stream boundaries")
-		}
-		if !strings.Contains(compacted, "earlier output truncated") {
-			t.Fatal("missing truncation marker")
-		}
-		sess.compactToolOutputs()
-		if sess.History()[0].Content != compacted {
-			t.Fatal("repeat compaction changed retained output")
+	for _, prefix := range []string{"", "context canceled; partial output:\n", "error: context deadline exceeded; partial output:\n"} {
+		for _, streams := range [][2]string{
+			{strings.Repeat("界", 9000), "warning tail"},
+			{strings.Repeat("stdout\n", 2000), strings.Repeat("stderr\n", 2000)},
+		} {
+			status := "exit code: 1"
+			if prefix != "" {
+				status = "exit code: unknown (interrupted)"
+			}
+			original := prefix + status + "\n<stdout>\n" + streams[0] + "\n</stdout>\n<stderr>\n" + streams[1] + "\n</stderr>"
+			reduced := truncateToolOutput(original)
+			if !strings.HasPrefix(reduced, prefix+status) {
+				t.Fatal("truncation lost interruption status")
+			}
+			if len(reduced) > toolOutputMax {
+				t.Fatalf("output exceeds budget: %d", len(reduced))
+			}
+			if _, ok := mapShellStreams(reduced, func(s string) string { return s }); !ok {
+				t.Fatal("truncation damaged stream boundaries")
+			}
+			if strings.ContainsRune(reduced, '\uFFFD') {
+				t.Fatal("truncation split unicode")
+			}
+			sess := New(testConfig("http://unused", nil))
+			history := []Message{{Role: "tool", Content: reduced}}
+			for range compactKeepRecent {
+				history = append(history, Message{Role: "user", Content: "recent"})
+			}
+			sess.SetHistory(history)
+			sess.compactToolOutputs()
+			compacted := sess.History()[0].Content
+			if !strings.HasPrefix(compacted, prefix+status) {
+				t.Fatal("compaction lost interruption status")
+			}
+			if len(compacted) > compactMaxLen {
+				t.Fatalf("compacted streams exceed budget: %d", len(compacted))
+			}
+			if _, ok := mapShellStreams(compacted, func(s string) string { return s }); !ok {
+				t.Fatal("history compaction damaged stream boundaries")
+			}
+			if !strings.Contains(compacted, "earlier output truncated") {
+				t.Fatal("missing truncation marker")
+			}
+			sess.compactToolOutputs()
+			if sess.History()[0].Content != compacted {
+				t.Fatal("repeat compaction changed retained output")
+			}
 		}
 	}
 }

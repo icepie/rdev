@@ -55,3 +55,23 @@ it.each([
   expect(html).not.toContain("&lt;stderr&gt;");
   expect(commandOutputText(result)).toBe([stdout,stderr,"exit code: 0"].filter(Boolean).join("\n"));
 });
+
+it.each(["context canceled", "error: context deadline exceeded"])("renders interrupted partial streams and keeps the cause when copying (%s)", cause => {
+  const prefix = `${cause}; partial output:`;
+  const result = `${prefix}\nexit code: unknown (interrupted)\n<stdout>\nretained output\n</stdout>\n<stderr>\nretained error\n</stderr>`;
+  const html = renderToStaticMarkup(createElement(ToolRow, {
+    tool: {id:"interrupted",name:"shell",done:true,args:'{"command":"slow-command"}',result,isError:true},t:key=>key,
+  }));
+  expect(html).toContain(prefix);
+  expect(html).toContain("retained output");
+  expect(html).toContain("retained error");
+  expect(html).toContain("exit code: unknown (interrupted)");
+  expect(html).not.toContain("&lt;stdout&gt;");
+  expect(html).not.toContain("&lt;stderr&gt;");
+  expect(commandOutputText(result)).toBe(`${prefix}\nretained output\nretained error\nexit code: unknown (interrupted)`);
+});
+
+it("does not strip arbitrary output that resembles an interrupted envelope", () => {
+  const output = "example partial output:\nexit code: unknown (interrupted)\n<stdout>\nraw text\n</stdout>\n<stderr>\n\n</stderr>";
+  expect(commandOutputText(output)).toBe(output);
+});
