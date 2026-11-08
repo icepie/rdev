@@ -75,3 +75,57 @@ func rpcImageContents(images []agent.MessageImage) []rpcImageContent {
 	}
 	return result
 }
+
+func (h *agentWSHandler) handleRPCPromoteQueued(ac *agentConn, request agentMsg) {
+	if ac.entry == nil {
+		h.writeRPCError(ac, request, "invalid_request", "unknown thread")
+		return
+	}
+	threadID := request.Thread
+	if threadID == "" {
+		threadID = ac.current
+	}
+	s := h.srv
+	s.agentSessionsMu.Lock()
+	th := ac.entry.threads[threadID]
+	if th == nil {
+		s.agentSessionsMu.Unlock()
+		h.writeRPCError(ac, request, "invalid_request", "unknown thread")
+		return
+	}
+	if !th.running {
+		s.agentSessionsMu.Unlock()
+		h.writeRPCError(ac, request, "invalid_request", "conversation is idle")
+		return
+	}
+	if th.turnCommand {
+		s.agentSessionsMu.Unlock()
+		h.writeRPCError(ac, request, "invalid_request", "current command must finish before guidance can run")
+		return
+	}
+	index := -1
+	for i, item := range th.queue {
+		if item.steering || len(item.display) > 0 || queueMode(item, th.model) != "follow_up" || item.text != request.Message {
+			continue
+		}
+		if request.QueueID != "" && item.id != request.QueueID {
+			continue
+		}
+		index = i
+		break
+	}
+	if index < 0 {
+		s.agentSessionsMu.Unlock()
+		h.writeRPCError(ac, request, "invalid_request", "queued message not found")
+		return
+	}
+	item := takeQueuedChat(&th.queue, index)
+	queueAgentSteeringLocked(th, item)
+	s.agentSessionsMu.Unlock()
+	if ac.socket != nil {
+		success := true
+		data, _ := json.Marshal(map[string]any{"promoted": true})
+		ac.writeJSON(agentMsg{Type: "response", Command: request.Command, ID: request.ID, Success: &success, Data: data})
+	}
+	s.broadcastQueue(ac.entry, th)
+}

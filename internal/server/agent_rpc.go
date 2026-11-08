@@ -167,6 +167,18 @@ func (h *agentWSHandler) handleAgentRPCFrame(ac *agentConn, raw []byte) bool {
 			}
 		}
 		h.handleRPCRemoveQueued(ac, request, queue)
+	case "promote_queued_message":
+		if err := rpcStringField(fields, "message", &request.Message, true); err != nil {
+			fail("invalid_request", err.Error())
+			return true
+		}
+		if _, exists := fields["queueId"]; exists {
+			if err := rpcStringField(fields, "queueId", &request.QueueID, true); err != nil {
+				fail("invalid_request", err.Error())
+				return true
+			}
+		}
+		h.handleRPCPromoteQueued(ac, request)
 	case "get_subagents":
 		h.handleGetSubagents(ac, request)
 	case "get_subagent_messages":
@@ -469,6 +481,7 @@ func (h *agentWSHandler) handleRPCAvailableCommands(ac *agentConn, request agent
 		{"name": "steer", "params": map[string]any{"message": "string", "thread": "string?"}},
 		{"name": "follow_up", "params": map[string]any{"message": "string", "thread": "string?"}},
 		{"name": "remove_queued_message", "params": map[string]any{"message": "string", "queue": "steering|followUp", "queueId": "string?"}},
+		{"name": "promote_queued_message", "params": map[string]any{"message": "string", "queueId": "string?"}},
 		{"name": "compact", "params": map[string]any{"customInstructions": "string?"}},
 		{"name": "get_subagents"}, {"name": "get_subagent_messages"},
 		{"name": "steer_subagent", "params": map[string]any{"subagentId": "string", "message": "string"}},

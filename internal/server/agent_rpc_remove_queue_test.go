@@ -103,3 +103,24 @@ func TestRPCRemoveQueuedMessage(t *testing.T) {
 		t.Fatal("foreign queue changed")
 	}
 }
+
+func TestRPCPromoteQueuedMessage(t *testing.T) {
+	srv := newTurnTestServer(t, "http://127.0.0.1:1")
+	entry, _ := srv.agentSessionFor("dev1", srv.clients["dev1"])
+	th := entry.threads[entry.current]
+	srv.agentSessionsMu.Lock()
+	th.running = true
+	th.queue = []agentQueuedChat{{text: "guidance", steering: true}, {text: "follow"}, {text: "second"}}
+	srv.agentSessionsMu.Unlock()
+	conn := &agentConn{authed: true, entry: entry, current: th.id, socket: nil}
+	h := &agentWSHandler{srv: srv}
+	h.handleAgentRPCFrame(conn, []byte(`{"type":"promote_queued_message","id":"p","message":"second"}`))
+	srv.agentSessionsMu.Lock()
+	defer srv.agentSessionsMu.Unlock()
+	if got := queueModes(th); !reflect.DeepEqual(got, []string{"steer", "steer", "follow_up"}) {
+		t.Fatalf("wrong promoted modes: %v", got)
+	}
+	if got := queueTexts(th.queue); !reflect.DeepEqual(got, []string{"guidance", "second", "follow"}) {
+		t.Fatalf("wrong promoted order: %v", got)
+	}
+}
