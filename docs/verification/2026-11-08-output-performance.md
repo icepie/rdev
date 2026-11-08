@@ -56,3 +56,15 @@ go test -race ./internal/client
 go test ./internal/server -run '^$' -bench '^BenchmarkAgentReplay$' -benchmem -count=3 -benchtime=200ms
 go test -race ./internal/server -run 'TestAgentReplay|TestAgentReasoningStreamsAndReplaysBeforeCompletion|TestResetRejectsLateTurnEvents|TestAgentStop|TestApprovalSurvivesBrowserReconnect'
 ```
+
+## 浏览器文字增量合并
+
+WebSocket 入口现在将相邻、同 thread 的纯 delta/reasoning 文本在16ms计时窗口内合并后交给会话状态 Hook。工具、审批、切换、结束、未知字段和线程/阶段变化先刷新前一段，保持原顺序。待合并文本最多32Ki UTF-16 code units，超限先刷新，大帧直接交付；空增量不占缓冲。计时器不是隐藏标签页会暂停的 rAF，但仍受浏览器后台计时器节流，不能承诺后台16ms延迟。
+
+断线先刷新尾部再结束当前 turn；设备切换、连接替换和卸载销毁旧缓冲，旧 socket 的延迟回调另有身份检查。多个分屏仍经原 thread 路由进入各自 sink，不跨线程合并。未知元数据帧原样交付，避免未来协议字段被吞掉。服务端重连 live 数组仍走已有回放，不在本次新增合并范围。
+
+可复现证据：`web/tests/thread-sink.test.js` 中以真实 useThreadSink 接收200个中文/emoji增量，原逐事件交付产生200次 Harness渲染；同一突发经 batch 并以 done 刷新后产生1次，最终正文相同且 streaming=false。这是确定性提交计数测试，不是浏览器帧率、端到端耗时或内存基准；没有宣称持续低速流也减少200倍渲染。
+
+真实浏览器验证：构建后的嵌入服务接收本地 SSE fixture 的200个增量（每20个刷新并间隔10ms），经 WebSocket、AgentPage 和实际消息组件渲染。原生发送消息后，DOM 检查得到200行，从000到199逐项与预期相同，中文/emoji完整，结束后没有停止按钮。该 fixture 不执行设备命令，不代表真实上游模型性能。
+
+220 Web测试、类型检查、Vite构建与Go嵌入服务构建通过。新增边界测试覆盖线程/阶段/工具/切换顺序、未来字段、大小限制、空增量、尾部刷新和废弃连接。全量Go测试未重复执行，本轮没有修改Go生产代码。

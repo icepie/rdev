@@ -1,15 +1,17 @@
+import { createStreamBatch } from '../ui/components/agent/stream-batch';
 import { JSDOM } from 'jsdom';
 import { act, createElement } from 'react';
 import { createRoot } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it } from 'vitest';
 import { applyScopedMessage, useThreadSink } from '../ui/components/agent/thread-sink';
 
-let dom, root, sink, previous;
+let dom, root, sink, previous, renders;
 beforeEach(async () => {
   dom = new JSDOM('<div id="root"></div>', { pretendToBeVisual: true });
   previous = Object.fromEntries(['window', 'document', 'requestAnimationFrame', 'IS_REACT_ACT_ENVIRONMENT'].map(k => [k, Object.getOwnPropertyDescriptor(globalThis, k)]));
   Object.assign(globalThis, { window: dom.window, document: dom.window.document, requestAnimationFrame: dom.window.requestAnimationFrame.bind(dom.window), IS_REACT_ACT_ENVIRONMENT: true });
-  function Harness() { sink = useThreadSink(); return null; }
+  renders = 0;
+  function Harness() { renders++; sink = useThreadSink(); return null; }
   root = createRoot(document.getElementById('root'));
   await act(async () => root.render(createElement(Harness)));
 });
@@ -339,4 +341,27 @@ it('restores explicit tool failures without guessing from result text', async ()
   ] }, { role:'assistant',reasoning:'Thinking before cancellation' }] });
   expect(sink.state.items[0].tools.map(tool=>tool.isError)).toEqual([true,false,false]);
   expect(sink.state.items[1].reasoning).toBe('Thinking before cancellation');
+});
+
+
+it('reduces burst commits while preserving the actual thread sink transcript', async () => {
+  const messages = Array.from({length:200}, () => ({op:'delta',thread:'a',text:'中文🙂 output\n'}));
+  const before = renders;
+  for (const message of messages) await frame(message);
+  const directCommits = renders - before;
+  const expected = sink.state.items[0].text;
+  await act(async () => sink.ops.reset());
+  const start = renders;
+  const batch = createStreamBatch(message => applyScopedMessage(sink.ops, message, key => key));
+  // Separate event deliveries in the same burst, followed by the real terminal
+  // boundary: done must flush the tail before finalizing the assistant turn.
+  await act(async () => {
+    messages.forEach(batch.push);
+    batch.push({op:'done',thread:'a'});
+  });
+  batch.dispose();
+  expect(sink.state.items[0]).toMatchObject({text:expected, streaming:false});
+  expect(sink.state.running).toBe(false);
+  expect(directCommits).toBe(200);
+  expect(renders-start).toBe(1);
 });

@@ -1,3 +1,4 @@
+import { createStreamBatch } from "../components/agent/stream-batch";
 import { clearQueueReturns } from "../components/agent/queue-actions";
 import { discardComposerTextDraft, reconcileComposerTextDrafts } from "../components/agent/use-composer-text-draft";
 import { AgentConnectionError } from "../components/agent/connection-error";
@@ -355,6 +356,7 @@ export function AgentPage() {
   const [groupWidth, setGroupWidth] = useState(0);
 
   const wsRef = useRef<WebSocket | null>(null);
+  const streamBatchRef = useRef<ReturnType<typeof createStreamBatch> | null>(null);
   const rightPanelRef = useRef<ImperativePanelHandle>(null);
   const panelWidthRef = useRef(initialPanelWidth);
   const panelSizingRef = useRef<HTMLDivElement>(null);
@@ -1107,6 +1109,8 @@ export function AgentPage() {
     pendingRenameRef.current.clear();
     setDeleteBusy(false);
     if (wsRef.current) {
+      streamBatchRef.current?.dispose();
+      streamBatchRef.current = null;
       wsRef.current.onclose = null;
       wsRef.current.close();
       wsRef.current = null;
@@ -1122,6 +1126,10 @@ export function AgentPage() {
 
     const ws = new WebSocket(wsURL("/agent?device=" + encodeURIComponent(deviceId)));
     wsRef.current = ws;
+    const streamBatch = createStreamBatch(msg => {
+      if (wsRef.current === ws) handleMessage(msg, deviceId);
+    });
+    streamBatchRef.current = streamBatch;
     // These belong to this socket, not the previous connection's React state.
     let authenticated = false;
     let rejected = false;
@@ -1146,10 +1154,13 @@ export function AgentPage() {
         ws.close();
         return;
       }
-      handleMessage(msg, deviceId);
+      streamBatch.push(msg);
     };
     ws.onclose = (event) => {
       if (wsRef.current !== ws) return;
+      streamBatch.flush();
+      streamBatch.dispose();
+      streamBatchRef.current = null;
       clearPing();
       rejectPendingPanelRequests();
       setAuthed(false);
@@ -1218,6 +1229,8 @@ export function AgentPage() {
     setReconnecting(false);
     clearPing();
     if (wsRef.current) {
+      streamBatchRef.current?.dispose();
+      streamBatchRef.current = null;
       wsRef.current.onclose = null;
       wsRef.current.close();
       wsRef.current = null;
@@ -1257,6 +1270,8 @@ export function AgentPage() {
       clearPing();
       rejectPendingPanelRequests();
       if (wsRef.current) {
+        streamBatchRef.current?.dispose();
+        streamBatchRef.current = null;
         wsRef.current.onclose = null;
         wsRef.current.close();
         wsRef.current = null;
