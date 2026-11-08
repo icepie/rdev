@@ -124,7 +124,7 @@ export function PanelTerminal({
         setAuthError("");
         setAuthRound((r) => r + 1);
         setAuthOpen(true);
-      } else if (msg.op === "auth_ok") {
+      } else if (msg.op === "auth_ok" || msg.op === "ready") {
         if (pendingPwRef.current) {
           rememberDevicePassword(device, pendingPwRef.current);
           pendingPwRef.current = "";
@@ -133,7 +133,11 @@ export function PanelTerminal({
         setAuthOpen(false);
         setAuthError("");
         setStatus("connected");
-        if (visibleRef.current) term.focus();
+        if (visibleRef.current) {
+          try { fitRef.current?.fit(); } catch { /* layout may still be pending */ }
+          term.focus();
+        }
+        ws.send(JSON.stringify({ op: "resize", rows: term.rows, cols: term.cols }));
       } else if (msg.op === "auth_fail") {
         forgetDevicePassword(device);
         pendingPwRef.current = "";

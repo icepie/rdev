@@ -15,7 +15,8 @@ import (
 // Terminal WebSocket protocol (optimized):
 //
 //	Server → Browser:  Binary frame = raw terminal output (zero overhead)
-//	                   Text frame   = JSON {"op":"auth","message":"..."} (password required)
+//	                   Text frame   = JSON {"op":"ready"} (session route established; send current size)
+//	                                   or {"op":"auth","message":"..."} (password required)
 //	                                   or {"op":"exit","code":N} or {"op":"error","message":"..."}
 //	Browser → Server:  Binary frame = raw input data (zero overhead)
 //	                   Text frame   = JSON {"op":"resize","rows":N,"cols":N}
@@ -101,21 +102,6 @@ func (h *terminalWSHandler) createSession(socket *gws.Conn, deviceID string) {
 
 	sessionID := generateID()
 
-	if err := client.Send(&protocol.Message{
-		Type:      protocol.MsgNewSession,
-		ClientID:  deviceID,
-		SessionID: sessionID,
-		Pty:       true,
-		Term:      "xterm-256color",
-		Rows:      24,
-		Cols:      80,
-		Env:       terminalSessionEnv(),
-	}); err != nil {
-		h.sendError(socket, "failed to reach device")
-		socket.WriteClose(1000, nil)
-		return
-	}
-
 	proxySess := &ProxySession{
 		ID:       sessionID,
 		ClientID: deviceID,
@@ -135,6 +121,26 @@ func (h *terminalWSHandler) createSession(socket *gws.Conn, deviceID string) {
 		return
 	}
 
+	// Reserve and publish the output route before the device can reply.
+	if err := client.Send(&protocol.Message{
+		Type:      protocol.MsgNewSession,
+		ClientID:  deviceID,
+		SessionID: sessionID,
+		Pty:       true,
+		Term:      "xterm-256color",
+		Rows:      24,
+		Cols:      80,
+		Env:       terminalSessionEnv(),
+	}); err != nil {
+		h.srv.removeSession(sessionID)
+		client.mu.Lock()
+		delete(client.Sessions, sessionID)
+		client.mu.Unlock()
+		h.sendError(socket, "failed to reach device")
+		socket.WriteClose(1000, nil)
+		return
+	}
+
 	tc := &terminalConn{
 		deviceID:  deviceID,
 		sessionID: sessionID,
@@ -144,6 +150,9 @@ func (h *terminalWSHandler) createSession(socket *gws.Conn, deviceID string) {
 	}
 
 	socket.Session().Store("terminalConn", tc)
+	// The browser may have fitted before connecting; request an explicit size
+	// synchronization even when xterm has not changed dimensions since then.
+	h.sendJSON(socket, terminalMsg{Op: "ready"})
 	go tc.pumpOutput()
 }
 

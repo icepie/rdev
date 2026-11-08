@@ -6,6 +6,7 @@ import { expect, it, vi } from "vitest";
 const terminals = vi.hoisted(() => []);
 const auth = vi.hoisted(() => ({ current: null }));
 vi.mock("@xterm/xterm", () => ({ Terminal: class {
+  rows = 42; cols = 132;
   options = {}; focus = vi.fn(); write = vi.fn(); reset = vi.fn(); dispose = vi.fn();
   constructor() { terminals.push(this); }
   loadAddon() {} open() {} onData() {} onResize() {}
@@ -27,7 +28,7 @@ it("keeps hidden shells connected without stealing focus and ignores replaced so
     static OPEN = 1;
     readyState = 1;
     constructor() { sockets.push(this); }
-    close() {} send() {}
+    close() {} send = vi.fn();
     message(frame) { this.onmessage?.({ data: JSON.stringify(frame) }); }
   }
   const replacements = {
@@ -54,6 +55,7 @@ it("keeps hidden shells connected without stealing focus and ignores replaced so
 
     await act(async () => first.message({ op: "auth_ok" }));
     expect(terminal.focus).not.toHaveBeenCalled();
+    expect(first.send).toHaveBeenCalledWith(JSON.stringify({op:"resize",rows:42,cols:132}));
     props.visible = true;
     await render();
     expect(sockets).toHaveLength(1);
@@ -64,7 +66,8 @@ it("keeps hidden shells connected without stealing focus and ignores replaced so
     await act(async () => first.onerror());
     await act(async () => document.querySelector("button").click());
     expect(sockets).toHaveLength(2);
-    await act(async () => sockets[1].message({ op: "auth_ok" }));
+    await act(async () => sockets[1].message({ op: "ready" }));
+    expect(sockets[1].send).toHaveBeenCalledWith(JSON.stringify({op:"resize",rows:42,cols:132}));
     await act(async () => { lateClose(); lateError(); });
     expect(document.body.textContent).not.toContain("agent.terminalClosed");
     expect(terminal.write).not.toHaveBeenCalled();

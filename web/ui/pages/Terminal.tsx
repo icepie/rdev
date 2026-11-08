@@ -314,7 +314,7 @@ export function TerminalPage() {
             authError: "",
             authRound: ++tab.authRound,
           });
-        } else if (msg.op === "auth_ok") {
+        } else if (msg.op === "auth_ok" || msg.op === "ready") {
           if (tab.pendingPassword) {
             rememberDevicePassword(tab.deviceId, tab.pendingPassword);
             tab.pendingPassword = "";
@@ -325,6 +325,7 @@ export function TerminalPage() {
           patchMeta(tab.id, { status: "connected", authOpen: false, authError: "" });
           if (tab.id === activeTabIdRef.current) tab.term.focus();
           doResize(tab);
+          ws.send(JSON.stringify({ op: "resize", rows: tab.term.rows, cols: tab.term.cols }));
         } else if (msg.op === "auth_fail") {
           forgetDevicePassword(tab.deviceId);
           tab.pendingPassword = "";
