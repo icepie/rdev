@@ -325,3 +325,29 @@ it('pins picker uploads to the directory at open time and rejects a changed devi
   await pickFile('new-device.txt');
   expect(second.sent.at(-1)).toMatchObject({op:'upload_start',deviceId:'two',name:'new-device.txt'});
 });
+
+it('clears a canceled task reselect without consuming the old upload', async () => {
+  const socket = await restoreUpload();
+  await act(async () => document.querySelector('[aria-label="files.resume upload.txt"]').click());
+  await act(async () => document.querySelector('input[type="file"]').dispatchEvent(new window.Event('cancel')));
+  // A subsequent file selection must not be validated as the canceled task.
+  await pickFile('after-cancel.txt');
+  expect(socket.sent.at(-1)).toMatchObject({op:'upload_start', name:'after-cancel.txt', deviceId:'two', parentPath:'/current'});
+  const tasks = JSON.parse(localStorage.getItem('rdevFileTasks.two'));
+  expect(tasks.find(task => task.id === 'old-upload')).toMatchObject({status:'failed', parentPath:'/original'});
+  expect(tasks.find(task => task.name === 'after-cancel.txt').status).toBe('queued');
+});
+
+it('rejects a task reselect returned after changing devices', async () => {
+  const old = await restoreUpload();
+  await act(async () => document.querySelector('[aria-label="files.resume upload.txt"]').click());
+  await render('three');
+  const current = sockets.at(-1);
+  await act(async () => current.onopen());
+  await pickFile();
+  expect(current.sent.some(message => message.op === 'upload_start')).toBe(false);
+  expect(old.sent.some(message => message.op === 'upload_start')).toBe(false);
+  expect(document.body.textContent).toContain('files.uploadDeviceChanged');
+  expect(localStorage.getItem('rdevFileTasks.three')).toBeNull();
+  expect(JSON.parse(localStorage.getItem('rdevFileTasks.two'))[0]).toMatchObject({id:'old-upload', status:'failed'});
+});

@@ -7,3 +7,5 @@ The picker target is cleared on selection or native cancel. Re-selecting a persi
 Regression coverage opens the picker, refreshes to another directory, verifies the original parent path, switches devices and verifies no upload is sent, then chooses again on the new device. Existing panel transfer and reconnect tests remain green.
 
 Validation: typecheck passed; all 75 Web files / 291 tests passed; production build and diff whitespace check passed. Native file chooser behavior is simulated through the DOM input; no OS-level chooser automation was used.
+
+Additional task-reselect regressions: native cancel clears the failed-task selection so a subsequent ordinary upload uses the current directory and leaves the old task unchanged; switching devices while reselecting a failed task rejects the returned file without sending on either socket or creating a task on the new device. Focused panel suite: 19 tests passed. Full Web suite: 75 files / 293 tests passed; typecheck and production build passed.
