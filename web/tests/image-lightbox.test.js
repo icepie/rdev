@@ -36,6 +36,7 @@ it('navigates a gallery, zooms and resets, then restores trigger focus without l
     expect(dialog().querySelector('img').style.transform).toContain('scale(1)');
     await key('Escape');
     expect(dialog()).toBeNull();
+    await act(async () => new Promise(resolve => setTimeout(resolve, 0))); // Modal focus restoration follows unmount.
     expect(document.activeElement).toBe(trigger);
     const after = new WheelEvent('wheel', { deltaY: -100, cancelable: true });
     window.dispatchEvent(after);
@@ -43,6 +44,7 @@ it('navigates a gallery, zooms and resets, then restores trigger focus without l
     await click(trigger);
     await click(dialog().querySelector('img'));
     expect(dialog()).toBeNull();
+    await act(async () => new Promise(resolve => setTimeout(resolve, 0))); // Modal focus restoration follows unmount.
     expect(document.activeElement).toBe(trigger);
   } finally {
     await act(async () => root.unmount());

@@ -48,7 +48,7 @@ Agent 的 write_file/edit 使用按设备与路径隔离、可取消的写入锁
 
 - 提供方/模型配置的 `api` 支持 `openai-completions`（默认）、`openai-responses` 和 `anthropic-messages`。Responses SSE 保留文本、推理摘要、函数调用、usage 和图片输入；使用 `store:false` 并持久化原始输出条目，限定同提供方/地址/模型回放。失败或取消后不保留可执行的未完成调用或原始回放条目；压缩与 subagent 继承所选协议。原始加密推理不会发送给浏览器，也不写入 chat-completions 请求。Anthropic 原生 Messages 支持文本/工具/图片及带签名和隐藏思考块，使用独立的同路由回放状态；模型的 `maxTokens`、`thinking.mode`、可选 `budgetTokens`/`supportsDisplay` 规则见 README。协议范围不包括 Responses WebSocket、供应商托管工具、Anthropic OAuth/Bedrock/Vertex 或 OMP RPC 全量兼容。
 
-- 独立 Files 页与 Agent 共用文件预览：点击文件名预览文本、Markdown 或图片，下载使用独立按钮；窄屏使用抽屉，提供刷新、下载和关闭。`/files` 的 `read` 请求携带 `deviceId`、`requestId`、`path`，返回 `file_content`，包含 `content`、`truncated`、可选 `encoding`/`mime` 或 `message`。沿用设备鉴权，不依赖 Agent 模型配置；过期响应不会替换当前预览。
+- 独立 Files 页与 Agent 共用文件预览：点击文件名预览文本、Markdown、CSV 表格或图片，下载使用独立按钮；窄屏使用抽屉，提供刷新、下载和关闭。`/files` 的 `read` 请求携带 `deviceId`、`requestId`、`path`，返回 `file_content`，包含 `content`、`truncated`、可选 `encoding`/`mime` 或 `message`。沿用设备鉴权，不依赖 Agent 模型配置；过期响应不会替换当前预览。CSV 默认显示 BB 样式虚拟表格（前 500 数据行、100 列），可切换源码或复制已加载文本；图片可进入共用全屏缩放预览。切换文件清理预览/选区状态，桌面弹窗及窄屏抽屉内的图片关闭后都返回原预览。
 
 - 工具失败状态保存并恢复；chat-completions/Responses 不新增此字段，Anthropic 将其映射为原生 tool_result.is_error；旧记录未保存该状态时不根据结果文字猜测。历史结果按所属助手响应匹配，避免调用 ID 跨轮复用串结果；仅含思考内容的消息也保留。
 

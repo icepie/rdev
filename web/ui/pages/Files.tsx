@@ -1696,9 +1696,9 @@ export function FilesBrowser({
       </AlertDialog>
 
       <Dialog open={preview !== null} onOpenChange={open => { if (!open) closePreview(); }}>
-        <DialogContent className="flex h-[min(80dvh,800px)] min-h-0 w-[calc(100vw-2rem)] max-w-5xl flex-col overflow-hidden p-0">
+        <DialogContent className="flex h-[min(80dvh,800px)] min-h-0 w-full md:w-[calc(100vw-2rem)] max-w-5xl flex-col overflow-hidden p-0">
           <DialogTitle className="sr-only">{preview?.path || t("files.name")}</DialogTitle>
-          {preview && <div className="min-h-0 flex-1 pt-8">
+          {preview && <div className="min-h-0 flex-1 md:pt-8">
             <FilePreview key={preview.device + ":" + preview.path} path={preview.path} state={preview.state}
               connected={device === preview.device} onRefresh={() => openPreview(preview.path)} t={t} />
           </div>}

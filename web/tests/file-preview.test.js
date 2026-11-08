@@ -1,0 +1,103 @@
+// @vitest-environment jsdom
+import { act, createElement } from "react";
+import { createRoot } from "react-dom/client";
+import { afterEach, expect, it, vi } from "vitest";
+import { dictionaries } from "../ui/lib/dictionaries";
+import * as DialogPrimitive from "@radix-ui/react-dialog";
+import { FilePreview } from "../ui/components/agent/file-preview";
+
+vi.mock("@pierre/diffs/react", () => ({File: ({file, options, selectedLines}) => createElement("pre", {"data-source": true, "data-wrap":options.overflow, "data-line":selectedLines?.start}, file.contents)}));
+vi.mock("../ui/lib/clipboard", () => ({copyText: vi.fn().mockResolvedValue(true)}));
+import { copyText } from "../ui/lib/clipboard";
+
+const t = (key, values = {}) => Object.entries(values).reduce((text, [name, value]) => text.replaceAll(`{${name}}`, String(value)), dictionaries.en[key] || key);
+const ready = content => ({status: "ready", content});
+afterEach(() => vi.restoreAllMocks());
+
+async function mount(props, wrap = node => node) {
+ globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+ vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function () { return this.tagName === "TR" ? 29 : 400; });
+ const host = document.createElement("div"); document.body.append(host);
+ const root = createRoot(host);
+ const defaults = {connected: true, onRefresh: vi.fn(), t};
+ const render = next => act(async () => root.render(wrap(createElement(FilePreview, {...defaults, ...next}))));
+ await render(props);
+ return {host, render, dispose: async () => {await act(async () => root.unmount()); host.remove(); delete globalThis.IS_REACT_ACT_ENVIRONMENT;}};
+}
+const button = (host, label) => [...host.querySelectorAll("button")].find(element => element.getAttribute("aria-label") === label);
+
+it("defaults CSV to a table, copies original text, switches source, and isolates file state", async () => {
+ const content = 'name,notes\r\nAda,"one,two"\r\n';
+ const {host, render, dispose} = await mount({path: "/a.csv", state: ready(content)});
+ try {
+  expect(host.querySelector('table').getAttribute("aria-label")).toBe("a.csv CSV preview");
+  expect(host.querySelector('table').textContent).toContain("one,two");
+  await act(async () => button(host, "Copy file contents").click());
+  expect(copyText).toHaveBeenLastCalledWith(content);
+  await act(async () => button(host, "Show source").click());
+  expect(host.querySelector('table')).toBeNull();
+  expect(host.querySelector('[data-source]').textContent).toBe(content);
+  await act(async () => button(host, "Toggle line wrap").click());
+  expect(host.querySelector('[data-source]').getAttribute('data-wrap')).toBe("wrap");
+  await render({path: "/b.md", state: ready("# New file")});
+  expect(host.querySelector('h1').textContent).toBe("New file");
+  expect(host.querySelector('[data-source]')).toBeNull();
+  await render({path: "/b.md", state: ready("# New file"), lineRange: {start: 1, end: 1}});
+  expect(host.querySelector('[data-source]').getAttribute('data-line')).toBe("1");
+  expect(host.querySelector('[data-source]').getAttribute('data-wrap')).toBe("scroll");
+  await render({path: "/b.md", state: ready("# Refreshed")});
+  expect(host.querySelector('[data-source]').textContent).toBe("# Refreshed");
+ } finally {await dispose();}
+});
+
+it("virtualizes a large CSV and reaches its final preview row without mounting the whole grid", async () => {
+ const columns = Array.from({length: 120}, (_, i) => `c${i}`);
+ const content = [columns.join(","), ...Array.from({length: 600}, (_, r) => columns.map((_, c) => `r${r}c${c}`).join(","))].join("\n");
+ const {host, dispose} = await mount({path: "/large.csv", state: ready(content)});
+ try {
+  const table = host.querySelector('table');
+  expect(table.textContent).toContain("r0c0");
+  expect(table.textContent).not.toContain("r499c0");
+  expect(table.querySelectorAll('tbody tr[data-index]').length).toBeLessThan(60);
+  expect(table.querySelectorAll('td').length).toBeLessThan(6000);
+  expect(host.textContent).toContain("Showing the first 500 rows and 100 columns.");
+  await act(async () => {table.parentElement.scrollTop = 499 * 29; table.parentElement.dispatchEvent(new Event("scroll"));});
+  expect(table.textContent).toContain("r499c0");
+  expect(table.textContent).not.toContain("r0c0");
+  expect(table.querySelectorAll('tbody tr[data-index]').length).toBeLessThan(60);
+ } finally {await dispose();}
+});
+
+it("opens the shared image lightbox and clears it when changing files", async () => {
+ const {host, render, dispose} = await mount({path: "/image.png", state: {...ready("aGVsbG8="), encoding:"base64", mime:"image/png"}});
+ try {
+  await act(async () => button(host, "Open image.png in full screen preview").click());
+  expect(document.querySelector('[role="dialog"] img').getAttribute("src")).toBe("data:image/png;base64,aGVsbG8=");
+  await render({path: "/other.md", state: ready("# Other file")});
+  expect(document.querySelector('[role="dialog"]')).toBeNull();
+  expect(host.querySelector("h1").textContent).toBe("Other file");
+ } finally {await dispose();}
+});
+
+it("keeps nested desktop image previews interactive and closes only the top layer", async () => {
+ const outerChange = vi.fn();
+ const wrap = child => createElement(DialogPrimitive.Root, {open: true, onOpenChange: outerChange},
+  createElement(DialogPrimitive.Portal, {container: document.body},
+   createElement(DialogPrimitive.Content, {"aria-describedby": undefined},
+    createElement(DialogPrimitive.Title, null, "File dialog"), child)));
+ const {dispose} = await mount({path: "/nested.png", state: {...ready("aGVsbG8="), encoding: "base64", mime: "image/png"}}, wrap);
+ try {
+  const opener = button(document.body, "Open nested.png in full screen preview");
+  await act(async () => {opener.focus(); opener.click();});
+  const dialogs = [...document.querySelectorAll('[role="dialog"]')];
+  expect(dialogs).toHaveLength(2);
+  const lightbox = dialogs[1];
+  expect(getComputedStyle(lightbox).pointerEvents).toBe("auto");
+  expect(lightbox.contains(document.activeElement)).toBe(true);
+  await act(async () => document.activeElement.dispatchEvent(new KeyboardEvent("keydown", {key: "Escape", bubbles: true})));
+  expect(document.querySelectorAll('[role="dialog"]')).toHaveLength(1);
+  expect(outerChange).not.toHaveBeenCalled();
+  await act(async () => new Promise(resolve => setTimeout(resolve, 0))); // Radix restores focus after unmount.
+  expect(document.activeElement).toBe(opener);
+ } finally {await dispose();}
+});

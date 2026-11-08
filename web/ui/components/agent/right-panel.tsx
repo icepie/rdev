@@ -1243,6 +1243,7 @@ export function AgentRightPanel({
         />
       ) : active.startsWith("file:") ? (
         <FilePreview
+          key={JSON.stringify([threadKey, active])}
           path={active.slice(5)}
           state={fileStates[active.slice(5)]}
           connected={connected}

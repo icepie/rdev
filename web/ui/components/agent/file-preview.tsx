@@ -1,5 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { File as PierreFile, type FileContents, type FileOptions } from "@pierre/diffs/react";
+import { CsvFilePreview } from "./csv-preview";
+import { ImageLightbox } from "../image-lightbox";
+import { IMAGE_TRANSPARENCY_CHECKER_STYLE } from "../../lib/image-preview";
 import { Button } from "../button";
 import { Icon } from "../icon";
 import { Markdown } from "../markdown";
@@ -13,15 +16,23 @@ function splitPath(path: string) {
   return { dir: path.slice(0, index + 1), base: path.slice(index + 1) };
 }
 
-/* bb file preview tab content (bb FilePreview, scoped port): header with
- * extension-resolved icon + path + icon buttons (markdown preview/source
- * toggle, line-wrap toggle, copy path); body = shiki code view (pierre
- * File) or rendered markdown for .md files in preview mode. A text
- * selection inside the body surfaces a floating "Add to chat" action (bb
- * SecondaryPanelSelectionActions, scoped port). Skipped bb surfaces:
- * CSV/video/iframe and download/
- * open-external (no such ops). */
-export function FilePreview({
+/* BB f51e6b0 FilePreview: shared by Agent tabs and the standalone Files
+ * dialog. Scope transient UI state to the file identity, not the panel slot. */
+type FilePreviewProps = {
+  path: string;
+  state: FilePreviewState | undefined;
+  connected: boolean;
+  onRefresh: () => void;
+  t: Translator;
+  onAddToChat?: (text: string) => void;
+  lineRange?: { start: number; end: number } | null;
+};
+
+export function FilePreview(props: FilePreviewProps) {
+  return <FilePreviewContent key={props.path} {...props} />;
+}
+
+function FilePreviewContent({
   path,
   state,
   connected,
@@ -29,27 +40,21 @@ export function FilePreview({
   t,
   onAddToChat,
   lineRange,
-}: {
-  path: string;
-  state: FilePreviewState | undefined;
-  connected: boolean;
-  onRefresh: () => void;
-  t: Translator;
-  onAddToChat?: (text: string) => void;
-  /* bb line-suffix highlight (markdown `/path:12` links): one-shot
-   * selectedLines range on the pierre File. */
-  lineRange?: { start: number; end: number } | null;
-}) {
+}: FilePreviewProps) {
   const bodyRef = useRef<HTMLDivElement>(null);
   const [selMenu, setSelMenu] = useState<{ x: number; y: number; text: string } | null>(null);
   const [wrap, setWrap] = useState(false);
+  const [imageOpen, setImageOpen] = useState(false);
   const { dir, base } = splitPath(path);
   const ext = base.includes(".") ? (base.split(".").pop() ?? "").toLowerCase() : "";
   const isMarkdown = ext === "md" || ext === "markdown";
-  /* bb getInitialFilePreviewViewMode: markdown starts in preview. */
+  const isCSV = ext === "csv";
+  const hasPreview = isMarkdown || isCSV;
+  /* BB renders Markdown and CSV previews by default. */
   const [viewMode, setViewMode] = useState<"preview" | "source">(
-    isMarkdown ? "preview" : "source",
+    hasPreview && !lineRange ? "preview" : "source",
   );
+  useEffect(() => { if (lineRange) setViewMode("source"); }, [lineRange?.start, lineRange?.end]);
   const themeType = useThemeType();
   const fileOptions = useMemo<FileOptions<undefined, undefined>>(
     () => ({
@@ -62,9 +67,11 @@ export function FilePreview({
     [wrap, themeType, lineRange],
   );
   const fileContents = useMemo<FileContents>(
-    () => ({ name: base, contents: state?.content ?? "", cacheKey: path }),
-    [base, state?.content, path],
+    () => ({ name: base, contents: state?.content ?? "" }),
+    [base, state?.content],
   );
+
+  useEffect(() => { setSelMenu(null); }, [state?.status, state?.content]);
 
   const captureSelection = () => {
     if (!onAddToChat) return;
@@ -114,10 +121,10 @@ export function FilePreview({
   }, [selMenu]);
 
   const headerIconBtn =
-    "inline-flex size-5 cursor-pointer items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-state-hover hover:text-foreground [&_svg]:size-3";
+    "inline-flex size-5 cursor-pointer items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-state-hover hover:text-foreground [&_svg]:size-3 max-md:pointer-coarse:size-9 max-md:pointer-coarse:[&_svg]:size-5";
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex h-full min-w-0 flex-col">
       {/* bb FilePreviewHeader: icon + name + icon buttons. */}
       <div className="flex shrink-0 items-center gap-1.5 px-3 py-1.5">
         <Icon
@@ -139,7 +146,7 @@ export function FilePreview({
           >
             <Icon name="Refresh" className="size-3.5" />
           </Button>
-          {isMarkdown && (
+          {hasPreview && (
             <button
               type="button"
               className={headerIconBtn}
@@ -150,7 +157,7 @@ export function FilePreview({
               <Icon name={viewMode === "preview" ? "Code" : "Eye"} />
             </button>
           )}
-          {(viewMode === "source" || !isMarkdown) &&
+          {(viewMode === "source" || !hasPreview) &&
             state?.encoding !== "base64" && (
             <button
               type="button"
@@ -158,9 +165,17 @@ export function FilePreview({
               title={t("agent.toggleWrap")}
               aria-label={t("agent.toggleWrap")}
               data-active={wrap || undefined}
+              aria-pressed={wrap}
               onClick={() => setWrap(!wrap)}
             >
               <Icon name="TextWrap" />
+            </button>
+          )}
+          {state?.status === "ready" && state.encoding !== "base64" && (
+            <button type="button" className={headerIconBtn}
+              title={t("agent.copyFileContents")} aria-label={t("agent.copyFileContents")}
+              onClick={() => void copyText(state.content)}>
+              <Icon name="FileText" />
             </button>
           )}
           <button
@@ -195,19 +210,21 @@ export function FilePreview({
           )}
           <div
             ref={bodyRef}
-            className="relative min-h-0 flex-1 overflow-auto"
+            className={`relative min-h-0 flex-1 ${isCSV && viewMode === "preview" ? "overflow-hidden" : "overflow-auto"}`}
             onMouseUp={captureSelection}
+            onScrollCapture={() => { if (selMenu) setSelMenu(null); }}
           >
             {state.encoding === "base64" && state.mime ? (
-              /* Image read (agent read_file or file browser): render the
-               * base64 body; checkerboard backdrop for transparency. */
-              <div className="flex h-full w-full items-center justify-center bg-[repeating-conic-gradient(var(--surface-recessed)_0%_25%,transparent_0%_50%)] bg-[length:16px_16px] p-4">
-                <img
-                  src={`data:${state.mime};base64,${state.content}`}
-                  alt={base}
-                  className="max-h-full max-w-full rounded border border-border-seam object-contain"
-                />
+              <div className="min-h-full w-full p-4" style={IMAGE_TRANSPARENCY_CHECKER_STYLE}>
+                <button type="button" className="block w-full cursor-zoom-in" aria-label={t("agent.openImagePreview", { name: base })} onClick={() => setImageOpen(true)}>
+                  <img src={`data:${state.mime};base64,${state.content}`} alt={base}
+                    decoding="async" className="mx-auto block h-auto max-w-full" />
+                </button>
+                <ImageLightbox isOpen={imageOpen} imageSrc={imageOpen ? `data:${state.mime};base64,${state.content}` : null}
+                  imageAlt={base} title={base} onClose={() => setImageOpen(false)} />
               </div>
+            ) : isCSV && viewMode === "preview" ? (
+              <CsvFilePreview name={base} content={state.content} t={t} />
             ) : isMarkdown && viewMode === "preview" ? (
               <div className="px-3 py-2 text-xs">
                 <Markdown text={state.content} />

@@ -2,12 +2,11 @@
 import {
   useCallback,
   useEffect,
-  useId,
   useLayoutEffect,
   useRef,
   useState,
 } from "react";
-import { createPortal } from "react-dom";
+import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { Button } from "./button";
 import { usePersistentOverlayFocus } from "./responsive-overlay";
 import { usePortalScopeProps } from "../lib/portal-scope";
@@ -175,6 +174,13 @@ export function ImageLightbox({
   const { t } = useI18n();
   const isVisible = isOpen ?? imageSrc !== null;
   const panelRef = useRef<HTMLDivElement>(null);
+  const returnFocusRef = useRef<HTMLElement | null>(null);
+  useLayoutEffect(() => {
+    if (isVisible) {
+      returnFocusRef.current = document.activeElement instanceof HTMLElement
+        ? document.activeElement : null;
+    }
+  }, [isVisible]);
   const [panelElement, setPanelElement] = useState<HTMLDivElement | null>(null);
   const attachPanel = useCallback((element: HTMLDivElement | null) => {
     panelRef.current = element;
@@ -185,11 +191,10 @@ export function ImageLightbox({
     closeRef.current = onClose;
   }, [onClose]);
   const requestClose = useCallback(() => closeRef.current(), []);
-  const titleId = useId();
   const scopeProps = usePortalScopeProps();
   useBrowserDimmingModal(isVisible);
   usePersistentOverlayFocus({
-    open: isVisible,
+    open: isVisible && panelElement !== null,
     panelRef,
     requestClose,
   });
@@ -248,95 +253,103 @@ export function ImageLightbox({
     return null;
   }
 
-  return createPortal(
-    <div
-      ref={attachPanel}
-      {...scopeProps}
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby={titleId}
-      tabIndex={-1}
-      className={cn(
-        "fixed inset-0 z-50 flex h-dvh w-full cursor-zoom-out items-center justify-center overflow-hidden bg-black/70 p-4 outline-none animate-in fade-in-0 duration-150 motion-reduce:animate-none",
-        "touch-none",
-      )}
-      onClick={(event) => {
-        if (
-          event.target === event.currentTarget ||
-          event.target instanceof HTMLImageElement
-        ) {
-          onClose();
-        }
-      }}
-    >
-      <h2 id={titleId} className="sr-only">
-        {title}
-      </h2>
-      {imageSrc ? (
-        <LightboxZoomableImage
-          key={imageSrc}
-          alt={imageAlt}
-          src={imageSrc}
-          viewport={panelElement}
-        />
-      ) : (
-        <div
-          role="status"
-          aria-label={t("agent.imageLoading")}
-          className="flex size-32 flex-col items-center justify-center gap-2 rounded-xl bg-black/35 text-sm text-white/60 sm:size-48"
-        >
-          <Icon name="Loading" className="size-5 animate-spin" />
-          <span>{t("agent.imageLoading")}</span>
-        </div>
-      )}
-
-      {hasNavigation ? (
-        <>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            className="absolute left-[max(0.5rem,env(safe-area-inset-left))] top-1/2 size-11 -translate-y-1/2 rounded-full bg-black/45 text-white hover:bg-black/60 hover:text-white disabled:pointer-events-auto"
-            onClick={onPrevious}
-            disabled={previousDisabled}
-            aria-label={t("agent.imagePrevious")}
+  // Join Radix's modal layer/focus stack when opened inside a desktop dialog.
+  // The BB drawer stack still owns keyboard handling on compact surfaces.
+  return (
+    <DialogPrimitive.Root open={isVisible} onOpenChange={(open) => { if (!open) onClose(); }}>
+      <DialogPrimitive.Portal container={document.body}>
+        <DialogPrimitive.Content asChild aria-describedby={undefined}
+          onCloseAutoFocus={(event) => {
+            event.preventDefault();
+            if (returnFocusRef.current?.isConnected) returnFocusRef.current.focus({ preventScroll: true });
+          }}>
+          <div
+            ref={attachPanel}
+            {...scopeProps}
+            role="dialog"
+            aria-modal="true"
+            tabIndex={-1}
+            className={cn(
+              "fixed inset-0 z-50 flex h-dvh w-full cursor-zoom-out items-center justify-center overflow-hidden bg-black/70 p-4 outline-none animate-in fade-in-0 duration-150 motion-reduce:animate-none",
+              "touch-none",
+            )}
+            onClick={(event) => {
+              if (
+                event.target === event.currentTarget ||
+                event.target instanceof HTMLImageElement
+              ) {
+                onClose();
+              }
+            }}
           >
-            <Icon name="ChevronLeft" className="size-5" />
-          </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            className="absolute right-[max(0.5rem,env(safe-area-inset-right))] top-1/2 size-11 -translate-y-1/2 rounded-full bg-black/45 text-white hover:bg-black/60 hover:text-white disabled:pointer-events-auto"
-            onClick={onNext}
-            disabled={nextDisabled}
-            aria-label={t("agent.imageNext")}
-          >
-            <Icon name="ChevronRight" className="size-5" />
-          </Button>
-        </>
-      ) : null}
+            <DialogPrimitive.Title className="sr-only">{title}</DialogPrimitive.Title>
+            {imageSrc ? (
+              <LightboxZoomableImage
+                key={imageSrc}
+                alt={imageAlt}
+                src={imageSrc}
+                viewport={panelElement}
+              />
+            ) : (
+              <div
+                role="status"
+                aria-label={t("agent.imageLoading")}
+                className="flex size-32 flex-col items-center justify-center gap-2 rounded-xl bg-black/35 text-sm text-white/60 sm:size-48"
+              >
+                <Icon name="Loading" className="size-5 animate-spin" />
+                <span>{t("agent.imageLoading")}</span>
+              </div>
+            )}
 
-      {navigationStatus ? (
-        <p
-          role="status"
-          className="absolute bottom-[max(1rem,env(safe-area-inset-bottom))] max-w-full px-4 text-center text-sm text-white"
-        >
-          {navigationStatus}
-        </p>
-      ) : null}
+            {hasNavigation ? (
+              <>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="absolute left-[max(0.5rem,env(safe-area-inset-left))] top-1/2 size-11 -translate-y-1/2 rounded-full bg-black/45 text-white hover:bg-black/60 hover:text-white disabled:pointer-events-auto"
+                  onClick={onPrevious}
+                  disabled={previousDisabled}
+                  aria-label={t("agent.imagePrevious")}
+                >
+                  <Icon name="ChevronLeft" className="size-5" />
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="absolute right-[max(0.5rem,env(safe-area-inset-right))] top-1/2 size-11 -translate-y-1/2 rounded-full bg-black/45 text-white hover:bg-black/60 hover:text-white disabled:pointer-events-auto"
+                  onClick={onNext}
+                  disabled={nextDisabled}
+                  aria-label={t("agent.imageNext")}
+                >
+                  <Icon name="ChevronRight" className="size-5" />
+                </Button>
+              </>
+            ) : null}
 
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon"
-        className="absolute right-[max(0.5rem,env(safe-area-inset-right))] top-[max(0.5rem,env(safe-area-inset-top))] size-11 rounded-full bg-black/45 text-white hover:bg-black/60 hover:text-white"
-        onClick={onClose}
-        aria-label={t("agent.imageClose")}
-      >
-        <Icon name="X" className="size-5" />
-      </Button>
-    </div>,
-    document.body,
+            {navigationStatus ? (
+              <p
+                role="status"
+                className="absolute bottom-[max(1rem,env(safe-area-inset-bottom))] max-w-full px-4 text-center text-sm text-white"
+              >
+                {navigationStatus}
+              </p>
+            ) : null}
+
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="absolute right-[max(0.5rem,env(safe-area-inset-right))] top-[max(0.5rem,env(safe-area-inset-top))] size-11 rounded-full bg-black/45 text-white hover:bg-black/60 hover:text-white"
+              onClick={onClose}
+              aria-label={t("agent.imageClose")}
+            >
+              <Icon name="X" className="size-5" />
+            </Button>
+          </div>
+        </DialogPrimitive.Content>
+      </DialogPrimitive.Portal>
+    </DialogPrimitive.Root>
   );
 }
