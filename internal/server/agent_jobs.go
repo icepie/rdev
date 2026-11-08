@@ -42,11 +42,13 @@ type agentJob struct {
 // browser disconnect or turn completion does not cancel jobs; Close does.
 // Callbacks run without the jobs mutex, so they may enter server state locks.
 type agentJobs struct {
-	mu         sync.Mutex
-	jobs       map[string]*agentJob
-	closed     bool
-	onChange   func()
-	onComplete func(agentJobSnapshot)
+	persistenceEnabled      bool
+	revision, savedRevision uint64
+	mu                      sync.Mutex
+	jobs                    map[string]*agentJob
+	closed                  bool
+	onChange                func()
+	onComplete              func(agentJobSnapshot)
 }
 
 func newAgentJobs(onComplete func(agentJobSnapshot)) *agentJobs {
@@ -82,6 +84,7 @@ func (m *agentJobs) start(kind, label string, run func(context.Context, func(str
 	ctx, cancel := context.WithCancel(context.Background())
 	job := &agentJob{guidance: guidance, snapshot: agentJobSnapshot{ID: generateID(), Kind: kind, Label: label, State: "running", Started: time.Now()}, cancel: cancel, done: make(chan struct{})}
 	m.jobs[job.snapshot.ID] = job
+	m.revision++
 	initial := job.snapshot
 	m.mu.Unlock()
 	if m.onChange != nil {
@@ -122,6 +125,7 @@ func (m *agentJobs) run(ctx context.Context, job *agentJob, run func(context.Con
 		snapshot := job.snapshot
 		snapshot.PendingGuidance = append([]string(nil), snapshot.PendingGuidance...)
 		notify := !m.closed
+		m.revision++
 		close(job.done)
 		m.mu.Unlock()
 		job.cancel()
@@ -194,6 +198,9 @@ func (m *agentJobs) Cancel(id string) error {
 		return fmt.Errorf("unknown job %q in this thread", id)
 	}
 	changed := job.requestCancel() && !m.closed
+	if changed {
+		m.revision++
+	}
 	m.mu.Unlock()
 	if changed && m.onChange != nil {
 		m.onChange()
@@ -223,6 +230,9 @@ func (m *agentJobs) CancelAll() {
 		changed = job.requestCancel() || changed
 	}
 	changed = changed && !m.closed
+	if changed {
+		m.revision++
+	}
 	m.mu.Unlock()
 	if changed && m.onChange != nil {
 		m.onChange()

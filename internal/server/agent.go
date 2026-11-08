@@ -580,12 +580,14 @@ func (h *agentWSHandler) OnOpen(socket *gws.Conn) {
 func (s *Server) buildAgentSession(entry *agentSessionEntry, th *agentThread, client *ClientConn, provider *AgentProvider, model *AgentModelConfig) *agent.Session {
 	if th.jobs == nil {
 		jobs := newAgentJobs(nil)
+		jobs.persistenceEnabled = s.DataDir != "" && s.AgentSessionTTL > 0
 		updates := &agentJobUpdates{launch: s.goAgent, publish: func() {
 			if s.broadcastAgentJobsChanged(entry, th, jobs) {
 				s.broadcastThreadList(entry)
 			}
 		}}
-		jobs.onChange = updates.Notify
+		checkpoints := &agentJobUpdates{launch: s.goAgent, publish: func() { s.persistAgentJobs(entry, th, jobs) }}
+		jobs.onChange = func() { checkpoints.Notify(); updates.Notify() }
 		jobs.onComplete = func(job agentJobSnapshot) { s.deliverAgentJob(entry, th, jobs, job) }
 		th.jobs = jobs
 	}
@@ -725,6 +727,12 @@ func (s *Server) agentSessionFor(deviceID string, client *ClientConn) (*agentSes
 				}
 			}
 			entry.threads[meta.ID] = th
+			if th.jobs.restore(store.loadJobs(deviceID, meta.ID)) {
+				// Rewrite interrupted states once after initialization, outside
+				// the session lock, without re-delivering completion messages.
+				owner := th.jobs
+				s.goAgent(func() { s.persistAgentJobs(entry, th, owner) })
+			}
 			// The most recently updated thread is listed first.
 			if recentThread == "" {
 				recentThread, recentModel = meta.ID, savedModel
@@ -873,7 +881,7 @@ func (s *Server) agentEvictionLoop() {
 		for id, entry := range s.agentSessions {
 			busy := false
 			for _, th := range entry.threads {
-				if th.running || th.turnCtx != nil || len(th.queue) > 0 || (th.jobs != nil && th.jobs.Running()) {
+				if th.running || th.turnCtx != nil || len(th.queue) > 0 || (th.jobs != nil && (th.jobs.Running() || th.jobs.pendingPersistence())) {
 					busy = true
 					break
 				}

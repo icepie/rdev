@@ -516,6 +516,9 @@ func (st *agentSessionStore) clear(deviceID, threadID string) {
 	if err := os.Remove(st.path(deviceID, threadID)); err != nil && !os.IsNotExist(err) {
 		log.Printf("agent history: clear %s/%s: %v", deviceID, threadID, err)
 	}
+	if err := os.Remove(st.jobsPath(deviceID, threadID)); err != nil && !os.IsNotExist(err) {
+		log.Printf("agent jobs: clear %s/%s: %v", deviceID, threadID, err)
+	}
 	delete(st.saved, deviceID+"/"+threadID)
 	key := deviceID + "/" + threadID
 	extras := st.extras[key]
@@ -553,6 +556,9 @@ func (st *agentSessionStore) cleanup() {
 			return
 		}
 		if err := os.Remove(path); err == nil {
+			if strings.HasSuffix(path, ".jsonl") {
+				_ = os.Remove(strings.TrimSuffix(path, ".jsonl") + ".jobs.json")
+			}
 			removed++
 		}
 	}
@@ -596,10 +602,15 @@ func (st *agentSessionStore) cleanup() {
 			if err != nil {
 				continue
 			}
-			if strings.HasSuffix(se.Name(), ".jsonl.tmp") {
+			if strings.HasSuffix(se.Name(), ".jsonl.tmp") || strings.HasSuffix(se.Name(), ".jobs.json.tmp") {
 				removeTmpIfStale(filepath.Join(full, se.Name()), info)
 			} else if strings.HasSuffix(se.Name(), ".jsonl") {
 				removeIfStale(filepath.Join(full, se.Name()), info)
+			} else if strings.HasSuffix(se.Name(), ".jobs.json") {
+				history := strings.TrimSuffix(filepath.Join(full, se.Name()), ".jobs.json") + ".jsonl"
+				if _, err := os.Stat(history); os.IsNotExist(err) {
+					_ = os.Remove(filepath.Join(full, se.Name()))
+				}
 			}
 		}
 		// Drop the device dir once nothing is left in it.
