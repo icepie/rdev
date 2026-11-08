@@ -36,6 +36,7 @@ export const dictionaries = {
     "agent.imagePreviewReload": "Image output was compacted. Open the remote file to preview it again.",
     "common.copy": "Copy",
     "common.loading": "Loading…",
+    "common.retry": "Retry",
     "index.logLevel": "Log level",
     "index.logDate": "Log date",
     "common.copied": "Copied",
@@ -626,6 +627,7 @@ export const dictionaries = {
   },
   "zh": {
     "common.loading": "正在加载…",
+    "common.retry": "重试",
     "index.logLevel": "日志级别",
     "index.logDate": "日志日期",
     "theme.toggle": "主题",

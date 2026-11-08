@@ -11,17 +11,22 @@ import { fetchDevices, UnauthorizedError, type DeviceInfo } from "./api";
 interface DevicesCtx {
   devices: DeviceInfo[];
   error: string;
+  loading: boolean;
   refresh: () => void;
 }
 
-const Ctx = createContext<DevicesCtx>({ devices: [], error: "", refresh: () => {} });
+const Ctx = createContext<DevicesCtx>({ devices: [], error: "", loading: true, refresh: () => {} });
 
 export function DevicesProvider({ children }: { children: ReactNode }) {
   const [devices, setDevices] = useState<DeviceInfo[]>([]);
   const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
   const [tick, setTick] = useState(0);
 
-  const refresh = useCallback(() => setTick((n) => n + 1), []);
+  const refresh = useCallback(() => {
+    setLoading(true);
+    setTick((n) => n + 1);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -40,6 +45,7 @@ export function DevicesProvider({ children }: { children: ReactNode }) {
         }
       } finally {
         inFlight = false;
+        if (!cancelled) setLoading(false);
       }
     };
     void load();
@@ -52,7 +58,7 @@ export function DevicesProvider({ children }: { children: ReactNode }) {
     };
   }, [tick]);
 
-  return <Ctx.Provider value={{ devices, error, refresh }}>{children}</Ctx.Provider>;
+  return <Ctx.Provider value={{ devices, error, loading, refresh }}>{children}</Ctx.Provider>;
 }
 
 export function useDevices(): DevicesCtx {

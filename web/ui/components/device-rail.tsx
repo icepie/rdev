@@ -20,7 +20,7 @@ export function DeviceRail({
   onPick: (deviceId: string) => void;
   selectedDevice?: string;
 }) {
-  const { devices, error } = useDevices();
+  const { devices, error, loading, refresh } = useDevices();
   const { t } = useI18n();
   const searchTriggerRef = useRef<HTMLButtonElement>(null);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -72,12 +72,21 @@ export function DeviceRail({
       </div>
       <div className="scrollbar-thin min-h-0 flex-1 overflow-y-auto px-2 py-2">
         {error && (
+          <div className="flex items-start gap-2 px-2 py-2 text-xs text-destructive-text">
           <p
             role="alert"
-            className="break-words px-2 py-2 text-xs text-destructive-text"
+            className="min-w-0 flex-1 break-words"
           >
             {error}
           </p>
+            <button type="button" onClick={refresh} disabled={loading} className="shrink-0 underline underline-offset-2 hover:no-underline disabled:opacity-50">{t(loading ? "common.loading" : "common.retry")}</button>
+          </div>
+        )}
+        {loading && devices.length === 0 && !error && (
+          <div role="status" className="flex items-center gap-2 px-2 py-3 text-xs text-muted-foreground">
+            <Icon name="Spinner" className="size-3.5 animate-spin motion-reduce:animate-none" />
+            {t("common.loading")}
+          </div>
         )}
         {visibleDevices.map((d) => (
           <button
@@ -114,7 +123,7 @@ export function DeviceRail({
             )}
           </button>
         ))}
-        {visibleDevices.length === 0 && !error && (
+        {visibleDevices.length === 0 && !error && !loading && (
           <div className="px-2 py-3 text-center text-xs text-muted-foreground">
             {t(query.trim() ? "rail.noMatches" : "rail.empty")}
           </div>
