@@ -375,7 +375,7 @@ export function ChatPaneView({
         run: (arg) => {
           const request = parseJobsCommand(arg);
           if (!request) {
-            ops.pushBubble("system", "/jobs [full|kill <id>|kill all]");
+            setComposerError("/jobs [full|kill <id>|kill all]");
             return false;
           }
           setJobsOpen(true);
@@ -389,7 +389,11 @@ export function ChatPaneView({
         desc: t("agent.cmd.compactDesc"),
         icon: "Minimize2",
         run: (arg) => {
-          if (!ready || running) return false;
+          if (!ready) return false;
+          if (running) {
+            setComposerError(t("agent.compactWhileRunning"));
+            return false;
+          }
           const payload: Record<string, unknown> = { op: "chat", text: `/compact${arg ? ` ${arg}` : ""}` };
           if (threadId) payload.thread = threadId;
           if (model) payload.model = model;
@@ -406,7 +410,10 @@ export function ChatPaneView({
         icon: "Terminal",
         needsArg: true,
         run: (arg) => {
-          if (!arg) return false;
+          if (!arg) {
+            setComposerError(t("agent.commandRequiresArgument", { command: "/bg" }));
+            return false;
+          }
           const payload: Record<string, unknown> = {
             op: "chat",
             text: `/bg ${arg}`,
@@ -423,7 +430,10 @@ export function ChatPaneView({
         icon: "UserRoundPlus",
         needsArg: true,
         run: (arg) => {
-          if (!arg) return false;
+          if (!arg) {
+            setComposerError(t("agent.commandRequiresArgument", { command: "/subagent" }));
+            return false;
+          }
           const payload: Record<string, unknown> = {
             op: "chat",
             text: `/subagent ${arg}`,
@@ -460,7 +470,10 @@ export function ChatPaneView({
         needsArg: true,
         runningOnly: true,
         run: (arg) => {
-          if (!arg) return false;
+          if (!arg) {
+            setComposerError(t("agent.commandRequiresArgument", { command: "/steer" }));
+            return false;
+          }
           const payload: Record<string, unknown> = { op: "steer", text: arg };
           if (threadId) payload.thread = threadId;
           return sendRaw(payload);
@@ -506,7 +519,8 @@ export function ChatPaneView({
   /* Executes a "/name arg" line; returns true when the input was consumed
    * as a command (unknown commands fall back to a normal chat send). */
   const runSlashLine = (text: string): boolean =>
-    dispatchSlashCommand(text, slashCommands, running, () => setInput(""));
+    dispatchSlashCommand(text, slashCommands, running, () => setInput(""),
+      command => setComposerError(t("agent.commandRequiresRunning", { command: `/${command}` })));
 
 
   /* bb pastRowDimClassName: every turn but the transcript's last renders
@@ -804,7 +818,7 @@ export function ChatPaneView({
             </div>
           )}
           {returningQueue && <p role="status" className="px-4 pt-2 text-xs text-muted-foreground">{t("agent.queueReturning")}</p>}
-          {composerError && <p role="alert" className="px-4 pt-2 text-xs text-destructive">{composerError}</p>}
+          {composerError && <p role="alert" className="px-4 pt-2 text-xs text-destructive-text">{composerError}</p>}
           {readingImages > 0 && (
             <p role="status" className="px-4 pt-2 text-xs text-muted-foreground">
               {t("agent.readingImages", { count: readingImages })}

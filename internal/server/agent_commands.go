@@ -65,8 +65,12 @@ func agentCommandTool(command, argument string) (string, json.RawMessage, error)
 	args := map[string]string{}
 	switch command {
 	case "/bg":
-		if argument == "--device" || strings.HasPrefix(argument, "--device ") || strings.HasPrefix(argument, "--device\t") {
-			rest := strings.TrimSpace(argument[len("--device"):])
+		optionEnd := strings.IndexFunc(argument, unicode.IsSpace)
+		if optionEnd < 0 {
+			optionEnd = len(argument)
+		}
+		if argument[:optionEnd] == "--device" {
+			rest := strings.TrimSpace(argument[optionEnd:])
 			i := strings.IndexFunc(rest, unicode.IsSpace)
 			if i < 1 {
 				return "", nil, fmt.Errorf("usage: /bg --device <id> <command>")

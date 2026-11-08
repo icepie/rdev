@@ -89,6 +89,9 @@ func TestExplicitCommandArguments(t *testing.T) {
 	}{
 		{"/bg", "printf 'a b'\necho done", "bg", `{"command":"printf 'a b'\necho done"}`},
 		{"/bg", "--device machine-a echo hi", "bg", `{"command":"echo hi","device":"machine-a"}`},
+		{"/bg", "--device\nmachine-a\ncat log\nprintf done", "bg", `{"command":"cat log\nprintf done","device":"machine-a"}`},
+		{"/bg", "--device\u00a0machine-a\u2003echo hi", "bg", `{"command":"echo hi","device":"machine-a"}`},
+		{"/bg", "--device-name echo hi", "bg", `{"command":"--device-name echo hi"}`},
 		{"/subagent", "inspect\nthen report", "subagent", `{"task":"inspect\nthen report"}`},
 	} {
 		name, raw, err := agentCommandTool(tc.command, tc.argument)
@@ -96,7 +99,7 @@ func TestExplicitCommandArguments(t *testing.T) {
 			t.Fatalf("got %s %s %v", name, raw, err)
 		}
 	}
-	for _, argument := range []string{"", "--device", "--device machine-a"} {
+	for _, argument := range []string{"", "--device", "--device machine-a", "--device\n", "--device\nmachine-a\n"} {
 		if _, _, err := agentCommandTool("/bg", argument); err == nil {
 			t.Fatalf("accepted invalid argument %q", argument)
 		}

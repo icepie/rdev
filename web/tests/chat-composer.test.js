@@ -91,6 +91,7 @@ it("preserves composer intent across modified keys, image loading and thread swi
       expect(composer.value).toBe(`/${name} `);
       await act(async () => sendButton().click());
       expect(sent).toEqual([]);
+      expect(document.querySelector('[role="alert"]').textContent).toBe("agent.commandRequiresArgument");
       const argument = name === "bg" ? "printf 'hello'\nprintf 'world'" : "检查日志\n保留错误详情";
       await act(async () => insertDraft(argument));
       const draft = composer.value;
@@ -112,6 +113,26 @@ it("preserves composer intent across modified keys, image loading and thread swi
       sent.length = 0;
     }
     props.model = "model";
+    for (const [command, running, error] of [
+      ["/jobs kill", true, "/jobs [full|kill <id>|kill all]"],
+      ["/compact preserve errors", true, "agent.compactWhileRunning"],
+      ["/steer ", true, "agent.commandRequiresArgument"],
+      ["/steer check logs", false, "agent.commandRequiresRunning"],
+      ["/stop", false, "agent.commandRequiresRunning"],
+    ]) {
+      props.threadId = `invalid-command-${command}`;
+      props.sink.state.running = running;
+      await render();
+      await act(async () => insertDraft(command));
+      const count = sent.length;
+      await act(async () => composer.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })));
+      expect(sent).toHaveLength(count);
+      expect(composer.value).toBe(command);
+      expect(document.querySelector('[role="alert"]').textContent).toBe(error);
+      expect(props.sink.ops.pushBubble).not.toHaveBeenCalled();
+      expect(props.sink.ops.turnOpen.current).toBe(true);
+    }
+    props.sink.state.running = false;
     for (const command of ["/COMPACT", "/bg\necho hi", "/subagent inspect"]) {
       props.threadId = `image-command-${command}`;
       await render();

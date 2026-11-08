@@ -11,12 +11,16 @@ export function dispatchSlashCommand(
   commands: readonly ExecutableSlashCommand[],
   running: boolean,
   clearDraft: () => void,
+  onInactive?: (name: string) => void,
 ): boolean {
   const match = text.match(/^\/([a-z]+)(?:\s+([\s\S]*))?$/i);
   if (!match) return false;
   const command = commands.find(command => command.name === match[1].toLowerCase());
   if (!command) return false;
-  if (command.runningOnly && !running) return true;
+  if (command.runningOnly && !running) {
+    onInactive?.(command.name);
+    return true;
+  }
   if (command.run((match[2] ?? "").trim())) clearDraft();
   return true;
 }
