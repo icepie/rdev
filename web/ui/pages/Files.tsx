@@ -431,6 +431,7 @@ export function FilesBrowser({
       }
     }).catch(error => {
       if (previewRequest.current !== id) return;
+      previewRequest.current = "";
       setPreview(current => current?.id === id ? { ...current, state: { ...current.state, status: "error", message: String(error instanceof Error ? error.message : error) } } : current);
     });
   }, [requireConnectedDevice, send]);
@@ -916,8 +917,8 @@ export function FilesBrowser({
         }
       };
       ws.onclose = () => {
-        if (wsRef.current === ws) wsRef.current = null;
-        if (disposed) return;
+        if (disposed || wsRef.current !== ws) return;
+        wsRef.current = null;
         sendQueueRef.current = [];
         endPendingRequests();
         listingGuard.current.invalidate();
@@ -937,6 +938,13 @@ export function FilesBrowser({
       };
     };
     const endPendingRequests = () => {
+      const pendingPreview = previewRequest.current;
+      previewRequest.current = "";
+      if (!disposed && pendingPreview) {
+        setPreview(current => current?.id === pendingPreview && current.state.status === "loading"
+          ? { ...current, state: { ...current.state, status: "error", message: tRef.current("files.connectionLost") } }
+          : current);
+      }
       connectionEpoch.current++;
       transferAuth.current.clear();
       pwReqRef.current?.resolve(null);
