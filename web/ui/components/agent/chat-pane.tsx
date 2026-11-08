@@ -7,7 +7,7 @@ import { ImagePreview } from "./image-preview";
 import { JobNotification, parseJobNotification, parseJobNotificationData } from "./job-notification";
 import { useComposerTextDraft } from "./use-composer-text-draft";
 import { useComposerDraft } from "./use-composer-draft";
-import { dispatchSlashCommand, matchSlashCommand } from "./slash-command";
+import { dispatchSlashCommand, matchSlashCommand, type ExecutableSlashCommand } from "./slash-command";
 import { parseJobsCommand } from "./jobs-command";
 /* ChatPaneView: one pane of the agent chat — transcript + queue + composer
  * + status strip, extracted from the Agent page so the split-screen layout
@@ -363,15 +363,11 @@ export function ChatPaneView({
   /* Slash commands: typing "/" in the composer opens a filtered menu;
    * no-arg commands run on confirm, commands needing an argument expand
    * into the input. Unknown slash text falls through as a normal chat. */
-  interface SlashCommand {
-    name: string;
-    aliases?: readonly string[];
+  interface SlashCommand extends ExecutableSlashCommand {
     label: string;
     desc: string;
     icon: string;
     needsArg?: boolean;
-    runningOnly?: boolean;
-    run: (arg: string) => boolean;
   }
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
   useEffect(() => { setModelPickerOpen(false); }, [threadId, ready, models.length]);
@@ -382,6 +378,7 @@ export function ChatPaneView({
     () => [
       {
         name: "model",
+        allowArgs: true,
         aliases: ["models"],
         label: t("agent.cmd.model"),
         desc: t("agent.cmd.modelDesc"),
@@ -415,6 +412,7 @@ export function ChatPaneView({
       },
       {
         name: "jobs",
+        allowArgs: true,
         label: t("agent.jobs.title"),
         desc: t("agent.jobs.commandDesc"),
         icon: "ListTodo",
@@ -431,6 +429,7 @@ export function ChatPaneView({
       },
       {
         name: "compact",
+        allowArgs: true,
         label: t("agent.cmd.compact"),
         desc: t("agent.cmd.compactDesc"),
         icon: "Minimize2",
@@ -451,6 +450,7 @@ export function ChatPaneView({
       },
       {
         name: "bg",
+        allowArgs: true,
         label: t("agent.cmd.bg"),
         desc: t("agent.cmd.bgDesc"),
         icon: "Terminal",
@@ -471,6 +471,7 @@ export function ChatPaneView({
       },
       {
         name: "subagent",
+        allowArgs: true,
         label: t("agent.cmd.subagent"),
         desc: t("agent.cmd.subagentDesc"),
         icon: "UserRoundPlus",
@@ -510,6 +511,7 @@ export function ChatPaneView({
       },
       {
         name: "steer",
+        allowArgs: true,
         label: t("agent.cmd.steer"),
         desc: t("agent.cmd.steerDesc"),
         icon: "Zap",
@@ -559,14 +561,20 @@ export function ChatPaneView({
       setSlashDismissed(true);
       return;
     }
-    if (cmd.run("")) setInput("");
+    if (cmd.run("")) {
+      setInput("");
+      setComposerError("");
+    }
   };
 
   /* Executes a "/name arg" line; returns true when the input was consumed
    * as a command (unknown commands fall back to a normal chat send). */
   const runSlashLine = (text: string): boolean =>
-    dispatchSlashCommand(text, slashCommands, running, () => setInput(""),
-      command => setComposerError(t("agent.commandRequiresRunning", { command: `/${command}` })));
+    dispatchSlashCommand(text, slashCommands, running, () => {
+      setInput("");
+      setComposerError("");
+    },
+      (command, reason) => setComposerError(t(reason === "arguments" ? "agent.commandNoArguments" : "agent.commandRequiresRunning", { command: `/${command}` })));
 
 
   /* bb pastRowDimClassName: every turn but the transcript's last renders

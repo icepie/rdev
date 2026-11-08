@@ -160,6 +160,9 @@ it("preserves composer intent across modified keys, image loading and thread swi
       ["/steer ", true, "agent.commandRequiresArgument"],
       ["/steer check logs", false, "agent.commandRequiresRunning"],
       ["/stop", false, "agent.commandRequiresRunning"],
+      ["/new extra", false, "agent.commandNoArguments"],
+      ["/reset\nkeep my messages", false, "agent.commandNoArguments"],
+      ["/stop other-thread", true, "agent.commandNoArguments"],
     ]) {
       props.threadId = `invalid-command-${command}`;
       props.sink.state.running = running;

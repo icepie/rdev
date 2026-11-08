@@ -2,6 +2,7 @@ export interface ExecutableSlashCommand {
   name: string;
   aliases?: readonly string[];
   runningOnly?: boolean;
+  allowArgs?: boolean;
   run(argument: string): boolean;
 }
 
@@ -23,13 +24,17 @@ export function dispatchSlashCommand(
   commands: readonly ExecutableSlashCommand[],
   running: boolean,
   clearDraft: () => void,
-  onInactive?: (name: string) => void,
+  onRejected?: (name: string, reason: "inactive" | "arguments") => void,
 ): boolean {
   const match = matchSlashCommand(text, commands);
   if (!match) return false;
   const { command, argument } = match;
+  if (argument && !command.allowArgs) {
+    onRejected?.(command.name, "arguments");
+    return true;
+  }
   if (command.runningOnly && !running) {
-    onInactive?.(command.name);
+    onRejected?.(command.name, "inactive");
     return true;
   }
   if (command.run(argument)) clearDraft();
