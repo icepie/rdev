@@ -227,6 +227,18 @@ func TestSubagentRPCWireContract(t *testing.T) {
 			t.Fatalf("selector %s changed model to %s", tc.fields, currentModel)
 		}
 	}
+	levelsRaw := `{"type":"get_available_thinking_levels","id":"levels-1"}`
+	sendAgentOp(t, socket, levelsRaw)
+	levelsReply := waitRawMsg(t, rec.msgs, "thinking levels response", func(m map[string]json.RawMessage) bool { return string(m["id"]) == `"levels-1"` })
+	if string(levelsReply["success"]) != "true" || !strings.Contains(string(levelsReply["data"]), `"levels":["off","low","medium","high"]`) {
+		t.Fatalf("invalid levels response: %s", levelsReply)
+	}
+	cycleRaw := `{"type":"cycle_thinking_level","id":"cycle-1"}`
+	sendAgentOp(t, socket, cycleRaw)
+	cycleReply := waitRawMsg(t, rec.msgs, "cycle thinking response", func(m map[string]json.RawMessage) bool { return string(m["id"]) == `"cycle-1"` })
+	if string(cycleReply["success"]) != "true" || string(cycleReply["data"]) != `{"level":"high"}` {
+		t.Fatalf("invalid cycle response: %s", cycleReply)
+	}
 	thinkingRaw, _ := json.Marshal(map[string]any{"type": "set_thinking_level", "id": "thinking-1", "level": "low"})
 	sendAgentOp(t, socket, string(thinkingRaw))
 	thinkingReply := waitRawMsg(t, rec.msgs, "thinking response", func(m map[string]json.RawMessage) bool {

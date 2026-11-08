@@ -136,6 +136,10 @@ func (h *agentWSHandler) handleAgentRPCFrame(ac *agentConn, raw []byte) bool {
 		}
 		_, ompSelector := fields["provider"]
 		h.handleRPCSetModel(ac, request, ompSelector)
+	case "get_available_thinking_levels":
+		h.handleRPCThinkingLevels(ac, request)
+	case "cycle_thinking_level":
+		h.handleRPCCycleThinkingLevel(ac, request)
 	case "set_thinking_level":
 		if err := rpcStringField(fields, "level", &request.Level, true); err != nil {
 			fail("invalid_request", err.Error())
@@ -564,6 +568,64 @@ func (h *agentWSHandler) handleRPCSetModel(ac *agentConn, request agentMsg, ompS
 	ac.writeJSON(agentMsg{Type: "response", Command: request.Command, ID: request.ID, Success: &success, Data: data})
 }
 
+// Caller holds agentSessionsMu; the current thread selects the capability set.
+func (h *agentWSHandler) rpcThinkingLevels(ac *agentConn) []string {
+	thread := ac.entry.threads[ac.current]
+	if thread == nil {
+		return nil
+	}
+	provider, model, _, err := h.srv.Agent.Resolve(thread.model)
+	if err != nil {
+		return nil
+	}
+	if provider.modelAPI(model) == "anthropic-messages" && model.Thinking.Mode == "anthropic-adaptive" {
+		return []string{"low", "medium", "high"}
+	}
+	return []string{"off", "low", "medium", "high"}
+}
+
+func (h *agentWSHandler) handleRPCThinkingLevels(ac *agentConn, request agentMsg) {
+	h.handleRPCThinkingControl(ac, request, false)
+}
+
+func (h *agentWSHandler) handleRPCCycleThinkingLevel(ac *agentConn, request agentMsg) {
+	h.handleRPCThinkingControl(ac, request, true)
+}
+
+func (h *agentWSHandler) handleRPCThinkingControl(ac *agentConn, request agentMsg, cycle bool) {
+	if ac.entry == nil || request.Thread != "" {
+		h.writeRPCError(ac, request, "invalid_request", "thinking controls require an active device session; omit thread")
+		return
+	}
+	h.srv.agentSessionsMu.Lock()
+	levels := h.rpcThinkingLevels(ac)
+	if len(levels) == 0 {
+		h.srv.agentSessionsMu.Unlock()
+		h.writeRPCError(ac, request, "invalid_request", "unknown thread or model")
+		return
+	}
+	var data any = map[string]any{"levels": levels}
+	level := ""
+	if cycle {
+		index := 0
+		for i, candidate := range levels {
+			if candidate == ac.entry.reasoningLevel {
+				index = (i + 1) % len(levels)
+				break
+			}
+		}
+		level = levels[index]
+		h.srv.setReasoningLevelLocked(ac.entry, level)
+		data = map[string]string{"level": level}
+	}
+	h.srv.agentSessionsMu.Unlock()
+	if cycle {
+		h.srv.writeAgentPrefs(ac.entry)
+		h.srv.agentBroadcast(ac.entry, agentMsg{Op: "reasoning_level", Level: level})
+	}
+	(&rpcTurnCompletion{conn: ac, request: request}).write(true, data, "", "")
+}
+
 func (h *agentWSHandler) handleRPCSetThinkingLevel(ac *agentConn, request agentMsg) {
 	if ac.entry == nil {
 		h.writeRPCError(ac, request, "invalid_request", "unknown thread")
@@ -604,6 +666,8 @@ func (h *agentWSHandler) handleRPCAvailableCommands(ac *agentConn, request agent
 		{"name": "get_state", "params": map[string]any{"thread": "string?"}},
 		{"name": "get_available_models"},
 		{"name": "set_model", "params": map[string]any{"provider": "string", "modelId": "string", "thread": "string?"}, "legacyParams": map[string]any{"model": "string"}},
+		{"name": "get_available_thinking_levels"},
+		{"name": "cycle_thinking_level"},
 		{"name": "set_thinking_level", "params": map[string]any{"level": "off|low|medium|high"}},
 		{"name": "set_todos", "params": map[string]any{"phases": "TodoPhase[]"}},
 		{"name": "abort", "params": map[string]any{"thread": "string?"}},

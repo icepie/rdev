@@ -1544,6 +1544,14 @@ func (h *agentWSHandler) handleSetReasoningLevel(ac *agentConn, level string) {
 	}
 	srv := h.srv
 	srv.agentSessionsMu.Lock()
+	srv.setReasoningLevelLocked(entry, level)
+	srv.agentSessionsMu.Unlock()
+	srv.writeAgentPrefs(entry)
+	srv.agentBroadcast(entry, agentMsg{Op: "reasoning_level", Level: level})
+}
+
+// Caller holds agentSessionsMu so read-modify-write controls stay atomic.
+func (srv *Server) setReasoningLevelLocked(entry *agentSessionEntry, level string) {
 	entry.reasoningLevel = level
 	for _, th := range entry.threads {
 		if th.running {
@@ -1560,9 +1568,6 @@ func (h *agentWSHandler) handleSetReasoningLevel(ac *agentConn, level string) {
 		th.session = newSession
 		th.sessionClient = entry.client
 	}
-	srv.agentSessionsMu.Unlock()
-	srv.writeAgentPrefs(entry)
-	srv.agentBroadcast(entry, agentMsg{Op: "reasoning_level", Level: level})
 }
 
 func (h *agentWSHandler) handleChat(ac *agentConn, text, modelRef, threadRef string, imagesRaw json.RawMessage) {
