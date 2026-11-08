@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -44,6 +45,7 @@ type fileMsg struct {
 }
 
 type fileSocket struct {
+	prefix     string // private wire namespace, never exposed to the browser
 	conn       *gws.Conn
 	srv        *Server
 	mu         sync.Mutex
@@ -63,7 +65,16 @@ type filesWSHandler struct {
 	adminBypass bool // valid admin token: skip device password
 }
 
+func (s *fileSocket) scopeID(id string) string {
+	if id == "" {
+		return ""
+	}
+	return s.prefix + id
+}
+
 func (s *fileSocket) writeText(msg fileMsg) {
+	msg.TaskID = strings.TrimPrefix(msg.TaskID, s.prefix)
+	msg.RequestID = strings.TrimPrefix(msg.RequestID, s.prefix)
 	data, _ := json.Marshal(msg)
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -71,8 +82,11 @@ func (s *fileSocket) writeText(msg fileMsg) {
 }
 
 func (s *fileSocket) writeBinary(raw []byte) {
-	data := make([]byte, len(raw))
-	copy(data, raw)
+	typ, id, offset, payload, err := protocol.DecodeBinFrameOffset(raw)
+	if err != nil {
+		return
+	}
+	data := protocol.EncodeBinFrameOffset(typ, strings.TrimPrefix(id, s.prefix), offset, payload)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.conn.WriteMessage(gws.OpcodeBinary, data)
@@ -81,6 +95,7 @@ func (s *fileSocket) writeBinary(raw []byte) {
 func (h *filesWSHandler) OnOpen(socket *gws.Conn) {
 	socket.Session().Store("fileSocket", &fileSocket{
 		conn:       socket,
+		prefix:     generateID() + ":",
 		srv:        h.srv,
 		authorized: make(map[string]string),
 		authFails:  make(map[string]int),
@@ -144,6 +159,14 @@ func (h *filesWSHandler) OnMessage(socket *gws.Conn, message *gws.Message) {
 	}
 	var msg fileMsg
 	if err := json.Unmarshal(message.Bytes(), &msg); err != nil {
+		return
+	}
+	// Namespace both task and one-shot request IDs before global routing.
+	// Browser IDs remain unchanged on all text/binary responses.
+	msg.TaskID = fs.scopeID(msg.TaskID)
+	msg.RequestID = fs.scopeID(msg.RequestID)
+	if len(msg.TaskID) > 255 || len(msg.RequestID) > 255 {
+		fs.writeText(fileMsg{Op: "error", TaskID: msg.TaskID, RequestID: msg.RequestID, Message: "file operation ID too long"})
 		return
 	}
 	switch msg.Op {
@@ -219,7 +242,7 @@ func (h *filesWSHandler) clientFor(socket *fileSocket, msg fileMsg) (*ClientConn
 
 func (h *filesWSHandler) handleList(socket *fileSocket, msg fileMsg) {
 	if msg.RequestID == "" {
-		msg.RequestID = generateID()
+		msg.RequestID = socket.scopeID(generateID())
 	}
 	client, ok := h.clientFor(socket, msg)
 	if !ok {
@@ -239,7 +262,7 @@ func (h *filesWSHandler) handleList(socket *fileSocket, msg fileMsg) {
 
 func (h *filesWSHandler) handleUploadStart(socket *fileSocket, msg fileMsg) {
 	if msg.TaskID == "" {
-		msg.TaskID = generateID()
+		msg.TaskID = socket.scopeID(generateID())
 	}
 	client, ok := h.clientFor(socket, msg)
 	if !ok {
@@ -263,7 +286,7 @@ func (h *filesWSHandler) handleUploadStart(socket *fileSocket, msg fileMsg) {
 
 func (h *filesWSHandler) handleDownloadStart(socket *fileSocket, msg fileMsg) {
 	if msg.TaskID == "" {
-		msg.TaskID = generateID()
+		msg.TaskID = socket.scopeID(generateID())
 	}
 	client, ok := h.clientFor(socket, msg)
 	if !ok {
@@ -278,7 +301,7 @@ func (h *filesWSHandler) handleDownloadStart(socket *fileSocket, msg fileMsg) {
 
 func (h *filesWSHandler) handleFileOp(socket *fileSocket, msg fileMsg) {
 	if msg.RequestID == "" {
-		msg.RequestID = generateID()
+		msg.RequestID = socket.scopeID(generateID())
 	}
 	client, ok := h.clientFor(socket, msg)
 	if !ok {
@@ -325,6 +348,11 @@ func (h *filesWSHandler) handleBinary(socket *fileSocket, raw []byte) {
 	typ, taskID, offset, payload, err := protocol.DecodeBinFrameOffset(raw)
 	if err != nil {
 		socket.writeText(fileMsg{Op: "error", Message: "invalid binary frame"})
+		return
+	}
+	taskID = socket.scopeID(taskID)
+	if len(taskID) > 255 {
+		socket.writeText(fileMsg{Op: "error", TaskID: taskID, Message: "file operation ID too long"})
 		return
 	}
 	route := h.srv.getFileTask(taskID)
