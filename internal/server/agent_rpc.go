@@ -142,6 +142,31 @@ func (h *agentWSHandler) handleAgentRPCFrame(ac *agentConn, raw []byte) bool {
 		}
 		request.Images = fields["images"]
 		h.handleRPCQueuedInput(ac, request)
+	case "remove_queued_message":
+		var queue string
+		if err := rpcStringField(fields, "queue", &queue, true); err != nil {
+			fail("invalid_request", err.Error())
+			return true
+		}
+		if queue != "steering" && queue != "followUp" {
+			fail("invalid_request", `queue must be "steering" or "followUp"`)
+			return true
+		}
+		if _, exists := fields["message"]; !exists {
+			fail("invalid_request", "message must be a string")
+			return true
+		}
+		if err := rpcStringField(fields, "message", &request.Message, false); err != nil {
+			fail("invalid_request", err.Error())
+			return true
+		}
+		if _, exists := fields["queueId"]; exists {
+			if err := rpcStringField(fields, "queueId", &request.QueueID, true); err != nil {
+				fail("invalid_request", err.Error())
+				return true
+			}
+		}
+		h.handleRPCRemoveQueued(ac, request, queue)
 	case "get_subagents":
 		h.handleGetSubagents(ac, request)
 	case "get_subagent_messages":
@@ -333,7 +358,10 @@ func (h *agentWSHandler) handleRPCState(ac *agentConn, request agentMsg) {
 	jobsRunning := false
 	if th.jobs != nil {
 		for _, job := range th.jobs.List() {
-			if job.State == "running" { jobsRunning = true; break }
+			if job.State == "running" {
+				jobsRunning = true
+				break
+			}
 		}
 	}
 	state := map[string]any{
@@ -341,9 +369,9 @@ func (h *agentWSHandler) handleRPCState(ac *agentConn, request agentMsg) {
 		"isCompacting": snap.running && th.workingTool == "/compact",
 		"messageCount": len(snap.history), "queuedMessageCount": len(snap.queue),
 		"hasPendingAsyncWork": jobsRunning,
-		"isSettled": !snap.running && len(snap.queue) == 0 && !jobsRunning,
-		"queuedMessages": map[string]any{"followUp": followUp, "steering": steering, "liveSteered": len(steering)},
-		"todoPhases":     snap.todos, "sessionFile": "rdev://thread/" + threadID,
+		"isSettled":           !snap.running && len(snap.queue) == 0 && !jobsRunning,
+		"queuedMessages":      map[string]any{"followUp": followUp, "steering": steering, "liveSteered": len(steering)},
+		"todoPhases":          snap.todos, "sessionFile": "rdev://thread/" + threadID,
 	}
 	s.agentSessionsMu.Unlock()
 	success := true
@@ -353,10 +381,18 @@ func (h *agentWSHandler) handleRPCState(ac *agentConn, request agentMsg) {
 
 func splitRPCQueue(items, modes []string) (steering, followUp []string) {
 	for i, item := range items {
-		if i < len(modes) && modes[i] == "steer" { steering = append(steering, item) } else { followUp = append(followUp, item) }
+		if i < len(modes) && modes[i] == "steer" {
+			steering = append(steering, item)
+		} else {
+			followUp = append(followUp, item)
+		}
 	}
-	if steering == nil { steering = []string{} }
-	if followUp == nil { followUp = []string{} }
+	if steering == nil {
+		steering = []string{}
+	}
+	if followUp == nil {
+		followUp = []string{}
+	}
 	return steering, followUp
 }
 
@@ -432,6 +468,7 @@ func (h *agentWSHandler) handleRPCAvailableCommands(ac *agentConn, request agent
 		{"name": "prompt", "params": map[string]any{"message": "string", "thread": "string?"}},
 		{"name": "steer", "params": map[string]any{"message": "string", "thread": "string?"}},
 		{"name": "follow_up", "params": map[string]any{"message": "string", "thread": "string?"}},
+		{"name": "remove_queued_message", "params": map[string]any{"message": "string", "queue": "steering|followUp", "queueId": "string?"}},
 		{"name": "compact", "params": map[string]any{"customInstructions": "string?"}},
 		{"name": "get_subagents"}, {"name": "get_subagent_messages"},
 		{"name": "steer_subagent", "params": map[string]any{"subagentId": "string", "message": "string"}},

@@ -217,6 +217,7 @@ func TestAgentRPCRequiresAuthentication(t *testing.T) {
 	for _, frame := range []string{
 		`{"type":"get_subagents"}`,
 		`{"type":"compact","customInstructions":"keep paths"}`,
+		`{"type":"remove_queued_message","queue":"steering","message":"x"}`,
 		`{"type":"cancel_subagent","subagentId":"child"}`,
 		`{"type":"request","command":"reset"}`,
 	} {
