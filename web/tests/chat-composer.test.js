@@ -34,7 +34,7 @@ it("preserves composer intent across modified keys, image loading and thread swi
   let insertDraft;
   const props = {
     sink: { state: { items: [], todos: [], queue: [], queueIds: [], running: false, stopping: false, turnUsage: null, currentTool: "", workingSince: null },
-      ops: { queueReturns: { current: new Map() }, registerScrollEl() {}, pushBubble: vi.fn(), setRunning() {}, setWorkingSince() {} } },
+      ops: { turnOpen: { current: true }, queueReturns: { current: new Map() }, registerScrollEl() {}, pushBubble: vi.fn(), setRunning() {}, setWorkingSince() {} } },
     t: key => key, threadId: "thread-a", device: "device", ready: true,
     sendRaw: payload => { sent.push(payload); return true; },
     emptyHint: "empty", copiedId: null, onCopy() {}, model: "model", models: [],
@@ -112,7 +112,22 @@ it("preserves composer intent across modified keys, image loading and thread swi
       sent.length = 0;
     }
     props.model = "model";
+    for (const command of ["/COMPACT", "/bg\necho hi", "/subagent inspect"]) {
+      props.threadId = `image-command-${command}`;
+      await render();
+      await act(async () => insertDraft(command));
+      await attach("command.png");
+      await act(async () => readers.at(-1).finish("data:image/png;base64,bmV3"));
+      await act(async () => sendButton().click());
+      expect(sent).toEqual([]);
+      expect(composer.value).toBe(command);
+      expect(document.querySelectorAll("img")).toHaveLength(1);
+      expect(document.querySelector('[role="alert"]').textContent).toBe("agent.commandImagesUnsupported");
+    }
+    props.threadId = "thread-a";
     await render();
+    expect(document.querySelector('[role="alert"]')).toBeNull();
+    readers.length = 0;
     await attach("first.png");
     expect(sendButton().disabled).toBe(true);
     expect(document.querySelector('[role="status"]').textContent).toBe("agent.readingImages");
@@ -164,9 +179,14 @@ it("preserves composer intent across modified keys, image loading and thread swi
     expect(document.querySelector('button[title="agent.queueEditImagesHint"]').disabled).toBe(true);
     await act(async () => sendButton().click());
     expect(sent.at(-1)).toMatchObject({ op: "chat", text: "queued image", images: [{ name: "original.png", mime: "image/png", data: "b3JpZ2luYWw=" }] });
+    props.sink.state.running = true;
+    await render();
     await attach("unreadable.png");
     await act(async () => readers[2].onerror());
-    expect(props.sink.ops.pushBubble).toHaveBeenCalledWith("error", "agent.imageReadFailed");
+    expect(document.querySelector('[role="alert"]').textContent).toBe("agent.imageReadFailed");
+    expect(props.sink.ops.pushBubble).not.toHaveBeenCalled();
+    props.sink.state.running = false;
+    await render();
     expect(document.querySelector('[role="status"]')).toBeNull();
     expect(sendButton().disabled).toBe(true);
     // Parallel reads may finish in reverse order, including separate picks.

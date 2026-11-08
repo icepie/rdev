@@ -538,3 +538,11 @@ Local fixture only (`@server` on port 19440); no real user history was deleted.
 - 对齐独立Files页面的已有行为：Agent文件面板加载下一页失败时保留已加载文件、total/offset和加载更多入口，在列表上方显示错误；重试清理错误并请求相同offset。首次目录加载失败仍清空旧内容及分页ref，避免展示错误目录。
 - 实际PanelFiles DOM/WebSocket模拟回归覆盖首批成功→下一页失败→同offset新请求重试→旧失败重复回包→第二页成功，确认文件完整且没有重复、错误提示清理；另覆盖刷新失败后分页从0开始。
 - 244项Web测试、类型检查及Vite构建通过。本轮未新增真实远端网络故障注入，既有请求归属/设备切换/传输回归继续通过。
+
+### Composer attachment errors and explicit commands
+
+- Attachment count/size/read failures now use a composer-local alert instead of `pushBubble`, whose transcript lifecycle closes the active turn. Draft edits, attachment removal, successful sends and thread/device switches clear the local error; canceled readers retain their existing ownership guards.
+- `/compact`, `/bg` and `/subagent` with attachments are rejected in the composer while preserving text and images. Server dispatch rejects the same commands before history/model/tool mutation. Other slash-prefixed conversation text still follows normal chat dispatch.
+- Actual ChatPane regression covers uppercase/multiline commands, retained attachments/drafts, thread-switch alert cleanup and failed image reading during a running turn without transcript insertion. Server regression covers all three commands, unchanged history and no tool execution/events.
+- Validation: Web suite 244 tests / 65 files, TypeScript and Vite production build passed. The final focused composer regression passed after adding the running-turn fixture reference. This change has no new real-browser visual acceptance claim.
+- `go test ./...` and focused server command/compaction tests with `-race -count=1` passed after the Web build completed.

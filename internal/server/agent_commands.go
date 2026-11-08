@@ -22,6 +22,9 @@ func runAgentConversation(ctx context.Context, sess *agent.Session, text string,
 		}
 	}()
 	command, argument := splitAgentCommand(text)
+	if len(images) > 0 && (command == "/compact" || command == "/bg" || command == "/subagent") {
+		return false, fmt.Errorf("%s does not accept images; remove the attachments or change the message", command)
+	}
 	if command == "/bg" || command == "/subagent" {
 		name, args, err := agentCommandTool(command, argument)
 		if err != nil {

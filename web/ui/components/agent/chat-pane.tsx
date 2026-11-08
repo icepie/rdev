@@ -166,6 +166,8 @@ export function ChatPaneView({
   const imageReaders = useRef(new Map<FileReader, PendingImage | null | undefined>());
   const imageConversion = useRef(new AbortController());
   const [readingImages, setReadingImages] = useState(0);
+  const [composerError, setComposerError] = useState("");
+  useEffect(() => setComposerError(""), [draftKey, input]);
   const cancelImageReads = useCallback(() => {
     const readers = [...imageReaders.current.keys()];
     imageReaders.current.clear();
@@ -232,14 +234,15 @@ export function ChatPaneView({
     if (returningQueueRef.current) return;
     const files = filesIn.filter((f) => f.type.startsWith("image/"));
     if (!files.length) return;
+    setComposerError("");
     let room = MAX_IMAGES - pendingImages.length - imageReaders.current.size;
     if (files.length > room) {
-      ops.pushBubble("error", t("agent.tooManyImages", { max: MAX_IMAGES }));
+      setComposerError(t("agent.tooManyImages", { max: MAX_IMAGES }));
     }
     for (const f of files) {
       if (room <= 0) break;
       if (f.size > MAX_IMAGE_BYTES) {
-        ops.pushBubble("error", t("agent.imageTooLarge", { name: f.name }));
+        setComposerError(t("agent.imageTooLarge", { name: f.name }));
         continue;
       }
       room--;
@@ -262,7 +265,7 @@ export function ChatPaneView({
         return true;
       };
       const readFailed = () => {
-        if (settle(null)) ops.pushBubble("error", t("agent.imageReadFailed", { name: f.name }));
+        if (settle(null)) setComposerError(t("agent.imageReadFailed", { name: f.name }));
       };
       reader.onerror = readFailed;
       reader.onload = async () => {
@@ -294,6 +297,11 @@ export function ChatPaneView({
     const text = input.trim();
     if (returningQueueRef.current) return;
     if ((!text && pendingImages.length === 0) || !ready || imageReaders.current.size > 0) return;
+    const command = text.match(/^\/(compact|bg|subagent)(?=\s|$)/i)?.[0];
+    if (command && pendingImages.length > 0) {
+      setComposerError(t("agent.commandImagesUnsupported", { command }));
+      return;
+    }
     if (text.startsWith("/") && pendingImages.length === 0 && runSlashLine(text)) {
       return;
     }
@@ -305,6 +313,7 @@ export function ChatPaneView({
     }
     if (!sendRaw(payload)) return;
     cancelImageReads();
+    setComposerError("");
     setInput("");
     setPendingImages(EMPTY_COMPOSER_IMAGES);
     if (!running) {
@@ -795,6 +804,7 @@ export function ChatPaneView({
             </div>
           )}
           {returningQueue && <p role="status" className="px-4 pt-2 text-xs text-muted-foreground">{t("agent.queueReturning")}</p>}
+          {composerError && <p role="alert" className="px-4 pt-2 text-xs text-destructive">{composerError}</p>}
           {readingImages > 0 && (
             <p role="status" className="px-4 pt-2 text-xs text-muted-foreground">
               {t("agent.readingImages", { count: readingImages })}
@@ -813,9 +823,10 @@ export function ChatPaneView({
                     type="button"
                     aria-label={t("common.cancel")}
                     className="shrink-0 transition-colors hover:text-foreground"
-                    onClick={() =>
-                      setPendingImages((prev) => prev.filter((_, j) => j !== i))
-                    }
+                    onClick={() => {
+                      setComposerError("");
+                      setPendingImages((prev) => prev.filter((_, j) => j !== i));
+                    }}
                   >
                     <Icon name="X" className="size-3.5" />
                   </button>

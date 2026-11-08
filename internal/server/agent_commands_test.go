@@ -125,3 +125,21 @@ func TestConversationDispatchesExplicitCommandWithoutModel(t *testing.T) {
 		t.Fatalf("dispatch: replaced=%v calls=%d args=%s err=%v", replaced, tool.calls, tool.args, err)
 	}
 }
+
+func TestExplicitCommandsRejectImagesWithoutMutatingHistory(t *testing.T) {
+	for _, command := range []string{" /COMPACT\nretain paths", "/bg echo hi", "/subagent inspect"} {
+		t.Run(command, func(t *testing.T) {
+			tool := &commandDispatchTool{}
+			session := agent.New(agent.Config{Tools: []agent.Tool{tool}})
+			original := []agent.Message{{Role: "user", Content: "keep this"}}
+			session.SetHistory(original)
+			replaced, err := runAgentConversation(t.Context(), session, command, []agent.MessageImage{{}}, func(agent.Event) { t.Error("rejected command emitted an event") })
+			if err == nil || !strings.Contains(err.Error(), "does not accept images") || replaced {
+				t.Fatalf("replaced=%v err=%v", replaced, err)
+			}
+			if tool.calls != 0 || !reflect.DeepEqual(session.History(), original) {
+				t.Fatal("rejected command changed history or ran a tool")
+			}
+		})
+	}
+}
