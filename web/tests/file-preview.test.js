@@ -35,7 +35,7 @@ it("defaults CSV to a table, copies original text, switches source, and isolates
   await act(async () => button(host, "Copy file contents").click());
   expect(copyText).toHaveBeenLastCalledWith(content);
   await act(async () => button(host, "Show source").click());
-  expect(host.querySelector('table')).toBeNull();
+  expect(host.querySelector('table').closest('[data-file-view]').getAttribute('aria-hidden')).toBe('true');
   expect(host.querySelector('[data-source]').textContent).toBe(content);
   await act(async () => button(host, "Toggle line wrap").click());
   expect(host.querySelector('[data-source]').getAttribute('data-wrap')).toBe("wrap");
@@ -184,4 +184,39 @@ it("releases hidden media and restores its position without autoplay", async () 
  expect(video.hasAttribute('src')).toBe(false);
  expect(pause).toHaveBeenCalledTimes(2);
  expect(load).toHaveBeenCalledTimes(4);
+});
+
+
+it("retains independent preview/source reading positions, lazily mounts source and resets on file change", async () => {
+ const props = {path:'/long.md',state:ready('# Heading\n\n' + 'Long content\n\n'.repeat(200))};
+ const {host,render,dispose} = await mount(props);
+ try {
+  const preview = host.querySelector('[data-file-view="preview"]');
+  const source = host.querySelector('[data-file-view="source"]');
+  const heading = host.querySelector('h1');
+  expect(host.querySelector('[data-source]')).toBeNull();
+  preview.scrollTop = 1200;
+  await act(async () => button(host, 'Show source').click());
+  const code = host.querySelector('[data-source]');
+  expect(preview.getAttribute('aria-hidden')).toBe('true');
+  expect(preview.inert || preview.hasAttribute('inert')).toBe(true);
+  expect(source.getAttribute('aria-hidden')).toBe('false');
+  expect(source.scrollTop).toBe(0);
+  source.scrollTop = 800;
+  source.scrollLeft = 90;
+  await act(async () => button(host, 'Show preview').click());
+  expect(host.querySelector('h1')).toBe(heading);
+  expect(preview.scrollTop).toBe(1200);
+  expect(source.getAttribute('aria-hidden')).toBe('true');
+  await act(async () => button(host, 'Show source').click());
+  expect(host.querySelector('[data-source]')).toBe(code);
+  expect(source.scrollTop).toBe(800);
+  expect(source.scrollLeft).toBe(90);
+  await render({...props, visible:false});
+  await render({...props, visible:true});
+  expect(source.scrollTop).toBe(800);
+  await render({...props,path:'/other.md'});
+  expect(host.querySelector('[data-file-view="preview"]').scrollTop).toBe(0);
+  expect(host.querySelector('[data-source]')).toBeNull();
+ } finally {await dispose();}
 });

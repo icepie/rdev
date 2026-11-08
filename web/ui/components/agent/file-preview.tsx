@@ -1,5 +1,5 @@
 import { useFileLineReveal } from "./file-line-reveal";
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from "react";
 import { File as PierreFile, type FileContents, type FileOptions } from "@pierre/diffs/react";
 import { FileSelectionMenu } from "./file-selection-menu";
 import { VideoFilePreview } from "./video-file-preview";
@@ -36,6 +36,24 @@ export function FilePreview(props: FilePreviewProps) {
   return <FilePreviewContent key={props.path} {...props} />;
 }
 
+// Mount expensive renderers on first use, then retain each mode's own scroll
+// container. Keep hidden geometry stable for CSV row measurement; display:none
+// would feed zero-height rows to its virtualizer and shift the saved position.
+// Inert, invisible panes cannot receive focus or affect the visible layout.
+function FileViewPane({ active, paneRef, mode, children }: {
+  active: boolean;
+  paneRef?: RefObject<HTMLDivElement | null>;
+  mode: "preview" | "source";
+  children: ReactNode;
+}) {
+  const [visited, setVisited] = useState(active);
+  if (active && !visited) setVisited(true);
+  return <div ref={paneRef} data-file-view={mode} aria-hidden={!active} inert={!active}
+    className={`h-full min-h-0 overflow-auto ${active ? "" : "invisible absolute inset-0 pointer-events-none"}`}>
+    {(visited || active) && children}
+  </div>;
+}
+
 function FilePreviewContent({
   path,
   state,
@@ -47,6 +65,7 @@ function FilePreviewContent({
   lineRange,
 }: FilePreviewProps) {
   const bodyRef = useRef<HTMLDivElement>(null);
+  const sourceRef = useRef<HTMLDivElement>(null);
   const [wrap, setWrap] = useState(false);
   const [imageOpen, setImageOpen] = useState(false);
   const { base } = splitPath(path);
@@ -60,7 +79,7 @@ function FilePreviewContent({
     hasPreview && !lineRange ? "preview" : "source",
   );
   useEffect(() => { if (lineRange) setViewMode("source"); }, [lineRange?.start, lineRange?.end]);
-  const onPostRender = useFileLineReveal(bodyRef, lineRange, visible && viewMode === "source");
+  const onPostRender = useFileLineReveal(sourceRef, lineRange, visible && viewMode === "source");
   const themeType = useThemeType();
   const fileOptions = useMemo<FileOptions<undefined, undefined>>(
     () => ({
@@ -104,13 +123,12 @@ function FilePreviewContent({
           )}
           <div
             ref={bodyRef}
-            className={`relative min-h-0 flex-1 ${(isCSV || isHTML) && viewMode === "preview" ? "overflow-hidden" : "overflow-auto"}`}
+            className="relative min-h-0 flex-1 overflow-hidden"
           >
-            {isHTML && state.encoding !== "base64" && <HtmlFilePreview content={state.content} name={base} hidden={viewMode !== "preview"} />}
             {state.encoding === "url" && state.mime?.startsWith("video/") ? (
               <VideoFilePreview key={state.content} src={state.content} name={base} visible={visible} t={t} />
-            ) : isHTML && state.encoding !== "base64" && viewMode === "preview" ? null : state.encoding === "base64" && state.mime ? (
-              <div className="min-h-full w-full p-4" style={IMAGE_TRANSPARENCY_CHECKER_STYLE}>
+            ) : state.encoding === "base64" && state.mime ? (
+              <div className="h-full w-full overflow-auto p-4" style={IMAGE_TRANSPARENCY_CHECKER_STYLE}>
                 <button type="button" className="block w-full cursor-zoom-in" aria-label={t("agent.openImagePreview", { name: base })} onClick={() => setImageOpen(true)}>
                   <img src={`data:${state.mime};base64,${state.content}`} alt={base}
                     decoding="async" className="mx-auto block h-auto max-w-full" />
@@ -118,22 +136,24 @@ function FilePreviewContent({
                 <ImageLightbox isOpen={imageOpen} imageSrc={imageOpen ? `data:${state.mime};base64,${state.content}` : null}
                   imageAlt={base} title={base} onClose={() => setImageOpen(false)} />
               </div>
-            ) : isCSV && viewMode === "preview" ? (
-              <CsvFilePreview name={base} content={state.content} t={t} />
-            ) : isMarkdown && viewMode === "preview" ? (
-              <div className="px-3 py-2 text-xs">
-                <Markdown text={state.content} />
-              </div>
             ) : (
-              /* bb SOURCE_VIEW_STYLE: DIFF_VIEW_STYLE + 16px gap blocks. */
-              <div style={{ ...DIFF_VIEW_STYLE, "--diffs-gap-block": "16px" } as CSSProperties}>
-                <PierreFile
-                  file={fileContents}
-                  options={fileOptions}
-                  selectedLines={lineRange}
-                  disableWorkerPool
-                />
-              </div>
+              <>
+                {isHTML ? (
+                  <HtmlFilePreview content={state.content} name={base} hidden={viewMode !== "preview"} />
+                ) : hasPreview && (
+                  <FileViewPane active={viewMode === "preview"} mode="preview">
+                    {isCSV ? <CsvFilePreview name={base} content={state.content} t={t} /> : (
+                      <div className="px-3 py-2 text-xs"><Markdown text={state.content} /></div>
+                    )}
+                  </FileViewPane>
+                )}
+                <FileViewPane active={viewMode === "source"} mode="source" paneRef={sourceRef}>
+                  {/* bb SOURCE_VIEW_STYLE: DIFF_VIEW_STYLE + 16px gap blocks. */}
+                  <div style={{ ...DIFF_VIEW_STYLE, "--diffs-gap-block": "16px" } as CSSProperties}>
+                    <PierreFile file={fileContents} options={fileOptions} selectedLines={lineRange} disableWorkerPool />
+                  </div>
+                </FileViewPane>
+              </>
             )}
             {onAddToChat && <FileSelectionMenu panelRef={bodyRef} content={state.content} mode={viewMode} onAddToChat={onAddToChat} t={t} />}
           </div>
