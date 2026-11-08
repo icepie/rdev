@@ -216,6 +216,17 @@ export function PanelFiles({
   const authOpenRef = useRef(false);
   const reselectTaskRef = useRef<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const uploadPickerTargetRef = useRef<{ device: string; path: string } | null>(null);
+
+  useEffect(() => {
+    const input = fileInputRef.current;
+    const clearPicker = () => {
+      uploadPickerTargetRef.current = null;
+      reselectTaskRef.current = null;
+    };
+    input?.addEventListener("cancel", clearPicker);
+    return () => input?.removeEventListener("cancel", clearPicker);
+  }, []);
 
   const progressDirty = useRef(false);
   const bump = useCallback(() => setTasksTick((n) => n + 1), []);
@@ -465,12 +476,13 @@ export function PanelFiles({
   );
 
   const startUpload = useCallback(
-    (file: File) => {
-      const activeDevice = deviceRef.current;
+    (file: File, target?: { device: string; path: string }) => {
+      const activeDevice = target?.device || deviceRef.current;
+      const targetPath = target?.path ?? currentPathRef.current;
       if (!activeDevice || !file) return;
       const pending = [...tasksRef.current!.values()].find(
         (task) =>
-          canResumeUpload(task, { device: activeDevice, path: currentPathRef.current, name: file.name, size: file.size }) &&
+          canResumeUpload(task, { device: activeDevice, path: targetPath, name: file.name, size: file.size }) &&
           !filesByTaskRef.current.has(task.id),
       );
       if (pending) {
@@ -487,7 +499,7 @@ export function PanelFiles({
         dir: "upload",
         device: activeDevice,
         name: file.name,
-        parentPath: currentPathRef.current,
+        parentPath: targetPath,
         size: file.size,
         done: 0,
         status: "queued",
@@ -893,7 +905,13 @@ export function PanelFiles({
     const taskId = reselectTaskRef.current;
     reselectTaskRef.current = null;
     e.target.value = "";
-    if (!taskId) { files.forEach(startUpload); return; }
+    const pickerTarget = uploadPickerTargetRef.current;
+    uploadPickerTargetRef.current = null;
+    if (pickerTarget && pickerTarget.device !== deviceRef.current) {
+      setListView(previous => ({ ...previous, pageError: tRef.current("files.uploadDeviceChanged") }));
+      return;
+    }
+    if (!taskId) { files.forEach(file => startUpload(file, pickerTarget ?? undefined)); return; }
     const task = tasksRef.current!.get(taskId);
     if (!task || task.status !== "failed") return;
     if (files.length !== 1 || !uploadResumeRequest(task, files[0])) {
@@ -911,7 +929,7 @@ export function PanelFiles({
   const onDrop = (e: DragEvent) => {
     e.preventDefault();
     setDragging(false);
-    [...e.dataTransfer.files].forEach(startUpload);
+    [...e.dataTransfer.files].forEach(file => startUpload(file));
   };
 
   const submitAuth = (password: string) => {
@@ -969,7 +987,10 @@ export function PanelFiles({
           size="icon"
           className="size-8 shrink-0"
           aria-label={t("files.upload")}
-          onClick={() => { reselectTaskRef.current = null; fileInputRef.current?.click(); }}
+          onClick={() => {
+            reselectTaskRef.current = null;
+            fileInputRef.current?.click();
+          }}
         >
           <Icon name="Upload" className="size-4" />
         </Button>
@@ -998,6 +1019,9 @@ export function PanelFiles({
         multiple
         className="hidden"
         onChange={onFilesPicked}
+        onClick={() => {
+          uploadPickerTargetRef.current = { device: deviceRef.current, path: currentPathRef.current };
+        }}
       />
 
       {/* Entries + tasks (container queries gate the optional columns) */}

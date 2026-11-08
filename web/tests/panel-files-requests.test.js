@@ -303,3 +303,25 @@ it('keeps an existing download resumable while waiting for reconnect', async () 
   expect(resumed).toHaveLength(1);
   expect(resumed[0].taskId).not.toBe(original.taskId);
 });
+
+it('pins picker uploads to the directory at open time and rejects a changed device', async () => {
+  const first = sockets[0];
+  await deliver(first, reply(first.sent[0], 'original.txt', {path:'/original'}));
+  await act(async () => document.querySelector('[aria-label="files.upload"]').click());
+  await act(async () => document.querySelector('[aria-label="files.refresh"]').click());
+  await deliver(first, reply(first.sent.at(-1), 'new.txt', {path:'/new'}));
+  await pickFile('pinned.txt');
+  expect(first.sent.at(-1)).toMatchObject({op:'upload_start',deviceId:'one',parentPath:'/original',name:'pinned.txt'});
+
+  await act(async () => document.querySelector('[aria-label="files.upload"]').click());
+  await render('two');
+  const second = sockets.at(-1);
+  await act(async () => second.onopen());
+  await pickFile('wrong-device.txt');
+  expect(second.sent.some(message => message.op === 'upload_start')).toBe(false);
+  expect(document.body.textContent).toContain('files.uploadDeviceChanged');
+
+  await act(async () => document.querySelector('[aria-label="files.upload"]').click());
+  await pickFile('new-device.txt');
+  expect(second.sent.at(-1)).toMatchObject({op:'upload_start',deviceId:'two',name:'new-device.txt'});
+});
