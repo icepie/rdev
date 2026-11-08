@@ -238,10 +238,11 @@ type rpcTodoPhase struct {
 	Tasks []rpcTodoTask `json:"tasks"`
 }
 type rpcTodoTask struct {
-	Content string `json:"content"`
-	Status  string `json:"status"`
-	Blocker string `json:"blocker,omitempty"`
-	Details string `json:"details,omitempty"`
+	Content string   `json:"content"`
+	Status  string   `json:"status"`
+	Blocker string   `json:"blocker,omitempty"`
+	Details string   `json:"details,omitempty"`
+	Notes   []string `json:"notes,omitempty"`
 }
 
 func (h *agentWSHandler) handleRPCSetTodos(ac *agentConn, request agentMsg, raw json.RawMessage) {
@@ -250,12 +251,16 @@ func (h *agentWSHandler) handleRPCSetTodos(ac *agentConn, request agentMsg, raw 
 		return
 	}
 	var phases []rpcTodoPhase
-	if len(raw) == 0 || json.Unmarshal(raw, &phases) != nil {
+	if len(raw) == 0 || json.Unmarshal(raw, &phases) != nil || phases == nil {
 		h.writeRPCError(ac, request, "invalid_request", "phases must be an array")
 		return
 	}
 	flat := make([]todoItem, 0)
 	for pi, phase := range phases {
+		if phase.Tasks == nil {
+			h.writeRPCError(ac, request, "invalid_request", fmt.Sprintf("phase %d tasks must be an array", pi))
+			return
+		}
 		if strings.TrimSpace(phase.Name) == "" {
 			h.writeRPCError(ac, request, "invalid_request", fmt.Sprintf("phase %d name is required", pi))
 			return

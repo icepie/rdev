@@ -17,7 +17,7 @@
 - `get_state` 返回指定线程的模型、流式/压缩状态、分开的 steering/follow-up 队列、后台任务 pending 状态、settled 状态、待办和 rdev 线程 URI；它读取服务端线程快照，不创建第二份会话状态。
 - `get_available_models` 返回配置中的规范 `provider/model` 列表；`set_model` 在目标线程空闲时切换模型并保留历史，运行中或未知线程/模型返回标准错误，避免把切换伪装成排队消息。
 - `set_thinking_level` 接受 `off`/`low`/`medium`/`high`，复用浏览器的设备级设置路径（影响该设备的所有线程；拒绝非空 `thread`，不伪装成线程独立设置）：空闲线程立即重建会话，运行线程在下一轮生效，并返回标准 response。
-- `set_todos` 接受 OMP `TodoPhase[]`，验证 phase/task 名称和状态（含 blocked/abandoned）后保留完整 phase 形状，同时映射一份扁平 todo 给现有浏览器；response 和 `get_state.todoPhases` 返回原 phases，模型的 `todo_write` 更新会清除旧的 RPC phase 视图。
+- `set_todos` 接受 OMP `TodoPhase[]`，验证 phase/task 名称、tasks 数组和状态（含 blocked/abandoned）后保留完整 phase 形状，同时映射一份扁平 todo 给现有浏览器；response 和 `get_state.todoPhases` 返回原 phases（包含 blocker/details/notes），模型的 `todo_write` 更新会清除旧的 RPC phase 视图；`phases:[]` 才会明确清空，null/非法输入不会改动原状态。
 - `abort` 取消目标线程当前轮次并清空待处理 follow-up；空闲线程返回 `{"aborted":false}`，运行中返回 `{"aborted":true}`，随后仍由浏览器线程生命周期广播唯一的 `stopped` 终止帧。
 - `prompt` 接受 `message` 和可选 `thread`，在线程空闲时启动一轮模型对话；忙碌线程返回 `busy`，完成或提供方失败后向原连接发送一次关联 response，并继续广播正常 turn 生命周期。
 - `steer` 与 `follow_up` 接受 `message` 和可选 `thread`，分别进入现有指导 FIFO 或普通 follow-up 队列；返回 admission response，详细排队/消费状态仍通过线程事件广播。
