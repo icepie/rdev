@@ -441,3 +441,19 @@ it('renders image-only guidance with preview while preserving the active turn ti
   expect(sink.state.running).toBe(true);
   expect(sink.state.workingSince).toBe(since);
 });
+
+
+it('updates queue modes and promotion errors without interrupting the active turn',async()=>{
+ await frame({op:'turn_start',text:'working'});
+ await act(async()=>sink.ops.appendDelta('partial'));
+ await frame({op:'queue',items:['same','same'],queueIds:['one','two'],queueModes:['steer','follow_up']});
+ await frame({op:'queue_promoted',queueId:'two',isError:true,message:'already consumed'});
+ expect(sink.state).toMatchObject({queueModes:['steer','follow_up'],queueError:'already consumed',running:true});
+ expect(sink.ops.turnOpen.current).toBe(true);
+ await frame({op:'queue_promoted',queueId:'two'});
+ expect(sink.state.queueError).toBe('');
+ await frame({op:'thread_peeked',running:true,history:[],queue:['later'],queueIds:['three'],queueModes:['model']});
+ expect(sink.state.queueModes).toEqual(['model']);
+ await frame({op:'reset_ok'});
+ expect(sink.state).toMatchObject({queueModes:[],queueError:''});
+});

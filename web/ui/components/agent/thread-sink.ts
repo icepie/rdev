@@ -68,6 +68,8 @@ export interface ThreadSinkState {
   todos: TodoItem[];
   queue: string[];
   queueIds: string[];
+  queueModes: string[];
+  queueError: string;
   running: boolean;
   /* Stop requested, server not yet acked (the turn unwind's stopped frame
    * clears it); keeps the stop button disabled in the meantime. */
@@ -95,6 +97,8 @@ export interface ThreadSinkOps {
   setTodos: Dispatch<SetStateAction<TodoItem[]>>;
   setQueue: Dispatch<SetStateAction<string[]>>;
   setQueueIds: Dispatch<SetStateAction<string[]>>;
+  setQueueModes: Dispatch<SetStateAction<string[]>>;
+  setQueueError: Dispatch<SetStateAction<string>>;
   queueReturns: RefObject<QueueReturns>;
   setRunning: Dispatch<SetStateAction<boolean>>;
   setStopping: Dispatch<SetStateAction<boolean>>;
@@ -148,6 +152,8 @@ export function useThreadSink(): ThreadSink {
   const [todos, setTodos] = useState<TodoItem[]>([]);
   const [queue, setQueue] = useState<string[]>([]);
   const [queueIds, setQueueIds] = useState<string[]>([]);
+  const [queueModes, setQueueModes] = useState<string[]>([]);
+  const [queueError, setQueueError] = useState("");
   const queueReturns = useRef<QueueReturns>(new Map());
   const [running, setRunning] = useState(false);
   const [stopping, setStopping] = useState(false);
@@ -333,6 +339,8 @@ export function useThreadSink(): ThreadSink {
     setTodos([]);
     setQueue([]);
     setQueueIds([]);
+    setQueueModes([]);
+    setQueueError("");
     clearQueueReturns(queueReturns.current);
     setRunning(false);
     setTurnUsage(null);
@@ -348,6 +356,8 @@ export function useThreadSink(): ThreadSink {
       setTodos,
       setQueue,
       setQueueIds,
+      setQueueModes,
+      setQueueError,
       queueReturns,
       setRunning,
       setStopping,
@@ -380,8 +390,8 @@ export function useThreadSink(): ThreadSink {
   );
 
   const state = useMemo<ThreadSinkState>(
-    () => ({ jobsRevision, jobs, jobsError, items, todos, queue, queueIds, running, stopping, turnUsage, currentTool, workingSince }),
-    [jobsRevision, jobs, jobsError, items, todos, queue, queueIds, running, stopping, turnUsage, currentTool, workingSince],
+    () => ({ jobsRevision, jobs, jobsError, items, todos, queue, queueIds, queueModes, queueError, running, stopping, turnUsage, currentTool, workingSince }),
+    [jobsRevision, jobs, jobsError, items, todos, queue, queueIds, queueModes, queueError, running, stopping, turnUsage, currentTool, workingSince],
   );
 
   return useMemo(() => ({ state, ops }), [state, ops]);
@@ -476,10 +486,12 @@ export function applyScopedMessage(
       /* Read-only snapshot for a secondary pane: history + live frames,
        * without switching the connection's current thread. */
       ops.resetTransient();
+      ops.setQueueError("");
       ops.setTodos(parseTodos(msg.todos));
       clearQueueReturns(ops.queueReturns.current);
       ops.setQueue(parseStringArray(msg.queue));
       ops.setQueueIds(parseStringArray(msg.queueIds));
+      ops.setQueueModes(parseStringArray(msg.queueModes));
       const running = !!msg.running;
       ops.setRunning(running);
       const peekWorking = parseWorking(msg.working, running);
@@ -656,12 +668,16 @@ export function applyScopedMessage(
     case "todo":
       ops.setTodos(parseTodos(msg.items));
       return;
+    case "queue_promoted":
+      ops.setQueueError(msg.isError === true ? asString(msg.message) || t("agent.queuePromoteFailed") : "");
+      return;
     case "dequeued":
       acceptQueueRemoval(ops.queueReturns.current, msg);
       return;
     case "queue":
       ops.setQueue(parseStringArray(msg.items));
       ops.setQueueIds(parseStringArray(msg.queueIds));
+      ops.setQueueModes(parseStringArray(msg.queueModes));
       return;
     case "done": {
       const usage = msg.usage;

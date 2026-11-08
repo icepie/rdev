@@ -19,6 +19,16 @@ import (
 )
 
 func TestImageOnlySteeringReachesProviderLiveReplayAndHistory(t *testing.T) {
+	for _, promote := range []bool{false, true} {
+		name := "direct"
+		if promote {
+			name = "promoted"
+		}
+		t.Run(name, func(t *testing.T) { testImageOnlySteering(t, promote) })
+	}
+}
+
+func testImageOnlySteering(t *testing.T, promote bool) {
 	var pngBytes bytes.Buffer
 	if err := png.Encode(&pngBytes, image.NewRGBA(image.Rect(0, 0, 2, 2))); err != nil {
 		t.Fatal(err)
@@ -120,9 +130,21 @@ func TestImageOnlySteeringReachesProviderLiveReplayAndHistory(t *testing.T) {
 		t.Fatal("invalid image mutated queue or canceled the active turn")
 	}
 	images, _ := json.Marshal([]agentImage{{Name: "guidance.png", Mime: "image/png", Data: data}})
-	payload, _ := json.Marshal(agentMsg{Op: "steer", Thread: auth.Thread, Images: images})
+	op := "steer"
+	if promote {
+		op = "chat"
+	}
+	payload, _ := json.Marshal(agentMsg{Op: op, Thread: auth.Thread, Images: images})
 	sendAgentOp(t, socket, string(payload))
-	waitAgentMsg(t, rec.msgs, "queued image", func(m agentMsg) bool { return m.Op == "queue" && len(m.QueueIDs) == 1 })
+	queuedFrame := waitAgentMsg(t, rec.msgs, "queued image", func(m agentMsg) bool { return m.Op == "queue" && len(m.QueueIDs) == 1 })
+	if promote {
+		raw, _ := json.Marshal(agentMsg{Op: "promote_queue", Thread: auth.Thread, QueueID: queuedFrame.QueueIDs[0]})
+		sendAgentOp(t, socket, string(raw))
+		ack := waitAgentMsg(t, rec.msgs, "image promoted", func(m agentMsg) bool { return m.Op == "queue_promoted" })
+		if ack.IsError {
+			t.Fatal(ack.Message)
+		}
+	}
 	releaseFirst()
 	steering := waitAgentMsg(t, rec.msgs, "live image guidance", func(m agentMsg) bool { return m.Op == "steering" })
 	if steering.Text != "" || string(steering.Images) != `["guidance.png"]` || len(steering.ImagePreviews) != 1 || !strings.HasPrefix(steering.ImagePreviews[0], "data:image/png;base64,") {

@@ -155,7 +155,7 @@ export function ChatPaneView({
   const reasoningOptions = supportedReasoning.length ? supportedReasoning : REASONING_LEVELS;
   const selectedReasoning = reasoningOptions.find((item) => item.level === reasoning) ?? reasoningOptions[0];
   const { state, ops } = sink;
-  const { items, todos, queue, queueIds, running, stopping, turnUsage, currentTool, workingSince } = state;
+  const { items, todos, queue, queueIds, queueModes = [], queueError = "", running, stopping, turnUsage, currentTool, workingSince } = state;
 
   const [returningQueue, setReturningQueue] = useState(false);
   const returningQueueRef = useRef(false);
@@ -735,7 +735,7 @@ export function ChatPaneView({
       {/* Queue: each row can be taken back into the composer (click) or
        * dropped entirely (✕); both go through the dequeue op so every
        * pane sees the rebroadcast list. */}
-      {queue.length > 0 && (
+      {(queue.length > 0 || queueError) && (
         <div className="shrink-0 border-t border-border-seam px-3.5 py-1.5">
           <div className="mx-auto flex w-full max-w-[760px] flex-col gap-0.5">
             <div className="flex items-center gap-1.5 text-2xs tracking-wide text-muted-foreground uppercase">
@@ -745,13 +745,14 @@ export function ChatPaneView({
                 ({queue.length})
               </span>
             </div>
+            {queueError && <p role="alert" className="text-xs text-destructive-text">{queueError}</p>}
             {queue.map((q, i) => (
               <div
                 key={queueIds[i] ?? i}
                 className="group/queue flex items-center gap-1 rounded-md py-0.5 pr-1 pl-4 text-xs text-muted-foreground transition-colors hover:bg-sidebar-accent"
               >
                 <span className="w-4 shrink-0 text-right text-2xs text-subtle-foreground/75 tabular-nums">
-                  {i + 1}
+                  {queueModes[i] === "steer" ? <Icon name="CornerDownRight" className="size-3" aria-label={t("agent.queueSteering")} /> : i + 1}
                 </span>
                 <button
                   type="button"
@@ -771,12 +772,19 @@ export function ChatPaneView({
                 >
                   {q || t("agent.queuedImages")}
                 </button>
+                {queueModes[i] === "follow_up" && running && <button type="button"
+                  aria-label={t("agent.queuePromote")} title={t("agent.queuePromote")}
+                  disabled={!ready || !queueIds[i] || returningQueue}
+                  className="shrink-0 cursor-pointer rounded p-0.5 text-subtle-foreground/75 opacity-0 transition-opacity group-hover/queue:opacity-100 group-focus-within/queue:opacity-100 pointer-coarse:opacity-100 max-md:pointer-coarse:min-h-9 max-md:pointer-coarse:min-w-9 hover:text-foreground disabled:pointer-events-none"
+                  onClick={() => { if (!sendRaw({ op: "promote_queue", thread: threadId, queueId: queueIds[i] })) setComposerError(t("agent.queuePromoteFailed")); }}>
+                  <Icon name="CornerDownRight" className="size-3.5" />
+                </button>}
                 <button
                   type="button"
                   aria-label={t("agent.queueRemove")}
                   title={t("agent.queueRemove")}
                   disabled={!ready || !queueIds[i]}
-                  className="shrink-0 cursor-pointer rounded p-0.5 text-subtle-foreground/75 opacity-0 transition-opacity group-hover/queue:opacity-100 group-focus-within/queue:opacity-100 pointer-coarse:opacity-100 hover:text-destructive-text disabled:pointer-events-none"
+                  className="shrink-0 cursor-pointer rounded p-0.5 text-subtle-foreground/75 opacity-0 transition-opacity group-hover/queue:opacity-100 group-focus-within/queue:opacity-100 pointer-coarse:opacity-100 max-md:pointer-coarse:min-h-9 max-md:pointer-coarse:min-w-9 hover:text-destructive-text disabled:pointer-events-none"
                   onClick={() => {
                     requestQueueRemoval(ops.queueReturns.current, sendRaw, threadId, queueIds[i]);
                   }}

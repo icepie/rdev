@@ -828,6 +828,8 @@ export function AgentPage() {
         }
         primaryOps.setQueue(parseStringArray(msg.queue));
         primaryOps.setQueueIds(parseStringArray(msg.queueIds));
+        primaryOps.setQueueModes(parseStringArray(msg.queueModes));
+        primaryOps.setQueueError("");
         clearQueueReturns(primaryOps.queueReturns.current);
         primaryOps.setTodos(parseTodos(msg.todos));
         primaryOps.openToolIds.current.clear();
@@ -1030,6 +1032,8 @@ export function AgentPage() {
         primaryOps.setTodos(parseTodos(msg.todos));
         primaryOps.setQueue(parseStringArray(msg.queue));
         primaryOps.setQueueIds(parseStringArray(msg.queueIds));
+        primaryOps.setQueueModes(parseStringArray(msg.queueModes));
+        primaryOps.setQueueError("");
         clearQueueReturns(primaryOps.queueReturns.current);
         primaryOps.setRunning(!!msg.running);
         const switchWorking = parseWorking(msg.working, !!msg.running);

@@ -23,7 +23,7 @@ import (
 // Browser <-> server agent protocol (text JSON frames on /agent?device=<id>).
 // In:  {op:"auth",password} | {op:"chat",text,model?,thread?,images?} | {op:"approve",id,allow,always?} |
 //
-//	{op:"steer",text} | {op:"dequeue",thread?,queueId,id} (legacy: index) | {op:"new_thread"} | {op:"switch_thread",thread} |
+//	{op:"steer",text} | {op:"promote_queue",thread?,queueId} | {op:"dequeue",thread?,queueId,id} (legacy: index) | {op:"new_thread"} | {op:"switch_thread",thread} |
 //	{op:"delete_thread",thread} | {op:"rename_thread",thread,title} |
 //	{op:"set_cwd",path} | {op:"set_permission_mode",mode} |
 //	{op:"set_reasoning_level",level} | {op:"set_auto_approve",value} (legacy) |
@@ -66,6 +66,7 @@ type agentMsg struct {
 	Thread        string              `json:"thread,omitempty"`
 	Threads       []agentThreadInfo   `json:"threads,omitempty"`
 	Todos         []todoItem          `json:"todos,omitempty"`
+	QueueModes    []string            `json:"queueModes,omitempty"`
 	QueueIDs      []string            `json:"queueIds,omitempty"`
 	Queue         []string            `json:"queue,omitempty"`
 	// Live carries the marshaled frames of the in-flight turn in auth_ok and
@@ -327,6 +328,7 @@ func queueTexts(q []agentQueuedChat) []string {
 // Guarded by Server.agentSessionsMu.
 type agentThread struct {
 	turnDisplay json.RawMessage
+	turnCommand bool // compact/tool commands do not consume model-boundary steering
 	// Acquire before agentSessionsMu; disk I/O never holds the global lock.
 	persistMu     sync.Mutex
 	jobs          *agentJobs
@@ -1020,14 +1022,19 @@ func (s *Server) broadcastThreadList(entry *agentSessionEntry) {
 // broadcastQueue sends the queue snapshot for one thread.
 func (s *Server) broadcastQueue(entry *agentSessionEntry, th *agentThread) {
 	s.agentSessionsMu.Lock()
+	if entry.threads[th.id] != th {
+		s.agentSessionsMu.Unlock()
+		return
+	}
 	items := queueTexts(th.queue)
 	ids := queueIDs(th.queue)
+	modes := queueModes(th)
 	s.agentSessionsMu.Unlock()
 	raw, err := json.Marshal(items)
 	if err != nil {
 		return
 	}
-	s.agentBroadcast(entry, agentMsg{Op: "queue", Thread: th.id, Items: raw, QueueIDs: ids})
+	s.agentBroadcast(entry, agentMsg{Op: "queue", Thread: th.id, Items: raw, QueueIDs: ids, QueueModes: modes})
 }
 
 // denyApprovalsLocked resolves every pending approval of a thread with deny
@@ -1141,14 +1148,15 @@ func (s *Server) requestApproval(entry *agentSessionEntry, th *agentThread, tc a
 // agentThreadSnapshot is the replay state of one thread for auth_ok,
 // thread_switched, thread_peeked and delete-thread remaps.
 type agentThreadSnapshot struct {
-	history  []agentHistoryEntry
-	todos    []todoItem
-	queue    []string
-	queueIDs []string
-	running  bool
-	working  *agentWorking
-	usage    *agentUsage
-	live     []json.RawMessage
+	history    []agentHistoryEntry
+	todos      []todoItem
+	queue      []string
+	queueIDs   []string
+	queueModes []string
+	running    bool
+	working    *agentWorking
+	usage      *agentUsage
+	live       []json.RawMessage
 }
 
 // threadSnapshotLocked snapshots a thread for an attacher. History and live
@@ -1159,11 +1167,12 @@ type agentThreadSnapshot struct {
 func (s *Server) threadSnapshotLocked(entry *agentSessionEntry, th *agentThread) agentThreadSnapshot {
 	msgs := th.session.History()
 	snap := agentThreadSnapshot{
-		todos:    th.todos,
-		queue:    queueTexts(th.queue),
-		queueIDs: queueIDs(th.queue),
-		running:  th.running,
-		usage:    th.lastUsage,
+		todos:      th.todos,
+		queue:      queueTexts(th.queue),
+		queueIDs:   queueIDs(th.queue),
+		queueModes: queueModes(th),
+		running:    th.running,
+		usage:      th.lastUsage,
 	}
 	if snap.todos == nil {
 		snap.todos = []todoItem{}
@@ -1258,6 +1267,7 @@ func (h *agentWSHandler) establish(ac *agentConn, client *ClientConn) {
 		Todos:          snap.todos,
 		Queue:          snap.queue,
 		QueueIDs:       snap.queueIDs,
+		QueueModes:     snap.queueModes,
 		AutoApprove:    permMode == agentPermFull, // legacy field
 		PermissionMode: permMode,
 		ReasoningLevel: reasoningLevel,
@@ -1358,6 +1368,8 @@ func (h *agentWSHandler) OnMessage(socket *gws.Conn, message *gws.Message) {
 		h.handleAskResponse(ac, msg.ID, msg.Answer)
 	case "steer":
 		h.handleSteer(ac, msg.Text, msg.Thread, msg.Images)
+	case "promote_queue":
+		h.handlePromoteQueued(ac, msg.Thread, msg.QueueID)
 	case "dequeue":
 		h.handleDequeueItem(ac, msg.Thread, msg.Index, msg.QueueID, msg.ID, msg.Restore)
 	case "stop":
@@ -1827,17 +1839,18 @@ func (h *agentWSHandler) handleSwitchThread(ac *agentConn, threadID string) {
 
 	// thread_switched is per-connection: only the requester's view changes.
 	ac.writeJSON(agentMsg{
-		Op:       "thread_switched",
-		Thread:   threadID,
-		Model:    model,
-		History:  snap.history,
-		Todos:    snap.todos,
-		Queue:    snap.queue,
-		QueueIDs: snap.queueIDs,
-		Running:  snap.running,
-		Working:  snap.working,
-		Live:     snap.live,
-		Usage:    snap.usage,
+		Op:         "thread_switched",
+		Thread:     threadID,
+		Model:      model,
+		History:    snap.history,
+		Todos:      snap.todos,
+		Queue:      snap.queue,
+		QueueIDs:   snap.queueIDs,
+		QueueModes: snap.queueModes,
+		Running:    snap.running,
+		Working:    snap.working,
+		Live:       snap.live,
+		Usage:      snap.usage,
 	})
 	srv.writeAgentPrefs(entry)
 	srv.broadcastThreadList(entry)
@@ -1867,16 +1880,17 @@ func (h *agentWSHandler) handlePeekThread(ac *agentConn, threadID string) {
 	srv.agentSessionsMu.Unlock()
 
 	ac.writeJSON(agentMsg{
-		Op:       "thread_peeked",
-		Thread:   threadID,
-		History:  snap.history,
-		Todos:    snap.todos,
-		Queue:    snap.queue,
-		QueueIDs: snap.queueIDs,
-		Running:  snap.running,
-		Working:  snap.working,
-		Live:     snap.live,
-		Usage:    snap.usage,
+		Op:         "thread_peeked",
+		Thread:     threadID,
+		History:    snap.history,
+		Todos:      snap.todos,
+		Queue:      snap.queue,
+		QueueIDs:   snap.queueIDs,
+		QueueModes: snap.queueModes,
+		Running:    snap.running,
+		Working:    snap.working,
+		Live:       snap.live,
+		Usage:      snap.usage,
 	})
 }
 
@@ -1976,17 +1990,18 @@ func (h *agentWSHandler) handleDeleteThread(ac *agentConn, threadID string) {
 		// browsers stay on their thread.
 		for _, conn := range affected {
 			conn.writeJSON(agentMsg{
-				Op:       "thread_switched",
-				Thread:   switchedTo,
-				Model:    switchModel,
-				History:  snap.history,
-				Todos:    snap.todos,
-				Queue:    snap.queue,
-				QueueIDs: snap.queueIDs,
-				Running:  snap.running,
-				Working:  snap.working,
-				Live:     snap.live,
-				Usage:    snap.usage,
+				Op:         "thread_switched",
+				Thread:     switchedTo,
+				Model:      switchModel,
+				History:    snap.history,
+				Todos:      snap.todos,
+				Queue:      snap.queue,
+				QueueIDs:   snap.queueIDs,
+				QueueModes: snap.queueModes,
+				Running:    snap.running,
+				Working:    snap.working,
+				Live:       snap.live,
+				Usage:      snap.usage,
 			})
 		}
 		srv.scheduleThreadMetaProbe(entry, switchedTo)
@@ -2508,6 +2523,8 @@ func (h *agentWSHandler) handleDirMkdir(ac *agentConn, path, requestID string) {
 // must hold agentSessionsMu.
 func (s *Server) startAgentTurnLocked(entry *agentSessionEntry, th *agentThread, text string, images []agent.MessageImage, display ...json.RawMessage) agentMsg {
 	th.running = true
+	command, _ := splitAgentCommand(text)
+	th.turnCommand = command == "/compact" || command == "/bg" || command == "/subagent"
 	th.lastOutcome = ""
 	th.turnFiles = nil
 	th.toolPaths = make(map[string]string)
