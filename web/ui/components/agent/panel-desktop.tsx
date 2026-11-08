@@ -1,7 +1,7 @@
 import { attachDesktopMediaSource } from "../../lib/desktop-media";
 import { desktopOwnsKeyboard } from "../../lib/desktop-input-focus";
 import { writeOwnedClipboard } from "../../lib/clipboard-write";
-import { paintDesktopImage } from "../../lib/desktop-frame";
+import { paintDesktopCanvas, paintDesktopImage } from "../../lib/desktop-frame";
 /* PanelDesktop: one device remote-desktop session inside an agent right-panel
  * tab. Self-contained WS client derived from the Desktop page, preserving both
  * stream modes: the legacy JPEG/H264 canvas stream over /desktop and the GPU
@@ -622,12 +622,10 @@ export function PanelDesktop({
   const paintImage = (image: CanvasImageSource, width: number, height: number) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    if (canvas.width !== width || canvas.height !== height) {
-      canvas.width = width;
-      canvas.height = height;
-    }
+    const context = canvas.getContext("2d");
+    if (!context) return;
+    paintDesktopCanvas(context, image, width, height);
     setCanvasShown(true);
-    canvas.getContext("2d")?.drawImage(image, 0, 0);
   };
 
   const fallbackToMjpeg = () => {
@@ -882,10 +880,9 @@ export function PanelDesktop({
         try {
           if (gpuVideoDecoderRef.current !== decoder) return;
           if (gpuCanvas && gpuCtx) {
-            gpuCanvas.width = frame.displayWidth || frame.codedWidth || gpuCanvas.width;
-            gpuCanvas.height = frame.displayHeight || frame.codedHeight || gpuCanvas.height;
-            gpuCtx.clearRect(0, 0, gpuCanvas.width, gpuCanvas.height);
-            gpuCtx.drawImage(frame, 0, 0, gpuCanvas.width, gpuCanvas.height);
+            paintDesktopCanvas(gpuCtx, frame,
+              frame.displayWidth || frame.codedWidth || gpuCanvas.width,
+              frame.displayHeight || frame.codedHeight || gpuCanvas.height);
             setGpuEmpty(null);
           }
           gpuUpdateFrameInfo();

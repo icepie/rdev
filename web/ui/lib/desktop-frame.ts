@@ -22,3 +22,17 @@ export async function paintDesktopImage(
   paint(image, image.naturalWidth || image.width, image.naturalHeight || image.height);
   return true;
 }
+
+
+/** Resizing a canvas resets its backing store and context state, even when the
+ * assigned dimension is unchanged. Preserve it across same-resolution frames. */
+export function paintDesktopCanvas(context: CanvasRenderingContext2D, image: CanvasImageSource, width: number, height: number) {
+  const canvas = context.canvas;
+  const resized = canvas.width !== width || canvas.height !== height;
+  if (canvas.width !== width) canvas.width = width;
+  if (canvas.height !== height) canvas.height = height;
+  // Resize already cleared the canvas. Otherwise remove old pixels before
+  // painting, including when the next frame contains transparent areas.
+  if (!resized) context.clearRect(0, 0, width, height);
+  context.drawImage(image, 0, 0, width, height);
+}

@@ -1,5 +1,5 @@
 import { expect, it, vi } from "vitest";
-import { paintDesktopImage } from "../ui/lib/desktop-frame";
+import { paintDesktopCanvas, paintDesktopImage } from "../ui/lib/desktop-frame";
 
 it("drops a decoded bitmap from a replaced stream and still releases it", async () => {
   const previous = Object.getOwnPropertyDescriptor(globalThis, "window");
@@ -46,4 +46,24 @@ it("checks ownership again after asynchronous fallback decoding", async () => {
     if (previous) Object.defineProperty(globalThis, "window", previous);
     else delete globalThis.window;
   }
+});
+
+
+it("does not reset the backing store for a stream of same-size frames", () => {
+  let width=800, height=600, resets=0;
+  const canvas={get width(){return width},set width(v){width=v;resets++},get height(){return height},set height(v){height=v;resets++}};
+  const context={canvas,clearRect:vi.fn(),drawImage:vi.fn()};
+  const frame={};
+  for(let i=0;i<120;i++)paintDesktopCanvas(context,frame,800,600);
+  expect(resets).toBe(0);
+  expect(context.drawImage).toHaveBeenCalledTimes(120);
+  expect(context.clearRect).toHaveBeenCalledTimes(120);
+  // A width-only resolution change must not reset height as well.
+  paintDesktopCanvas(context,frame,1024,600);
+  expect(resets).toBe(1);
+  expect(context.clearRect).toHaveBeenCalledTimes(120);
+  expect(context.drawImage).toHaveBeenLastCalledWith(frame,0,0,1024,600);
+  paintDesktopCanvas(context,frame,1024,600);
+  expect(resets).toBe(1);
+  expect(context.clearRect).toHaveBeenLastCalledWith(0,0,1024,600);
 });
