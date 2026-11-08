@@ -92,6 +92,7 @@ export interface TodoItem {
 }
 
 export interface ThreadInfo {
+  model?: string;
   outcomeAt?: string;
   outcome?: "done" | "error" | "stopped";
   backgroundJobs?: number;

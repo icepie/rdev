@@ -139,4 +139,4 @@ RPC 帧由独立命令白名单分发，复用设备认证门槛。未知命令�
 
 - rdev 扩展 RPC 支持运行中任务管理：`get_jobs` 返回 `data.jobs` 摘要；`get_job` 接收 `jobId` 并返回 `data.job`（含有界输出）；`cancel_job` 接收 `jobId`，支持 `all`，返回 `data.cancellationRequested`。三个方法均可携带 `thread`，省略时使用当前连接所选线程。请求关联 `id` 与任务 `jobId` 分离；回执仅发给调用连接，任务状态通知仍共享。方法在 `rpcCommands` 中以 `source: "rdev"` 声明，不属于 OMP 标准命令。
 
-- 浏览器支持 `/model` 和 `/models`：无参数打开现有模型选择器；带参数时接受当前模型目录中的完整 ID。未知 ID 保留草稿并提示。此选择与界面选择器一致，是共享的下一条消息偏好，模型 ID 随聊天消息发送；不修改运行中的轮次，不伪装为线程级即时切换。OMP 的模糊 ID、角色别名和 thinking 后缀尚未移植。RPC 客户端仍使用 `get_available_models` / `set_model`。
+- 浏览器支持 `/model` 和 `/models`：无参数打开现有模型选择器；带参数时接受当前模型目录中的完整 ID。未知 ID 保留草稿并提示。此选择与界面选择器一致，是按线程隔离的下一条消息偏好，模型 ID 随聊天消息发送；切换窗格不互相覆盖，正在运行的旧轮次完成不会覆盖新选择。线程删除会清理草稿选择，重新认证或切换设备后以服务端线程模型为准。推理强度和权限模式仍为设备级设置。OMP 的模糊 ID、角色别名和 thinking 后缀尚未移植。RPC 客户端仍使用 `get_available_models` / `set_model`。

@@ -91,7 +91,7 @@ export interface ChatPaneViewProps {
   emptyHint: string;
   copiedId: string | null;
   onCopy: (id: string, text: string) => void;
-  /* Global (entry-level) composer config, shared by every pane. */
+  /* Model selection is thread-local; reasoning and permission mode remain device-wide. */
   model: string;
   models: ModelInfo[];
   onModelChange: (id: string) => void;

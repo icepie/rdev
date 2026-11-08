@@ -123,6 +123,7 @@ export function parseThreads(v: unknown): ThreadInfo[] {
       outcome?: unknown;
       outcomeAt?: unknown;
       backgroundJobs?: unknown;
+      model?: unknown;
       tool?: unknown;
     };
     const id = asString(o.id);
@@ -131,6 +132,7 @@ export function parseThreads(v: unknown): ThreadInfo[] {
       {
         id,
         title: asString(o.title),
+        model: asString(o.model) || undefined,
         updatedAt: asString(o.updatedAt),
         outcomeAt: asString(o.outcomeAt) || undefined,
         running: !!o.running,

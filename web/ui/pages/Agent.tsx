@@ -1,3 +1,4 @@
+import { useThreadModels } from "../components/agent/use-thread-models";
 import { createStreamBatch } from "../components/agent/stream-batch";
 import { clearQueueReturns } from "../components/agent/queue-actions";
 import { discardComposerTextDraft, reconcileComposerTextDrafts } from "../components/agent/use-composer-text-draft";
@@ -229,6 +230,7 @@ export function AgentPage() {
   const [authError, setAuthError] = useState("");
   const pendingPasswordRef = useRef<{ device: string; password: string } | null>(null);
   const [threads, setThreads] = useState<ThreadInfo[]>([]);
+  const {modelFor, select: selectThreadModel, reset: resetThreadModels} = useThreadModels(threads, model);
   /* Cross-device thread list (all_threads op); null until the first frame
    * arrives — older servers never send it and the sidebar falls back to
    * the current-device thread_list. */
@@ -783,6 +785,7 @@ export function AgentPage() {
         /* Server-persisted model wins; localStorage is a display cache only. */
         const m = asString(msg.model);
         setModel(m);
+        resetThreadModels();
         if (m) localStorage.setItem(MODEL_KEY, m);
         setPermMode(parsePermMode(msg.permissionMode));
         const authCwd = asString(msg.cwd);
@@ -1221,6 +1224,7 @@ export function AgentPage() {
     for (const ops of secondarySinksRef.current.values()) ops.reset();
     setModels([]);
     setModel("");
+    resetThreadModels();
     setThreads([]);
     setThread("");
     threadRef.current = "";
@@ -1395,13 +1399,6 @@ export function AgentPage() {
     [sendRaw],
   );
 
-  /* Composer model picker: display cache only; the model actually used
-   * travels with each chat payload. */
-  const selectModel = useCallback((id: string) => {
-    setModel(id);
-    localStorage.setItem(MODEL_KEY, id);
-  }, []);
-
   const submitPassword = (pw: string): boolean => {
     const ws = wsRef.current;
     if (!pw || ws?.readyState !== WebSocket.OPEN) {
@@ -1434,9 +1431,6 @@ export function AgentPage() {
       updateSidebarView({ sort: id, dir: id === "alpha" ? "asc" : "desc" });
     }
   };
-
-  const currentContextWindow =
-    models.find((m) => m.id === model)?.contextWindow ?? undefined;
 
   /* ── Split-screen panes (bb) ── */
 
@@ -1805,6 +1799,7 @@ export function AgentPage() {
     const isCurrent = resolvedTid === thread;
     const focusedPane = layout.focusedPaneId === pane.paneId;
     const info = threads.find((th) => th.id === resolvedTid);
+    const paneModel = modelFor(resolvedTid);
     const title = isCurrent
       ? currentThreadTitle
       : info?.title || resolvedTid;
@@ -1822,9 +1817,9 @@ export function AgentPage() {
         : device === SERVER_AGENT_ID ? t("agent.serverEmpty") : t("agent.empty"),
       copiedId,
       onCopy: copy,
-      model,
+      model: paneModel,
       models,
-      onModelChange: selectModel,
+      onModelChange: (id: string) => selectThreadModel(resolvedTid, id),
       reasoning,
       onReasoningChange: selectReasoning,
       permMode,
@@ -1832,7 +1827,7 @@ export function AgentPage() {
       device,
       deviceOs: currentDevice?.os,
       connStatus: status,
-      contextWindow: currentContextWindow,
+      contextWindow: models.find(item => item.id === paneModel)?.contextWindow,
       onOpenFile: openFileInPanel,
       onOpenDiff: openDiffInPanel,
     };
