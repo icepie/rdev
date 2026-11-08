@@ -15,7 +15,7 @@
 - Subagent 指导在模型响应或工具批次结束后按 FIFO 接入；最后一次边界之后收到的指导继续在同一子会话执行，不会复用主会话历史或扩大已授予的工具权限。每条最多 4096 字节，最多待处理 8 条。完成、取消或关闭后拒绝新指导；取消/失败时未消费的指导可通过 `jobs read` 的 `pendingGuidance` 查看。入口包括 Agent 的 `jobs` 工具及任务面板的“追加指导”。面板使用线程隔离的 `steer_job` / `job_steered` 请求回执，仅确认接收后清空未修改的草稿；拒绝、15 秒未确认或断线时保留内容。切换任务保留本面板内的草稿，任务结束后可复制，刷新页面不保证恢复这些任务草稿。兼容 OMP RPC 的 `get_subagents`、`get_subagent_messages`、`steer_subagent` 和 `cancel_subagent` 接口，接受 OMP 的 `type` 命令帧及 `subagentId`/`message`/`fromByte` 字段，返回标准 `response`/`success`/`data`/`error` 回执；消息读取返回 `rdev://subagent/<id>` 有界输出窗口，游标超出窗口时将 `reset` 置为 true，不伪装成 OMP 持久化 session 文件。
 - OMP RPC 还提供 `negotiate_protocol`（当前版本 2）与 `get_available_commands`，其中 `commands` 按 OMP 语义返回可通过 `prompt.message` 执行的 slash 命令（compact/bg/subagent/jobs），包含 description、source 与 input.hint；rdev 扩展字段 `rpcCommands` 单独列出 RPC 方法及参数。旧客户端若依赖原先的 RPC 方法列表，应改读 `rpcCommands`。浏览器专用的 new/reset/stop/steer 控件不冒充 prompt slash 命令。
 - `get_state` 返回指定线程的模型、流式/压缩状态、分开的 steering/follow-up 队列、后台任务 pending 状态、settled 状态、待办和 rdev 线程 URI；它读取服务端线程快照，不创建第二份会话状态。
-- `get_available_models` 返回配置中的规范 `provider/model` 列表；`set_model` 在目标线程空闲时切换模型并保留历史，运行中或未知线程/模型返回标准错误，避免把切换伪装成排队消息。
+- `get_available_models` 返回配置中的规范 `provider/model` 列表；`set_model` 接受 OMP 的 `provider` + `modelId` 或旧版 rdev 的 `model`（两种格式不可混用），在目标线程空闲时切换模型并保留历史，运行中或未知线程/模型返回标准错误，避免把切换伪装成排队消息。
 - `set_thinking_level` 接受 `off`/`low`/`medium`/`high`，复用浏览器的设备级设置路径（影响该设备的所有线程；拒绝非空 `thread`，不伪装成线程独立设置）：空闲线程立即重建会话，运行线程在下一轮生效，并返回标准 response。
 - `set_todos` 接受 OMP `TodoPhase[]`，验证 phase/task 名称、tasks 数组和状态（含 blocked/abandoned）后保留完整 phase 形状，同时映射一份扁平 todo 给现有浏览器；response 和 `get_state.todoPhases` 返回原 phases（包含 blocker/details/notes），模型的 `todo_write` 更新会清除旧的 RPC phase 视图；`phases:[]` 才会明确清空，null/非法输入不会改动原状态。
 - `abort` 取消目标线程当前轮次并清空待处理 follow-up；空闲线程返回 `{"aborted":false}`，运行中返回 `{"aborted":true}`，随后仍由浏览器线程生命周期广播唯一的 `stopped` 终止帧。
@@ -139,4 +139,4 @@ RPC 帧由独立命令白名单分发，复用设备认证门槛。未知命令�
 
 - rdev 扩展 RPC 支持运行中任务管理：`get_jobs` 返回 `data.jobs` 摘要；`get_job` 接收 `jobId` 并返回 `data.job`（含有界输出）；`cancel_job` 接收 `jobId`，支持 `all`，返回 `data.cancellationRequested`。三个方法均可携带 `thread`，省略时使用当前连接所选线程。请求关联 `id` 与任务 `jobId` 分离；回执仅发给调用连接，任务状态通知仍共享。方法在 `rpcCommands` 中以 `source: "rdev"` 声明，不属于 OMP 标准命令。
 
-- 浏览器支持 `/model` 和 `/models`：无参数打开现有模型选择器；带参数时接受当前模型目录中的完整 ID。未知 ID 保留草稿并提示。此选择与界面选择器一致，是按线程隔离的下一条消息偏好，模型 ID 随聊天消息发送；切换窗格不互相覆盖，正在运行的旧轮次完成不会覆盖新选择。线程删除会清理草稿选择，重新认证或切换设备后以服务端线程模型为准。推理强度和权限模式仍为设备级设置。OMP 的模糊 ID、角色别名和 thinking 后缀尚未移植。RPC 客户端仍使用 `get_available_models` / `set_model`。
+- 浏览器支持 `/model` 和 `/models`：无参数打开现有模型选择器；带参数时接受当前模型目录中的完整 ID。未知 ID 保留草稿并提示。此选择与界面选择器一致，是按线程隔离的下一条消息偏好，模型 ID 随聊天消息发送；切换窗格不互相覆盖，正在运行的旧轮次完成不会覆盖新选择。线程删除会清理草稿选择，重新认证或切换设备后以服务端线程模型为准。推理强度和权限模式仍为设备级设置。OMP 的模糊 ID、角色别名和 thinking 后缀尚未移植。RPC 客户端仍使用 `get_available_models` / `set_model`。`set_model` 的 OMP 请求字段现已支持；成功回执仍是 rdev 的 `{model: "provider/model"}`，模型目录也仍使用 rdev 元数据结构，不应视作完整 OMP Model 对象兼容。

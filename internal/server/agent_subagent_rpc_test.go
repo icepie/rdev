@@ -167,6 +167,35 @@ func TestSubagentRPCWireContract(t *testing.T) {
 	if string(modelReply["success"]) != "true" || string(modelReply["data"]) != `{"model":"p/m2"}` {
 		t.Fatalf("invalid set model response: %s", modelReply)
 	}
+	// Literal OMP selectors must resolve the requested provider, and malformed
+	// selectors must leave the current model unchanged.
+	for _, tc := range []struct {
+		fields string
+		ok     bool
+	}{
+		{`"provider":"p","modelId":"m1"`, true},
+		{`"provider":"missing","modelId":"m2"`, false},
+		{`"provider":"p"`, false},
+		{`"modelId":"m2"`, false},
+		{`"provider":null,"modelId":"m2"`, false},
+		{`"provider":"p","modelId":2`, false},
+		{`"provider":"p","modelId":"m2","model":"p/m2"`, false},
+		{`"provider":"p/m2","modelId":"x"`, false},
+	} {
+		sendAgentOp(t, socket, `{"type":"set_model","id":"omp-model",`+tc.fields+`}`)
+		reply := waitRawMsg(t, rec.msgs, "OMP model response", func(m map[string]json.RawMessage) bool {
+			return string(m["type"]) == `"response"` && string(m["id"]) == `"omp-model"`
+		})
+		if (string(reply["success"]) == "true") != tc.ok {
+			t.Fatalf("selector %s: %s", tc.fields, reply)
+		}
+		srv.agentSessionsMu.Lock()
+		currentModel := th.model
+		srv.agentSessionsMu.Unlock()
+		if currentModel != "p/m1" {
+			t.Fatalf("selector %s changed model to %s", tc.fields, currentModel)
+		}
+	}
 	thinkingRaw, _ := json.Marshal(map[string]any{"type": "set_thinking_level", "id": "thinking-1", "level": "low"})
 	sendAgentOp(t, socket, string(thinkingRaw))
 	thinkingReply := waitRawMsg(t, rec.msgs, "thinking response", func(m map[string]json.RawMessage) bool {

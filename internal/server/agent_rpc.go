@@ -130,7 +130,7 @@ func (h *agentWSHandler) handleAgentRPCFrame(ac *agentConn, raw []byte) bool {
 	case "get_available_models":
 		h.handleRPCAvailableModels(ac, request)
 	case "set_model":
-		if err := rpcStringField(fields, "model", &request.Model, true); err != nil {
+		if err := rpcModelReference(fields, &request.Model); err != nil {
 			fail("invalid_request", err.Error())
 			return true
 		}
@@ -586,7 +586,7 @@ func (h *agentWSHandler) handleRPCAvailableCommands(ac *agentConn, request agent
 		{"name": "negotiate_protocol"}, {"name": "get_available_commands"},
 		{"name": "get_state", "params": map[string]any{"thread": "string?"}},
 		{"name": "get_available_models"},
-		{"name": "set_model", "params": map[string]any{"model": "string", "thread": "string?"}},
+		{"name": "set_model", "params": map[string]any{"provider": "string", "modelId": "string", "thread": "string?"}, "legacyParams": map[string]any{"model": "string"}},
 		{"name": "set_thinking_level", "params": map[string]any{"level": "off|low|medium|high"}},
 		{"name": "set_todos", "params": map[string]any{"phases": "TodoPhase[]"}},
 		{"name": "abort", "params": map[string]any{"thread": "string?"}},
@@ -653,6 +653,31 @@ func (h *agentWSHandler) handleRPCCompact(ac *agentConn, request agentMsg) {
 func (h *agentWSHandler) writeRPCError(ac *agentConn, request agentMsg, code, message string) {
 	success := false
 	ac.writeJSON(agentMsg{Type: "response", Command: request.Command, ID: request.ID, Success: &success, Code: code, Error: message})
+}
+
+// OMP uses separate provider/modelId fields. Keep the shipped rdev model
+// reference as an alternative, but never silently choose between both forms.
+func rpcModelReference(fields map[string]json.RawMessage, dest *string) error {
+	_, hasProvider := fields["provider"]
+	_, hasModelID := fields["modelId"]
+	if !hasProvider && !hasModelID {
+		return rpcStringField(fields, "model", dest, true)
+	}
+	if _, mixed := fields["model"]; mixed {
+		return fmt.Errorf("use provider/modelId or model, not both")
+	}
+	var provider, modelID string
+	if err := rpcStringField(fields, "provider", &provider, true); err != nil {
+		return err
+	}
+	if err := rpcStringField(fields, "modelId", &modelID, true); err != nil {
+		return err
+	}
+	if strings.Contains(provider, "/") {
+		return fmt.Errorf("provider must not contain /")
+	}
+	*dest = provider + "/" + modelID
+	return nil
 }
 
 func rpcStringField(fields map[string]json.RawMessage, key string, dest *string, required bool) error {
