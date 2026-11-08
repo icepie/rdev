@@ -138,10 +138,11 @@ func (h *agentWSHandler) handleAgentRPCFrame(ac *agentConn, raw []byte) bool {
 	case "abort":
 		h.handleRPCAbort(ac, request)
 	case "prompt":
-		if err := rpcStringField(fields, "message", &request.Message, true); err != nil {
+		if err := rpcStringField(fields, "message", &request.Message, false); err != nil {
 			fail("invalid_request", err.Error())
 			return true
 		}
+		request.Images = fields["images"]
 		h.handleRPCPrompt(ac, request)
 	case "steer", "follow_up":
 		if err := rpcStringField(fields, "message", &request.Message, false); err != nil {
@@ -307,6 +308,15 @@ func (h *agentWSHandler) handleRPCPrompt(ac *agentConn, request agentMsg) {
 		return
 	}
 	s := h.srv
+	images, err := parseRPCImages(request.Images)
+	if err != nil {
+		h.writeRPCError(ac, request, "invalid_request", err.Error())
+		return
+	}
+	if strings.TrimSpace(request.Message) == "" && len(images) == 0 {
+		h.writeRPCError(ac, request, "invalid_request", "message must not be blank")
+		return
+	}
 	threadID := request.Thread
 	if threadID == "" {
 		threadID = ac.current
@@ -323,12 +333,12 @@ func (h *agentWSHandler) handleRPCPrompt(ac *agentConn, request agentMsg) {
 		h.writeRPCError(ac, request, "busy", "conversation is busy")
 		return
 	}
-	start := s.startAgentTurnLocked(ac.entry, th, request.Message, nil)
+	start := s.startAgentTurnLocked(ac.entry, th, request.Message, images)
 	turn := snapshotAgentTurnLocked(th)
 	turn.rpc = &rpcTurnCompletion{conn: ac, request: request}
 	s.agentSessionsMu.Unlock()
 	s.agentBroadcastTurn(ac.entry, th, start)
-	s.goAgent(func() { s.runAgentTurn(ac.entry, th, turn, request.Message, nil) })
+	s.goAgent(func() { s.runAgentTurn(ac.entry, th, turn, request.Message, images) })
 }
 
 func (h *agentWSHandler) handleRPCQueuedInput(ac *agentConn, request agentMsg) {

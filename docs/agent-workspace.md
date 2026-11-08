@@ -19,7 +19,7 @@
 - `set_thinking_level` 接受 `off`/`low`/`medium`/`high`，复用浏览器的设备级设置路径（影响该设备的所有线程；拒绝非空 `thread`，不伪装成线程独立设置）：空闲线程立即重建会话，运行线程在下一轮生效，并返回标准 response。
 - `set_todos` 接受 OMP `TodoPhase[]`，验证 phase/task 名称、tasks 数组和状态（含 blocked/abandoned）后保留完整 phase 形状，同时映射一份扁平 todo 给现有浏览器；response 和 `get_state.todoPhases` 返回原 phases（包含 blocker/details/notes），模型的 `todo_write` 更新会清除旧的 RPC phase 视图；`phases:[]` 才会明确清空，null/非法输入不会改动原状态。
 - `abort` 取消目标线程当前轮次并清空待处理 follow-up；空闲线程返回 `{"aborted":false}`，运行中返回 `{"aborted":true}`，随后仍由浏览器线程生命周期广播唯一的 `stopped` 终止帧。
-- `prompt` 接受 `message` 和可选 `thread`，在线程空闲时启动一轮模型对话；忙碌线程返回 `busy`，完成或提供方失败后向原连接发送一次关联 response，并继续广播正常 turn 生命周期。
+- `prompt` 接受 `message`、可选 `thread` 和 OMP `images: ImageContent[]`（type/mimeType/data）；支持图文和纯图片，复用附件数量/大小限制与预览转换，非法附件在入场前拒绝。在线程空闲时启动一轮模型对话；忙碌线程返回 `busy`，完成或提供方失败后向原连接发送一次关联 response，并继续广播正常 turn 生命周期。
 - `steer` 与 `follow_up` 接受 `message` 和可选 `thread`，分别进入现有指导 FIFO 或普通 follow-up 队列；返回 admission response，详细排队/消费状态仍通过线程事件广播。
 - `remove_queued_message` 兼容 OMP 的 `message` + `queue`（`steering`/`followUp`）匹配；rdev 额外接受 `queueId` 做稳定身份校验，返回 `removed` 和可恢复的 OMP `ImageContent[]`，不会删除后台通知或跨线程项目。
 - `promote_queued_message` 按 OMP 语义把指定 follow-up 提升到 steering FIFO；支持可选 `queueId`，拒绝空闲会话、命令轮次、后台通知、模型切换项和不存在项目。
