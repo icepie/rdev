@@ -4,8 +4,6 @@ import { SyntaxCode } from "../syntax-code";
 import { cn } from "../../lib/utils";
 import type { ToolItem, Translator } from "./types";
 
-const RESULT_CAP = 4000;
-
 function commandOf(tool: ToolItem): string {
   try {
     const parsed: unknown = JSON.parse(tool.args);
@@ -71,7 +69,6 @@ export function commandOutputText(result: string): string {
  * args JSON block is redundant — the $ line already states what ran. */
 export function CommandOutputBody({
   tool,
-  t,
 }: {
   tool: ToolItem;
   t: Translator;
@@ -88,27 +85,24 @@ export function CommandOutputBody({
   };
   const command = commandOf(tool);
   const parsed = useMemo(() => parseShellResult(tool.result), [tool.result]);
-  const cap = (s: string) =>
-    s.length > RESULT_CAP
-      ? s.slice(0, RESULT_CAP) + "\n" + t("agent.truncated")
-      : s;
+  // The server bounds stored tool results and background output windows.
+  // Preserve the entire received snapshot: another head-only UI cap would
+  // discard the final errors deliberately retained by that server policy.
   const stdoutHtml = useMemo(
-    () =>
-      parsed && parsed.stdout ? renderAnsiOutput(cap(parsed.stdout)) : null,
-    [parsed, t],
+    () => parsed?.stdout ? renderAnsiOutput(parsed.stdout) : null,
+    [parsed],
   );
   const stderrHtml = useMemo(
-    () =>
-      parsed && parsed.stderr ? renderAnsiOutput(cap(parsed.stderr)) : null,
-    [parsed, t],
+    () => parsed?.stderr ? renderAnsiOutput(parsed.stderr) : null,
+    [parsed],
+  );
+  const rawHtml = useMemo(
+    () => !parsed && tool.result ? renderAnsiOutput(tool.result) : null,
+    [parsed, tool.result],
   );
 
   /* Legacy / in-flight results without the envelope: raw ANSI as before. */
   if (!parsed) {
-    let output = tool.result;
-    if (output.length > RESULT_CAP)
-      output = output.slice(0, RESULT_CAP) + "\n" + t("agent.truncated");
-    const html = output ? renderAnsiOutput(output) : null;
     return (
       <div
         className={cn(
@@ -122,8 +116,8 @@ export function CommandOutputBody({
               $ <SyntaxCode code={command} language="shell" />
             </div>
           )}
-          {html ? (
-            <div dangerouslySetInnerHTML={{ __html: html }} />
+          {rawHtml ? (
+            <div dangerouslySetInnerHTML={{ __html: rawHtml }} />
           ) : (
             !command && "…"
           )}

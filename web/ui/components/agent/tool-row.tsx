@@ -23,8 +23,6 @@ import {
 } from "./transcript-rows";
 import type { ToolItem, Translator } from "./types";
 
-const RESULT_CAP = 4000;
-
 /* Per-kind work row (bb ExpandableTimelineRow + TimelineTitleView): header
  * rhythm matches the old ToolCard — `px-2 py-0 text-sm leading-5 gap-1.5`,
  * hover-revealed chevron — with bb verb/target titles, diff stats, and
@@ -70,12 +68,10 @@ function formatArgValue(value: unknown): string {
   return JSON.stringify(value) ?? "undefined";
 }
 
-/* Standard result card shared by the non-command bodies (old ToolCard
- * styling, RESULT_CAP truncation notice preserved). */
-function ResultCard({ tool, t }: { tool: ToolItem; t: Translator }) {
-  let result = tool.result;
-  if (result.length > RESULT_CAP)
-    result = result.slice(0, RESULT_CAP) + "\n" + t("agent.truncated");
+/* Standard result card shared by non-command bodies. The server already
+ * bounds stored output; keep its retained tail and truncation marker intact. */
+function ResultCard({ tool }: { tool: ToolItem; t: Translator }) {
+  const result = tool.result;
   return (
     <div
       className={cn(
