@@ -44,6 +44,12 @@ func TestRPCTodosRoundTripAndInvalidInput(t *testing.T) {
 		}
 	}
 	check(phases)
+	srv.agentSessionsMu.Lock()
+	browserTodo := entry.threads[entry.current].todos[0]
+	srv.agentSessionsMu.Unlock()
+	if browserTodo.Blocker != "network" || browserTodo.Details != "retain details" || !reflect.DeepEqual(browserTodo.Notes, []string{"first", "second"}) {
+		t.Fatalf("browser projection lost task metadata: %+v", browserTodo)
+	}
 	for _, bad := range []string{`null`, `{}`, `[null]`, `[{"name":"Deploy"}]`, `[{"name":"Deploy","tasks":null}]`, `[{"name":"Deploy","tasks":[{"content":"bad","status":"unknown"}]}]`, `[{"name":"Deploy","tasks":[{"content":"ok","status":"pending","notes":42}]}]`} {
 		call("set_todos", `,"phases":`+bad, false)
 		check(phases)

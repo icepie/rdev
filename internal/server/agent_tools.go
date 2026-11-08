@@ -1212,8 +1212,11 @@ func (t *globTool) Execute(ctx context.Context, raw json.RawMessage) (string, er
 
 // todoItem is one checklist entry maintained by the todo_write tool.
 type todoItem struct {
-	Content string `json:"content"`
-	Status  string `json:"status"` // "pending" | "in_progress" | "completed"
+	Blocker string   `json:"blocker,omitempty"`
+	Details string   `json:"details,omitempty"`
+	Notes   []string `json:"notes,omitempty"`
+	Content string   `json:"content"`
+	Status  string   `json:"status"` // "pending" | "in_progress" | "completed"
 }
 
 // todoWriteTool records the model's plan/progress checklist. It never

@@ -86,6 +86,9 @@ export type TranscriptItem = TurnItem | ApprovalItem | BubbleItem | AskItem;
 export interface TodoItem {
   content: string;
   status: string;
+  blocker?: string;
+  details?: string;
+  notes?: string[];
 }
 
 export interface ThreadInfo {

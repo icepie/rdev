@@ -276,7 +276,7 @@ func (h *agentWSHandler) handleRPCSetTodos(ac *agentConn, request agentMsg, raw 
 				h.writeRPCError(ac, request, "invalid_request", fmt.Sprintf("phase %d task %d has invalid status", pi, ti))
 				return
 			}
-			flat = append(flat, todoItem{Content: phase.Name + ": " + task.Content, Status: task.Status})
+			flat = append(flat, todoItem{Content: phase.Name + ": " + task.Content, Status: task.Status, Blocker: task.Blocker, Details: task.Details, Notes: task.Notes})
 		}
 	}
 	threadID := request.Thread

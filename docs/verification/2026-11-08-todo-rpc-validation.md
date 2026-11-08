@@ -9,3 +9,9 @@ TestRPCTodosRoundTripAndInvalidInput 通过真实 WebSocket 验证：
 - 空数组明确清空 RPC phases 与浏览器 todos。
 
 该测试与 TestSubagentRPCWireContract 的 race 检查通过。此记录不证明待办的重启持久化、全部 OMP 类型验证或完整 UI blocked/abandoned 展示；这些仍需独立验证。
+
+## 待办卡状态展示补充
+
+对照 `/tmp/rdev-bb-reference/apps/app/src/components/promptbox/banner/ThreadTodoCard.tsx`：活动任务使用静态方框，完成计数仅统计 completed。rdev 补充 OMP blocked/abandoned 的语义显示，沿用 BB 主题的 surface-attention/warning-text，不计放弃任务为完成；状态文字提供中英文，折叠触发器关联唯一列表 ID，阻塞原因从服务端扁平待办投影传递至卡片。
+
+`web/tests/todo-card.test.js` 验证五种状态的排序、1/5 完成统计、阻塞原因、放弃标签和折叠关联；Web 264 测试、typecheck、production build 通过。服务端回读测试增加 blocker/details/notes 的浏览器投影检查。此轮未做浏览器像素截图验收，不以 DOM 测试声称亮暗色逐像素一致。
