@@ -306,7 +306,12 @@ async fn run_once_stream_tunnel(args: &Args, instance_id: &str, endpoint: &str) 
     info!("connecting gpu desktop tcp tunnel to {endpoint}; local={local_addr}");
     let stream: Box<dyn AsyncReadWrite + Unpin + Send> =
         if endpoint.starts_with("kcp://") || endpoint.starts_with("udp://") {
-            Box::new(KcpStream::connect(&kcp_config(), addr.parse()?).await?)
+            let address = tokio::net::lookup_host(&addr)
+                .await
+                .with_context(|| format!("resolve KCP endpoint {addr}"))?
+                .next()
+                .ok_or_else(|| anyhow!("KCP endpoint {addr} resolved to no addresses"))?;
+            Box::new(KcpStream::connect(&kcp_config(), address).await?)
         } else {
             Box::new(
                 TcpStream::connect(addr)
@@ -677,6 +682,18 @@ mod tests {
         assert!(is_ws_endpoint("ws://host/ws"));
         assert!(is_ws_endpoint("https://host"));
         assert!(!is_ws_endpoint("tcp://host:8481"));
+    }
+
+    #[tokio::test]
+    async fn kcp_endpoint_resolves_domain_names() {
+        let endpoint = "kcp://localhost:8482";
+        let address = endpoint_addr(endpoint);
+        let resolved = tokio::net::lookup_host(&address)
+            .await
+            .unwrap()
+            .next()
+            .unwrap();
+        assert_eq!(resolved.port(), 8482);
     }
 
     #[test]

@@ -11,7 +11,7 @@ default = []
 embedded-rdev-desktop = ["dep:rdev-desktop"]
 embedded-rdev-desktop-vaapi = ["embedded-rdev-desktop", "rdev-desktop/va-static"]
 embedded-rdev-desktop-wayland = ["embedded-rdev-desktop-vaapi", "rdev-desktop/pipewire"]
-embedded-rdev-desktop-hw = ["embedded-rdev-desktop-vaapi", "rdev-desktop/nvenc"]
+cua-native = ["dep:rdev-cua-bridge", "rdev-cua-bridge/cua-native"]
 
 [dependencies]
 # Keep regular builds on current crates; the Win7 package applies PE import
@@ -20,6 +20,7 @@ anyhow = "1.0.102"
 base64 = "0.22.1"
 ed25519-dalek = { version = "2.2.0", default-features = false, features = ["alloc"] }
 rdev-desktop = { path = "vendor/rdev-desktop", optional = true, default-features = false }
+rdev-cua-bridge = { path = "cua-driver-bridge", optional = true, default-features = false }
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 clap = { version = "4.6.1", features = ["derive", "env"] }
 futures-util = "0.3.32"
@@ -31,7 +32,7 @@ self-replace = "1"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
 tempfile = "3.27.0"
-tokio = { version = "1.52.3", features = ["fs", "io-util", "macros", "process", "rt-multi-thread", "signal", "sync", "time"] }
+tokio = { version = "1.52.3", features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["fmt", "env-filter"] }
 url = "2.5.8"
