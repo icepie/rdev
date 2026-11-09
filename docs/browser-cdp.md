@@ -10,6 +10,10 @@ Browser support is disabled by default. Start the server with `--browser` or set
 
 Install Chrome/Chromium on the server under the unprivileged account running rdev. The server searches `google-chrome-stable`, `google-chrome`, `chromium`, and `chromium-browser`. Set `RDEV_CHROME_PATH=/path/to/chrome` to override discovery. Chrome must be able to start headless with its sandbox enabled; rdev does not add `--no-sandbox`. The frontend assets come from that Chrome binary, so no external DevTools CDN is required.
 
+On openSUSE Leap, install `chromium` and `google-noto-sans-cjk-fonts`, then run `fc-cache -f`. Confirm `fc-list :lang=zh` lists a CJK font; a headless Chromium installation alone does not guarantee Chinese glyph coverage. Reopen existing browser sessions after installing fonts if they retain the old font cache.
+
+For an existing root-run rdev service, do not disable Chrome's sandbox or change the service's data permissions just to launch Chrome. The production deployment uses a root-owned `/usr/local/bin/rdev-chromium` launcher: it accepts only a fresh root-owned `/tmp/rdev-browser-<digits>` profile, gives that directory to the dedicated non-login `rdev-browser` account, then uses `setpriv` to drop user/group privileges and capabilities before executing Chromium with a clean environment. `HOME` is the temporary profile; original browser arguments are preserved. The systemd drop-in `/etc/systemd/system/rdev.service.d/chromium.conf` sets `RDEV_CHROME_PATH=/usr/local/bin/rdev-chromium`. Keep the launcher root-owned and never writable by the browser account.
+
 Update both rdev server and Go clients. The client update makes TCP connection establishment concurrent (up to 64 pending connects) and cancels pending connects on close/disconnect. Older clients still work but can stall resource loads behind slow outbound connects.
 
 ## Routing and lifetime
