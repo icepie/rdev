@@ -6,6 +6,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -70,7 +71,10 @@ func (s *Session) RunTurnWithSteering(ctx context.Context, userText string, imag
 		return true
 	}
 	var total Usage
-	for round := range cfg.MaxTurns {
+	for round := 0; cfg.MaxTurns == 0 || round < cfg.MaxTurns; round++ {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
 		s.compactToolOutputs()
 		emit(Event{Type: EventAssistantStart})
 		assistant, usage, err := streamChat(ctx, cfg, s.History(),
@@ -89,7 +93,7 @@ func (s *Session) RunTurnWithSteering(ctx context.Context, userText string, imag
 				assistant.Responses = nil
 				assistant.Anthropic = nil
 				s.appendHistory(assistant)
-			case round == 0 && assistant.Content == "" && assistant.Reasoning == "" && len(assistant.ToolCalls) == 0:
+			case !errors.Is(err, ErrContentFiltered) && round == 0 && assistant.Content == "" && assistant.Reasoning == "" && len(assistant.ToolCalls) == 0:
 				// The first round failed with no output at all (both
 				// attempts): roll back the user message so the next request
 				// does not carry two consecutive user messages.
@@ -106,7 +110,7 @@ func (s *Session) RunTurnWithSteering(ctx context.Context, userText string, imag
 
 		if len(assistant.ToolCalls) == 0 {
 			s.appendHistory(assistant)
-			if round+1 < cfg.MaxTurns && injectSteering() {
+			if (cfg.MaxTurns == 0 || round+1 < cfg.MaxTurns) && injectSteering() {
 				continue
 			}
 			emit(Event{Type: EventDone, Text: assistant.Content, Reasoning: assistant.Reasoning, Usage: total})
@@ -139,7 +143,7 @@ func (s *Session) RunTurnWithSteering(ctx context.Context, userText string, imag
 		// Append the assistant message together with all its tool results so
 		// an aborted round never leaves dangling tool_calls in the history.
 		s.appendHistory(append([]Message{assistant}, toolMsgs...)...)
-		if round+1 < cfg.MaxTurns {
+		if cfg.MaxTurns == 0 || round+1 < cfg.MaxTurns {
 			injectSteering()
 		}
 	}

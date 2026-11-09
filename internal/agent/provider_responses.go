@@ -171,6 +171,9 @@ func readResponsesStream(body io.Reader, scope string, onText, onReasoning func(
 			if detail == "" {
 				detail = event.Response.Incomplete.Reason
 			}
+			if strings.EqualFold(detail, "content_filter") {
+				return false, ErrContentFiltered
+			}
 			return false, fmt.Errorf("agent: %s: %s", event.Type, detail)
 		case "error":
 			return false, fmt.Errorf("agent: Responses error: %s", event.Message)

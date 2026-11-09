@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"rdev/internal/agent"
 	"rdev/internal/server"
 	"rdev/internal/updater"
 )
@@ -45,7 +46,7 @@ func main() {
 		agentBaseURL               = "https://api.openai.com/v1"
 		agentAPIKey                = ""
 		agentModel                 = "gpt-4o-mini"
-		agentMaxTurns              = 25
+		agentMaxTurns              = agent.DefaultMaxTurns
 		agentConfigPath            = ""
 		agentSessionTTL            = 720 * time.Hour
 	)
@@ -215,7 +216,7 @@ Options:
   --agent-base-url OpenAI-compatible LLM API base URL (default https://api.openai.com/v1; env RDEV_AGENT_BASE_URL)
   --agent-api-key  LLM API key for the web agent; empty disables it (env RDEV_AGENT_API_KEY)
   --agent-model    LLM model for the web agent (default gpt-4o-mini; env RDEV_AGENT_MODEL)
-  --agent-max-turns Max agent tool-call turns per chat (default 25; env RDEV_AGENT_MAX_TURNS)
+  --agent-max-turns Max agent tool-call turns per chat (default 0: unlimited; env RDEV_AGENT_MAX_TURNS)
   --agent-config   Path to multi-provider model config JSON (env RDEV_AGENT_CONFIG; overrides --agent-base-url/--agent-api-key/--agent-model)
   --agent-session-ttl Agent chat history retention (default 720h; env RDEV_AGENT_SESSION_TTL; 0 disables persistence)
   --version, -v    Print version and exit

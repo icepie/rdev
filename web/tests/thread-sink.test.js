@@ -457,3 +457,13 @@ it('updates queue modes and promotion errors without interrupting the active tur
  await frame({op:'reset_ok'});
  expect(sink.state).toMatchObject({queueModes:[],queueError:''});
 });
+
+it('shows content filtering as a provider notice while preserving partial output', async () => {
+  await frame({ op: 'turn_start', text: 'request' });
+  await act(async () => sink.ops.appendDelta('partial answer'));
+  await frame({ op: 'error', code: 'provider_content_filter', message: 'provider filtering' });
+  expect(sink.state.running).toBe(false);
+  expect(sink.state.items.some(item => item.kind === 'turn' && item.text === 'partial answer')).toBe(true);
+  expect(sink.state.items.some(item => item.kind === 'system' && item.text === 'agent.providerContentFilter')).toBe(true);
+  expect(sink.state.items.some(item => item.kind === 'error')).toBe(false);
+});

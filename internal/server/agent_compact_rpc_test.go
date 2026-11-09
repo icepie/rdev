@@ -20,7 +20,7 @@ func TestAgentRPCCompactLifecycle(t *testing.T) {
 	for _, outcome := range []string{"success", "provider_error", "reset"} {
 		t.Run(outcome, func(t *testing.T) {
 			entered, release := make(chan struct{}), make(chan struct{})
-			var once sync.Once
+			var once, enteredOnce sync.Once
 			unblock := func() { once.Do(func() { close(release) }) }
 			provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				var body struct {
@@ -32,7 +32,7 @@ func TestAgentRPCCompactLifecycle(t *testing.T) {
 				if len(body.Messages) == 0 || !strings.Contains(body.Messages[len(body.Messages)-1].Content, "retain paths") {
 					t.Error("missing custom instructions")
 				}
-				close(entered)
+				enteredOnce.Do(func() { close(entered) })
 				select {
 				case <-release:
 				case <-r.Context().Done():

@@ -94,7 +94,6 @@ func TestAgentHistoryMigratesLegacyFlatFile(t *testing.T) {
 func TestAgentHistoryListThreadsOrderingAndTitles(t *testing.T) {
 	st := newTestStore(t)
 	st.save("dev1", "t_1", "m", []agent.Message{{Role: "user", Content: "first thread"}})
-	time.Sleep(1100 * time.Millisecond) // meta timestamps are second-granular
 	st.save("dev1", "t_2", "m", []agent.Message{{Role: "user", Content: strings.Repeat("长", 40)}})
 
 	metas := st.listThreads("dev1")
@@ -219,7 +218,6 @@ func TestAgentHistorySaveTrimDropsOrphanTool(t *testing.T) {
 func TestAgentHistoryListThreadsPrefersMtime(t *testing.T) {
 	st := newTestStore(t)
 	st.save("dev1", "t_1", "m", []agent.Message{{Role: "user", Content: "one"}})
-	time.Sleep(1100 * time.Millisecond) // meta timestamps are second-granular
 	st.save("dev1", "t_2", "m", []agent.Message{{Role: "user", Content: "two"}})
 	// Append to t_1 without touching its meta line: it becomes the most
 	// recently active thread by mtime, not by meta.
@@ -227,6 +225,12 @@ func TestAgentHistoryListThreadsPrefersMtime(t *testing.T) {
 		{Role: "user", Content: "one"},
 		{Role: "assistant", Content: "reply"},
 	})
+	// Filesystem mtimes and the wall clock may straddle a whole-second boundary.
+	// Set the ordering explicitly instead of depending on a sleep or clock skew.
+	later := time.Now().Add(2 * time.Second)
+	if err := os.Chtimes(st.path("dev1", "t_1"), later, later); err != nil {
+		t.Fatal(err)
+	}
 	metas := st.listThreads("dev1")
 	if len(metas) != 2 || metas[0].ID != "t_1" {
 		t.Fatalf("order = %+v, want t_1 first (mtime beats stale meta)", metas)

@@ -98,7 +98,7 @@ type Config struct {
 	SystemPrompt string
 	Tools        []Tool
 	// MaxTurns caps model round-trips per Run (each round may include tool
-	// calls). 0 means DefaultMaxTurns.
+	// calls). 0 means no fixed limit; context cancellation still stops the run.
 	MaxTurns int
 	// ReasoningEffort selects low/medium/high through the chosen adapter.
 	// Empty/off omits the request setting, except adaptive-only Anthropic
@@ -119,7 +119,7 @@ type Config struct {
 	HTTPClient *http.Client
 }
 
-const DefaultMaxTurns = 25
+const DefaultMaxTurns = 0
 
 // Message is one conversation entry in OpenAI chat-completions wire shape.
 type Message struct {

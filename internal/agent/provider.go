@@ -59,9 +59,13 @@ type streamChunk struct {
 		Delta struct {
 			Content          string          `json:"content"`
 			ReasoningContent string          `json:"reasoning_content"`
+			Reasoning        string          `json:"reasoning"`
+			ReasoningText    string          `json:"reasoning_text"`
+			Refusal          string          `json:"refusal"`
 			ToolCalls        []toolCallDelta `json:"tool_calls"`
 		} `json:"delta"`
-		FinishReason string `json:"finish_reason"`
+		FinishReason       string          `json:"finish_reason"`
+		NativeFinishReason json.RawMessage `json:"native_finish_reason"`
 	} `json:"choices"`
 	Usage *struct {
 		PromptTokens     int `json:"prompt_tokens"`
@@ -99,9 +103,9 @@ type pendingToolCall struct {
 // (both may be nil), and returns the assembled assistant message and the usage
 // reported by the server. ctx cancels the in-flight request.
 //
-// A failed round is retried once when it produced no output at all (no
-// content, reasoning, or tool-call delta): such failures are almost always
-// transient connection/setup errors and nothing was emitted downstream yet.
+// A retryable failed round is retried once only before any content, reasoning,
+// or tool-call delta. Permanent HTTP errors, filtering and output limits are
+// terminal; retries never duplicate already-emitted content or device calls.
 func streamChat(ctx context.Context, cfg Config, history []Message, onDelta, onReasoning func(string)) (Message, Usage, error) {
 	var payload []byte
 	var err error
@@ -119,7 +123,7 @@ func streamChat(ctx context.Context, cfg Config, history []Message, onDelta, onR
 		return Message{}, Usage{}, err
 	}
 	assistant, usage, progress, err := streamChatOnce(ctx, cfg, payload, onDelta, onReasoning)
-	if err != nil && !progress && ctx.Err() == nil {
+	if err != nil && !progress && ctx.Err() == nil && retryEmptyProviderResponse(err) {
 		assistant, usage, _, err = streamChatOnce(ctx, cfg, payload, onDelta, onReasoning)
 	}
 	return assistant, usage, err
@@ -206,7 +210,7 @@ func streamChatOnce(ctx context.Context, cfg Config, payload []byte, onDelta, on
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, errorBodyLimit))
-		return Message{}, Usage{}, false, fmt.Errorf("agent: chat request failed: %s: %s", resp.Status, strings.TrimSpace(string(body)))
+		return Message{}, Usage{}, false, &providerHTTPError{status: resp.StatusCode, detail: strings.TrimSpace(string(body))}
 	}
 
 	if cfg.API == "openai-responses" {
@@ -214,7 +218,17 @@ func streamChatOnce(ctx context.Context, cfg Config, payload []byte, onDelta, on
 	} else if cfg.API == "anthropic-messages" {
 		assistant, usage, err = readAnthropicStream(resp.Body, providerReplayScope(cfg), onDelta, onReasoning, func() { watchdog.Reset(streamIdleTimeout) })
 	} else {
-		assistant, usage, err = readStream(resp.Body, onDelta, onReasoning, func() { watchdog.Reset(streamIdleTimeout) })
+		var finishTimer *time.Timer
+		defer func() {
+			if finishTimer != nil {
+				finishTimer.Stop()
+			}
+		}()
+		assistant, usage, err = readStreamWithFinish(resp.Body, onDelta, onReasoning, func() { watchdog.Reset(streamIdleTimeout) }, func() {
+			if finishTimer == nil {
+				finishTimer = time.AfterFunc(2500*time.Millisecond, func() { _ = resp.Body.Close() })
+			}
+		})
 	}
 	progress = assistant.Anthropic != nil || assistant.Responses != nil || assistant.Content != "" || assistant.Reasoning != "" || len(assistant.ToolCalls) > 0
 	return assistant, usage, progress, err
@@ -227,14 +241,20 @@ func streamChatOnce(ctx context.Context, cfg Config, payload []byte, onDelta, on
 // assembled message is still returned so the caller can tell whether any
 // progress was made.
 func readStream(body io.Reader, onDelta, onReasoning func(string), poke func()) (Message, Usage, error) {
+	return readStreamWithFinish(body, onDelta, onReasoning, poke, nil)
+}
+
+func readStreamWithFinish(body io.Reader, onDelta, onReasoning func(string), poke, onFinish func()) (Message, Usage, error) {
 	var (
-		content   strings.Builder
-		reasoning strings.Builder
-		calls     = make(map[int]*pendingToolCall)
-		callOrder []int // delta indices in first-seen order
-		usage     Usage
-		sawDone   bool   // the stream ended with `data: [DONE]`
-		finish    string // last observed finish_reason
+		content      strings.Builder
+		reasoning    strings.Builder
+		calls        = make(map[int]*pendingToolCall)
+		callOrder    []int // delta indices in first-seen order
+		usage        Usage
+		sawDone      bool   // the stream ended with `data: [DONE]`
+		finish       string // last observed finish_reason
+		terminalErr  error
+		terminalSeen bool
 	)
 	assemble := func() Message {
 		assistant := Message{Role: "assistant", Content: content.String(), Reasoning: reasoning.String()}
@@ -282,8 +302,30 @@ func readStream(body io.Reader, onDelta, onReasoning func(string), poke func()) 
 				usage.OutputTokens = chunk.Usage.CompletionTokens
 			}
 			for _, choice := range chunk.Choices {
+				var nativeReason string
+				_ = json.Unmarshal(choice.NativeFinishReason, &nativeReason)
+				if native := nativeFinishReasonError(nativeReason); native != nil && terminalErr == nil {
+					terminalErr = native
+					terminalSeen = true
+				}
 				if choice.FinishReason != "" {
 					finish = choice.FinishReason
+					terminalSeen = true
+					if terminalErr == nil {
+						terminalErr = finishReasonError(finish)
+					}
+				}
+				if terminalSeen && onFinish != nil {
+					onFinish()
+				}
+				if choice.Delta.ReasoningContent == "" {
+					choice.Delta.ReasoningContent = choice.Delta.Reasoning
+				}
+				if choice.Delta.ReasoningContent == "" {
+					choice.Delta.ReasoningContent = choice.Delta.ReasoningText
+				}
+				if choice.Delta.Refusal != "" {
+					choice.Delta.Content += choice.Delta.Refusal
 				}
 				if choice.Delta.ReasoningContent != "" {
 					reasoning.WriteString(choice.Delta.ReasoningContent)
@@ -315,7 +357,7 @@ func readStream(body io.Reader, onDelta, onReasoning func(string), poke func()) 
 			}
 		}
 		if err != nil {
-			if err == io.EOF {
+			if err == io.EOF || terminalSeen {
 				break
 			}
 			return assemble(), usage, fmt.Errorf("agent: read stream: %w", err)
@@ -323,17 +365,12 @@ func readStream(body io.Reader, onDelta, onReasoning func(string), poke func()) 
 	}
 
 	assistant := assemble()
-	// Match OMP's case-insensitive completion aliases and reject provider
-	// failure reasons before an incomplete tool call can reach execution.
-	switch strings.ToLower(finish) {
-	case "", "stop", "end", "tool_calls", "function_call":
-	case "length", "max_tokens":
-		return assistant, usage, errors.New("agent: response truncated (length limit)")
-	default:
-		return assistant, usage, fmt.Errorf("agent: provider finish_reason: %s", finish)
+	if terminalErr != nil {
+		return assistant, usage, terminalErr
 	}
+
 	switch {
-	case !sawDone && finish == "":
+	case !sawDone && !terminalSeen:
 		// Connection dropped mid-stream with no terminal signal at all.
 		return assistant, usage, errors.New("agent: stream truncated (EOF without [DONE])")
 	case sawDone && assistant.Content == "" && assistant.Reasoning == "" && len(assistant.ToolCalls) == 0 &&

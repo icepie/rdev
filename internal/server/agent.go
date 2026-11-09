@@ -2835,6 +2835,9 @@ func (s *Server) runAgentTurn(entry *agentSessionEntry, th *agentThread, turn ag
 		terminal = agentMsg{Op: "stopped", Thread: th.id, Canceled: true}
 	default:
 		terminal = agentMsg{Op: "error", Thread: th.id, Message: runErr.Error()}
+		if errors.Is(runErr, agent.ErrContentFiltered) {
+			terminal.Code = "provider_content_filter"
+		}
 	}
 	if turn.rpc != nil {
 		rpcErr = runErr

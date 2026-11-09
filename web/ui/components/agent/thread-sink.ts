@@ -709,6 +709,14 @@ export function applyScopedMessage(
       return;
     }
     case "error": {
+      if (msg.code === "provider_content_filter") {
+        const notice = t("agent.providerContentFilter");
+        if (ops.turnOpen.current) ops.finishTurn({ display: msg.display, unfinishedToolResult: notice });
+        ops.pushBubble("system", notice);
+        ops.setRunning(false);
+        ops.resetTransient();
+        return;
+      }
       const message = asString(msg.message) || t("common.error");
       if (message === "agent is busy" || message === "agent is busy; stop first") {
         // A rejected command does not end the already-running turn.
