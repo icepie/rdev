@@ -62,3 +62,15 @@ Run the self-contained real Chrome integration with `RDEV_TEST_CHROME=1 go test 
 
 
 Automation validation: 83 frontend test files / 317 tests, TypeScript check and production build passed. Full `internal/server` and `internal/agent` race suites passed; lifecycle changes additionally passed targeted race checks with real Chrome enabled. Real physical desktop input across OSes was not exercised in this environment.
+
+## GPU 客户端自动化与连接复用
+
+`computer` 根据设备能力选择传输。Go 客户端继续使用普通桌面协议；GPU 客户端使用已经注册的 GPU 桌面隧道，读取 `CapturableList` 并发送原生 Config / PointerEvent / KeyboardEvent / TextInputEvent，不再向 GPU 客户端发送它不支持的 `desktop_start`。
+
+GPU 截图需要**服务端安装 FFmpeg**；Docker 运行镜像已包含。仅在服务端解码客户端现有的 fMP4/H.264 输出，不读取服务端桌面；原有 GPU 客户端不需要为此升级。截图保持解码后的像素尺寸，键鼠坐标映射到对应的捕获源；Unicode 文本使用 GPU 服务原生 TextInputEvent，不修改剪贴板。当前适配针对内嵌 RDev Desktop 的 fMP4 协议，不声明支持所有移动端私有视频封包格式。
+
+同一 Agent 会话/设备的 GPU 控制与解码连接持续复用，连续工具调用不会重新 Config 或重新连接。显式释放、用户接管、会话删除/重置、连接替换或两分钟空闲会关闭通道。截图等待新帧；输入前检查连接、来源与分辨率，拒绝旧截图坐标。
+
+已经打开的 Agent 桌面面板按设备保持稳定组件身份；收到工具动作不重新挂载。GPU 屏幕改变时在原连接上更新 Config，同一屏幕不重复配置。网页查看通道和 Agent 控制通道各自独立、均复用；没有让工具依赖用户浏览器必须在线。
+
+验证：真实 FFmpeg 编码/解码 + GPU WebSocket/隧道协议 fixture 验证截图、点击、Unicode、键盘和连续五次调用只建立一条连接/一次 Config；React 回归测试验证已打开桌面跨工具动作/屏幕变更不重新挂载。物理设备仍需实机验收。

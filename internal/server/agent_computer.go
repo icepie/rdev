@@ -70,6 +70,7 @@ func (s *Server) takeDesktopControl(device string) {
 	lease.owner.mu.Unlock()
 	lease.owner.opMu.Lock()
 	lease.owner.screens = nil
+	closeGPUAutomation(lease.owner)
 	lease.owner.opMu.Unlock()
 	s.releaseAutomationDesktop(lease.owner)
 	lease.tool.publish(view)
@@ -104,6 +105,9 @@ func (t *computerTool) Execute(ctx context.Context, raw json.RawMessage) (string
 	if err != nil {
 		return "", err
 	}
+	if a.Action == "status" && t.srv.clientGPUDesktopAvailable(client) {
+		return t.executeGPU(ctx, client, a, raw)
+	}
 	if a.Action == "status" {
 		return marshalJobResult(map[string]any{"device": client.ID, "desktop": client.Desktop})
 	}
@@ -112,6 +116,10 @@ func (t *computerTool) Execute(ctx context.Context, raw json.RawMessage) (string
 			return "", fmt.Errorf("wait for the current desktop operation before releasing")
 		}
 		defer t.state.opMu.Unlock()
+		if d := t.state.gpu[client.ID]; d != nil {
+			d.close()
+			delete(t.state.gpu, client.ID)
+		}
 		t.srv.automationMu.Lock()
 		if t.srv.desktopOwners[client.ID].owner == t.state {
 			delete(t.srv.desktopOwners, client.ID)
@@ -124,6 +132,9 @@ func (t *computerTool) Execute(ctx context.Context, raw json.RawMessage) (string
 	}
 	if a.Action != "screenshot" && (!client.Desktop.Input || client.Desktop.ViewOnly) {
 		return "", fmt.Errorf("device desktop is view-only")
+	}
+	if t.srv.clientGPUDesktopAvailable(client) {
+		return t.executeGPU(ctx, client, a, raw)
 	}
 	if a.Source != "" {
 		found := false

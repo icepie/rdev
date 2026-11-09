@@ -38,6 +38,7 @@ type gpuDesktopTunnelOpen struct {
 }
 
 type gpuDesktopStream struct {
+	dataMu sync.RWMutex
 	id     uint64
 	data   chan []byte
 	closed chan struct{}
@@ -276,6 +277,13 @@ func (t *gpuDesktopTunnel) dispatchData(streamID uint64, data []byte) {
 	if stream == nil {
 		return
 	}
+	stream.dataMu.RLock()
+	defer stream.dataMu.RUnlock()
+	select {
+	case <-stream.closed:
+		return
+	default:
+	}
 	payload := append([]byte(nil), data...)
 	select {
 	case stream.data <- payload:
@@ -293,7 +301,9 @@ func (t *gpuDesktopTunnel) closeStream(streamID uint64) {
 	if stream != nil {
 		stream.once.Do(func() {
 			close(stream.closed)
+			stream.dataMu.Lock()
 			close(stream.data)
+			stream.dataMu.Unlock()
 		})
 	}
 }
@@ -347,7 +357,9 @@ func (t *gpuDesktopTunnel) close() {
 			delete(t.streams, id)
 			stream.once.Do(func() {
 				close(stream.closed)
+				stream.dataMu.Lock()
 				close(stream.data)
+				stream.dataMu.Unlock()
 			})
 		}
 		t.mu.Unlock()

@@ -1,6 +1,6 @@
 import type { AutomationView } from "./agent/automation";
 import { BrowserPreview } from "./browser-preview";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { apiFetch, getDevicePassword } from "../lib/api";
 import { useDevices } from "../lib/devices";
 import { useI18n } from "../lib/i18n";
@@ -25,8 +25,14 @@ export function BrowserPanel({ device, visible = true, deviceSelection = "inline
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const online = devices.some(d => d.id === exitDevice);
+  const attachedAutomation = useRef(false);
   useEffect(() => {
-    if (!automation?.base || !automation.target) return;
+    if (!automation?.base || !automation.target) {
+      if (attachedAutomation.current) { setBase(""); setSelected(""); setTargets([]); }
+      attachedAutomation.current = false;
+      return;
+    }
+    attachedAutomation.current = true;
     setExitDevice(automation.device);
     setBase(automation.base);
     setSelected(automation.target);

@@ -24,7 +24,7 @@ RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
     -o /out/rdev-server ./cmd/rdev-server
 
 FROM alpine:3.22
-RUN apk add --no-cache ca-certificates tzdata && mkdir -p /data
+RUN apk add --no-cache ca-certificates tzdata ffmpeg && mkdir -p /data
 COPY --from=go-build /out/rdev-server /usr/local/bin/rdev-server
 VOLUME ["/data"]
 EXPOSE 8080 2222 15900

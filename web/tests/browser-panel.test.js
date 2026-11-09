@@ -54,5 +54,8 @@ it("attaches the conversation target without silently selecting another thread's
    expect(new URL(document.querySelector("iframe").src).searchParams.get("wss")).toContain("/page/owned-page");
    expect(document.querySelector('[role="combobox"]').disabled).toBe(true);
    expect([...document.querySelectorAll("button")].find(b=>b.textContent==="browser.stop").disabled).toBe(true);
+   await act(() => root.render(createElement(BrowserPanel,{device:"laptop"})));
+   expect(document.querySelector("iframe")).toBeNull();
+   expect(document.querySelector("form")).not.toBeNull();
  } finally {await act(() => root.unmount());globalThis.fetch=originalFetch;vi.unstubAllGlobals();dom.window.close();}
 });

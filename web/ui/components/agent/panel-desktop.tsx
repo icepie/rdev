@@ -261,7 +261,7 @@ export function PanelDesktop({
   visible: boolean;
   t: Translator;
 }) {
-  const [settingsState, setSettingsState] = useState<Settings>(() => ({ ...loadSettings(), ...(initialSource ? { source: initialSource } : {}) }));
+  const [settingsState, setSettingsState] = useState<Settings>(() => ({ ...loadSettings(), ...(initialSource?.startsWith("gpu:") ? { gpuSource: initialSource.slice(4) } : initialSource ? { source: initialSource } : {}) }));
   const [status, setStatusState] = useState<{ text: string; cls: StatusCls }>({
     text: "",
     cls: "",
@@ -969,7 +969,7 @@ export function PanelDesktop({
   };
 
   const gpuSetSources = (list: string[]) => {
-    const saved = localStorage.getItem(GP + "source") || settingsRef.current.gpuSource || "";
+    const saved = initialSourceRef.current?.startsWith("gpu:") ? initialSourceRef.current.slice(4) : localStorage.getItem(GP + "source") || settingsRef.current.gpuSource || "";
     const names = gpuSourceNamesRef.current;
     const currentIdx = Number(settingsRef.current.gpuSource);
     const previousName = names && Number.isInteger(currentIdx) ? names[currentIdx] || "" : "";
@@ -2143,6 +2143,21 @@ export function PanelDesktop({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible]);
+
+  const initialSourceRef = useRef(initialSource);
+  initialSourceRef.current = initialSource;
+  useEffect(() => {
+    if (!initialSource) return;
+    if (initialSource.startsWith("gpu:")) {
+      const source = initialSource.slice(4);
+      if (settingsRef.current.gpuSource === source) return;
+      updateSettings({ gpuSource: source });
+      if (connModeRef.current === "gpu") apiRef.current.gpuSendConfig();
+    } else if (settingsRef.current.source !== initialSource) {
+      updateSettings({ source: initialSource });
+      if (connModeRef.current === "desktop") apiRef.current.connect();
+    }
+  }, [initialSource]);
 
   /* ── Device caps loading + visibility-gated connect ── */
 
