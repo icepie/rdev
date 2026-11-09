@@ -1,10 +1,7 @@
 // Ported from web/public/i18n.js (vanilla UI). Keys unchanged.
 export const dictionaries = {
   "en": {
-    "browser.textInput": "Text input",
-    "browser.textHint": "Click an input in the webpage first, compose here, then insert. Ctrl/⌘ + Enter also inserts.",
-    "browser.insertText": "Insert into webpage",
-    "browser.textFailed": "Text insertion was not confirmed. Check the webpage before retrying.",
+    "browser.textFailed": "Browser input could not be synchronized. Check the connection and try again.",
     "browser.previewUnsupported": "Preview controls are unavailable for this Chrome version. Use full view.",
 
     "nav.browser": "Browser",
@@ -673,10 +670,7 @@ export const dictionaries = {
     "files.transferNoTarget": "Target pane has no device selected"
   },
   "zh": {
-    "browser.textInput": "文字输入",
-    "browser.textHint": "先点击网页中的输入框，在这里完成输入法选词，再插入网页。也可按 Ctrl/⌘ + Enter。",
-    "browser.insertText": "插入网页",
-    "browser.textFailed": "未确认文字是否插入，请检查网页后再重试。",
+    "browser.textFailed": "网页输入未能同步，请检查连接后重试。",
     "browser.previewUnsupported": "当前 Chrome 版本暂不支持预览控制，请使用独立窗口。",
 
     "nav.browser": "浏览器",

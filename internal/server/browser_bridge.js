@@ -1,5 +1,5 @@
 // Runs inside Chrome's native inspector, sharing its existing CDP connection.
-// Only rdev's parent frame may control the preview or insert committed text.
+// Only rdev's parent frame may control the preview layout.
 let app;
 let showTools = false;
 const notify = message => parent.postMessage(message, location.origin);
@@ -14,18 +14,7 @@ window.addEventListener("message", async event => {
     showTools = event.data.visible === true;
     applyLayout();
   }
-  if (event.data?.type === "rdev-browser-insert-text" && typeof event.data.text === "string" && event.data.text.length <= 65536) {
-    const id = event.data.id;
-    try {
-      if (!app?.screenCaptureModel) throw new Error("Browser is not ready");
-      const result = await app.screenCaptureModel.target().inputAgent().invoke_insertText({ text: event.data.text });
-      const error = result.getError?.();
-      if (error) throw new Error(error);
-      notify({ type: "rdev-browser-text-result", id });
-    } catch (error) {
-      notify({ type: "rdev-browser-text-result", id, error: String(error.message || error) });
-    }
-  }
+
 });
 const reveal = () => document.getElementById("rdev-preview-loading")?.remove();
 try {
@@ -42,6 +31,8 @@ try {
   app.onScreencastEnabledChanged = () => { update(); applyLayout(); };
   app.enabledSetting.set(true);
   app.onScreencastEnabledChanged();
+  const { installBrowserInput } = await import("./rdev-input.js");
+  installBrowserInput(app, notify);
   reveal();
   notify({ type: "rdev-browser-ready" });
 } catch {

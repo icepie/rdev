@@ -13,7 +13,7 @@ interface Target { id: string; title: string; url: string }
 
 /** Chrome's own inspector frontend includes its interactive Screencast app. */
 export function BrowserPanel({ device, visible = true, deviceSelection = "inline" }: { device: string; visible?: boolean; deviceSelection?: "inline" | "sidebar" }) {
-  const { t } = useI18n();
+  const { t, lang } = useI18n();
   const { devices } = useDevices();
   const [selectedDevice, setExitDevice] = useState(device === "@server" ? "" : device);
   const exitDevice = deviceSelection === "sidebar" ? device : selectedDevice;
@@ -78,7 +78,7 @@ export function BrowserPanel({ device, visible = true, deviceSelection = "inline
     } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
     finally { setBusy(false); }
   };
-  const inspector = base && selected ? `${base}/devtools/inspector.html?${new URLSearchParams({ [location.protocol === "https:" ? "wss" : "ws"]: `${location.host}${base}/devtools/page/${selected}`, dockSide: "undocked" })}` : "";
+  const inspector = base && selected ? `${base}/devtools/inspector.html?${new URLSearchParams({ [location.protocol === "https:" ? "wss" : "ws"]: `${location.host}${base}/devtools/page/${selected}`, dockSide: "undocked", rdevLang: lang === "zh" ? "zh" : "en-US" })}` : "";
 
   return <div className="flex min-h-0 min-w-0 w-full flex-1 flex-col overflow-hidden bg-background">
     <div className="flex min-h-11 shrink-0 flex-wrap items-center gap-2 border-b border-border-seam px-3 py-2 text-xs">

@@ -168,18 +168,26 @@ func TestBrowserPreviewInjectsBridgeOnlyForEmbeddedView(t *testing.T) {
 	s := NewServer()
 	s.BrowserEnabled = true
 	s.browsers = map[string]*browserSession{"device": {capability: "cap", endpoint: endpoint, ready: ready}}
-	for _, preview := range []bool{false, true} {
-		path := "/api/browser/view/cap/devtools/inspector.html"
-		if preview {
-			path += "?rdevPreview=1"
+	for _, mode := range []struct{ preview, localized bool }{{}, {preview: true}, {localized: true}, {preview: true, localized: true}} {
+		query := url.Values{}
+		if mode.preview {
+			query.Set("rdevPreview", "1")
 		}
+		if mode.localized {
+			query.Set("rdevLang", "zh")
+		}
+		path := "/api/browser/view/cap/devtools/inspector.html?" + query.Encode()
 		response := httptest.NewRecorder()
 		s.HandleBrowserView(response, httptest.NewRequest("GET", path, nil))
-		if response.Code != 200 || strings.Contains(response.Body.String(), "rdev-bridge.js") != preview {
-			t.Fatalf("preview %v: %s", preview, response.Body)
+		body := response.Body.String()
+		if response.Code != 200 || strings.Contains(body, "rdev-bridge.js") != mode.preview || strings.Contains(body, "rdev-locale.js") != mode.localized {
+			t.Fatalf("mode %+v: %s", mode, body)
 		}
-		if !strings.Contains(response.Body.String(), "Chrome inspector") {
+		if !strings.Contains(body, "Chrome inspector") {
 			t.Fatal("inspector document lost")
+		}
+		if mode.localized && strings.Count(body, "rdev-locale.js") != 1 {
+			t.Fatal("locale bootstrap injected more than once")
 		}
 	}
 }

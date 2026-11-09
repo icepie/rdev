@@ -26,6 +26,12 @@ import (
 //go:embed browser_bridge.js
 var browserBridge []byte
 
+//go:embed browser_input.js
+var browserInput []byte
+
+//go:embed browser_locale.js
+var browserLocale []byte
+
 const browserIdleTimeout = 30 * time.Minute
 const browserLimit = 4
 
@@ -381,12 +387,20 @@ func (s *Server) HandleBrowserView(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	if path == "devtools/rdev-bridge.js" {
+	if path == "devtools/rdev-bridge.js" || path == "devtools/rdev-input.js" || path == "devtools/rdev-locale.js" {
 		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
-		_, _ = w.Write(browserBridge)
+		if path == "devtools/rdev-locale.js" {
+			_, _ = w.Write(browserLocale)
+		} else if path == "devtools/rdev-input.js" {
+			_, _ = w.Write(browserInput)
+		} else {
+			_, _ = w.Write(browserBridge)
+		}
 		return
 	}
-	preview := path == "devtools/inspector.html" && r.URL.Query().Get("rdevPreview") == "1"
+	inspector := path == "devtools/inspector.html"
+	preview := inspector && r.URL.Query().Get("rdevPreview") == "1"
+	locale := inspector && (r.URL.Query().Get("rdevLang") == "zh" || r.URL.Query().Get("rdevLang") == "en-US")
 	proxy := httputil.NewSingleHostReverseProxy(b.endpoint)
 	proxy.Transport = browserTransport
 	director := proxy.Director
@@ -403,16 +417,22 @@ func (s *Server) HandleBrowserView(w http.ResponseWriter, r *http.Request) {
 		req.Header.Del("X-RDev-Token")
 	}
 	proxy.ModifyResponse = func(resp *http.Response) error {
-		if preview && resp.StatusCode == http.StatusOK {
+		if (preview || locale) && resp.StatusCode == http.StatusOK {
 			data, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
 			resp.Body.Close()
 			if err != nil {
 				return err
 			}
-			bridge := []byte(`<style id="rdev-preview-loading">html{visibility:hidden}</style><script type="module" src="./rdev-bridge.js"></script>`)
+			var bridge []byte
+			if locale {
+				bridge = append(bridge, []byte(`<script src="./rdev-locale.js"></script>`)...)
+			}
+			if preview {
+				bridge = append(bridge, []byte(`<style id="rdev-preview-loading">html{visibility:hidden}</style><script type="module" src="./rdev-bridge.js"></script>`)...)
+			}
 			data = bytes.Replace(data, []byte("<head>"), append([]byte("<head>"), bridge...), 1)
 			// Chrome's inspector may omit an explicit head element.
-			if !bytes.Contains(data, []byte(`id="rdev-preview-loading"`)) {
+			if !bytes.Contains(data, bridge) {
 				data = bytes.Replace(data, []byte("<meta charset="), append(bridge, []byte("<meta charset=")...), 1)
 			}
 			resp.Body = io.NopCloser(bytes.NewReader(data))

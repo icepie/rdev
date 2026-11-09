@@ -27,7 +27,9 @@ Update both rdev server and Go clients. The client update makes TCP connection e
 
 ## Input methods
 
-The native Screencast canvas forwards ordinary key events but does not provide an editable IME composition host. Use **Text input** for Chinese/Japanese input methods, emoji, pasted text, and multiline text: click the destination input in the webpage, compose in the local textarea, then choose **Insert into webpage** (or Ctrl/Command + Enter after composition finishes). Committed text goes through `Input.insertText` on the inspector's existing CDP connection. Candidate confirmation is not submitted, and the draft is retained if insertion is not confirmed. This is an explicit composition input area, not transparent native IME support on the canvas itself.
+Click the webpage and type directly. A transparent local textarea at the pointer position hosts OS composition, while `Input.imeSetComposition` mirrors preedit and `Input.insertText` commits the chosen text through the existing CDP session. There is no separate text panel or insert action. Candidate confirmation is not forwarded as a webpage Enter key; ordinary typing, navigation keys and local clipboard paste keep their own paths. Pointer focus changes commit pending composition before the remote click is dispatched.
+
+DevTools follows the rdev interface language (Simplified Chinese or English), including the standalone inspector. Switching languages reloads the inspector frontend, not the remote webpage.
 
 ## Limitations
 
@@ -39,3 +41,6 @@ The embedded view defaults to the webpage preview with the DevTools panel collap
 - Proxy logs on both ends confirmed the test HTTP request to client loopback traversed the selected device. With the concurrent client, a fresh test navigation completed in 122 ms locally (a functional check, not a performance benchmark).
 - Closing returned HTTP 204; the old browser capability immediately returned 404.
 - Frontend: 78 files / 300 tests, typecheck and production build passed. Server and CLI suites passed. Client suite and targeted client/server race checks passed.
+
+- Direct input follow-up: real Chrome composition commands targeting the local editing host produced remote preedit `nihao`, committed `你好🌏` once, and one Backspace left `你好`. Ordinary `a` yielded `你好a`; Tab followed by `b` typed into the next field. These are browser-engine composition tests, not a claim of testing every OS input method.
+- Chinese DevTools labels verified: 元素、控制台、样式、计算样式、布局. Web suite: 82 files / 313 tests passed; targeted browser backend race checks passed.
