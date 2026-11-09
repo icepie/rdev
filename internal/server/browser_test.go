@@ -157,3 +157,29 @@ func TestBrowserDisabledByDefault(t *testing.T) {
 		}
 	}
 }
+
+func TestBrowserPreviewInjectsBridgeOnlyForEmbeddedView(t *testing.T) {
+	const html = "<!DOCTYPE html><html><meta charset=\"utf-8\"><body>Chrome inspector</body></html>"
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, html) }))
+	defer backend.Close()
+	endpoint, _ := url.Parse(backend.URL)
+	ready := make(chan struct{})
+	close(ready)
+	s := NewServer()
+	s.BrowserEnabled = true
+	s.browsers = map[string]*browserSession{"device": {capability: "cap", endpoint: endpoint, ready: ready}}
+	for _, preview := range []bool{false, true} {
+		path := "/api/browser/view/cap/devtools/inspector.html"
+		if preview {
+			path += "?rdevPreview=1"
+		}
+		response := httptest.NewRecorder()
+		s.HandleBrowserView(response, httptest.NewRequest("GET", path, nil))
+		if response.Code != 200 || strings.Contains(response.Body.String(), "rdev-bridge.js") != preview {
+			t.Fatalf("preview %v: %s", preview, response.Body)
+		}
+		if !strings.Contains(response.Body.String(), "Chrome inspector") {
+			t.Fatal("inspector document lost")
+		}
+	}
+}

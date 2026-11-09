@@ -2,8 +2,10 @@ package server
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/rand"
+	_ "embed"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -20,6 +22,9 @@ import (
 	"sync"
 	"time"
 )
+
+//go:embed browser_bridge.js
+var browserBridge []byte
 
 const browserIdleTimeout = 30 * time.Minute
 const browserLimit = 4
@@ -376,6 +381,12 @@ func (s *Server) HandleBrowserView(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	if path == "devtools/rdev-bridge.js" {
+		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+		_, _ = w.Write(browserBridge)
+		return
+	}
+	preview := path == "devtools/inspector.html" && r.URL.Query().Get("rdevPreview") == "1"
 	proxy := httputil.NewSingleHostReverseProxy(b.endpoint)
 	proxy.Transport = browserTransport
 	director := proxy.Director
@@ -385,12 +396,29 @@ func (s *Server) HandleBrowserView(w http.ResponseWriter, r *http.Request) {
 		req.URL.RawPath = ""
 		req.URL.RawQuery = ""
 		req.Host = b.endpoint.Host
+		req.Header.Set("Accept-Encoding", "identity")
 		req.Header.Del("Origin")
 		req.Header.Del("Authorization")
 		req.Header.Del("Cookie")
 		req.Header.Del("X-RDev-Token")
 	}
 	proxy.ModifyResponse = func(resp *http.Response) error {
+		if preview && resp.StatusCode == http.StatusOK {
+			data, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+			resp.Body.Close()
+			if err != nil {
+				return err
+			}
+			bridge := []byte(`<style id="rdev-preview-loading">html{visibility:hidden}</style><script type="module" src="./rdev-bridge.js"></script>`)
+			data = bytes.Replace(data, []byte("<head>"), append([]byte("<head>"), bridge...), 1)
+			// Chrome's inspector may omit an explicit head element.
+			if !bytes.Contains(data, []byte(`id="rdev-preview-loading"`)) {
+				data = bytes.Replace(data, []byte("<meta charset="), append(bridge, []byte("<meta charset=")...), 1)
+			}
+			resp.Body = io.NopCloser(bytes.NewReader(data))
+			resp.ContentLength = int64(len(data))
+			resp.Header.Del("Content-Length")
+		}
 		resp.Header.Set("Cache-Control", "no-store")
 		resp.Header.Set("Referrer-Policy", "no-referrer")
 		return nil

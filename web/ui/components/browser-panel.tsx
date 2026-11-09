@@ -1,3 +1,4 @@
+import { BrowserPreview } from "./browser-preview";
 import { useEffect, useState } from "react";
 import { apiFetch, getDevicePassword } from "../lib/api";
 import { useDevices } from "../lib/devices";
@@ -79,8 +80,8 @@ export function BrowserPanel({ device, visible = true, deviceSelection = "inline
   };
   const inspector = base && selected ? `${base}/devtools/inspector.html?${new URLSearchParams({ [location.protocol === "https:" ? "wss" : "ws"]: `${location.host}${base}/devtools/page/${selected}`, dockSide: "undocked" })}` : "";
 
-  return <div className="flex min-h-0 flex-1 flex-col bg-background">
-    <div className="flex min-h-11 flex-wrap items-center gap-2 border-b border-border-seam px-3 py-2 text-xs">
+  return <div className="flex min-h-0 min-w-0 w-full flex-1 flex-col overflow-hidden bg-background">
+    <div className="flex min-h-11 shrink-0 flex-wrap items-center gap-2 border-b border-border-seam px-3 py-2 text-xs">
       <Icon name="Globe" className="size-4 text-muted-foreground" />
       <span className="min-w-0 flex-1 truncate">{t("nav.browser")}{exitDevice && ` · ${exitDevice}`}</span>
       {base && <>
@@ -99,7 +100,7 @@ export function BrowserPanel({ device, visible = true, deviceSelection = "inline
     </div>
     {error && <p role="alert" className="px-3 py-2 text-xs text-destructive-text">{error}</p>}
     {!online && base && <p role="status" className="px-3 py-2 text-xs text-muted-foreground">{t("browser.offline")}</p>}
-    {!base ? <form onSubmit={e => { e.preventDefault(); void start(); }} className="m-auto flex w-full max-w-sm flex-col gap-3 p-6">
+    {!base ? <form onSubmit={e => { e.preventDefault(); void start(); }} className="m-auto flex min-h-0 min-w-0 w-full max-w-sm flex-col gap-3 overflow-y-auto p-4">
       <p className="text-sm text-muted-foreground">{t("browser.intro")}</p>
       {deviceSelection === "sidebar" ? (
         exitDevice ? <div className="flex min-w-0 items-center gap-2 text-sm">
@@ -108,7 +109,7 @@ export function BrowserPanel({ device, visible = true, deviceSelection = "inline
         </div> : <p className="text-sm text-muted-foreground">{t("browser.selectFromSidebar")}</p>
       ) : <label className="flex flex-col gap-1 text-xs">{t("browser.exitDevice")}
         <Select disabled={busy} value={exitDevice} onValueChange={value => { setExitDevice(value); setPassword(getDevicePassword(value)); }}>
-          <SelectTrigger aria-label={t("browser.exitDevice")} className="w-full">
+          <SelectTrigger aria-label={t("browser.exitDevice")} className="min-w-0 w-full">
             <SelectValue placeholder={t("agent.selectDeviceShort")} />
           </SelectTrigger>
           <SelectContent>
@@ -121,6 +122,6 @@ export function BrowserPanel({ device, visible = true, deviceSelection = "inline
         <Button type="submit" disabled={!online || busy}>{t(busy ? "common.loading" : "browser.start")}</Button>
       </>}
       <p className="text-xs text-muted-foreground">{t("browser.lifetime")}</p>
-    </form> : inspector && visible ? <iframe title={t("browser.preview")} src={inspector} referrerPolicy="no-referrer" className="min-h-0 w-full flex-1 border-0" allow="clipboard-read; clipboard-write" /> : <p role="status" className="p-4 text-xs text-muted-foreground">{t("common.loading")}</p>}
+    </form> : inspector && visible ? <BrowserPreview key={inspector} src={inspector} /> : <p role="status" className="p-4 text-xs text-muted-foreground">{t("common.loading")}</p>}
   </div>;
 }

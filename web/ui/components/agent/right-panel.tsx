@@ -1213,7 +1213,7 @@ export function AgentRightPanel({
         </div>
       </div>
 
-      <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-sidebar">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-sidebar">
       {active === "info" ? (
         /* Info tab */
         <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
@@ -1313,7 +1313,7 @@ export function AgentRightPanel({
             key={tabId(tab)}
             className={
               active === tabId(tab)
-                ? "flex min-h-0 flex-1 flex-col"
+                ? "flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden"
                 : "hidden"
             }
           >

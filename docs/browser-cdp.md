@@ -25,9 +25,13 @@ Update both rdev server and Go clients. The client update makes TCP connection e
 - Closing the browser affects all attached viewers and deletes its temporary profile (cookies and tabs). Sessions idle for 30 minutes expire. Server shutdown terminates managed Chrome processes.
 - The Chrome debugging port only binds to loopback. Creating/attaching requires the normal API authentication and device password unless an administrator is authenticated. DevTools assets and page sockets use a random, instance-scoped capability URL, revoked on close. These URLs grant control of that browser and should not be shared. The admin token is never included in the embedded DevTools URL or forwarded to Chrome.
 
+## Input methods
+
+The native Screencast canvas forwards ordinary key events but does not provide an editable IME composition host. Use **Text input** for Chinese/Japanese input methods, emoji, pasted text, and multiline text: click the destination input in the webpage, compose in the local textarea, then choose **Insert into webpage** (or Ctrl/Command + Enter after composition finishes). Committed text goes through `Input.insertText` on the inspector's existing CDP connection. Candidate confirmation is not submitted, and the draft is retained if insertion is not confirmed. This is an explicit composition input area, not transparent native IME support on the canvas itself.
+
 ## Limitations
 
-The embedded view is the full native DevTools layout; the full-view action is useful on narrow screens. Tabs/cookies do not survive browser shutdown. This increment does not add Agent browser automation tools, persistent profiles, or a video/WebRTC rendering transport.
+The embedded view defaults to the webpage preview with the DevTools panel collapsed. Use the DevTools button to expand it; the full-view action opens the unmodified native inspector. A small version-dependent adapter uses Chrome's Screencast split widget; unsupported versions fall back to the native layout with a notice. Tabs/cookies do not survive browser shutdown. This increment does not add Agent browser automation tools, persistent profiles, or a video/WebRTC rendering transport.
 
 ## Validation (2026-11-09)
 
