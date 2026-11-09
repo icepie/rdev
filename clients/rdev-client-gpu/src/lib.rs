@@ -1,4 +1,3 @@
-pub mod client_logs;
 pub mod config;
 pub mod desktop;
 pub mod desktop_env;

@@ -1,0 +1,10 @@
+// Apply RDev's overlay without modifying the pinned AutoJs6 source checkout.
+def rdev = new File(System.getProperty('rdev.androidDir'))
+gradle.beforeProject { project ->
+    if (project.path == ':app') {
+        project.pluginManager.withPlugin('com.android.application') {
+            project.ext.rdevAndroidDir = rdev
+            project.apply from: new File(rdev, 'app/build.gradle')
+        }
+    }
+}

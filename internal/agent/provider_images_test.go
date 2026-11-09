@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"image"
 	"image/jpeg"
+	"image/png"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -106,6 +107,55 @@ func TestProviderLeavesNonPreviewAndTruncatedContentAsText(t *testing.T) {
 	history := []Message{{Role: "user", Content: preview}}
 	if got := providerMessages(history); !reflect.DeepEqual(got, history) {
 		t.Fatal("rewrote user content")
+	}
+}
+
+func TestSanitizeNativeMCPImagesPreservesResultAndAttachesImages(t *testing.T) {
+	var pngData bytes.Buffer
+	if err := png.Encode(&pngData, image.NewRGBA(image.Rect(0, 0, 2, 2))); err != nil {
+		t.Fatal(err)
+	}
+	jpegPreview := testToolPreview(t)
+	jpegEncoded := strings.TrimPrefix(jpegPreview, "[image preview]\ndata:image/jpeg;base64,")
+	input, err := json.Marshal(map[string]any{"result": map[string]any{
+		"content": []any{
+			map[string]any{"type": "text", "text": "visible"},
+			map[string]any{"type": "image", "mimeType": "image/png", "data": base64.StdEncoding.EncodeToString(pngData.Bytes())},
+			map[string]any{"type": "image", "mimeType": "image/jpeg", "data": jpegEncoded},
+		},
+		"structuredContent": map[string]any{"ok": true}, "isError": false,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	clean, images := sanitizeNativeToolResult(string(input))
+	if len(images) != 2 || images[0].Mime != "image/png" || images[1].Mime != "image/jpeg" {
+		t.Fatalf("images = %+v", images)
+	}
+	var got map[string]any
+	if err := json.Unmarshal([]byte(clean), &got); err != nil {
+		t.Fatal(err)
+	}
+	result := got["result"].(map[string]any)
+	if result["isError"] != false || result["structuredContent"].(map[string]any)["ok"] != true {
+		t.Fatalf("metadata lost: %s", clean)
+	}
+	parts := result["content"].([]any)
+	if parts[0].(map[string]any)["text"] != "visible" || !strings.Contains(parts[1].(map[string]any)["data"].(string), "omitted") {
+		t.Fatalf("content not sanitized: %s", clean)
+	}
+	provider := providerMessages([]Message{{Role: "tool", Content: clean, Images: images}})
+	if len(provider) != 2 || len(provider[1].Images) != 2 || strings.Contains(provider[0].Content, "base64") {
+		t.Fatalf("provider messages: %+v", provider)
+	}
+}
+
+func TestSanitizeNativeMCPInvalidImageDoesNotRetainBase64(t *testing.T) {
+	encoded := base64.StdEncoding.EncodeToString([]byte("not an image"))
+	input := `{"result":{"content":[{"type":"image","mimeType":"image/png","data":"` + encoded + `"}],"structuredContent":{"ok":true},"isError":true}}`
+	clean, images := sanitizeNativeToolResult(input)
+	if len(images) != 0 || strings.Contains(clean, encoded) || !strings.Contains(clean, nativeImagePlaceholder) || !strings.Contains(clean, `"isError":true`) || !json.Valid([]byte(clean)) {
+		t.Fatalf("invalid image was not safely omitted: %s (%v)", clean, images)
 	}
 }
 

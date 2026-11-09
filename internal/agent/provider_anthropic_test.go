@@ -304,6 +304,47 @@ func TestAnthropicToolImagesAndErrorScope(t *testing.T) {
 	}
 }
 
+func TestAnthropicNativeMCPImageResultIncludesTextAndImage(t *testing.T) {
+	preview := testToolPreview(t)
+	image, ok := toolPreviewImage(preview)
+	if !ok {
+		t.Fatal("invalid test image")
+	}
+	history := []Message{
+		{Role: "assistant", ToolCalls: []ToolCall{{ID: "native-1", Name: "computer", Arguments: "{}"}}},
+		{Role: "tool", ToolCallID: "native-1", Content: `{"result":{"content":[{"type":"text","text":"window details"},{"type":"image","mimeType":"image/jpeg","data":"` + nativeImagePlaceholder + `"}],"structuredContent":{"ok":true}}}`, Images: []MessageImage{image}},
+	}
+	raw, err := marshalAnthropicRequest(Config{Model: "fixture"}, history)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var request struct {
+		Messages []struct {
+			Content []struct {
+				Type    string
+				Content json.RawMessage
+			} `json:"content"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(raw, &request); err != nil {
+		t.Fatal(err)
+	}
+	if len(request.Messages) != 2 || len(request.Messages[1].Content) != 1 {
+		t.Fatalf("unexpected request: %s", raw)
+	}
+	var resultContent []struct {
+		Type   string
+		Text   string
+		Source map[string]string
+	}
+	if err := json.Unmarshal(request.Messages[1].Content[0].Content, &resultContent); err != nil {
+		t.Fatal(err)
+	}
+	if len(resultContent) != 2 || resultContent[0].Type != "text" || !strings.Contains(resultContent[0].Text, `"structuredContent"`) || resultContent[1].Type != "image" || resultContent[1].Source["data"] != image.Data {
+		t.Fatalf("native MCP text/image result was not preserved: %+v", resultContent)
+	}
+}
+
 func TestAnthropicCompactionAndReplayBlockOrder(t *testing.T) {
 	// A provider may emit later text after a call. Keep signed blocks in order
 	// but move tool_use to the tail when replaying, as OMP does.

@@ -33,6 +33,7 @@ pub enum MessageInbound {
     ReleaseKeyboard,
     GetCapturableList,
     GetScreenshot,
+    Cua(serde_json::Value),
     Config(ClientConfiguration),
     PauseVideo,
     ResumeVideo,
@@ -43,7 +44,13 @@ pub enum MessageInbound {
 #[derive(Serialize, Deserialize, Debug)]
 pub enum MessageOutbound {
     CapturableList(Vec<String>),
-    AgentCapabilities { version: u32 },
+    AgentCapabilities { version: u32, #[serde(default)] cua: bool },
+    CuaResult {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        result: Option<serde_json::Value>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
     Screenshot(String),
     NewVideo,
     ConfigOk,
@@ -292,4 +299,8 @@ pub trait WeylusSender {
 
 pub trait WeylusReceiver: Iterator<Item = Result<MessageInbound, Self::Error>> {
     type Error: std::error::Error;
+    #[cfg(feature = "cua-native")]
+    fn cua_shutdown(&self) -> Option<tokio::sync::watch::Receiver<bool>> {
+        None
+    }
 }

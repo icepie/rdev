@@ -23,18 +23,23 @@ import (
 // tool calls; neither the web viewer nor the device capture is restarted.
 type gpuAgentDesktop struct {
 	gws.BuiltinEventHandler
-	client       *ClientConn
-	tunnel       *gpuDesktopTunnel
-	socket       *gws.Conn
-	messages     chan json.RawMessage
-	agentVersion int
-	done         chan struct{}
-	once         sync.Once
-	touched      atomic.Int64
-	source       string
-	sourceName   string
-	configured   bool
-	names        []string
+	client        *ClientConn
+	tunnel        *gpuDesktopTunnel
+	socket        *gws.Conn
+	messages      chan json.RawMessage
+	agentVersion  int
+	autojs        bool
+	cua           bool
+	capabilities  bool
+	nativeSession bool
+	cuaTools      map[string]bool
+	done          chan struct{}
+	once          sync.Once
+	touched       atomic.Int64
+	source        string
+	sourceName    string
+	configured    bool
+	names         []string
 }
 
 func (d *gpuAgentDesktop) close() {
@@ -80,9 +85,16 @@ func (d *gpuAgentDesktop) wait(ctx context.Context, name string) (json.RawMessag
 				continue
 			}
 			if value := fields["AgentCapabilities"]; value != nil {
-				var caps struct{ Version int }
+				var caps struct {
+					Version int
+					Autojs  bool
+					Cua     bool
+				}
 				if json.Unmarshal(value, &caps) == nil {
 					d.agentVersion = caps.Version
+					d.autojs = caps.Autojs
+					d.cua = caps.Cua
+					d.capabilities = true
 				}
 			}
 			for _, key := range []string{"Error", "ConfigError"} {
@@ -95,6 +107,145 @@ func (d *gpuAgentDesktop) wait(ctx context.Context, name string) (json.RawMessag
 			}
 		}
 	}
+}
+
+const gpuCuaRequestMax = 64 << 10
+const gpuCuaResultMax = 8 << 20
+
+func gpuCuaAllowedTool(name string) bool {
+	switch name {
+	case "list_apps", "list_windows", "get_window_state", "get_desktop_state", "bring_to_front", "click", "scroll", "drag", "press_key", "type_text", "set_value":
+		return true
+	default:
+		return false
+	}
+}
+
+func (d *gpuAgentDesktop) requireCua(ctx context.Context) error {
+	if !d.capabilities {
+		capCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		if _, err := d.wait(capCtx, "AgentCapabilities"); err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return fmt.Errorf("native Cua tools unsupported: this device did not advertise Cua capability; use a supported Rust client (%v)", err)
+		}
+	}
+	if !d.cua {
+		return fmt.Errorf("native Cua tools unsupported: this device requires a Cua-capable Rust client; Go and older clients support screenshot/input only")
+	}
+	return nil
+}
+
+func gpuCuaRequest(action string, raw json.RawMessage) (json.RawMessage, error) {
+	if len(raw) > gpuCuaRequestMax {
+		return nil, fmt.Errorf("native Cua request exceeds %d byte limit", gpuCuaRequestMax)
+	}
+	request := struct {
+		Action    string                     `json:"action"`
+		Name      string                     `json:"name,omitempty"`
+		Arguments map[string]json.RawMessage `json:"arguments,omitempty"`
+	}{Action: "tools"}
+	if action == "native" {
+		var args struct {
+			Tool      string                     `json:"tool"`
+			Arguments map[string]json.RawMessage `json:"arguments"`
+		}
+		if err := json.Unmarshal(raw, &args); err != nil {
+			return nil, fmt.Errorf("invalid native Cua arguments: %w", err)
+		}
+		if strings.TrimSpace(args.Tool) == "" || len(args.Tool) > 128 {
+			return nil, fmt.Errorf("native requires a tool name from native_tools (maximum 128 bytes)")
+		}
+		if !gpuCuaAllowedTool(args.Tool) {
+			return nil, fmt.Errorf("native Cua tool %q is not allowed; use native_tools", args.Tool)
+		}
+		request.Action, request.Name, request.Arguments = "call", args.Tool, args.Arguments
+	} else if action != "native_tools" {
+		return nil, fmt.Errorf("unsupported native Cua action %q", action)
+	}
+	payload, err := json.Marshal(map[string]any{"Cua": request})
+	if err != nil {
+		return nil, err
+	}
+	if len(payload) > gpuCuaRequestMax {
+		return nil, fmt.Errorf("native Cua request exceeds %d byte limit", gpuCuaRequestMax)
+	}
+	return payload, nil
+}
+
+// Keep the MCP result intact: tool schemas, structuredContent, content images,
+// and isError all belong to the result, not a screenshot-only preview envelope.
+func gpuCuaResult(raw json.RawMessage) (string, error) {
+	if len(raw) > gpuCuaResultMax {
+		return "", fmt.Errorf("native Cua result exceeds %d byte limit", gpuCuaResultMax)
+	}
+	var envelope struct {
+		Result json.RawMessage `json:"result"`
+		Error  *string         `json:"error"`
+	}
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		return "", fmt.Errorf("invalid CuaResult: %w", err)
+	}
+	if envelope.Error != nil {
+		if envelope.Result != nil {
+			return "", fmt.Errorf("invalid CuaResult: both result and error")
+		}
+		return "", fmt.Errorf("Cua: %s", *envelope.Error)
+	}
+	result := bytes.TrimSpace(envelope.Result)
+	if len(result) == 0 || result[0] != '{' {
+		return "", fmt.Errorf("invalid CuaResult: missing MCP result object")
+	}
+	return marshalJobResult(map[string]any{"result": envelope.Result})
+}
+
+func (d *gpuAgentDesktop) discoverCuaTools(ctx context.Context) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	if err := d.send(json.RawMessage(`{"Cua":{"action":"tools"}}`)); err != nil {
+		return "", err
+	}
+	raw, err := d.wait(ctx, "CuaResult")
+	if err != nil {
+		return "", err
+	}
+	framed, err := gpuCuaResult(raw)
+	if err != nil {
+		return "", err
+	}
+	var envelope struct {
+		Result map[string]json.RawMessage `json:"result"`
+	}
+	if err := json.Unmarshal([]byte(framed), &envelope); err != nil {
+		return "", err
+	}
+	var tools []json.RawMessage
+	if err := json.Unmarshal(envelope.Result["tools"], &tools); err != nil || tools == nil {
+		return "", fmt.Errorf("invalid Cua tools/list result")
+	}
+	allowed := make([]json.RawMessage, 0, len(tools))
+	names := make(map[string]bool)
+	for _, tool := range tools {
+		var schema struct {
+			Name string `json:"name"`
+		}
+		if err := json.Unmarshal(tool, &schema); err != nil {
+			return "", fmt.Errorf("invalid Cua tool schema: %w", err)
+		}
+		if gpuCuaAllowedTool(schema.Name) {
+			allowed = append(allowed, tool)
+			names[schema.Name] = true
+		}
+	}
+	envelope.Result["tools"], err = json.Marshal(allowed)
+	if err != nil {
+		return "", err
+	}
+	d.cuaTools = names
+	return marshalJobResult(envelope)
 }
 
 // Adapt an authenticated multiplexed tunnel stream to the websocket dialer.
@@ -270,6 +421,57 @@ func (t *computerTool) executeGPU(ctx context.Context, client *ClientConn, a com
 			delete(t.state.gpu, client.ID)
 		}
 	}()
+	if a.Action == "native_tools" || a.Action == "native" {
+		if err = d.requireCua(ctx); err != nil {
+			return "", err
+		}
+		request, err := gpuCuaRequest(a.Action, raw)
+		if err != nil {
+			return "", err
+		}
+		if err = t.claim(client.ID); err != nil {
+			return "", err
+		}
+		t.publish(automationView{Kind: "desktop", Device: client.ID, Action: a.Action})
+		if a.Action == "native_tools" {
+			result, err := d.discoverCuaTools(ctx)
+			success = err == nil && ctx.Err() == nil
+			d.nativeSession = success
+			return result, err
+		}
+		if d.cuaTools == nil {
+			if _, err := d.discoverCuaTools(ctx); err != nil {
+				return "", err
+			}
+		}
+		var args struct {
+			Tool string `json:"tool"`
+		}
+		if err := json.Unmarshal(raw, &args); err != nil {
+			return "", err
+		}
+		if !d.cuaTools[args.Tool] {
+			return "", fmt.Errorf("native Cua tool %q is unavailable on this device; use native_tools", args.Tool)
+		}
+		if err = ctx.Err(); err != nil {
+			return "", err
+		}
+		if err = d.send(request); err != nil {
+			return "", err
+		}
+		result, err := d.wait(ctx, "CuaResult")
+		if err != nil {
+			return "", err
+		}
+		// Completed tool/permission errors do not discard native element tokens.
+		// Transport failure and cancellation still close the private driver.
+		if err = ctx.Err(); err != nil {
+			return "", err
+		}
+		success = true
+		d.nativeSession = true
+		return gpuCuaResult(result)
+	}
 	names := d.names
 	if names == nil || a.Action == "status" {
 		if err = d.send("GetCapturableList"); err != nil {
@@ -290,11 +492,11 @@ func (t *computerTool) executeGPU(ctx context.Context, client *ClientConn, a com
 			sources = append(sources, map[string]string{"id": fmt.Sprintf("gpu:%d", i), "label": name})
 		}
 		success = true
-		if !d.configured {
+		if !d.configured && !d.nativeSession {
 			d.close()
 			delete(t.state.gpu, client.ID)
 		}
-		return marshalJobResult(map[string]any{"device": client.ID, "transport": "gpu-desktop-tunnel", "sources": sources, "desktop": client.Desktop})
+		return marshalJobResult(map[string]any{"device": client.ID, "transport": "gpu-desktop-tunnel", "sources": sources, "desktop": client.Desktop, "cua": d.cua})
 	}
 	screen := t.state.screens[client.ID]
 	if a.Source == "" && screen.client == client {

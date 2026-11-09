@@ -38,7 +38,7 @@
 | 客户端版本 | 兼容版 `rdev-client-*`(go，默认，CGO_ENABLED=0)、性能版 `rdev-client-gpu-*`(rs，Rust GPU 硬件编码)、特性版 `rdev-client-cgo-*`(cgo，内置软件 H.264/x264，GPL-2.0-only)。三者均可通过 `run.sh`/`run.ps1` 的 `--client go|rs|cgo` 一键启动 |
 | Rust GPU Client | 可选实验版 `clients/rdev-client-gpu`，优先补齐 SSH/session/内置 SFTP/Rsync/TCP/file 基础能力，并提供可选内置 RDev/Weylus 风格 GPU 桌面隧道；Win7 包使用普通 Windows GNU 构建加 PE import patch 和兼容 shim DLL |
 | Android / Termux | 支持 Termux 一键运行 Go 兼容版与 Rust no-desktop 版，Android/Bionic 包使用 Android libc DNS；详见 `docs/android-termux.md` |
-| Android APK | 独立安卓被控端设计采用 `MediaProjection + MediaCodec` 高性能屏幕流，输入走 Accessibility；详见 `docs/android-apk.md` |
+| Android APK | Android 7.0+ 独立被控端，`MediaProjection + MediaCodec` 屏幕流和 Accessibility 输入；单 APK 内嵌真实 AutoJs6 6.8.0 / OpenCV，Agent 可通过 `autojs` 执行设备端脚本；详见 `docs/android-apk.md` |
 | VNC/RFB Bridge | 服务端可选 `--vnc` 暴露现代 VNC 入口，使用 VeNCrypt Plain 用户名/密码认证，`username=deviceId` 选择设备 |
 | Web Agent | 浏览器内 LLM Agent（`/agent?device=<id>`），通过 OpenAI 兼容接口驱动，shell/list_dir/read_file/write_file 工具在选定设备上执行 |
 
@@ -290,6 +290,10 @@ Web UI 是 React 19 + Tailwind CSS v4 + Radix UI 单页应用，组件/设计令
 - Win7 运行 Go 客户端请使用 XTLS `go-win7` 工具链构建，例如 `GO_WIN7=/path/to/go-win7/bin/go make win7-go-client win7-service-wrapper`。
 - Windows 服务不要直接托管客户端 EXE；使用 `rdev-service-wrapper.exe`，并在配置中设置 `interactive: true`，让服务在活动登录用户桌面启动客户端，避免桌面截图出现 Session 0 的 `Access is denied`。
 - GPU 桌面采用 RDev/Weylus 风格：`rdev-client-gpu` 可通过 `embedded-rdev-desktop` feature 内置启动 vendored RDev 桌面 HTTP/WS 服务并连接 `/gpu-desktop-tunnel`，服务端通过 `/gpu-desktop/<device>/` 代理浏览器流量；服务端只做鉴权和隧道转发。
+- Rust 原生控件操作：编译时启用 `cua-native`（会同时启用 `embedded-rdev-desktop`），Agent 可通过 `computer` 的 `native_tools` 发现工具，再用 `native`、`tool`、`arguments` 调用。无需先截图；控件标识在当前桌面会话内复用。Go 客户端保持原有截图/坐标输入路径，不安装 Cua。
+- Cua Driver 固定为 `0.45.2`，首次原生调用从官方 GitHub release 下载并校验固定 SHA-256，安装到用户缓存目录下的 `rdev/cua-driver/`。每个桌面连接持有独立 stdio 子进程，不开放 Cua 网络端口；释放、断开或取消会终止并回收进程。首次使用需要可访问 GitHub，下载/权限/驱动错误直接返回，不伪装成功。
+- 发布包中 Debian 11/12/13、普通 Windows、macOS 的 amd64/arm64 启用该 feature；运行时要求 Linux glibc ≥2.30（还需 X11/Xi/xkbcommon 动态库）、Windows 10+ 或 macOS 13+。CentOS 7/8、Win7、Android 保持关闭；旧版 macOS 仍可使用普通桌面功能。系统辅助功能授权和 Linux 桌面/合成器限制由 Cua 返回，不绕过权限。
+- 原生结果保留 MCP 文本、结构化内容及错误信息；有效 PNG/JPEG 图片作为模型附件发送，不把 base64 当文本塞入上下文。原生操作沿用桌面独占控制、人工接管和空闲释放规则。
 
 服务 wrapper 配置示例：
 

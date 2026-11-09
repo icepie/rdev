@@ -1,6 +1,7 @@
 <resources>
     <string name="app_name">RDev Android</string>
     <string name="accessibility_service_label">RDev Remote Input</string>
+    <string name="autojs_accessibility_service_label">RDev AutoJs Scripts</string>
     <string name="accessibility_service_description">Allows RDev to inject remote touch and system navigation events when you explicitly enable control.</string>
     <string name="ime_service_label">RDev HID Keyboard</string>
 </resources>

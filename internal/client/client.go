@@ -236,8 +236,7 @@ type Client struct {
 	activeWSBase string
 
 	// OnConnect is called after successfully connecting and registering.
-	OnConnect    func(c *Client)
-	logCollector *clientLogCollector
+	OnConnect func(c *Client)
 }
 
 type clientTransport interface {
@@ -294,7 +293,6 @@ func (t *streamClientTransport) Close(reason string) error {
 
 // NewClient creates a new client
 func NewClient(serverURL, clientID, password, shell string) *Client {
-	lc := newClientLogCollector()
 	c := &Client{
 		serverURL:       serverURL,
 		clientID:        clientID,
@@ -315,9 +313,7 @@ func NewClient(serverURL, clientID, password, shell string) *Client {
 		reconnectReset:  make(chan struct{}, 1),
 		reconnectMin:    defaultReconnectMin,
 		reconnectMax:    defaultReconnectMax,
-		logCollector:    lc,
 	}
-	lc.install(c)
 	return c
 }
 
@@ -406,7 +402,6 @@ func (h *wsEventHandler) OnOpen(socket *gws.Conn) {
 		ClientOS:            runtime.GOOS,
 		Password:            h.client.password,
 		DesktopCapabilities: desktopCapabilities(),
-		LogSupported:        true,
 		ConfinedDownloads:   true,
 	}); err != nil {
 		log.Printf("register send error: %v", err)
@@ -811,7 +806,6 @@ func (c *Client) connectStream(kind, endpoint string) error {
 		ClientOS:            runtime.GOOS,
 		Password:            c.password,
 		DesktopCapabilities: desktopCapabilities(),
-		LogSupported:        true,
 		ConfinedDownloads:   true,
 	}); err != nil {
 		conn.Close()
@@ -915,10 +909,6 @@ func (c *Client) handleMessage(msg *protocol.Message) {
 		c.reconnectBackoffReset()
 		if c.OnConnect != nil {
 			c.OnConnect(c)
-		}
-	case protocol.MsgLogConfig:
-		if c.logCollector != nil {
-			c.logCollector.configure(msg)
 		}
 	case protocol.MsgNewSession:
 		c.handleNewSession(msg)

@@ -244,6 +244,144 @@ where
     }
 }
 
+pub fn cua_supported() -> bool {
+    #[cfg(feature = "cua-native")]
+    {
+        rdev_cua_bridge::supported()
+    }
+    #[cfg(not(feature = "cua-native"))]
+    {
+        false
+    }
+}
+
+fn cua_error(error: impl Into<String>) -> MessageOutbound {
+    MessageOutbound::CuaResult {
+        result: None,
+        error: Some(error.into()),
+    }
+}
+
+#[cfg(feature = "cua-native")]
+async fn cua_disconnected(shutdown: &mut Option<tokio::sync::watch::Receiver<bool>>) {
+    match shutdown {
+        Some(shutdown) => loop {
+            if *shutdown.borrow() {
+                return;
+            }
+            if shutdown.changed().await.is_err() {
+                return;
+            }
+        },
+        None => std::future::pending().await,
+    }
+}
+
+#[cfg(feature = "cua-native")]
+struct CuaWorker {
+    requests: tokio::sync::mpsc::Sender<rdev_cua_bridge::Request>,
+    stop: Option<tokio::sync::oneshot::Sender<()>>,
+    thread: Option<JoinHandle<()>>,
+    busy: Arc<std::sync::atomic::AtomicBool>,
+}
+
+#[cfg(feature = "cua-native")]
+impl CuaWorker {
+    fn new<S>(
+        mut sender: S,
+        mut shutdown: Option<tokio::sync::watch::Receiver<bool>>,
+    ) -> std::io::Result<Self>
+    where
+        S: WeylusSender + Send + 'static,
+    {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+        let (requests, mut receiver) = tokio::sync::mpsc::channel(1);
+        let (stop, mut stopped) = tokio::sync::oneshot::channel();
+        let busy = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let worker_busy = busy.clone();
+        let thread = std::thread::Builder::new()
+            .name("rdev-cua".into())
+            .spawn(move || {
+                let mut session = rdev_cua_bridge::Session::new();
+                loop {
+                    let response = runtime.block_on(async {
+                        let request = tokio::select! {
+                            biased;
+                            _ = &mut stopped => return None,
+                            _ = cua_disconnected(&mut shutdown) => return None,
+                            request = receiver.recv() => request?,
+                        };
+                        tokio::select! {
+                            biased;
+                            _ = &mut stopped => None,
+                            _ = cua_disconnected(&mut shutdown) => None,
+                            result = session.request(request) => Some(match result {
+                                Ok(result) => MessageOutbound::CuaResult {
+                                    result: Some(result),
+                                    error: None,
+                                },
+                                Err(error) => cua_error(format!("{error:#}")),
+                            }),
+                        }
+                    });
+                    let Some(response) = response else {
+                        break;
+                    };
+                    worker_busy.store(false, std::sync::atomic::Ordering::Release);
+                    // WeylusSender may block; never invoke it inside the Tokio runtime.
+                    if sender.send_message(response).is_err() {
+                        break;
+                    }
+                    worker_busy.store(false, std::sync::atomic::Ordering::Release);
+                }
+                // Session is dropped before its runtime, including cancellation of an active request.
+                drop(session);
+            })?;
+        Ok(Self {
+            requests,
+            stop: Some(stop),
+            thread: Some(thread),
+            busy,
+        })
+    }
+
+    fn submit(&self, request: rdev_cua_bridge::Request) -> Result<(), String> {
+        if self
+            .busy
+            .compare_exchange(
+                false,
+                true,
+                std::sync::atomic::Ordering::AcqRel,
+                std::sync::atomic::Ordering::Acquire,
+            )
+            .is_err()
+        {
+            return Err("A Cua request is already in progress".into());
+        }
+        if self.requests.try_send(request).is_err() {
+            self.busy.store(false, std::sync::atomic::Ordering::Release);
+            return Err("Cua worker stopped".into());
+        }
+        Ok(())
+    }
+}
+
+#[cfg(feature = "cua-native")]
+impl Drop for CuaWorker {
+    fn drop(&mut self) {
+        if let Some(stop) = self.stop.take() {
+            let _ = stop.send(());
+        }
+        if let Some(thread) = self.thread.take() {
+            if let Err(error) = thread.join() {
+                warn!("Failed to join Cua worker: {error:?}");
+            }
+        }
+    }
+}
+
 fn send_runtime_status<S>(sender: &mut S, capture_backend: &str, encoder_backend: &str)
 where
     S: WeylusSender,
@@ -461,7 +599,11 @@ impl<S, R, FnUInput> WeylusClientHandler<S, R, FnUInput> {
         S: WeylusSender + Clone + Send + Sync + 'static,
         FnUInput: Fn(),
     {
-        self.send_message(MessageOutbound::AgentCapabilities { version: 1 });
+        #[cfg(feature = "cua-native")]
+        let shutdown = self.receiver.as_ref().unwrap().cua_shutdown();
+        #[cfg(feature = "cua-native")]
+        let mut cua_worker: Option<CuaWorker> = None;
+        self.send_message(MessageOutbound::AgentCapabilities { version: 1, cua: cua_supported() });
         self.send_message(MessageOutbound::EncoderCapabilities(encoder_capabilities(
             self.config.encoder_options,
         )));
@@ -485,6 +627,34 @@ impl<S, R, FnUInput> WeylusClientHandler<S, R, FnUInput> {
                         MessageInbound::SetClipboard(event) => self.set_clipboard(event),
                         MessageInbound::ReleaseKeyboard => self.release_keyboard(),
                         MessageInbound::GetCapturableList => self.send_capturable_list(),
+                        MessageInbound::Cua(request) => {
+                            #[cfg(feature = "cua-native")]
+                            {
+                                if shutdown.as_ref().is_some_and(|shutdown| *shutdown.borrow()) {
+                                    break;
+                                }
+                                let result = (|| -> Result<(), String> {
+                                    if !cua_supported() {
+                                        return Err("Cua native control is unsupported on this platform".into());
+                                    }
+                                    let request = serde_json::from_value(request)
+                                        .map_err(|error| format!("Invalid Cua request: {error}"))?;
+                                    if cua_worker.is_none() {
+                                        cua_worker = Some(CuaWorker::new(self.sender.clone(), shutdown.clone())
+                                            .map_err(|error| format!("Cannot start Cua worker: {error}"))?);
+                                    }
+                                    cua_worker.as_ref().unwrap().submit(request)
+                                })();
+                                if let Err(error) = result {
+                                    self.send_message(cua_error(error));
+                                }
+                            }
+                            #[cfg(not(feature = "cua-native"))]
+                            {
+                                let _ = request;
+                                self.send_message(cua_error("Cua native control is not included in this build"));
+                            }
+                        }
                         MessageInbound::GetScreenshot => {
                             if self.video_sender.send(VideoCommands::Screenshot).is_err() {
                                 self.send_message(MessageOutbound::Error(
@@ -525,6 +695,8 @@ impl<S, R, FnUInput> WeylusClientHandler<S, R, FnUInput> {
                 }
             }
         }
+        #[cfg(feature = "cua-native")]
+        drop(cua_worker);
 
         drop(self.video_sender);
         if let Err(err) = self.video_thread.join() {
@@ -1512,18 +1684,27 @@ fn recorder_for_capturable(
 
 pub struct WsWeylusReceiver {
     recv: tokio::sync::mpsc::Receiver<MessageInbound>,
+    shutdown: tokio::sync::watch::Receiver<bool>,
 }
 
 impl Iterator for WsWeylusReceiver {
     type Item = Result<MessageInbound, Infallible>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.recv.blocking_recv().map(Ok)
+        if *self.shutdown.borrow() {
+            return None;
+        }
+        let message = self.recv.blocking_recv()?;
+        if *self.shutdown.borrow() { None } else { Some(Ok(message)) }
     }
 }
 
 impl WeylusReceiver for WsWeylusReceiver {
     type Error = Infallible;
+    #[cfg(feature = "cua-native")]
+    fn cua_shutdown(&self) -> Option<tokio::sync::watch::Receiver<bool>> {
+        Some(self.shutdown.clone())
+    }
 }
 
 pub enum WsMessage {
@@ -1552,6 +1733,15 @@ impl WeylusSender for WsWeylusSender {
     }
 }
 
+// Either websocket half closing stops its peer and the connection's native worker.
+struct WsShutdown(tokio::sync::watch::Sender<bool>);
+
+impl Drop for WsShutdown {
+    fn drop(&mut self) {
+        let _ = self.0.send(true);
+    }
+}
+
 pub fn weylus_websocket_channel(
     websocket: WebSocket<TokioIo<Upgraded>>,
     semaphore_shutdown: Arc<tokio::sync::Semaphore>,
@@ -1562,10 +1752,14 @@ pub fn weylus_websocket_channel(
 
     let (sender_inbound, receiver_inbound) = channel::<MessageInbound>(32);
     let (sender_outbound, mut receiver_outbound) = channel::<WsMessage>(32);
+    let (shutdown, shutdown_rx) = tokio::sync::watch::channel(false);
 
     {
         let sender_outbound = sender_outbound.clone();
+        let shutdown_guard = WsShutdown(shutdown.clone());
+        let mut shutdown_rx = shutdown_rx.clone();
         tokio::spawn(async move {
+            let _shutdown_guard = shutdown_guard;
             let mut send_fn = |frame| async {
                 if let Err(err) = sender_outbound.send(WsMessage::Frame(frame)).await {
                     warn!("Failed to send websocket frame while receiving fragmented frame: {err}.")
@@ -1577,6 +1771,8 @@ pub fn weylus_websocket_channel(
                 let fut = rx.read_frame::<_, WebSocketError>(&mut send_fn);
 
                 let frame = tokio::select! {
+                    biased;
+                    _ = shutdown_rx.changed() => break,
                     _ = semaphore_shutdown.acquire() => break,
                     frame = fut => match frame {
                         Ok(frame) => frame,
@@ -1594,8 +1790,15 @@ pub fn weylus_websocket_channel(
                     OpCode::Close => break,
                     OpCode::Text => match serde_json::from_slice(&frame.payload) {
                         Ok(msg) => {
-                            if let Err(err) = sender_inbound.send(msg).await {
-                                warn!("Failed to forward inbound message to WeylusClientHandler: {err}.");
+                            tokio::select! {
+                                biased;
+                                _ = shutdown_rx.changed() => break,
+                                _ = semaphore_shutdown.acquire() => break,
+                                result = sender_inbound.send(msg) => {
+                                    if result.is_err() {
+                                        break;
+                                    }
+                                }
                             }
                         }
                         Err(err) => warn!("Failed to parse message: {err}"),
@@ -1606,7 +1809,10 @@ pub fn weylus_websocket_channel(
         });
     }
 
+    let mut writer_shutdown = shutdown_rx.clone();
     tokio::spawn(async move {
+        let _shutdown_guard = WsShutdown(shutdown);
+        let sending = async {
         loop {
             let msg = if let Some(msg) = receiver_outbound.recv().await {
                 msg
@@ -1643,6 +1849,12 @@ pub fn weylus_websocket_channel(
                 }
             }
         }
+        };
+        tokio::select! {
+            biased;
+            _ = writer_shutdown.changed() => {},
+            _ = sending => {},
+        }
     });
 
     (
@@ -1651,6 +1863,7 @@ pub fn weylus_websocket_channel(
         },
         WsWeylusReceiver {
             recv: receiver_inbound,
+            shutdown: shutdown_rx,
         },
     )
 }

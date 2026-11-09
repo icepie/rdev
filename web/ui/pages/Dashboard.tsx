@@ -3,7 +3,6 @@ import {
   useContext,
   useEffect,
   useMemo,
-  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -11,10 +10,9 @@ import { Link } from "react-router-dom";
 import { MobileNavContext } from "../shell/AppShell";
 import { useI18n } from "../lib/i18n";
 import { useDevices } from "../lib/devices";
-import { apiFetch, apiJSON, authURL, type DeviceInfo } from "../lib/api";
+import { apiFetch, apiJSON, type DeviceInfo } from "../lib/api";
 import { cn } from "../lib/utils";
 import { Button } from "../components/button";
-import { Input } from "../components/input";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/card";
 import { Badge } from "../components/badge";
 import {
@@ -26,29 +24,6 @@ import {
   TableRow,
 } from "../components/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/tabs";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from "../components/dialog";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "../components/alert-dialog";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "../components/select";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -90,18 +65,7 @@ interface DesktopCaps {
   reason?: string;
 }
 
-interface LogDeviceState {
-  id: string;
-  enabled?: boolean;
-  level?: string;
-  size?: number;
-  latest?: string;
-  supported?: boolean;
-}
-
 type ClientFlavor = "go" | "cgo" | "rs";
-
-const LOG_LEVELS = ["error", "warn", "info", "debug", "trace"] as const;
 
 function shellQuote(value: string): string {
   return `'${value.replaceAll("'", "'\\''")}'`;
@@ -114,14 +78,6 @@ function vncDisplayAddr(addr: string): string {
     return host + ":" + addr.split(":").pop();
   if (addr.startsWith("[::]:")) return host + ":" + addr.slice(5);
   return addr;
-}
-
-function formatBytes(n: number | undefined): string {
-  let v = Number(n || 0);
-  if (v < 1024) return v + " B";
-  if (v < 1024 * 1024) return (v / 1024).toFixed(1) + " KB";
-  if (v < 1024 * 1024 * 1024) return (v / 1024 / 1024).toFixed(1) + " MB";
-  return (v / 1024 / 1024 / 1024).toFixed(1) + " GB";
 }
 
 function randomPassword(): string {
@@ -292,25 +248,8 @@ export function DashboardPage() {
     proxyAddr: "",
   });
   const [flavor, setFlavor] = useState<ClientFlavor>("go");
-  const [logStates, setLogStates] = useState<Record<string, LogDeviceState>>(
-    {},
-  );
-  const [logDevice, setLogDevice] = useState("");
-  const [logLevel, setLogLevel] = useState("info");
-  const [logTail, setLogTail] = useState("");
-  const [logDate, setLogDate] = useState(() =>
-    new Date().toISOString().slice(0, 10),
-  );
-  const [deleteOpen, setDeleteOpen] = useState(false);
   const [androidTrying, setAndroidTrying] = useState(false);
   const [configError, setConfigError] = useState("");
-  const [logError, setLogError] = useState("");
-  const [logStatesError, setLogStatesError] = useState("");
-  const [logLoading, setLogLoading] = useState(false);
-  const [logBusy, setLogBusy] = useState(false);
-  const activeLogDevice = useRef("");
-  const logRequest = useRef(0);
-  const logMutation = useRef(false);
   const [copiedId, copy] = useCopy();
 
   /* Server config (ports / VNC address) */
@@ -364,27 +303,6 @@ export function DashboardPage() {
     },
     [copy, pwPlaceholder],
   );
-
-  /* Client log states (polled alongside the device list) */
-  const loadLogStates = useCallback(async (): Promise<
-    Record<string, LogDeviceState>
-  > => {
-    try {
-      const list = await apiJSON<LogDeviceState[]>("/api/client-logs/devices");
-      const map: Record<string, LogDeviceState> = {};
-      for (const x of Array.isArray(list) ? list : []) map[x.id] = x;
-      setLogStates(map);
-      setLogStatesError("");
-      return map;
-    } catch (error) {
-      setLogStatesError(String(error));
-      return {};
-    }
-  }, []);
-
-  useEffect(() => {
-    if (devices.some((device) => device.logSupported)) void loadLogStates();
-  }, [loadLogStates, devices]);
 
   /* Stats */
   const totalSessions = devices.reduce(
@@ -463,94 +381,6 @@ export function DashboardPage() {
     },
     [copy, deviceConnStrings],
   );
-
-  /* Client log modal */
-  const refreshLogTail = useCallback(
-    async (device: string) => {
-      if (activeLogDevice.current !== device) return;
-      const request = ++logRequest.current;
-      setLogLoading(true);
-      setLogError("");
-      try {
-        const r = await apiFetch(
-          "/api/client-logs/devices/" +
-            encodeURIComponent(device) +
-            "/tail?lines=300",
-        );
-        if (!r.ok) throw new Error(t("index.logTailError", { status: r.status }));
-        const data = (await r.json()) as { lines?: string[] };
-        if (request !== logRequest.current) return;
-        setLogTail((data.lines || []).join("\n") || t("index.logNoLines"));
-      } catch (error) {
-        if (request === logRequest.current) setLogError(String(error));
-      } finally {
-        if (request === logRequest.current) setLogLoading(false);
-      }
-    },
-    [t],
-  );
-
-  const openLogModal = useCallback(
-    async (device: string) => {
-      activeLogDevice.current = device;
-      const request = ++logRequest.current;
-      setLogDevice(device);
-      setLogTail("");
-      setLogError("");
-      setLogLoading(true);
-      const states = await loadLogStates();
-      if (request !== logRequest.current) return;
-      setLogLevel(states[device]?.level || "info");
-      await refreshLogTail(device);
-    },
-    [loadLogStates, refreshLogTail],
-  );
-
-  const updateLogs = useCallback(
-    async (action: boolean | "delete") => {
-      if (!logDevice || logMutation.current) return;
-      const device = logDevice;
-      logMutation.current = true;
-      setLogBusy(true);
-      setLogError("");
-      try {
-        const r = await apiFetch(
-          "/api/client-logs/devices/" + encodeURIComponent(device) +
-            (action === "delete" ? "" : "/config"),
-          action === "delete"
-            ? { method: "DELETE" }
-            : {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ enabled: action, level: logLevel }),
-              },
-        );
-        if (!r.ok) throw new Error(`${t("common.error")}: HTTP ${r.status}`);
-        await loadLogStates();
-        await refreshLogTail(device);
-        refreshDevices();
-      } catch (error) {
-        if (activeLogDevice.current === device) setLogError(String(error));
-      } finally {
-        logMutation.current = false;
-        setLogBusy(false);
-      }
-    },
-    [logDevice, logLevel, loadLogStates, refreshLogTail, refreshDevices, t],
-  );
-
-  const downloadLog = useCallback(() => {
-    if (!logDevice || !logDate) return;
-    location.href = authURL(
-      "/api/client-logs/devices/" +
-        encodeURIComponent(logDevice) +
-        "/download?date=" +
-        logDate,
-    );
-  }, [logDevice, logDate]);
-
-
-  const logState = logDevice ? logStates[logDevice] : undefined;
 
   const stats = [
     {
@@ -668,8 +498,6 @@ export function DashboardPage() {
               </TableRow>
             )}
             {devices.map((d) => {
-              const st = logStates[d.id];
-              const logSupported = Boolean(d.logSupported);
               return (
                 <TableRow key={d.id} className="grid grid-cols-2 p-2 md:table-row md:p-0">
                   <TableCell className="col-start-2 row-start-1 block text-right md:table-cell md:text-left" aria-label={t("index.status")}>
@@ -792,33 +620,6 @@ export function DashboardPage() {
                           </DropdownMenuItem>
                         </DropdownMenuContent>
                       </DropdownMenu>
-                      {logSupported ? (
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className={cn(
-                            st?.enabled && "border-success/50 text-success",
-                          )}
-                          onClick={() => openLogModal(d.id)}
-                        >
-                          <Icon name="FileText" />
-                          {st?.enabled ? t("index.logOn") : t("index.logs")}
-                        </Button>
-                      ) : (
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <span>
-                              <Button variant="outline" size="sm" disabled>
-                                <Icon name="FileText" />
-                                {t("index.logUnsupported")}
-                              </Button>
-                            </span>
-                          </TooltipTrigger>
-                          <TooltipContent>
-                            {t("index.logUnsupportedTitle")}
-                          </TooltipContent>
-                        </Tooltip>
-                      )}
                     </div>
                   </TableCell>
                 </TableRow>
@@ -1117,133 +918,6 @@ export function DashboardPage() {
         </CardContent>
       </Card>
 
-      {/* Client log modal */}
-      <Dialog
-        open={!!logDevice}
-        onOpenChange={(o) => {
-          if (!o) {
-            activeLogDevice.current = "";
-            logRequest.current++;
-            setLogDevice("");
-            setDeleteOpen(false);
-          }
-        }}
-      >
-        <DialogContent aria-describedby={undefined} className="flex max-h-[86dvh] flex-col overflow-y-auto sm:max-w-4xl">
-          <DialogHeader>
-            <DialogTitle className="break-all text-timeline-accent">
-              {t("index.logTitle")} · {logDevice}
-            </DialogTitle>
-          </DialogHeader>
-          <div className="flex flex-wrap items-center gap-2">
-            <Select value={logLevel} onValueChange={setLogLevel} disabled={logBusy || logLoading}>
-              <SelectTrigger aria-label={t("index.logLevel")} className="h-8 w-28 text-xs">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {LOG_LEVELS.map((lv) => (
-                  <SelectItem key={lv} value={lv}>
-                    {lv}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={logBusy || logLoading}
-              onClick={() => updateLogs(true)}
-            >
-              {t("index.logEnable")}
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              className="border-attention/50 text-attention"
-              disabled={logBusy || logLoading}
-              onClick={() => updateLogs(false)}
-            >
-              {t("index.logDisable")}
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={logBusy || logLoading}
-              onClick={() => refreshLogTail(logDevice)}
-            >
-              <Icon name="Refresh" />
-              {t("index.logRefresh")}
-            </Button>
-            <Input
-              type="date"
-              aria-label={t("index.logDate")}
-              value={logDate}
-              onChange={(e) => setLogDate(e.target.value)}
-              className="h-8 w-36 text-xs"
-            />
-            <Button variant="outline" size="sm" onClick={downloadLog} disabled={!logDate}>
-              <Icon name="Download" />
-              {t("index.logDownload")}
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              className="border-destructive/50 text-destructive-text"
-              disabled={logBusy || logLoading}
-              onClick={() => setDeleteOpen(true)}
-            >
-              <Icon name="Trash2" />
-              {t("index.logDelete")}
-            </Button>
-          </div>
-          <div className="break-words text-xs text-muted-foreground">
-            {logState
-              ? t("index.logMeta", {
-                  status: logState.enabled
-                    ? t("index.logStatusOn")
-                    : t("index.logStatusOff"),
-                  size: formatBytes(logState.size),
-                  latest: logState.latest || "-",
-                  supported:
-                    logState.supported === false
-                      ? t("index.logNo")
-                      : t("index.logYes"),
-                })
-              : "—"}
-          </div>
-          {logStatesError && <p role="alert" className="break-words text-sm text-destructive-text">{logStatesError}</p>}
-          {logError && <p role="alert" className="break-words text-sm text-destructive-text">{logError}</p>}
-          {(logLoading || logBusy) && <p role="status" className="text-xs text-muted-foreground">{t("common.loading")}</p>}
-          <div className="min-h-0 overflow-auto" aria-busy={logLoading || logBusy}>
-            <CodeBlock className="min-h-32 p-3 whitespace-pre-wrap break-all select-text sm:min-h-60">
-              {logTail || (!logLoading && !logError ? t("index.logEmpty") : "")}
-            </CodeBlock>
-          </div>
-        </DialogContent>
-      </Dialog>
-
-      {/* Delete logs confirm */}
-      <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>{t("index.logDeleteTitle")}</AlertDialogTitle>
-            <AlertDialogDescription>
-              {t("index.logDeleteDesc", { id: logDevice })}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>{t("common.cancel")}</AlertDialogCancel>
-            <AlertDialogAction
-              disabled={logBusy}
-              onClick={() => {
-                void updateLogs("delete");
-              }}
-            >
-              {t("common.ok")}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
     </div>
   );
 }

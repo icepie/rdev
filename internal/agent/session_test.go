@@ -436,6 +436,28 @@ func TestHistoryToolMessagesTruncatedBeforeFeed(t *testing.T) {
 	}
 }
 
+func TestNativeComputerToolResultIsNotTruncated(t *testing.T) {
+	result := `{"result":"` + strings.Repeat("x", toolOutputMax+128) + `"}`
+	srv, _ := newFakeProvider(t,
+		sseChunk("", "", sseToolCall("c1", "computer", `{"action":"native_tools"}`))+sseDone,
+		sseChunk("done", "")+sseDone,
+	)
+	sess := New(testConfig(srv.URL, []Tool{&bigOutputTool{name: "computer", out: result}}))
+	emit, events := collectEvents()
+	if _, err := sess.Run(context.Background(), "inspect desktop tools", emit); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	ends := eventsOfType(*events, EventToolEnd)
+	if len(ends) != 1 || ends[0].ToolResult != result || !json.Valid([]byte(ends[0].ToolResult)) {
+		t.Fatalf("native tool result was truncated or corrupted: events=%+v", ends)
+	}
+	for _, message := range sess.History() {
+		if message.Role == "tool" && message.Content != result {
+			t.Fatalf("native result in history = %d bytes, want intact %d bytes", len(message.Content), len(result))
+		}
+	}
+}
+
 type bigOutputTool struct {
 	name string
 	out  string

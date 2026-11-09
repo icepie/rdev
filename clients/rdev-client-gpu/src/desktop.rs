@@ -25,6 +25,7 @@ pub fn capabilities(enabled: bool) -> DesktopCapabilities {
             view_only: false,
             input: true,
             clipboard: true,
+            cua: rdev_desktop::websocket::cua_supported(),
             backends: desktop_backends(),
             input_backends: vec!["rdev-desktop".to_string()],
             video_codecs: vec!["h264".to_string()],

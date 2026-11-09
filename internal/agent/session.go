@@ -128,7 +128,11 @@ func (s *Session) RunTurnWithSteering(ctx context.Context, userText string, imag
 			emit(Event{Type: EventToolStart, ToolID: tc.ID, ToolName: tc.Name, ToolArgs: args, Summary: tc.Summary})
 			result, isErr := s.executeTool(ctx, tool, *tc, args)
 			tc.IsError = isErr
-			result = truncateToolOutput(result)
+			result, resultImages := sanitizeNativeToolResult(result)
+			nativeResult := isNativeComputerCall(tc.Name, args) || len(resultImages) > 0 || strings.Contains(result, nativeImagePlaceholder)
+			if !nativeResult {
+				result = truncateToolOutput(result)
+			}
 			if d, ok := tool.(Differ); ok && !isErr {
 				tc.Diff = d.LastDiff()
 			}
@@ -138,7 +142,7 @@ func (s *Session) RunTurnWithSteering(ctx context.Context, userText string, imag
 					emit(Event{Type: EventTodo, ToolResult: items})
 				}
 			}
-			toolMsgs = append(toolMsgs, Message{Role: "tool", ToolCallID: tc.ID, Content: result})
+			toolMsgs = append(toolMsgs, Message{Role: "tool", ToolCallID: tc.ID, Content: result, Images: resultImages})
 		}
 		// Append the assistant message together with all its tool results so
 		// an aborted round never leaves dangling tool_calls in the history.

@@ -20,6 +20,7 @@ import java.util.Locale;
 import android.util.Base64;
 
 import java.util.Map;
+import java.nio.charset.StandardCharsets;
 
 final class RDevGpuTunnel {
     private static final String TAG = "RDevTunnel";
@@ -126,7 +127,7 @@ final class RDevGpuTunnel {
     }
 
     private void clearStreams() {
-        for (Stream stream : streams.values()) stream.stopVideo();
+        for (Stream stream : streams.values()) stream.close();
         streams.clear();
     }
 
@@ -173,7 +174,7 @@ final class RDevGpuTunnel {
             if (stream != null) stream.onData(body);
         } else if (frameType == FRAME_CLOSE) {
             Stream stream = streams.remove(streamId);
-            if (stream != null) stream.stopVideo();
+            if (stream != null) stream.close();
             Log.i(TAG, "stream close " + streamId);
         }
     }
@@ -194,7 +195,8 @@ final class RDevGpuTunnel {
     private void sendClose(long streamId) {
         try { sendFrame(FRAME_CLOSE, streamId, new byte[0]); }
         catch (IOException ignored) {}
-        streams.remove(streamId);
+        Stream stream = streams.remove(streamId);
+        if (stream != null) stream.close();
     }
 
     private long readU64(byte[] data, int off) {
@@ -215,7 +217,11 @@ final class RDevGpuTunnel {
 
     private final class Stream implements AndroidVideoHub.Listener {
         final long id;
-        final ByteArrayOutputStream request = new ByteArrayOutputStream();
+        final ByteArrayOutputStream wsInput = new ByteArrayOutputStream();
+        final ByteArrayOutputStream wsMessage = new ByteArrayOutputStream();
+        int wsMessageOpcode;
+        RDevAutoJs.Run autoJsRun;
+        boolean streamClosed;
         boolean upgraded;
         boolean videoActive;
         boolean waitingForKeyFrame;
@@ -231,9 +237,10 @@ final class RDevGpuTunnel {
 
         void onData(byte[] body) {
             if (!upgraded) {
-                request.write(body, 0, body.length);
-                String req = request.toString();
+                wsInput.write(body, 0, body.length);
+                String req = wsInput.toString();
                 if (!req.contains("\r\n\r\n")) return;
+                wsInput.reset();
                 handleHttpRequest(req);
                 return;
             }
@@ -261,10 +268,70 @@ final class RDevGpuTunnel {
         }
 
         private void handleWebSocketBytes(byte[] body) {
+            if (wsInput.size() + body.length > 400 * 1024) { close(); return; }
+            wsInput.write(body, 0, body.length);
+            byte[] input = wsInput.toByteArray();
+            wsInput.reset();
+            int pos = 0;
+            while (input.length - pos >= 2) {
+                int b0 = input[pos] & 0xff;
+                int b1 = input[pos + 1] & 0xff;
+                boolean fin = (b0 & 0x80) != 0;
+                int opcode = b0 & 0x0f;
+                long length = b1 & 0x7f;
+                int header = 2;
+                if (length == 126) {
+                    if (input.length - pos < 4) break;
+                    length = ((input[pos + 2] & 0xffL) << 8) | (input[pos + 3] & 0xffL);
+                    header = 4;
+                } else if (length == 127) {
+                    if (input.length - pos < 10) break;
+                    length = 0;
+                    for (int i = 0; i < 8; i++) length = (length << 8) | (input[pos + 2 + i] & 0xffL);
+                    if (length < 0) { close(); return; }
+                    header = 10;
+                }
+                boolean masked = (b1 & 0x80) != 0;
+                if (masked) header += 4;
+                if (length > 400 * 1024 || length > Integer.MAX_VALUE) { close(); return; }
+                if (input.length - pos < header + (int) length) break;
+                byte[] payload = new byte[(int) length];
+                int payloadOffset = pos + header;
+                System.arraycopy(input, payloadOffset, payload, 0, payload.length);
+                if (masked) {
+                    int maskOffset = payloadOffset - 4;
+                    for (int i = 0; i < payload.length; i++) payload[i] ^= input[maskOffset + (i & 3)];
+                }
+                pos = payloadOffset + payload.length;
+                if (opcode == 1) {
+                    if (wsMessageOpcode != 0) { close(); return; }
+                    wsMessageOpcode = opcode;
+                    wsMessage.write(payload, 0, payload.length);
+                } else if (opcode == 0 && wsMessageOpcode == 1) {
+                    if (wsMessage.size() + payload.length > 394240) { close(); return; }
+                    wsMessage.write(payload, 0, payload.length);
+                } else if (opcode == 8) {
+                    close();
+                    return;
+                } else continue;
+                if (wsMessage.size() > 394240) { close(); return; }
+                if (fin && wsMessageOpcode == 1) {
+                    dispatchWebSocketText(new String(wsMessage.toByteArray(), StandardCharsets.UTF_8));
+                    wsMessage.reset();
+                    wsMessageOpcode = 0;
+                }
+            }
+            if (pos < input.length) wsInput.write(input, pos, input.length - pos);
+        }
+
+        private void dispatchWebSocketText(String text) {
             try {
-                RDevWsFrame frame = RDevWsFrame.decode(body);
-                if (frame == null || frame.opcode != 1) return;
-                String text = new String(frame.payload, "UTF-8");
+                Object message = new org.json.JSONTokener(text).nextValue();
+                JSONObject autoJs = message instanceof JSONObject ? ((JSONObject) message).optJSONObject("AutoJs") : null;
+                if (autoJs != null) {
+                    handleAutoJs(autoJs);
+                    return;
+                }
                 Log.i(TAG, "desktop ws " + text);
                 if (text.equals("\"GetScreenshot\"")) {
                     AndroidVideoHub.screenshot((png, error) -> {
@@ -299,6 +366,79 @@ final class RDevGpuTunnel {
                 Log.w(TAG, "desktop ws parse failed", e);
             }
         }
+
+        private void handleAutoJs(JSONObject request) throws Exception {
+            String action = request.optString("action", "");
+            if ("status".equals(action)) {
+                sendWsText(id, new JSONObject().put("AutoJsResult", RDevAutoJs.status()).toString());
+                return;
+            }
+            if (!"run".equals(action)) { sendAutoJsError("AutoJs action must be status or run"); return; }
+            Object scriptValue = request.opt("script");
+            if (!(scriptValue instanceof String)) { sendAutoJsError("script must be a string"); return; }
+            String script = (String) scriptValue;
+            if (script.getBytes(StandardCharsets.UTF_8).length > RDevAutoJs.MAX_SCRIPT_BYTES) {
+                sendAutoJsError("Auto.js script exceeds 65536 UTF-8 bytes");
+                return;
+            }
+            int timeoutMs = RDevAutoJs.MAX_TIMEOUT_MS;
+            if (request.has("timeoutMs")) {
+                Object timeoutValue = request.opt("timeoutMs");
+                if (!(timeoutValue instanceof Number)) { sendAutoJsError("timeoutMs must be an integer"); return; }
+                double numeric = ((Number) timeoutValue).doubleValue();
+                if (numeric != Math.rint(numeric) || numeric > Integer.MAX_VALUE || numeric < Integer.MIN_VALUE) {
+                    sendAutoJsError("timeoutMs must be an integer"); return;
+                }
+                timeoutMs = (int) numeric;
+            }
+            if (timeoutMs <= 0) { sendAutoJsError("timeoutMs must be a positive integer"); return; }
+            timeoutMs = Math.min(timeoutMs, RDevAutoJs.MAX_TIMEOUT_MS);
+            if (autoJsRun != null) autoJsRun.cancel();
+            final RDevAutoJs.Run[] runRef = new RDevAutoJs.Run[1];
+            RDevAutoJs.Run run = RDevAutoJs.run(script, timeoutMs, result -> {
+                synchronized (Stream.this) {
+                    if (streamClosed || autoJsRun != runRef[0]) return;
+                    autoJsRun = null;
+                }
+                try {
+                    JSONObject envelope = new JSONObject().put("AutoJsResult", result);
+                    String encoded = envelope.toString();
+                    if (encoded.getBytes(StandardCharsets.UTF_8).length > RDevAutoJs.MAX_RESPONSE_BYTES) {
+                        result.put("truncated", true);
+                        result.put("logs", new org.json.JSONArray());
+                        result.put("value", RDevAutoJs.bounded(result.optString("value", ""), 4096));
+                        encoded = envelope.toString();
+                    }
+                    sendWsText(id, encoded);
+                } catch (Exception e) { Log.w(TAG, "Auto.js response failed", e); }
+            });
+            runRef[0] = run;
+            synchronized (this) {
+                if (streamClosed) { run.cancel(); return; }
+                autoJsRun = run;
+            }
+            run.start();
+        }
+
+        private void sendAutoJsError(String message) {
+            try { sendWsText(id, new JSONObject().put("AutoJsResult", new JSONObject()
+                    .put("status", "error").put("value", "").put("logs", new org.json.JSONArray())
+                    .put("error", RDevAutoJs.bounded(message, 8192))).toString()); }
+            catch (Exception ignored) { }
+        }
+
+        void close() {
+            RDevAutoJs.Run run;
+            synchronized (this) {
+                if (streamClosed) return;
+                streamClosed = true;
+                run = autoJsRun;
+                autoJsRun = null;
+            }
+            if (run != null) run.cancel();
+            stopVideo();
+        }
+
 
         private void updateConfig(String text) {
             try {
@@ -472,7 +612,8 @@ final class RDevGpuTunnel {
 
     private void sendInitialCapabilities(long streamId) {
         try {
-            sendWsText(streamId, new JSONObject().put("AgentCapabilities", new JSONObject().put("version", 1)).toString());
+            JSONObject capabilities = new JSONObject().put("version", 1).put("autojs", true);
+            sendWsText(streamId, new JSONObject().put("AgentCapabilities", capabilities).toString());
             sendWsText(streamId, encoderCapabilities());
             sendWsText(streamId, inputCapabilities());
             sendWsText(streamId, clipboardCapabilities());

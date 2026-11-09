@@ -177,8 +177,8 @@ public class MainActivity extends Activity {
         quick.addView(stop, topMarginParams(dp(10)));
         root.addView(quick, sectionParams());
 
-        LinearLayout permissions = card("权限与输入", "远程触控、键盘和公开存储访问需要系统授权。", colors);
-        Button accessibility = button("无障碍触控权限", false, colors);
+        LinearLayout permissions = card("权限与输入", "远程触控启用 RDev Remote Input；脚本控制启用 RDev AutoJs Scripts。两者都在本 APK 内，无需另装 AutoJs。", colors);
+        Button accessibility = button("触控 / AutoJs 无障碍权限", false, colors);
         accessibility.setOnClickListener(v -> startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)));
         permissions.addView(accessibility, matchWrap());
 
@@ -409,6 +409,7 @@ public class MainActivity extends Activity {
     private String statusText(String message) {
         return message
             + "\n\n触控控制：" + (RDevAccessibilityService.isActive() ? "已开启" : "未开启，需启用 RDev Remote Input")
+            + "\nAutoJs 6.8.0：" + (new org.autojs.autojs.core.accessibility.AccessibilityTool(this).isOperational() ? "脚本控件操作已就绪" : "引擎已内置；控件操作需启用 RDev AutoJs Scripts")
             + "\n键盘输入：" + (RDevInputMethodService.isActive() ? "RDev HID Keyboard 已连接" : "可选，启用后文本和特殊按键更稳定")
             + "\n文件访问：" + fileAccessStatus()
             + "\n后台保活：" + batteryStatus();

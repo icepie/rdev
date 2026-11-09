@@ -1,3 +1,49 @@
-plugins {
-    id 'com.android.application' version '9.3.0' apply false
+plugins { id 'base' }
+
+def runtime = file('../../third_party/autojs6')
+def windows = System.getProperty('os.name').toLowerCase(Locale.ROOT).contains('windows')
+def runtimeWrapper = new File(runtime, windows ? 'gradlew.bat' : 'gradlew')
+
+tasks.register('assembleDebug', Exec) {
+    group = 'build'
+    description = 'Build the single RDev APK with the pinned AutoJs6 runtime and OpenCV.'
+    workingDir runtime
+    commandLine((windows ? ['cmd', '/c'] : ['sh']) + [
+        runtimeWrapper.absolutePath, '--no-daemon',
+        '-I', file('autojs.init.gradle').absolutePath,
+        "-Drdev.androidDir=${projectDir.absolutePath}",
+        '-Pautojs.leakcanary.enabled=false',
+        ':app:assembleInrtDebug', ':app:verifyInrtDebugNativePageAlignment'
+    ])
+    doFirst {
+        if (!runtimeWrapper.isFile()) {
+            throw new GradleException('Initialize runtime sources: git submodule update --init --recursive')
+        }
+    }
+    doLast {
+        def apks = fileTree(new File(runtime, 'app/build/outputs/apk/inrt/debug')) { include '*.apk' }.files
+        if (apks.size() != 1) throw new GradleException("Expected one universal RDev APK, found ${apks}")
+        copy {
+            from apks.first()
+            into 'app/build/outputs/apk/debug'
+            rename { 'app-debug.apk' }
+        }
+    }
 }
+
+tasks.named('assemble') { dependsOn 'assembleDebug' }
+
+tasks.register('test', Exec) {
+    group = 'verification'
+    description = 'Run the existing RDev Android regression tests against the embedded runtime.'
+    workingDir runtime
+    commandLine((windows ? ['cmd', '/c'] : ['sh']) + [
+        runtimeWrapper.absolutePath, '--no-daemon',
+        '-I', file('autojs.init.gradle').absolutePath,
+        "-Drdev.androidDir=${projectDir.absolutePath}",
+        '-Pautojs.leakcanary.enabled=false',
+        ':app:testInrtDebugUnitTest', '--tests', 'dev.icepie.rdev.*'
+    ])
+}
+
+tasks.named('check') { dependsOn 'test' }

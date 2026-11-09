@@ -1,30 +1,124 @@
-plugins { id 'com.android.application' }
+import groovy.json.JsonSlurper
+import java.security.MessageDigest
+import javax.xml.parsers.DocumentBuilderFactory
+import javax.xml.transform.TransformerFactory
+import javax.xml.transform.dom.DOMSource
+import javax.xml.transform.stream.StreamResult
 
-android {
-    namespace 'dev.icepie.rdev'
-    compileSdk 37
+// Applied to AutoJs6's :app by autojs.init.gradle. The upstream checkout stays unmodified.
+def rdev = rdevAndroidDir
+def openCv = new File(rdev, '../../third_party/autojs6-opencv').canonicalFile
+def generated = layout.buildDirectory.dir('generated/rdev')
+def sourceManifest = file('src/main/AndroidManifest.xml')
+def nativeArchive = new File(openCv, 'libs/opencv-native-4.8.0.aar')
+def provenanceFile = new File(openCv, 'libs/opencv-native-4.8.0.provenance.json')
 
-    defaultConfig {
-        applicationId 'dev.icepie.rdev'
-        minSdk 21
-        targetSdk 33
-        versionCode 128
-        versionName '0.2.128'
-    }
-
-    packaging {
-        resources {
-            excludes += ['META-INF/INDEX.LIST', 'META-INF/io.netty.versions.properties']
+def prepareRuntime = tasks.register('prepareRdevRuntime') {
+    inputs.files(sourceManifest, nativeArchive, provenanceFile, rootProject.file('LICENSE'))
+    inputs.dir(new File(openCv, 'app/src/main/assets/licenses'))
+    inputs.file(new File(openCv, 'THIRD_PARTY_NOTICES.md'))
+    outputs.dir(generated)
+    doLast {
+        def output = generated.get().asFile
+        output.mkdirs()
+        def androidNS = 'http://schemas.android.com/apk/res/android'
+        def factory = DocumentBuilderFactory.newInstance()
+        factory.namespaceAware = true
+        def document = factory.newDocumentBuilder().parse(sourceManifest)
+        def application = document.getElementsByTagName('application').item(0)
+        // RDev's authenticated tunnel is the only remote scripting entry. Do not inherit
+        // AutoJs6's exported run/import/Tasker activities, aliases or plugin endpoints.
+        def components = application.childNodes
+        for (int i = components.length - 1; i >= 0; i--) {
+            def node = components.item(i)
+            if (node.nodeType != org.w3c.dom.Node.ELEMENT_NODE) continue
+            if (node.nodeName == 'activity-alias') {
+                application.removeChild(node)
+                continue
+            }
+            if (node.nodeName in ['activity', 'service', 'receiver', 'provider']) {
+                def permission = node.getAttributeNS(androidNS, 'permission')
+                def systemIpc = (node.nodeName == 'service' && permission.startsWith('android.permission.BIND_')) ||
+                        (node.nodeName == 'provider' && permission == 'android.permission.INTERACT_ACROSS_USERS_FULL')
+                node.setAttributeNS(androidNS, 'android:exported', systemIpc ? 'true' : 'false')
+            }
+            if (node.getAttributeNS(androidNS, 'name') == 'org.autojs.autojs.core.accessibility.AccessibilityServiceUsher') {
+                node.setAttributeNS(androidNS, 'android:label', '@string/autojs_accessibility_service_label')
+            }
         }
-    }
+        TransformerFactory.newInstance().newTransformer().transform(
+            new DOMSource(document), new StreamResult(new File(output, 'AndroidManifest.xml')))
 
-    testOptions {
-        unitTests.returnDefaultValues = true
+        def provenance = new JsonSlurper().parse(provenanceFile)
+        def sha256 = { File input ->
+            def digest = MessageDigest.getInstance('SHA-256')
+            input.withInputStream { stream ->
+                byte[] buffer = new byte[65536]
+                int count
+                while ((count = stream.read(buffer)) != -1) digest.update(buffer, 0, count)
+            }
+            digest.digest().encodeHex().toString()
+        }
+        if (sha256(nativeArchive) != provenance.artifact.sha256) {
+            throw new GradleException('OpenCV archive does not match its pinned provenance')
+        }
+        copy {
+            from zipTree(nativeArchive)
+            include 'jni/**/libopencv_java4.so'
+            into output
+        }
+        def record = ['schema=1', 'library=libopencv_java4.so',
+                      'packageName=io.github.supermonster003.autojs6.plugin.opencv', 'versionName=4.8.0']
+        provenance.artifact.abis.toSorted().each { abi, metadata ->
+            def library = new File(output, "jni/${abi}/libopencv_java4.so")
+            if (sha256(library) != metadata.sha256) throw new GradleException("OpenCV hash mismatch: ${abi}")
+            record.add("sha256.${abi}=${metadata.sha256}")
+        }
+        def assets = new File(output, 'assets')
+        assets.mkdirs()
+        new File(assets, 'opencv-runtime.properties').setText(record.join('\n') + '\n', 'UTF-8')
+        copy { from rootProject.file('LICENSE'); into new File(assets, 'licenses/autojs6') }
+        copy { from new File(openCv, 'app/src/main/assets/licenses'); into new File(assets, 'licenses/opencv') }
+        copy { from new File(openCv, 'THIRD_PARTY_NOTICES.md'); into new File(assets, 'licenses/opencv') }
+        new File(assets, 'licenses/autojs6/SOURCE.txt').setText(
+            'AutoJs6 6.8.0, MPL-2.0\nhttps://github.com/SuperMonster003/AutoJs6/tree/b7c88e117d70176058ae0c035194a7c188ffb8c2\n' +
+            'RDev integration and reproducible source dependencies: https://github.com/icepie/rdev/tree/main/clients/rdev-android\n' +
+            'OpenCV source and native build provenance: https://github.com/SuperMonster003/AutoJs6-Plugin-OpenCV\n', 'UTF-8')
     }
 }
 
 dependencies {
     implementation 'io.jpower.kcp:kcp-netty:1.5.2'
-    implementation 'com.squareup.okhttp3:okhttp:5.5.0'
-    testImplementation 'junit:junit:4.13.2'
 }
+
+androidComponents {
+    finalizeDsl { android ->
+        android.defaultConfig.applicationId = 'dev.icepie.rdev'
+        android.defaultConfig.minSdk = 24
+        def inrt = android.productFlavors.getByName('inrt')
+        inrt.applicationId = 'dev.icepie.rdev'
+        inrt.applicationIdSuffix = ''
+        inrt.minSdk = 24
+        inrt.targetSdk = 33
+        inrt.versionCode = 130
+        inrt.versionName = '0.2.130'
+        inrt.manifestPlaceholders.putAll([
+            appName: '@string/app_name', authorities: 'dev.icepie.rdev.fileprovider',
+            intentCategory: 'android.intent.category.DEFAULT', intentCategoryInrt: 'android.intent.category.DEFAULT'
+        ])
+        inrt.buildConfigField 'String', 'FILE_PROVIDER_AUTHORITY', '"dev.icepie.rdev.fileprovider"'
+        android.splits.abi.enable = false
+        android.sourceSets.getByName('main').manifest.srcFile(new File(generated.get().asFile, 'AndroidManifest.xml'))
+        def source = android.sourceSets.getByName('inrt')
+        source.manifest.srcFile(new File(rdev, 'app/src/main/AndroidManifest.xml'))
+        source.java.srcDir(new File(rdev, 'app/src/main/java'))
+        source.res.srcDir(new File(rdev, 'app/src/main/res'))
+        source.assets.srcDir(new File(generated.get().asFile, 'assets'))
+        source.jniLibs.srcDir(new File(generated.get().asFile, 'jni'))
+        android.sourceSets.getByName('test').java.srcDir(new File(rdev, 'app/src/test/java'))
+        android.packaging.jniLibs.keepDebugSymbols.add('**/libopencv_java4.so')
+        android.packaging.resources.excludes.addAll(['META-INF/INDEX.LIST', 'META-INF/io.netty.versions.properties'])
+    }
+}
+
+tasks.matching { it.name == 'preBuild' }.configureEach { dependsOn prepareRuntime }

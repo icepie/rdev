@@ -1,0 +1,6 @@
+[submodule "third_party/autojs6"]
+	path = third_party/autojs6
+	url = https://github.com/SuperMonster003/AutoJs6.git
+[submodule "third_party/autojs6-opencv"]
+	path = third_party/autojs6-opencv
+	url = https://github.com/SuperMonster003/AutoJs6-Plugin-OpenCV.git

@@ -5,17 +5,17 @@ This design is for a native Android controlled endpoint. It does not depend on T
 ## Goals
 
 - Support broad Android compatibility while keeping the high-performance path first.
-- Start with Android 5.0 / API 21 because `MediaProjection` is introduced there.
-- Use system APIs and Java/Kotlin only for the first implementation; avoid Compose/AndroidX-heavy dependencies.
+- Require Android 7.0 / API 24 for the embedded AutoJs6 runtime and bundled OpenCV.
+- Keep RDev's native Android UI, capture and input paths; compile the genuine AutoJs6 runtime into the same APK.
 - Reuse RDev server authentication, device registration, browser desktop UI, and `gpu-desktop-tunnel` routing where possible.
 
 ## Compatibility Targets
 
 | Area | Target |
 | --- | --- |
-| Minimum OS | Android 5.0 / API 21 |
+| Minimum OS | Android 7.0 / API 24 |
 | Preferred OS | Android 8+ for better `MediaCodec` stability |
-| CPU ABI | APK is Java-only first; no ABI split required |
+| CPU ABI | Universal APK: arm64-v8a, armeabi-v7a, x86, x86_64; includes native OpenCV |
 | Capture | `MediaProjection` + `VirtualDisplay` |
 | Encode | `MediaCodec` H.264 baseline/main; optional HEVC on supported devices |
 | Input | `AccessibilityService` |
@@ -40,7 +40,8 @@ Android APK
   ├─ AndroidGpuDesktopService
   ├─ ScreenCapturePipeline
   ├─ VideoEncoderPipeline
-  └─ RDevAccessibilityService
+  ├─ RDevAccessibilityService
+  └─ AutoJs6 runtime + RDevAutoJs + OpenCV
 ```
 
 ## Components
@@ -182,23 +183,52 @@ Use one of these options:
 2. User opens APK and enters server URL/password/device ID.
 3. APK asks for notification permission on Android 13+.
 4. APK asks for screen capture permission with `MediaProjectionManager`.
-5. APK guides user to enable Accessibility.
+5. APK guides user to enable `RDev Remote Input` for desktop controls and `RDev AutoJs Scripts` for script-driven accessibility. Both services are included in this APK.
 6. User taps Start; foreground service connects and registers.
+
+## Embedded AutoJs6
+
+RDev Android 0.2.129 embeds AutoJs6 6.8.0 from the pinned `third_party/autojs6` submodule. It preserves upstream application initialization, Rhino, script modules and the AutoJs accessibility service. No separate AutoJs application is required. OpenCV 4.8.0 is bundled from `third_party/autojs6-opencv`, verified against its native provenance hashes, and checked for 16 KiB page alignment during the build.
+
+The Agent `autojs` tool runs on the selected Android device through the authenticated GPU tunnel:
+
+```json
+{"action":"status"}
+```
+
+```json
+{"action":"run","script":"auto(); JSON.stringify({package: currentPackage(), buttons: className('android.widget.Button').find().size()});","timeoutMs":5000}
+```
+
+- In a server conversation, add an explicit `device` selected with `list_devices`. The tool shares desktop ownership with `computer`; manual takeover or closing the execution stream cancels the running engine.
+- `status` reports the engine version and AutoJs accessibility connection. Enable **RDev AutoJs Scripts** for selectors, clicks and gestures. `requestScreenCapture()` still requires Android's system consent; it is not silently granted.
+- `run` accepts background Rhino scripts, up to 65,536 UTF-8 bytes. UI-mode and external-engine scripts are rejected. Optional upstream plugins are not all bundled; this integration includes OpenCV, not Node/Python/OCR plugin runtimes.
+- The timeout defaults to 25 seconds and cannot exceed 25 seconds. Results include `status`, the last expression converted to text, `logs`, and any `error`. Use `JSON.stringify` for structured values. Text/error fields are bounded to 8 KiB, logs to 48 KiB/256 lines, and the response to 128 KiB; `truncated` indicates discarded output.
+- Upstream external script launch/import activities are not exported. Required Android system-permission-protected IPC remains available. AutoJs6's MPL-2.0 license, source links and OpenCV notices are packaged under `assets/licenses/`.
+- Desktop commands such as `"GetCapturableList"`, `"ResumeVideo"`, `"PauseVideo"` and `"GetScreenshot"` are JSON strings; AutoJs requests are JSON objects. Decode either JSON value type before dispatching. Android 0.2.130 fixes the 0.2.129 regression that rejected string commands before video subscription, leaving a connected viewer at zero frames.
+
+Verified on an Android 15 x86_64 emulator: real Rhino execution and console logs, file round-trips, accessibility queries and clicks, system-consented 1080×2400 capture, OpenCV resizing/matrix operations, permission errors, exceptions, output truncation, timeout, and cancellation preventing later file writes. Android 0.2.130 was also verified on a physical arm64 Samsung SM-G9650: the production browser displayed the 464×960 screen stream, and the same desktop tunnel answered both the string screen-list command and the AutoJs status object. The remaining ABIs are packaged and alignment-checked, not device-tested.
 
 ## ADB Development Flow
 
+Use JDK 21 and an Android SDK with accepted licenses. The pinned upstream wrapper supplies Gradle; required SDK/NDK components are resolved by the Android build. The overlay keeps the upstream checkout unmodified and uses its pinned shared dependencies.
+
 ```sh
+git submodule update --init --recursive
+export ANDROID_HOME="${ANDROID_HOME:-$HOME/Android/Sdk}"
+sh third_party/autojs6/gradlew -p clients/rdev-android --no-daemon assembleDebug
 adb devices
-./gradlew -p clients/rdev-android assembleDebug
 adb install -r clients/rdev-android/app/build/outputs/apk/debug/app-debug.apk
-adb shell am start -n cn.singzer.rdev.android/.MainActivity
-adb logcat -s RDevAndroid RDevAgent RDevCapture RDevEncoder RDevInput
+adb shell am start -n dev.icepie.rdev/.MainActivity
+adb logcat -s RDevAndroid RDevAgent RDevCapture RDevEncoder RDevInput RDevAutoJs
 ```
 
-Enable Accessibility on a test device if the ROM allows it:
+Run the existing RDev Android unit tests with `sh third_party/autojs6/gradlew -p clients/rdev-android --no-daemon test`; the root `check` task also runs them against the embedded runtime.
+
+On an isolated test device, enable both accessibility services if the ROM allows it. This command replaces the enabled-service list; do not use it unchanged on a personal device:
 
 ```sh
-adb shell settings put secure enabled_accessibility_services cn.singzer.rdev.android/.RDevAccessibilityService
+adb shell settings put secure enabled_accessibility_services dev.icepie.rdev/org.autojs.autojs.core.accessibility.AccessibilityServiceUsher:dev.icepie.rdev/dev.icepie.rdev.RDevAccessibilityService
 adb shell settings put secure accessibility_enabled 1
 ```
 

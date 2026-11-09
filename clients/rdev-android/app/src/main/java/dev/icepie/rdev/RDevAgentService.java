@@ -58,7 +58,6 @@ public class RDevAgentService extends Service {
     private final Map<String, Socket> forwards = new HashMap<>();
     private int captureStopGeneration;
     private final SecureRandom reconnectRandom = new SecureRandom();
-    private final RDevLogCollector logCollector = new RDevLogCollector();
 
     @Override public void onCreate() {
         super.onCreate();
@@ -297,10 +296,8 @@ public class RDevAgentService extends Service {
                 .put("clientVersion", "android-dev")
                 .put("instanceId", instanceId)
                 .put("password", prefs.getString("password", ""))
-                .put("desktop", desktop)
-                .put("logSupported", true);
+                .put("desktop", desktop);
             client.sendText(msg.toString());
-            logCollector.i(TAG, "register sent id=" + prefs.getString("id", "android"));
             Log.i(TAG, "register sent id=" + prefs.getString("id", "android"));
         } catch (Exception e) {
             Log.w(TAG, "register send failed", e);
@@ -313,12 +310,8 @@ public class RDevAgentService extends Service {
             String type = msg.optString("type", "");
             if ("register".equals(type)) {
                 String registeredId = msg.optString("clientId", getSharedPreferences("rdev", MODE_PRIVATE).getString("id", "android"));
-                logCollector.i(TAG, "registered as " + registeredId);
                 Log.i(TAG, "registered as " + registeredId);
                 startTunnel(registeredId);
-            } else if ("log_config".equals(type)) {
-                logCollector.attach(this);
-                logCollector.configure(msg);
             } else if ("desktop_start".equals(type)) {
                 sendDesktopReady(msg.optString("sessionId", ""));
             } else if ("new_session".equals(type)) {
@@ -357,11 +350,9 @@ public class RDevAgentService extends Service {
             } else if ("file_transfer_cancel".equals(type)) {
                 if (fileManager != null) fileManager.cancel(msg.optString("taskId", ""));
             } else {
-                logCollector.i(TAG, "message type=" + type);
                 Log.d(TAG, "message type=" + type);
             }
         } catch (Exception e) {
-            logCollector.w(TAG, "invalid websocket text", e);
             Log.w(TAG, "invalid websocket text: " + text, e);
         }
     }
@@ -388,7 +379,6 @@ public class RDevAgentService extends Service {
         try {
             client.sendText(msg.toString());
         } catch (IOException e) {
-            logCollector.w(TAG, "send text failed", e);
             Log.w(TAG, "send text failed", e);
         }
     }

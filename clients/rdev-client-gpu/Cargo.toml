@@ -12,6 +12,7 @@ embedded-rdev-desktop = ["dep:rdev-desktop"]
 embedded-rdev-desktop-vaapi = ["embedded-rdev-desktop", "rdev-desktop/va-static"]
 embedded-rdev-desktop-wayland = ["embedded-rdev-desktop-vaapi", "rdev-desktop/pipewire"]
 embedded-rdev-desktop-hw = ["embedded-rdev-desktop-vaapi", "rdev-desktop/nvenc"]
+cua-native = ["embedded-rdev-desktop", "rdev-desktop/cua-native"]
 
 [dependencies]
 # Keep regular builds on current crates; the Win7 package applies PE import

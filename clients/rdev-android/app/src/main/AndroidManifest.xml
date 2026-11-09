@@ -1,4 +1,5 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
@@ -12,12 +13,12 @@
 
     <application
         android:allowBackup="false"
-        android:label="@string/app_name"
+        android:label="RDev Android"
         android:requestLegacyExternalStorage="true"
         android:supportsRtl="true"
-        android:theme="@style/AppTheme"
-        android:usesCleartextTraffic="true">
-        <activity android:name=".MainActivity" android:exported="true" android:launchMode="singleTop">
+        android:usesCleartextTraffic="true"
+        tools:replace="android:label">
+        <activity android:name="dev.icepie.rdev.MainActivity" android:exported="true" android:launchMode="singleTop" android:theme="@style/RDevTheme">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
@@ -31,13 +32,13 @@
         </activity>
 
         <service
-            android:name=".RDevAgentService"
+            android:name="dev.icepie.rdev.RDevAgentService"
             android:enabled="true"
             android:exported="false"
             android:foregroundServiceType="mediaProjection" />
 
         <service
-            android:name=".RDevAccessibilityService"
+            android:name="dev.icepie.rdev.RDevAccessibilityService"
             android:enabled="true"
             android:exported="true"
             android:label="@string/accessibility_service_label"
@@ -51,7 +52,7 @@
         </service>
 
         <service
-            android:name=".RDevInputMethodService"
+            android:name="dev.icepie.rdev.RDevInputMethodService"
             android:enabled="true"
             android:exported="true"
             android:label="@string/ime_service_label"

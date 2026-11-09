@@ -83,7 +83,7 @@ jobs:
             linux_distro: debian13
             linux_image: debian:13
             builder_suffix: debian13-amd64
-            linux_features: embedded-rdev-desktop-wayland
+            linux_features: embedded-rdev-desktop-wayland,cua-native
             enable_vaapi: y
             arch: amd64
           - name: linux-amd64-debian12
@@ -95,7 +95,7 @@ jobs:
             linux_distro: debian12
             linux_image: debian:12
             builder_suffix: debian12-amd64
-            linux_features: embedded-rdev-desktop
+            linux_features: embedded-rdev-desktop,cua-native
             enable_vaapi: n
             arch: amd64
           - name: linux-amd64-debian11
@@ -107,7 +107,7 @@ jobs:
             linux_distro: debian11
             linux_image: debian:11
             builder_suffix: debian11-amd64
-            linux_features: embedded-rdev-desktop
+            linux_features: embedded-rdev-desktop,cua-native
             enable_vaapi: n
             arch: amd64
           - name: linux-amd64-centos7
@@ -143,7 +143,7 @@ jobs:
             linux_distro: debian13
             linux_image: debian:13
             builder_suffix: debian13-arm64
-            linux_features: embedded-rdev-desktop-wayland
+            linux_features: embedded-rdev-desktop-wayland,cua-native
             enable_vaapi: y
             arch: arm64
           - name: linux-arm64-debian12
@@ -155,7 +155,7 @@ jobs:
             linux_distro: debian12
             linux_image: debian:12
             builder_suffix: debian12-arm64
-            linux_features: embedded-rdev-desktop
+            linux_features: embedded-rdev-desktop,cua-native
             enable_vaapi: n
             arch: arm64
           - name: linux-arm64-debian11
@@ -167,7 +167,7 @@ jobs:
             linux_distro: debian11
             linux_image: debian:11
             builder_suffix: debian11-arm64
-            linux_features: embedded-rdev-desktop
+            linux_features: embedded-rdev-desktop,cua-native
             enable_vaapi: n
             arch: arm64
           - name: linux-arm64-centos8
@@ -188,12 +188,14 @@ jobs:
             artifact: rdev-client-gpu.exe
             asset: rdev-client-gpu-windows-amd64
             llvm_mingw: msvcrt
+            desktop_features: embedded-rdev-desktop,cua-native
           - name: windows-arm64
             os: ubuntu-latest
             target: aarch64-pc-windows-gnullvm
             artifact: rdev-client-gpu.exe
             asset: rdev-client-gpu-windows-arm64
             llvm_mingw: ucrt
+            desktop_features: embedded-rdev-desktop,cua-native
           - name: windows-win7-amd64
             os: ubuntu-latest
             target: x86_64-pc-windows-gnullvm
@@ -207,12 +209,14 @@ jobs:
             artifact: rdev-client-gpu
             asset: rdev-client-gpu-darwin-amd64
             deployment_target: '10.13'
+            desktop_features: embedded-rdev-desktop,cua-native
           - name: darwin-arm64
             os: macos-15
             target: aarch64-apple-darwin
             artifact: rdev-client-gpu
             asset: rdev-client-gpu-darwin-arm64
             deployment_target: '11.0'
+            desktop_features: embedded-rdev-desktop,cua-native
           - name: android-arm64
             os: ubuntu-latest
             target: aarch64-linux-android
@@ -431,7 +435,7 @@ jobs:
         env:
           MACOSX_DEPLOYMENT_TARGET: ${{ matrix.deployment_target }}
           RDEV_VERSION: ${{ github.ref_name }}
-        run: cargo build --release --features embedded-rdev-desktop --target ${{ matrix.target }}
+        run: cargo build --release --features '${{ matrix.desktop_features || 'embedded-rdev-desktop' }}' --target ${{ matrix.target }}
 
       - name: Stage artifact
         shell: bash

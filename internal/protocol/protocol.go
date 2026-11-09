@@ -60,10 +60,6 @@ const (
 	// GPU desktop tunnel over shared TCP/KCP transport.
 	MsgGPUDesktopTunnel MessageType = "gpu_desktop_tunnel"
 
-	// Client log collection / telemetry.
-	MsgLogConfig MessageType = "log_config" // S->C: dynamic client log upload config
-	MsgLogBatch  MessageType = "log_batch"  // C->S: client log entries batch
-
 	// Legacy text-frame data types (kept for reference, use binary frames instead)
 	MsgData       MessageType = "data"
 	MsgStderrData MessageType = "stderr"
@@ -207,15 +203,6 @@ type Message struct {
 	Text            string          `json:"text,omitempty"`
 	ClipboardItems  []ClipboardItem `json:"clipboardItems,omitempty"`
 
-	// Client log collection
-	LogSupported    bool       `json:"logSupported,omitempty"`
-	LogEnabled      bool       `json:"logEnabled,omitempty"`
-	LogLevel        string     `json:"logLevel,omitempty"`
-	SampleRate      float64    `json:"sampleRate,omitempty"`
-	MaxLineBytes    int        `json:"maxLineBytes,omitempty"`
-	FlushIntervalMs int        `json:"flushIntervalMs,omitempty"`
-	Logs            []LogEntry `json:"logs,omitempty"`
-
 	// Legacy fields (text frames)
 	Data   string `json:"data,omitempty"`
 	Stderr string `json:"stderr,omitempty"`
@@ -225,16 +212,6 @@ type Message struct {
 type ClipboardItem struct {
 	MIME string `json:"mime"`
 	Data string `json:"data"`
-}
-
-// LogEntry is one client-side log event uploaded to the server.
-type LogEntry struct {
-	Timestamp string            `json:"ts,omitempty"`
-	Level     string            `json:"level,omitempty"`
-	Target    string            `json:"target,omitempty"`
-	Module    string            `json:"module,omitempty"`
-	Message   string            `json:"msg,omitempty"`
-	Fields    map[string]string `json:"fields,omitempty"`
 }
 
 // DesktopCapabilities describes remote desktop support reported by a device.

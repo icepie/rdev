@@ -24,15 +24,21 @@ import (
 
 type gpuAgentFixture struct {
 	gws.BuiltinEventHandler
-	connections atomic.Int32
-	configs     atomic.Int32
-	snapshots   atomic.Int32
-	inputs      chan string
+	connections    atomic.Int32
+	configs        atomic.Int32
+	snapshots      atomic.Int32
+	inputs         chan string
+	cua            bool
+	nativeResult   json.RawMessage
+	nativeBlock    bool
+	nativeRequests chan json.RawMessage
+	requests       atomic.Int32
 }
 
 func (h *gpuAgentFixture) OnOpen(c *gws.Conn) {
 	h.connections.Add(1)
-	_ = c.WriteMessage(gws.OpcodeText, []byte(`{"AgentCapabilities":{"version":1}}`))
+	caps, _ := json.Marshal(map[string]any{"AgentCapabilities": map[string]any{"version": 1, "cua": h.cua}})
+	_ = c.WriteMessage(gws.OpcodeText, caps)
 }
 func (h *gpuAgentFixture) OnClose(c *gws.Conn, _ error) {
 	if value, ok := c.Session().Load("cancel"); ok {
@@ -41,6 +47,7 @@ func (h *gpuAgentFixture) OnClose(c *gws.Conn, _ error) {
 }
 func (h *gpuAgentFixture) OnMessage(c *gws.Conn, m *gws.Message) {
 	defer m.Close()
+	h.requests.Add(1)
 	var name string
 	if json.Unmarshal(m.Bytes(), &name) == nil {
 		if name == "GetScreenshot" {
@@ -57,6 +64,21 @@ func (h *gpuAgentFixture) OnMessage(c *gws.Conn, m *gws.Message) {
 	}
 	var fields map[string]json.RawMessage
 	_ = json.Unmarshal(m.Bytes(), &fields)
+	if request := fields["Cua"]; request != nil {
+		if h.nativeRequests != nil {
+			h.nativeRequests <- bytes.Clone(request)
+		}
+		var action struct {
+			Action string `json:"action"`
+		}
+		_ = json.Unmarshal(request, &action)
+		if action.Action == "tools" {
+			_ = c.WriteMessage(gws.OpcodeText, []byte(`{"CuaResult":{"result":{"tools":[{"name":"list_apps","inputSchema":{"type":"object"}},{"name":"click","inputSchema":{"type":"object","required":["element_index"]}},{"name":"shell","inputSchema":{"type":"object"}}]}}}`))
+		} else if !h.nativeBlock {
+			_ = c.WriteMessage(gws.OpcodeText, h.nativeResult)
+		}
+		return
+	}
 	if fields["Config"] != nil {
 		h.configs.Add(1)
 		var config struct {
@@ -232,5 +254,170 @@ func TestGPUOldClientRequiresUpgradeWithoutStartingDecoder(t *testing.T) {
 	_, err := d.freshFrame(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "update this device") {
 		t.Fatalf("missing capability should fail before sending a request: %v", err)
+	}
+}
+
+func newGPUCuaTool(t *testing.T, fixture *gpuAgentFixture) (*computerTool, *ClientConn) {
+	t.Helper()
+	upgrade := gws.NewUpgrader(fixture, nil)
+	web := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c, err := upgrade.Upgrade(w, r)
+		if err == nil {
+			go c.ReadLoop()
+		}
+	}))
+	t.Cleanup(web.Close)
+	srv, client, _ := newProxyTestServer(t, "cua-device", "")
+	client.Desktop = &protocol.DesktopCapabilities{Supported: true, Input: true, Backends: []string{"gpu-desktop-tunnel"}}
+	srv.gpuDesktopTunnels[client.ID] = gpuFixtureTunnel(t, client.ID, strings.TrimPrefix(web.URL, "http://"))
+	base := testAutomation(t, srv, client.ID, "cua-thread")
+	t.Cleanup(func() {
+		base.state.opMu.Lock()
+		closeDesktopAutomation(base.state)
+		base.state.opMu.Unlock()
+	})
+	return &computerTool{base}, client
+}
+
+func TestComputerCuaUnsupportedDoesNotSend(t *testing.T) {
+	for _, action := range []string{"native_tools", "native"} {
+		t.Run(action+"_Go", func(t *testing.T) {
+			srv, client, transport := newProxyTestServer(t, "go-device", "")
+			client.Desktop = &protocol.DesktopCapabilities{Supported: true, Input: true}
+			tool := computerTool{testAutomation(t, srv, client.ID, "thread")}
+			_, err := tool.Execute(context.Background(), json.RawMessage(`{"action":"`+action+`","tool":"list_apps"}`))
+			if err == nil || !strings.Contains(err.Error(), "Cua-capable Rust client") {
+				t.Fatalf("missing explicit unsupported error: %v", err)
+			}
+			if transport.lastMsg() != nil {
+				t.Fatal("unsupported Go client received a command")
+			}
+		})
+		t.Run(action+"_old_Rust", func(t *testing.T) {
+			fixture := &gpuAgentFixture{}
+			tool, _ := newGPUCuaTool(t, fixture)
+			_, err := tool.Execute(context.Background(), json.RawMessage(`{"action":"`+action+`","tool":"list_apps"}`))
+			if err == nil || !strings.Contains(err.Error(), "Cua-capable Rust client") {
+				t.Fatalf("missing explicit unsupported error: %v", err)
+			}
+			if fixture.requests.Load() != 0 {
+				t.Fatal("unsupported Rust client received a websocket command")
+			}
+		})
+	}
+}
+
+func TestComputerCuaDiscoveryResultsAndSession(t *testing.T) {
+	const response = `{"CuaResult":{"result":{"content":[{"type":"text","text":"permission refused"},{"type":"image","mimeType":"image/png","data":"aW1hZ2U="}],"structuredContent":{"element_index":7},"isError":true}}}`
+	fixture := &gpuAgentFixture{cua: true, nativeResult: json.RawMessage(response), nativeRequests: make(chan json.RawMessage, 8)}
+	tool, client := newGPUCuaTool(t, fixture)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	tools, err := tool.Execute(ctx, json.RawMessage(`{"action":"native_tools"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(tools, `"shell"`) || !strings.Contains(tools, `"required":["element_index"]`) {
+		t.Fatalf("tool allowlist/schema not preserved: %s", tools)
+	}
+	for range 2 {
+		result, err := tool.Execute(ctx, json.RawMessage(`{"action":"native","tool":"click","arguments":{"element_index":7}}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := `{"result":{"content":[{"type":"text","text":"permission refused"},{"type":"image","mimeType":"image/png","data":"aW1hZ2U="}],"structuredContent":{"element_index":7},"isError":true}}`
+		if result != want {
+			t.Fatalf("MCP result changed: %s", result)
+		}
+	}
+	status, err := tool.Execute(ctx, json.RawMessage(`{"action":"status"}`))
+	if err != nil || !strings.Contains(status, `"cua":true`) {
+		t.Fatalf("status missing Cua capability: %s %v", status, err)
+	}
+	if fixture.connections.Load() != 1 || fixture.configs.Load() != 0 || fixture.snapshots.Load() != 0 || len(tool.state.screens) != 0 || tool.state.gpu[client.ID] == nil {
+		t.Fatal("native calls restarted session or required capture")
+	}
+	for i := range 3 {
+		request := <-fixture.nativeRequests
+		if i == 0 {
+			if string(request) != `{"action":"tools"}` {
+				t.Fatalf("wrong tools/list framing: %s", request)
+			}
+		} else if string(request) != `{"action":"call","name":"click","arguments":{"element_index":7}}` {
+			t.Fatalf("wrong tools/call framing: %s", request)
+		}
+	}
+	if _, err := tool.Execute(ctx, json.RawMessage(`{"action":"release"}`)); err != nil || len(tool.state.gpu) != 0 {
+		t.Fatalf("native release failed: %v", err)
+	}
+}
+
+func TestComputerCuaErrorAndUnavailableTool(t *testing.T) {
+	fixture := &gpuAgentFixture{cua: true, nativeResult: json.RawMessage(`{"CuaResult":{"error":"Accessibility permission denied"}}`), nativeRequests: make(chan json.RawMessage, 8)}
+	tool, client := newGPUCuaTool(t, fixture)
+	for range 2 {
+		_, err := tool.Execute(context.Background(), json.RawMessage(`{"action":"native","tool":"list_apps"}`))
+		if err == nil || !strings.Contains(err.Error(), "Accessibility permission denied") {
+			t.Fatalf("lost driver error: %v", err)
+		}
+	}
+	if fixture.connections.Load() != 1 || tool.state.gpu[client.ID] == nil || len(fixture.nativeRequests) != 3 {
+		t.Fatal("driver error discarded session or rediscovered tools")
+	}
+	_, err := tool.Execute(context.Background(), json.RawMessage(`{"action":"native","tool":"scroll"}`))
+	if err == nil || !strings.Contains(err.Error(), "unavailable") || len(fixture.nativeRequests) != 3 {
+		t.Fatalf("undiscovered tool was sent: %v", err)
+	}
+}
+
+func TestComputerCuaManualTakeoverCancels(t *testing.T) {
+	fixture := &gpuAgentFixture{cua: true, nativeBlock: true, nativeRequests: make(chan json.RawMessage, 8)}
+	tool, client := newGPUCuaTool(t, fixture)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	result := make(chan error, 1)
+	go func() {
+		_, err := tool.Execute(ctx, json.RawMessage(`{"action":"native","tool":"click","arguments":{"element_index":7}}`))
+		result <- err
+	}()
+	for range 2 {
+		select {
+		case <-fixture.nativeRequests:
+		case <-ctx.Done():
+			t.Fatal("native request never reached client")
+		}
+	}
+	if _, err := tool.Execute(ctx, json.RawMessage(`{"action":"native_tools"}`)); err == nil || !strings.Contains(err.Error(), "another automation action") {
+		t.Fatalf("concurrent native operation accepted: %v", err)
+	}
+	tool.srv.interruptDesktopAutomation(client.ID)
+	select {
+	case err := <-result:
+		if err == nil || !strings.Contains(err.Error(), "canceled") {
+			t.Fatalf("takeover did not cancel native call: %v", err)
+		}
+	case <-ctx.Done():
+		t.Fatal("native call did not stop")
+	}
+	if len(tool.state.gpu) != 0 {
+		t.Fatal("takeover retained native driver connection")
+	}
+}
+
+func TestGPUCuaFramingAndBounds(t *testing.T) {
+	for _, raw := range []string{`{}`, `null`, `{"result":null}`, `{"result":[]}`, `{"result":{},"error":"failure"}`, `{"result":`, strings.Repeat(" ", gpuCuaResultMax+1)} {
+		if _, err := gpuCuaResult(json.RawMessage(raw)); err == nil {
+			t.Fatalf("invalid result accepted: %.80s", raw)
+		}
+	}
+	for _, raw := range []string{`{"tool":"shell"}`, `{"tool":"list_apps","arguments":[]}`, `{"tool":""}`, `{"tool":"list_apps","arguments":{"text":"` + strings.Repeat("x", gpuCuaRequestMax) + `"}}`} {
+		if _, err := gpuCuaRequest("native", json.RawMessage(raw)); err == nil {
+			t.Fatalf("invalid request accepted: %.80s", raw)
+		}
+	}
+	d := &gpuAgentDesktop{messages: make(chan json.RawMessage, 1), done: make(chan struct{})}
+	d.messages <- json.RawMessage(`{"AgentCapabilities":{"version":1}}`)
+	if err := d.requireCua(context.Background()); err == nil || !d.capabilities || d.cua {
+		t.Fatalf("missing Cua capability was accepted: %v", err)
 	}
 }

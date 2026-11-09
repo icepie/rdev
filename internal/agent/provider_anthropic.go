@@ -81,6 +81,17 @@ func marshalAnthropicRequest(cfg Config, history []Message) ([]byte, error) {
 			var content any = m.Content
 			if img, ok := toolPreviewImage(m.Content); ok {
 				content = []any{anthropicImage(img)}
+			} else if len(m.Images) > 0 {
+				blocks := make([]any, 0, len(m.Images)+1)
+				if m.Content != "" {
+					blocks = append(blocks, map[string]any{"type": "text", "text": strings.ReplaceAll(m.Content, nativeImagePlaceholder, "Image returned by tool (see attached image).")})
+				}
+				for _, image := range m.Images {
+					if image.Data != "" && (image.Mime == "image/png" || image.Mime == "image/jpeg") {
+						blocks = append(blocks, anthropicImage(image))
+					}
+				}
+				content = blocks
 			}
 			appendBlocks("user", []any{map[string]any{"type": "tool_result", "tool_use_id": m.ToolCallID, "content": content, "is_error": toolErrors[m.ToolCallID]}})
 			continue

@@ -1,4 +1,4 @@
 <resources>
-    <style name="AppTheme" parent="android:style/Theme.Material.Light.NoActionBar">
+    <style name="RDevTheme" parent="android:style/Theme.Material.Light.NoActionBar">
     </style>
 </resources>
