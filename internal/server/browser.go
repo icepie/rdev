@@ -47,6 +47,10 @@ type browserTarget struct {
 // Assets and page CDP sockets are exposed through a per-instance capability,
 // never through an unauthenticated debugging port or a reusable admin token.
 func (s *Server) HandleBrowserAPI(w http.ResponseWriter, r *http.Request) {
+	if !s.BrowserEnabled {
+		http.NotFound(w, r)
+		return
+	}
 	if !s.requireAuth(w, r) {
 		return
 	}
@@ -286,6 +290,10 @@ func (s *Server) CloseBrowsers() {
 }
 
 func (s *Server) HandleBrowserView(w http.ResponseWriter, r *http.Request) {
+	if !s.BrowserEnabled {
+		http.NotFound(w, r)
+		return
+	}
 	secret, path, ok := strings.Cut(strings.TrimPrefix(r.URL.Path, "/api/browser/view/"), "/")
 	if !ok {
 		http.NotFound(w, r)

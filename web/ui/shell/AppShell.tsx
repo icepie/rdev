@@ -1,3 +1,4 @@
+import { useServerCapabilities } from "../lib/server-capabilities";
 import { DeviceRail } from "../components/device-rail";
 import { themePresets, type ThemePreset } from "../lib/themes";
 import { Suspense, createContext, useEffect, useRef, useState, type ReactNode } from "react";
@@ -37,6 +38,11 @@ const NAV_ITEMS = [
   { to: "/browser", key: "nav.browser", icon: "Globe" },
   { to: "/agent", key: "nav.agent", icon: "Bot" },
 ] as const;
+
+function useNavigationItems() {
+  const { browserEnabled } = useServerCapabilities();
+  return NAV_ITEMS.filter(item => item.to !== "/browser" || browserEnabled);
+}
 
 const THEME_CHOICES: { value: ThemeChoice; key: string }[] = [
   { value: "auto", key: "theme.auto" },
@@ -92,10 +98,11 @@ export const MobileNavContext = createContext<MobileNavCtx>({
 
 /* The global nav rows, used when the drawer has no page section. */
 export function MobileNavList() {
+  const navItems = useNavigationItems();
   const { t } = useI18n();
   return (
     <>
-      {NAV_ITEMS.map((item) => (
+      {navItems.map((item) => (
         <MobileNavLink key={item.to} item={item} label={t(item.key)} />
       ))}
     </>
@@ -155,6 +162,7 @@ function RailSettings() {
 
 /** Hidden with the owning sidebar; mobile has no persistent navigation rail. */
 export function MobileWorkspaceNavigation({ onClose }: { onClose?: () => void } = {}) {
+  const navItems = useNavigationItems();
   const { t } = useI18n();
   const railControl = useRailControl();
   return <nav aria-label={t("nav.label")} className="absolute inset-y-0 left-0 flex w-12 flex-col items-center gap-0.5 overflow-y-auto border-r border-border-seam bg-sidebar py-2 md:hidden">
@@ -162,12 +170,13 @@ export function MobileWorkspaceNavigation({ onClose }: { onClose?: () => void } 
       className={cn(RAIL_BUTTON_CLASS, "mb-2 shrink-0 cursor-pointer")}>
       <Icon name="PanelLeft" className="size-4.5" />
     </button>
-    {NAV_ITEMS.map(item => <RailLink key={item.to} item={item} label={t(item.key)} />)}
+    {navItems.map(item => <RailLink key={item.to} item={item} label={t(item.key)} />)}
     <RailSettings />
   </nav>;
 }
 
 export function AppShell() {
+  const navItems = useNavigationItems();
   const navigate = useNavigate();
   const shellRef = useRef<HTMLDivElement>(null);
   const compactViewport = useIsCompactViewport();
@@ -228,7 +237,7 @@ export function AppShell() {
             <TooltipContent side="right">RDev</TooltipContent>
           </Tooltip>
         )}
-        {NAV_ITEMS.map((item) => (
+        {navItems.map((item) => (
           <RailLink key={item.to} item={item} label={t(item.key)} />
         ))}
         <RailSettings />

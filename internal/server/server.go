@@ -561,6 +561,7 @@ func (f *ReverseForward) Result() (uint32, string) {
 
 // Server manages WebSocket clients and SSH proxy
 type Server struct {
+	BrowserEnabled     bool // explicit opt-in for server-hosted Chrome
 	browserMu          sync.Mutex
 	browsers           map[string]*browserSession
 	clients            map[string]*ClientConn
@@ -2079,6 +2080,7 @@ func (s *Server) HandleConfigAPI(w http.ResponseWriter, r *http.Request) {
 		"proxyAddr":    s.ProxyAddr,
 		"authRequired": map[bool]string{true: "true", false: "false"}[s.AdminToken != ""],
 		// Never expose provider API keys here.
+		"browserEnabled": map[bool]string{true: "true", false: "false"}[s.BrowserEnabled],
 		"agentEnabled":   map[bool]string{true: "true", false: "false"}[s.Agent != nil && s.Agent.Enabled()],
 		"agentModel":     agentDefaultModel(s.Agent),
 		"agentProviders": agentProviderIDs(s.Agent),

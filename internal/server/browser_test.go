@@ -42,6 +42,7 @@ func TestBrowserProxyRejectsReplacedDeviceConnection(t *testing.T) {
 
 func TestBrowserAPIRequiresAdminAndDeviceAuth(t *testing.T) {
 	s, _, _ := newProxyTestServer(t, "device", "password")
+	s.BrowserEnabled = true
 	s.AdminToken = "admin"
 	request := func(body, token string) int {
 		req := httptest.NewRequest("POST", "/api/browser", strings.NewReader(body))
@@ -84,6 +85,7 @@ func TestBrowserViewScopesAssetsAndFiltersTargets(t *testing.T) {
 	ready := make(chan struct{})
 	close(ready)
 	s := NewServer()
+	s.BrowserEnabled = true
 	s.browsers = map[string]*browserSession{"device": {device: "device", capability: "cap", endpoint: endpoint, ready: ready}}
 	for _, tc := range []struct {
 		path   string
@@ -126,4 +128,32 @@ func TestBrowserConcurrentAttachSharesStartupFailure(t *testing.T) {
 	}
 	wg.Wait()
 	s.CloseBrowsers()
+}
+
+func TestBrowserDisabledByDefault(t *testing.T) {
+	s := NewServer()
+	for _, test := range []struct {
+		path   string
+		handle http.HandlerFunc
+	}{
+		{"/api/browser", s.HandleBrowserAPI}, {"/api/browser/view/anything/targets", s.HandleBrowserView},
+	} {
+		response := httptest.NewRecorder()
+		test.handle(response, httptest.NewRequest("GET", test.path, nil))
+		if response.Code != http.StatusNotFound {
+			t.Fatalf("%s returned %d", test.path, response.Code)
+		}
+	}
+	for _, enabled := range []bool{false, true} {
+		s.BrowserEnabled = enabled
+		response := httptest.NewRecorder()
+		s.HandleConfigAPI(response, httptest.NewRequest("GET", "/api/config", nil))
+		var config map[string]string
+		if err := json.Unmarshal(response.Body.Bytes(), &config); err != nil {
+			t.Fatal(err)
+		}
+		if (config["browserEnabled"] == "true") != enabled {
+			t.Fatalf("wrong browser capability: %v", config)
+		}
+	}
 }

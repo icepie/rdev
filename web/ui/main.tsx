@@ -1,3 +1,4 @@
+import { ServerCapabilitiesProvider } from "./lib/server-capabilities";
 import { StrictMode, lazy, useEffect } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter, Route, Routes, Navigate, useLocation } from "react-router-dom";
@@ -38,6 +39,7 @@ createRoot(document.getElementById("root")!).render(
         <TooltipProvider>
           <UnauthorizedHandler>
             <BrowserRouter>
+              <ServerCapabilitiesProvider>
               <DevicesProvider>
                 <TitleSync />
                 <Routes>
@@ -54,6 +56,7 @@ createRoot(document.getElementById("root")!).render(
                   </Route>
                 </Routes>
               </DevicesProvider>
+              </ServerCapabilitiesProvider>
             </BrowserRouter>
           </UnauthorizedHandler>
         </TooltipProvider>

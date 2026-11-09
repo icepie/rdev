@@ -35,6 +35,7 @@ func main() {
 		batchConcurrency           = 0
 		vncAddr                    = ""
 		proxyAddr                  = ""
+		browserEnabled             = parseBoolDefault(os.Getenv("RDEV_BROWSER_ENABLED"), false)
 		tunnelBase                 = ""
 		clientLogDir               = ""
 		clientLogRetention         = 7 * 24 * time.Hour
@@ -125,6 +126,8 @@ func main() {
 				vncAddr = os.Args[i+1]
 				i++
 			}
+		case "--browser":
+			browserEnabled = true
 		case "--proxy":
 			if i+1 < len(os.Args) {
 				proxyAddr = os.Args[i+1]
@@ -200,6 +203,7 @@ Options:
   --max-forwards     Max concurrent TCP forwards per device (default 1024)
   --batch-concurrency Max concurrent batch operations (default GOMAXPROCS*8)
   --vnc             VNC/RFB listen address with username=deviceId auth (optional)
+  --browser         Enable server Chrome browser UI and CDP endpoints (default off; env RDEV_BROWSER_ENABLED)
   --proxy           HTTP/SOCKS5 proxy listen address; username=deviceId[@password] selects the exit device (optional; env RDEV_PROXY_ADDR)
   --tunnel-base     Public ws(s):// base URL advertised to devices for tcp-tunnel dial-backs when the HTTP endpoint is behind a reverse proxy, e.g. wss://r.example.com (optional; env RDEV_TUNNEL_BASE)
   --client-log-dir  Client log storage directory (default ./data/client-logs)
@@ -322,6 +326,7 @@ Examples:
 	sshPort := portFromAddr(sshAddr)
 
 	srv := server.NewServer()
+	srv.BrowserEnabled = browserEnabled
 	srv.ReleaseVersion = version
 	srv.ClientLogs = server.NewClientLogManager(clientLogDir, clientLogRetention, clientLogMaxFileSize)
 	srv.ClientLogs.StartCleanup()

@@ -1,3 +1,4 @@
+import { useServerCapabilities } from "../../lib/server-capabilities";
 import { BrowserPanel } from "../browser-panel";
 import { FilePreview } from "./file-preview";
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
@@ -666,7 +667,7 @@ export function NewTabPage({
           <Icon name="Monitor" className="size-4 shrink-0 text-muted-foreground" />
           {t("agent.openDesktop")}
         </button>
-        <button type="button" onClick={onOpenBrowser} className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-sm hover:bg-state-hover"><Icon name="Globe" className="size-4" />{t("nav.browser")}</button>
+        {onOpenBrowser && <button type="button" onClick={onOpenBrowser} className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-sm hover:bg-state-hover"><Icon name="Globe" className="size-4" />{t("nav.browser")}</button>}
       </div>
       <div>
         <div className="px-2 pb-2 text-xs font-normal leading-5 text-subtle-foreground/75">
@@ -769,8 +770,11 @@ export function AgentRightPanel({
   const [recent, setRecent] = useState<string[]>([]);
   const [refreshing, setRefreshing] = useState(false);
 
+  const { browserEnabled, loading: capabilitiesLoading } = useServerCapabilities();
+
   /* Restore the persisted strip on thread switch. */
   useEffect(() => {
+    if (capabilitiesLoading) return;
     if (!threadKey) {
       setDynTabs([]);
       setRecent([]);
@@ -778,7 +782,7 @@ export function AgentRightPanel({
       return;
     }
     const rec = readPanelTabs()[threadKey];
-    const tabs: DynTab[] = rec?.tabs ?? [];
+    const tabs: DynTab[] = (rec?.tabs ?? []).filter(tab => tab.kind !== "browser" || browserEnabled);
     setDynTabs(tabs);
     setRecent(rec?.recent ?? []);
     const savedActive: PanelTabStore["active"] = rec?.active ?? null;
@@ -791,15 +795,17 @@ export function AgentRightPanel({
     } else {
       setActive("diff");
     }
-  }, [threadKey]);
+  }, [threadKey, browserEnabled, capabilitiesLoading]);
 
   /* Persist the strip — but never on the render where threadKey changed:
    * that render still carries the previous thread's state and the restore
    * effect above owns it (writes would clobber the new key's record). */
   const persistKeyRef = useRef("");
   useEffect(() => {
-    if (persistKeyRef.current !== threadKey) {
-      persistKeyRef.current = threadKey;
+    if (capabilitiesLoading) return;
+    const persistKey = JSON.stringify([threadKey, browserEnabled]);
+    if (persistKeyRef.current !== persistKey) {
+      persistKeyRef.current = persistKey;
       return;
     }
     if (!threadKey) return;
@@ -829,7 +835,7 @@ export function AgentRightPanel({
     } catch {
       /* storage full/blocked — strip state stays session-only */
     }
-  }, [threadKey, dynTabs, active, recent]);
+  }, [threadKey, dynTabs, active, recent, browserEnabled, capabilitiesLoading]);
 
   /* Stop the refresh spinner once fresh changes land; safety timeout in
    * case the device never answers. */
@@ -1234,7 +1240,7 @@ export function AgentRightPanel({
           onOpenTerminal={openTerminalTab}
           onOpenFiles={() => openSingletonTab("files")}
           onOpenDesktop={() => openSingletonTab("desktop")}
-          onOpenBrowser={() => openSingletonTab("browser")}
+          onOpenBrowser={browserEnabled ? () => openSingletonTab("browser") : undefined}
           onOpenFile={openFileTab}
           onSearchFiles={onSearchFiles}
           t={t}
