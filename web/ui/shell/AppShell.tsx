@@ -1,6 +1,7 @@
+import { DeviceRail } from "../components/device-rail";
 import { themePresets, type ThemePreset } from "../lib/themes";
 import { Suspense, createContext, useEffect, useRef, useState, type ReactNode } from "react";
-import { NavLink, Outlet, useLocation, useMatch } from "react-router-dom";
+import { NavLink, Outlet, useLocation, useMatch, useNavigate } from "react-router-dom";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { useI18n } from "../lib/i18n";
 import { useTheme, type ThemeChoice } from "../lib/theme";
@@ -166,6 +167,7 @@ export function MobileWorkspaceNavigation({ onClose }: { onClose?: () => void } 
 }
 
 export function AppShell() {
+  const navigate = useNavigate();
   const shellRef = useRef<HTMLDivElement>(null);
   const compactViewport = useIsCompactViewport();
   useMobileViewport(shellRef, compactViewport);
@@ -248,12 +250,10 @@ export function AppShell() {
             <DialogPrimitive.Title className="sr-only">{t("nav.label")}</DialogPrimitive.Title>
             <MobileWorkspaceNavigation onClose={() => setMobileNavOpen(false)} />
             <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto">
-              {drawerSection ?? <>
-                <div className="flex h-12 shrink-0 items-center border-b border-border-seam px-3 text-sm font-medium">RDev</div>
-                <nav aria-label={t("nav.label")} className="flex flex-col gap-0.5 p-2">
-                  <MobileNavList />
-                </nav>
-              </>}
+              {drawerSection ?? <DeviceRail onPick={(device) => {
+                setMobileNavOpen(false);
+                navigate(`/agent?device=${encodeURIComponent(device)}`);
+              }} />}
             </div>
           </DialogPrimitive.Content>
         </DialogPrimitive.Portal>
