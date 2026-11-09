@@ -53,7 +53,7 @@ fn run(cfg: Config) {
     let mut failures = FailureLog::default();
     thread::sleep(Duration::from_secs(60));
     loop {
-        #[cfg(windows)]
+        #[cfg(any(unix, windows))]
         let executable = env::current_exe().ok();
         match check_and_apply(&cfg) {
             Ok(true) => {
@@ -64,7 +64,13 @@ fn run(cfg: Config) {
                         warn!("auto-update restart failed: {err:#}");
                     });
                 }
-                #[cfg(not(windows))]
+                #[cfg(unix)]
+                if let Some(executable) = executable.as_deref() {
+                    restart_self(executable).unwrap_or_else(|err| {
+                        warn!("auto-update restart failed: {err:#}");
+                    });
+                }
+                #[cfg(not(any(unix, windows)))]
                 info!("auto-update applied; restart rdev-client-gpu to use the new version");
                 return;
             }
@@ -73,6 +79,16 @@ fn run(cfg: Config) {
         }
         thread::sleep(cfg.interval);
     }
+}
+
+#[cfg(unix)]
+fn restart_self(executable: &Path) -> Result<()> {
+    use std::os::unix::process::CommandExt;
+
+    let error = std::process::Command::new(executable)
+        .args(env::args_os().skip(1))
+        .exec();
+    Err(error).with_context(|| format!("exec updated binary {}", executable.display()))
 }
 
 #[cfg(windows)]
