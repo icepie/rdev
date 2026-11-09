@@ -202,13 +202,13 @@ jobs:
             llvm_mingw: msvcrt
             win7: true
           - name: darwin-amd64
-            os: macos-14
+            os: macos-15-intel
             target: x86_64-apple-darwin
             artifact: rdev-client-gpu
             asset: rdev-client-gpu-darwin-amd64
             deployment_target: '10.13'
           - name: darwin-arm64
-            os: macos-14
+            os: macos-15
             target: aarch64-apple-darwin
             artifact: rdev-client-gpu
             asset: rdev-client-gpu-darwin-arm64

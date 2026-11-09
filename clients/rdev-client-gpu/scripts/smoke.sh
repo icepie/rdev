@@ -144,7 +144,7 @@ timeout 30 sshpass -p "$PASSWORD" scp -O \
   exit 1
 }
 
-HTTP_PORT="$HTTP_PORT" DEVICE_ID="$DEVICE_ID" PASSWORD="$PASSWORD" BASE="$BASE" python3 - <<'PY'
+ADMIN_TOKEN="$ADMIN_TOKEN" HTTP_PORT="$HTTP_PORT" DEVICE_ID="$DEVICE_ID" PASSWORD="$PASSWORD" BASE="$BASE" python3 - <<'PY'
 import base64
 import hashlib
 import json
@@ -177,6 +177,7 @@ request = (
     "Upgrade: websocket\r\n"
     "Connection: Upgrade\r\n"
     f"Sec-WebSocket-Key: {key}\r\n"
+    f"X-RDev-Token: {os.environ['ADMIN_TOKEN']}\r\n"
     "Sec-WebSocket-Version: 13\r\n\r\n"
 )
 sock.sendall(request.encode())
