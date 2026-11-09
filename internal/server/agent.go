@@ -464,6 +464,8 @@ type agentSessionEntry struct {
 // entry.current only seeds new connections and persists as the resume
 // default.
 type agentConn struct {
+	// Optional synchronous reply sink for in-process management tools.
+	reply func(agentMsg)
 	// Management views share the original connection write lock.
 	responseTo     *agentConn
 	responseThread string
@@ -507,6 +509,10 @@ func (ac *agentConn) writeData(data []byte) bool {
 }
 
 func (ac *agentConn) writeJSON(msg agentMsg) {
+	if ac.reply != nil {
+		ac.reply(msg)
+		return
+	}
 	if ac.responseTo != nil {
 		if msg.Op == "error" {
 			msg.Op = "thread_action_error"
@@ -621,6 +627,9 @@ func (s *Server) buildAgentSession(entry *agentSessionEntry, th *agentThread, cl
 		th.jobs = jobs
 	}
 	tools := s.agentBaseTools(entry, client, th.cwd)
+	if entry.deviceID == agentServerDeviceID {
+		tools = append(tools, &agentSessionsTool{srv: s, owner: entry, thread: th.id}, &agentSessionsTool{srv: s, owner: entry, thread: th.id, mutate: true})
+	}
 	tools = append(tools, s.automationTools(entry, th)...)
 	if entry.deviceID != agentServerDeviceID && client != nil {
 		tools = append(tools, &backgroundTool{jobs: th.jobs, shell: &shellTool{srv: s, client: client, Cwd: th.cwd}})
@@ -2935,7 +2944,7 @@ func (s *Server) HandleAgentWS(w http.ResponseWriter, r *http.Request) {
 
 func buildAgentSystemPrompt(deviceID, cwd string) string {
 	if deviceID == agentServerDeviceID {
-		return "You are the server agent in rdev. The server is your coordination environment only. No server-host shell or filesystem access is available. Call list_devices to discover currently connected remote devices and their tool schemas, then device_tool with an explicit device ID. No device registration is needed. Check the live device list rather than inventing device IDs. Use subagent for isolated delegated tasks, jobs to inspect or cancel them, and verify their results. Work autonomously within these capabilities and answer in the user's language."
+		return "You are the server agent in rdev. The server is your coordination environment only. No server-host shell or filesystem access is available. Call list_devices to discover currently connected remote devices and their tool schemas, then device_tool with an explicit device ID. Use agent_sessions to list or read Agent conversations (including offline history), and manage_agent_session to create, rename or delete a specified conversation; discover exact device and thread IDs before managing them. No device registration is needed. Check the live device list rather than inventing device IDs. Use subagent for isolated delegated tasks, jobs to inspect or cancel them, and verify their results. Work autonomously within these capabilities and answer in the user's language."
 	}
 	prompt := fmt.Sprintf(`You are an agent inside rdev, a remote-device management server. You operate the device %q through tools; every tool call runs ON THE DEVICE, not on the server or the user's machine.
 

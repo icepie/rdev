@@ -24,15 +24,16 @@ type automationPage struct {
 	target  string
 }
 type agentAutomation struct {
-	gpu     map[string]*gpuAgentDesktop
-	desktop map[string]*agentDesktopSession
-	opMu    sync.Mutex
-	mu      sync.Mutex
-	paused  bool
-	cancel  context.CancelFunc
-	pages   map[string]automationPage
-	screens map[string]automationScreen
-	view    automationView
+	gpu          map[string]*gpuAgentDesktop
+	desktop      map[string]*agentDesktopSession
+	opMu         sync.Mutex
+	mu           sync.Mutex
+	manualInputs int // transient manual-input interruption, not a control mode
+	paused       bool
+	cancel       context.CancelFunc
+	pages        map[string]automationPage
+	screens      map[string]automationScreen
+	view         automationView
 }
 
 func (s *Server) automationTools(entry *agentSessionEntry, th *agentThread) []agent.Tool {
@@ -83,6 +84,10 @@ func (t *automationTool) begin(ctx context.Context) (context.Context, func(), er
 	}
 	t.state.mu.Lock()
 	defer t.state.mu.Unlock()
+	if t.state.manualInputs > 0 {
+		t.state.opMu.Unlock()
+		return nil, nil, fmt.Errorf("manual desktop input is in progress; take a fresh screenshot before continuing")
+	}
 	if t.state.paused {
 		t.state.opMu.Unlock()
 		return nil, nil, fmt.Errorf("user has taken control; wait for user to resume automation")

@@ -1,3 +1,7 @@
+import { FilePreview } from "./file-preview";
+import type { FilePreviewState } from "./types";
+import { readFilePreviewReply } from "../../lib/file-preview-reply";
+import { Dialog, DialogContent, DialogTitle } from "../dialog";
 import { createTransferAttempts } from "../../lib/file-transfer-attempts";
 import { uploadChunks } from "../../lib/upload-chunks";
 import { encodeFrame, decodeFrame } from "../../lib/file-transfer-frame";
@@ -172,14 +176,19 @@ export function PanelFiles({
   visible,
   t,
   onOpenFile,
+  workspaceKey,
 }: {
   device: string;
+  workspaceKey?: string;
   /* false while another panel tab is active: the panel stays mounted but is
    * display:none — transfers/watchdog continue, progress rendering pauses. */
   visible: boolean;
   t: Translator;
-  onOpenFile: (path: string) => void;
+  onOpenFile?: (path: string) => void;
 }) {
+  const taskStorageKey = workspaceKey ? JSON.stringify([device, workspaceKey]) : device;
+  const taskStorageRef = useRef(taskStorageKey);
+  taskStorageRef.current = taskStorageKey;
   const [pathInput, setPathInput] = useState("");
   const [entries, setEntries] = useState<FileEntry[]>([]);
   const [listView, setListView] = useState<ListView>({
@@ -198,7 +207,7 @@ export function PanelFiles({
   const reconnectDelayRef = useRef(1000);
   const reconnectTimerRef = useRef(0);
   const tasksRef = useRef<Map<string, FileTask> | null>(null);
-  if (!tasksRef.current) tasksRef.current = loadPersistedTasks(device, t("files.reselect"));
+  if (!tasksRef.current) tasksRef.current = loadPersistedTasks(taskStorageKey, t("files.reselect"));
   const filesByTaskRef = useRef(new Map<string, File>());
   const currentPathRef = useRef("");
   const parentPathRef = useRef("");
@@ -231,7 +240,7 @@ export function PanelFiles({
   const progressDirty = useRef(false);
   const bump = useCallback(() => setTasksTick((n) => n + 1), []);
   const saveTasks = useCallback(
-    () => { persistTasks(deviceRef.current, tasksRef.current!); progressDirty.current = false; },
+    () => { persistTasks(taskStorageRef.current, tasksRef.current!); progressDirty.current = false; },
     [],
   );
 
@@ -257,6 +266,29 @@ export function PanelFiles({
     return true;
   }, []);
 
+  // Cross-device previews use this already-authorized Files connection, never
+  // the conversation's Agent file_read (which may run on the server).
+  const [preview, setPreview] = useState<{path: string; state: FilePreviewState} | null>(null);
+  const previewRequest = useRef("");
+  const closePreview = useCallback(() => { previewRequest.current = ""; setPreview(null); }, []);
+  const failPreview = useCallback((message: string) => {
+    if (!previewRequest.current) return;
+    previewRequest.current = "";
+    setPreview(current => current ? {...current, state:{...current.state,status:"error",message}} : current);
+  }, []);
+  const openPreview = (path: string) => {
+    if (onOpenFile) { onOpenFile(path); return; }
+    const requestId = makeId();
+    previewRequest.current = requestId;
+    setPreview({path,state:{status:"loading",content:"",message:"",truncated:false}});
+    if (!send({op:"read",deviceId:deviceRef.current,requestId,path})) failPreview(tRef.current("files.connectionLost"));
+  };
+  useEffect(() => {
+    if (preview?.state.status !== "loading") return;
+    const timer = window.setTimeout(() => failPreview(tRef.current("files.previewTimeout")), 15000);
+    return () => window.clearTimeout(timer);
+  }, [preview, failPreview]);
+
   const sendTransfer = useCallback((task: FileTask, message: Record<string, unknown>) => {
     if (send(message)) return;
     transferAttempts.current.remove(task.id);
@@ -271,6 +303,7 @@ export function PanelFiles({
   const list = useCallback(
     (path: string, append = false) => {
       if (wsRef.current?.readyState !== WebSocket.OPEN) {
+        failPreview(tRef.current("files.connectionLost"));
         listingGuard.current.invalidate();
         setListView(previous => ({ ...previous, notice: tRef.current("files.connectionLost") }));
         return;
@@ -532,7 +565,15 @@ export function PanelFiles({
 
   const onText = useCallback(
     (msg: Record<string, unknown>) => {
+      const reply = readFilePreviewReply(previewRequest.current, deviceRef.current, msg);
+      if (reply) {
+        previewRequest.current = "";
+        setPreview(current => current ? {...current,state:reply} : current);
+        return;
+      }
+      if (msg.op === "file_content") return;
       if (msg.op === "auth_required") {
+        failPreview(tRef.current("common.passwordWrong"));
         /* The server rejects any op on an unauthorized socket with this;
          * surface the password overlay (it auto-submits a remembered
          * password once, like the terminal tabs). */
@@ -675,6 +716,7 @@ export function PanelFiles({
       bump();
     },
     [
+      failPreview,
       saveTasks,
       uploadLoop,
       stopUpload,
@@ -729,8 +771,9 @@ export function PanelFiles({
    * Re-runs when the device prop changes: clears per-device state, drops the
    * old socket, reconnects, and lists the home directory. */
   useEffect(() => {
+    closePreview();
     progressDirty.current = false;
-    tasksRef.current = loadPersistedTasks(device, tRef.current("files.reselect"));
+    tasksRef.current = loadPersistedTasks(taskStorageKey, tRef.current("files.reselect"));
     listingGuard.current.invalidate();
     reselectTaskRef.current = null;
     filesByTaskRef.current.clear();
@@ -800,6 +843,7 @@ export function PanelFiles({
         tasksRef.current!.forEach(stopUpload);
         wsRef.current = null;
         if (disposed) return;
+        failPreview(tRef.current("files.connectionLost"));
         listingGuard.current.invalidate();
         setListView(previous => ({ ...previous, notice: tRef.current("files.connectionLost") }));
         window.clearTimeout(reconnectTimerRef.current);
@@ -821,7 +865,7 @@ export function PanelFiles({
         wsRef.current = null;
       }
     };
-  }, [device, onBinary, onText, resumeActive, closeAuth, bump, stopUpload]);
+  }, [device, taskStorageKey, onBinary, onText, resumeActive, closeAuth, closePreview, failPreview, bump, stopUpload]);
 
   /* Speed sampling + stalled-download watchdog + task re-render, every 500ms.
    * Hidden panes persist progress and keep the watchdog, but do not render. */
@@ -1081,7 +1125,7 @@ export function PanelFiles({
                       className="flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 rounded-sm text-left text-sm text-foreground hover:text-timeline-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                       onClick={() => {
                         if (entry.isDir) list(entry.path);
-                        else onOpenFile(entry.path);
+                        else openPreview(entry.path);
                       }}
                     >
                       <Icon
@@ -1222,6 +1266,15 @@ export function PanelFiles({
         </div>
       </div>
 
+      <Dialog open={visible && preview !== null} onOpenChange={open => { if (!open) closePreview(); }}>
+        <DialogContent className="flex h-[80dvh] max-w-5xl flex-col overflow-hidden p-0">
+          <DialogTitle className="sr-only">{preview?.path || t("files.name")}</DialogTitle>
+          {preview && <div className="flex min-h-0 flex-1 flex-col pt-8">
+            <FilePreview path={preview.path} state={preview.state} connected={wsRef.current?.readyState === WebSocket.OPEN}
+              visible={visible} onRefresh={() => openPreview(preview.path)} t={t} />
+          </div>}
+        </DialogContent>
+      </Dialog>
       {/* Device password prompt (auto-submits a remembered password once) */}
       {authOpen && (
         <TabAuthOverlay

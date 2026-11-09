@@ -3,6 +3,8 @@ import { act, createElement, Profiler } from 'react';
 import { createRoot } from 'react-dom/client';
 import { beforeEach, afterEach, expect, it, vi } from 'vitest';
 vi.mock('../ui/pages/Terminal', () => ({ TabAuthOverlay: () => null }));
+vi.mock('../ui/components/dialog', () => ({ Dialog: ({open,children}) => open ? children : null, DialogContent: ({children}) => children, DialogTitle: () => null }));
+vi.mock('../ui/components/agent/file-preview', () => ({ FilePreview: ({state}) => createElement('div', {'data-preview':true}, state?.status + ':' + (state?.message || state?.content || '')) }));
 vi.mock('../ui/components/icon', () => ({ Icon: () => null }));
 vi.mock('../ui/lib/api', () => ({ wsURL: () => 'ws://fixture/files', getDevicePassword: () => '', rememberDevicePassword() {}, forgetDevicePassword() {} }));
 import { encodeFrame } from '../ui/lib/file-transfer-frame';
@@ -28,7 +30,7 @@ beforeEach(async () => {
   await act(async () => sockets[0].onopen());
 });
 afterEach(async () => { await act(async()=>root.unmount()); dom.window.close(); vi.unstubAllGlobals(); vi.useRealTimers(); });
-const render = (device, visible = false) => act(async()=>root.render(createElement(Profiler,{id:'files',onRender:()=>commits.push(1)},createElement(PanelFiles,{device,visible,t:key=>key,onOpenFile(){}}))));
+const render = (device, visible = false, onOpenFile = () => {}, workspaceKey) => act(async()=>root.render(createElement(Profiler,{id:'files',onRender:()=>commits.push(1)},createElement(PanelFiles,{device,visible,t:key=>key,onOpenFile,workspaceKey}))));
 const deliver = (socket, message) => act(async()=>socket.onmessage({data:JSON.stringify(message)}));
 const reply = (request, name, extra={}) => ({op:'list_result',requestId:request.requestId,path:'/tmp',entries:[{name,path:'/tmp/'+name,isDir:false,size:1}],total:1,offset:0,...extra});
 
@@ -350,4 +352,40 @@ it('rejects a task reselect returned after changing devices', async () => {
   expect(document.body.textContent).toContain('files.uploadDeviceChanged');
   expect(localStorage.getItem('rdevFileTasks.three')).toBeNull();
   expect(JSON.parse(localStorage.getItem('rdevFileTasks.two'))[0]).toMatchObject({id:'old-upload', status:'failed'});
+});
+
+
+it('reads cross-device previews through the selected Files socket and rejects wrong-device replies', async()=>{
+  await render('one', true, null);
+  const socket=sockets.at(-1);
+  await deliver(socket,reply(socket.sent.find(x=>x.op==='list'),'same.txt'));
+  await act(()=>[...document.querySelectorAll('button')].find(b=>b.textContent==='same.txt').click());
+  const request=socket.sent.at(-1);
+  expect(request).toMatchObject({op:'read',deviceId:'one',path:'/tmp/same.txt'});
+  await deliver(socket,{op:'file_content',requestId:request.requestId,deviceId:'two',content:'WRONG DEVICE'});
+  expect(document.querySelector('[data-preview]').textContent).toBe('loading:');
+  await deliver(socket,{op:'file_content',requestId:request.requestId,deviceId:'one',content:'correct file'});
+  expect(document.querySelector('[data-preview]').textContent).toBe('ready:correct file');
+  await render('one',false,null);
+  expect(document.querySelector('[data-preview]')).toBeNull();
+  await render('one',true,null);
+  expect(document.querySelector('[data-preview]').textContent).toBe('ready:correct file');
+});
+
+it('settles preview on disconnection without mistaking it for a directory response', async()=>{
+  await render('one',true,null);
+  const socket=sockets.at(-1);
+  await deliver(socket,reply(socket.sent.find(x=>x.op==='list'),'pending.txt'));
+  await act(()=>[...document.querySelectorAll('button')].find(b=>b.textContent==='pending.txt').click());
+  await act(()=>socket.onclose());
+  expect(document.querySelector('[data-preview]').textContent).toContain('files.connectionLost');
+});
+
+it('does not restore another file workspace transfers on the same device', async()=>{
+  const task={id:'private-task',name:'private.txt',dir:'upload',status:'failed',parentPath:'/private',size:1,done:0};
+  localStorage.setItem('rdevFileTasks.'+JSON.stringify(['one','workspace-a']),JSON.stringify([task]));
+  await render('one',true,()=>{},'workspace-b');
+  expect(document.body.textContent).not.toContain('private.txt');
+  await render('one',true,()=>{},'workspace-a');
+  expect(document.body.textContent).toContain('private.txt');
 });

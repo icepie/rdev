@@ -1947,7 +1947,6 @@ export function AgentPage() {
   const automationView = automationViews[JSON.stringify([device, thread])] ?? null;
   const rightPanelProps = {
     automation: automationView,
-    onAutomationControl: (paused: boolean) => { sendRaw({ op: "automation_control", thread, value: paused }); },
     visible: panelOpen,
     changes,
     diffs,

@@ -42,7 +42,7 @@ func TestAutomationDeviceAuthorization(t *testing.T) {
 		t.Fatal(err)
 	}
 }
-func TestAutomationTakeoverCancelsAndSerializes(t *testing.T) {
+func TestManualInputCancelsActionWithoutPausingAutomation(t *testing.T) {
 	s := NewServer()
 	base := testAutomation(t, s, "device", "a")
 	tool := computerTool{base}
@@ -61,7 +61,7 @@ func TestAutomationTakeoverCancelsAndSerializes(t *testing.T) {
 		t.Fatal("another thread took screen")
 	}
 	returned := make(chan struct{})
-	go func() { s.takeDesktopControl("device"); close(returned) }()
+	go func() { s.interruptDesktopAutomation("device"); close(returned) }()
 	select {
 	case <-ctx.Done():
 	case <-time.After(time.Second):
@@ -78,8 +78,10 @@ func TestAutomationTakeoverCancelsAndSerializes(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("takeover hung")
 	}
-	if _, _, err := base.begin(context.Background()); err == nil {
-		t.Fatal("agent ran after takeover")
+	if _, finish, err := base.begin(context.Background()); err != nil {
+		t.Fatal("manual input left automation paused", err)
+	} else {
+		finish()
 	}
 	if err := other.claim("device"); err != nil {
 		t.Fatal("lease not released", err)

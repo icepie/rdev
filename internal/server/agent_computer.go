@@ -49,12 +49,12 @@ func (t *computerTool) claim(device string) error {
 	}
 	lease := t.srv.desktopOwners[device]
 	if lease.owner != nil && lease.owner != t.state && time.Now().Before(lease.until) {
-		return fmt.Errorf("desktop is controlled by another conversation; release it or take over in the desktop panel")
+		return fmt.Errorf("desktop is controlled by another conversation; release it or wait until its lease expires")
 	}
 	t.srv.desktopOwners[device] = desktopAutomationLease{owner: t.state, tool: t.automationTool, until: time.Now().Add(2 * time.Minute)}
 	return nil
 }
-func (s *Server) takeDesktopControl(device string) {
+func (s *Server) interruptDesktopAutomation(device string) {
 	s.automationMu.Lock()
 	lease := s.desktopOwners[device]
 	s.automationMu.Unlock()
@@ -62,7 +62,8 @@ func (s *Server) takeDesktopControl(device string) {
 		return
 	}
 	lease.owner.mu.Lock()
-	lease.owner.paused = true
+	lease.owner.manualInputs++
+	defer func() { lease.owner.mu.Lock(); lease.owner.manualInputs--; lease.owner.mu.Unlock() }()
 	if lease.owner.cancel != nil {
 		lease.owner.cancel()
 	}

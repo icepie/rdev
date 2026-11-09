@@ -36,6 +36,7 @@ import {
 } from "../tooltip";
 import { ChangesDeck } from "./changes-deck";
 import { resolveFileIconName } from "./file-visuals";
+import { PanelDevice } from "./panel-device";
 import { PanelDesktop } from "./panel-desktop";
 import { PanelFiles } from "./panel-files";
 import { PanelTerminal } from "./panel-terminal";
@@ -62,16 +63,16 @@ export type PanelDock = "left" | "top" | "bottom" | "right";
  * "new tab" launcher. */
 type DynTab =
   | { kind: "file"; path: string }
-  | { kind: "terminal"; num: number }
-  | { kind: "files" }
-  | { kind: "desktop" }
-  | { kind: "browser" }
+  | { kind: "terminal"; num: number; device?: string }
+  | { kind: "files"; device?: string; num?: number }
+  | { kind: "desktop"; device?: string; num?: number }
+  | { kind: "browser"; device?: string; num?: number }
   | { kind: "new" };
 
 function tabId(tab: DynTab): string {
   if (tab.kind === "file") return "file:" + tab.path;
   if (tab.kind === "terminal") return "term:" + tab.num;
-  return tab.kind;
+  return "num" in tab && tab.num ? `${tab.kind}:${tab.num}` : tab.kind;
 }
 
 /* Persisted dynamic tabs (everything except the new-tab launcher). */
@@ -105,10 +106,10 @@ function readPanelTabs(): Record<string, PanelTabStore> {
           return { kind: "file", path: o.path };
         }
         if (o.kind === "terminal" && typeof o.num === "number") {
-          return { kind: "terminal", num: o.num };
+          return { kind: "terminal", num: o.num, ...(typeof o.device === "string" ? {device:o.device} : {}) };
         }
         if (o.kind === "files" || o.kind === "desktop" || o.kind === "browser") {
-          return { kind: o.kind };
+          return { kind: o.kind, ...(typeof o.device === "string" ? {device:o.device} : {}), ...(typeof o.num === "number" && Number.isInteger(o.num) && o.num > 1 ? {num:o.num} : {}) };
         }
         return null;
       };
@@ -369,7 +370,7 @@ function SortablePanelTab({
           : tab.kind === "desktop"
             ? "Monitor"
             : tab.kind === "browser" ? "Globe" : "NewTab";
-  const label =
+  const baseLabel =
     tab.kind === "file"
       ? splitPath(tab.path).base
       : tab.kind === "terminal"
@@ -379,6 +380,8 @@ function SortablePanelTab({
           : tab.kind === "desktop"
             ? t("agent.desktopTab")
             : tab.kind === "browser" ? t("nav.browser") : t("agent.newTabLabel");
+  const label = baseLabel + (tab.kind !== "terminal" && "num" in tab && tab.num ? ` ${tab.num}` : "")
+    + ("device" in tab && tab.device ? ` · ${tab.device}` : "");
   return (
     <ContextMenu modal={false}>
       <ContextMenuTrigger asChild>
@@ -729,13 +732,11 @@ export function AgentRightPanel({
   openFileSignal,
   openDiffSignal,
   automation,
-  onAutomationControl,
   panelFull,
   onSetDock,
   onToggleFull,
 }: {
   automation?: AutomationView | null;
-  onAutomationControl?: (paused: boolean) => void;
   changes: ChangesState | null;
   /* Per-path get_diff replies, keyed by file path; missing = not fetched. */
   diffs: Record<string, DiffState>;
@@ -774,6 +775,11 @@ export function AgentRightPanel({
   const remembered: { browser?: AutomationView; desktop?: AutomationView } = automationTargets.scope === threadKey ? automationTargets : {};
   const desktopAutomation = automation?.kind === "desktop" ? automation : automation ? remembered.desktop : undefined;
   const browserAutomation = automation?.kind === "browser" ? automation : automation ? remembered.browser : undefined;
+  const linkedAutomation = (tab: DynTab) => {
+    if ("num" in tab && tab.num) return undefined;
+    const target = tab.kind === "desktop" ? desktopAutomation : tab.kind === "browser" ? browserAutomation : undefined;
+    return "device" in tab && tab.device && tab.device !== target?.device ? undefined : target;
+  };
   const [active, setActive] = useState<string>("diff");
   const [dynTabs, setDynTabs] = useState<DynTab[]>([]);
   const [recent, setRecent] = useState<string[]>([]);
@@ -827,16 +833,8 @@ export function AgentRightPanel({
           x.kind === "files" ||
           x.kind === "desktop" || x.kind === "browser",
       ),
-      active:
-        active === "info" || active === "diff"
-          ? { kind: active }
-          : active === "files" || active === "desktop" || active === "browser"
-            ? { kind: active }
-            : active.startsWith("file:")
-              ? { kind: "file", path: active.slice(5) }
-              : active.startsWith("term:")
-                ? { kind: "terminal", num: Number(active.slice(5)) }
-                : null,
+      active: active === "info" || active === "diff" ? {kind:active}
+        : dynTabs.find((tab): tab is StoredDynTab => tab.kind !== "new" && tabId(tab) === active) ?? null,
       recent,
     };
     try {
@@ -849,7 +847,7 @@ export function AgentRightPanel({
   useEffect(() => {
     if (!automation || (automation.kind === "browser" && !browserEnabled)) return;
     setAutomationTargets(current => ({ ...(current.scope === threadKey ? current : {}), scope: threadKey, [automation.kind]: automation }));
-    setDynTabs(tabs => tabs.some(tab => tab.kind === automation.kind) ? tabs : [...tabs, { kind: automation.kind }]);
+    setDynTabs(tabs => tabs.some(tab => tabId(tab) === automation.kind) ? tabs.map(tab => tabId(tab) === automation.kind ? {...tab, device:automation.device} : tab) : [...tabs, { kind: automation.kind, device:automation.device }]);
     setActive(automation.kind);
   }, [automation, browserEnabled, threadKey]);
 
@@ -934,13 +932,14 @@ export function AgentRightPanel({
     setActive("term:" + num);
   };
 
-  /* Singleton device-scoped tabs: one file manager and one desktop per
-   * strip (both bind to info.device). */
-  const openSingletonTab = (kind: "files" | "desktop" | "browser") => {
-    if (!dynTabs.some((x) => x.kind === kind)) {
-      setDynTabs([...dynTabs, { kind }]);
-    }
-    setActive(kind);
+  /* Every launch creates a separate device-bound workspace. Legacy IDs
+   * remain the first slot so existing saved tabs and automation still work. */
+  const openDeviceTab = (kind: "files" | "desktop" | "browser") => {
+    const siblings = dynTabs.filter(tab => tab.kind === kind);
+    const num = siblings.length ? Math.max(...siblings.map(tab => "num" in tab ? tab.num ?? 1 : 1)) + 1 : undefined;
+    const tab: DynTab = {kind, ...(num ? {num} : {})};
+    setDynTabs([...dynTabs, tab]);
+    setActive(tabId(tab));
   };
 
   const closeTab = (id: string) => {
@@ -1229,11 +1228,6 @@ export function AgentRightPanel({
         </div>
       </div>
 
-      {automation && ((active === "desktop" && desktopAutomation) || (active === "browser" && browserAutomation)) && <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border-seam bg-background px-3 py-2 text-xs">
-        <span className="min-w-0 flex-1 truncate" title={(active === "browser" ? browserAutomation : desktopAutomation)?.device}>{t(active === "browser" ? "automation.browser" : "automation.desktop")} · {(active === "browser" ? browserAutomation : desktopAutomation)?.device}</span>
-        <span className="text-muted-foreground" role="status">{t(automation.paused ? "automation.manual" : "automation.agent")}</span>
-        <Button variant="outline" size="sm" disabled={!connected} onClick={() => onAutomationControl?.(!automation.paused)}>{t(automation.paused ? "automation.resume" : "automation.takeover")}</Button>
-      </div>}
       <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-sidebar">
       {active === "info" ? (
         /* Info tab */
@@ -1259,9 +1253,9 @@ export function AgentRightPanel({
           onOpenChanges={() => setActive("diff")}
           onOpenInfo={() => setActive("info")}
           onOpenTerminal={openTerminalTab}
-          onOpenFiles={() => openSingletonTab("files")}
-          onOpenDesktop={() => openSingletonTab("desktop")}
-          onOpenBrowser={browserEnabled ? () => openSingletonTab("browser") : undefined}
+          onOpenFiles={() => openDeviceTab("files")}
+          onOpenDesktop={() => openDeviceTab("desktop")}
+          onOpenBrowser={browserEnabled ? () => openDeviceTab("browser") : undefined}
           onOpenFile={openFileTab}
           onSearchFiles={onSearchFiles}
           t={t}
@@ -1283,8 +1277,7 @@ export function AgentRightPanel({
           }
         />
       ) : active.startsWith("term:") ||
-        active === "files" ||
-        active === "desktop" || active === "browser" ? (
+        /^(files|desktop|browser)(:|$)/.test(active) ? (
         /* Terminal/files/desktop tabs render below (kept mounted). */
         null
       ) : (
@@ -1331,37 +1324,33 @@ export function AgentRightPanel({
         tab.kind === "files" ||
         tab.kind === "desktop" || tab.kind === "browser" ? (
           <div
-            key={tabId(tab)}
+            key={JSON.stringify([threadKey, tabId(tab)])}
             className={
               active === tabId(tab)
                 ? "flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden"
                 : "hidden"
             }
           >
-            {tab.kind === "terminal" ? (
-              <PanelTerminal
-                device={info.device}
-                visible={visible && active === tabId(tab)}
-                t={t}
-              />
-            ) : tab.kind === "files" ? (
-              <PanelFiles
-                device={info.device}
-                visible={visible && active === tabId(tab)}
-                t={t}
-                onOpenFile={openFileTab}
-              />
-            ) : tab.kind === "browser" ? (
-              <div className="flex min-h-0 flex-1 flex-col" inert={!!browserAutomation && !automation?.paused}>
-                <BrowserPanel key={browserAutomation?.device ?? info.device} device={browserAutomation?.device ?? info.device} automation={browserAutomation} visible={visible && active === tabId(tab)} />
-              </div>
-            ) : (
-              <div className="flex min-h-0 flex-1 flex-col" inert={!!desktopAutomation && !automation?.paused}>
-                <PanelDesktop initialSource={desktopAutomation ? desktopAutomation.source || "auto" : undefined} key={desktopAutomation?.device ?? info.device}
-                  device={desktopAutomation?.device ?? info.device}
-                  visible={visible && active === tabId(tab)} t={t} />
-              </div>
-            )}
+            <PanelDevice
+              device={linkedAutomation(tab)?.device ?? tab.device ?? info.device}
+              onChange={device => setDynTabs(tabs => tabs.map(current => tabId(current) === tabId(tab) ? { ...current, device } : current))}
+            >
+              {target => tab.kind === "terminal" ? (
+                <PanelTerminal key={target} device={target} visible={visible && active === tabId(tab)} t={t} />
+              ) : tab.kind === "files" ? (
+                <PanelFiles key={target} device={target} workspaceKey={JSON.stringify([threadKey, tabId(tab)])} visible={visible && active === tabId(tab)} t={t}
+                  onOpenFile={target === info.device ? openFileTab : undefined} />
+              ) : tab.kind === "browser" ? (
+                <div className="flex min-h-0 flex-1 flex-col">
+                  <BrowserPanel key={target} device={target} deviceSelection="sidebar" automation={linkedAutomation(tab)} visible={visible && active === tabId(tab)} />
+                </div>
+              ) : (
+                <div className="flex min-h-0 flex-1 flex-col">
+                  <PanelDesktop key={target} device={target} initialSource={linkedAutomation(tab) ? linkedAutomation(tab)?.source || "auto" : undefined}
+                    visible={visible && active === tabId(tab)} t={t} />
+                </div>
+              )}
+            </PanelDevice>
           </div>
         ) : (
           []

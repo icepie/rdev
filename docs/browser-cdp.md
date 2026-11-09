@@ -54,8 +54,8 @@ The browser runs **on the server**, with network requests tunneled through the e
 - `computer`: `status` (screens/capabilities), `screenshot`, `click`, `drag`, `scroll`, `key`, `text`, `release`. Inputs use the same remote desktop protocol as the manual UI. `text` replaces the client's clipboard and pastes using its platform modifier. GPU-only/view-only clients cannot gain input capabilities through this tool.
 - Server-mode conversations must supply `device`; device-bound conversations cannot route to a different device. Existing tool approval rules apply, and offline/password-protected routing follows the same authorization rules as device tools.
 - Desktop input requires a screenshot from the same client connection/source/dimensions within two minutes. Coordinates use the returned image pixels. A desktop lease prevents other conversations from interleaving operations; release it explicitly or wait for the two-minute idle expiry.
-- The Agent right panel follows the actual target, including server-mode conversations. Its control bar allows user takeover and returning control. Takeover cancels and drains the in-flight operation before enabling manual interaction. Manual input through the ordinary desktop panel also pauses the owning Agent. Returning control enables subsequent tool calls; it does not submit a new chat message.
-- Browser controls remain bound to that conversation's tab during takeover. Independently opened native DevTools windows are still authorized manual browser clients; the control bar does not revoke their CDP access.
+- The Agent right panel supports multiple terminal, files, desktop and browser workspaces, each with a persisted device selection. Server-mode conversations require choosing a real client for these panels; they never connect a client endpoint to `@server`. The first desktop/browser slot follows tool targets; additional slots remain independent. Selecting another device detaches that slot from the old target until the next tool action.
+- Panels are directly interactive, without an Agent-control/takeover bar. Manual legacy desktop input cancels and drains an overlapping Agent operation and invalidates its screenshot; later tools can continue after taking a fresh screenshot. There is no persistent manual-control pause. Independent browser and GPU controls remain authorized native clients.
 - Screenshot results use validated JPEG image envelopes (up to 1 MiB encoded), preserving pixel dimensions. They render as image previews and are converted to vision attachments for providers, rather than truncated base64 text. Normal text output limits remain unchanged.
 
 Run the self-contained real Chrome integration with `RDEV_TEST_CHROME=1 go test ./internal/server -run TestBrowserAgentChromeIntegration -count=1`. Its synthetic client only permits a local fixture under a hostname that is unreachable outside the device tunnel. It verifies routing, DOM observation, Unicode fill/click, screenshots, CDP errors and conversation isolation. Desktop tests use a protocol fixture; physical display/input behavior still depends on the client's platform capabilities.
@@ -71,8 +71,14 @@ Agent 截图不再依赖服务端 FFmpeg，也不再传输/解码连续视频。
 
 Go 客户端声明 `desktop.agentVersion=1`，通过 `desktop_start` 的 `onDemand=true` 开启可复用捕获会话，再由 `desktop_snapshot` 请求一帧 JPEG；键鼠仍走轻量控制通道。该公共实现覆盖 Go Windows/macOS/Linux 的已有捕获后端，不改变各平台权限要求或凭空补足不支持的捕获后端。Rust GPU 各构建变体共享原生截图实现；Android 支持原有 MediaProjection 平台范围，输入仍需无障碍权限。
 
-同一 Agent 会话/设备复用控制连接和捕获源，键鼠操作不额外截图。显式释放、用户接管、会话删除/重置、连接替换或两分钟空闲关闭 Agent 通道。输入检查截图对应的设备连接、来源与两分钟有效期；操作后需再次截图验证结果，发送成功不等于应用已处理。Go 旧客户端保留原桌面协议回退；GPU/Android 旧客户端缺少原生截图能力时明确提示升级，不再要求安装服务端 FFmpeg。新接口需要同时更新服务端和客户端。
+同一 Agent 会话/设备复用控制连接和捕获源，键鼠操作不额外截图。显式释放、普通桌面手动输入、会话删除/重置、连接替换或两分钟空闲关闭 Agent 通道。输入检查截图对应的设备连接、来源与两分钟有效期；操作后需再次截图验证结果，发送成功不等于应用已处理。Go 旧客户端保留原桌面协议回退；GPU/Android 旧客户端缺少原生截图能力时明确提示升级，不再要求安装服务端 FFmpeg。新接口需要同时更新服务端和客户端。
 
 已经打开的 Agent 桌面面板按设备保持稳定组件身份；收到工具动作不重新挂载。GPU 屏幕改变时在原连接上更新 Config，同一屏幕不重复配置。网页查看通道和 Agent 控制通道各自独立、均复用；没有让工具依赖用户浏览器必须在线。
 
 验证：原生 PNG WebSocket/隧道 fixture 验证截图、点击、Unicode、键盘及五次调用仅建立一条连接/一次 Config/两次截图；Go 测试覆盖按需捕获、会话复用、释放与旧协议回退；Rust 测试覆盖像素通道、stride、非法缓冲区和缩放；Android 单元测试覆盖截图不订阅视频。跨平台物理设备仍需实机验收。
+
+## 服务端 Agent 对话管理
+
+仅服务端 Agent 提供 `agent_sessions`（list/read，历史支持 offset/limit）和 `manage_agent_session`（create/rename/delete，必须指定 device）。离线设备已有历史也可管理，权限检查沿用跨设备会话管理规则；受保护设备及离线跨设备管理需要管理员认证。修改操作沿用工具审批，删除复用 UI 的取消工作、持久化清理和广播流程，禁止删除正在执行该工具的调用方对话。管理不会向目标会话发送消息，也不会切换当前浏览器聊天视图。
+
+右侧每个文件管理页签的传输记录独立存储。跨设备文件预览通过该设备已授权的 Files 连接读取，请求和回复同时校验设备及请求 ID，不使用服务端会话的同名文件路径。

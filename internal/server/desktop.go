@@ -158,7 +158,7 @@ func (h *desktopWSHandler) OnMessage(socket *gws.Conn, message *gws.Message) {
 			return
 		}
 		if msg.InputType != "cursor_move" {
-			bc.srv.takeDesktopControl(bc.deviceID)
+			bc.srv.interruptDesktopAutomation(bc.deviceID)
 		}
 		bc.client.Send(input)
 	case "clipboard_get":
