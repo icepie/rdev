@@ -5,6 +5,7 @@ import { useI18n } from "../lib/i18n";
 import { Button } from "./button";
 import { Input } from "./input";
 import { Icon } from "./icon";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./select";
 
 interface Target { id: string; title: string; url: string }
 
@@ -82,9 +83,14 @@ export function BrowserPanel({ device, visible = true }: { device: string; visib
       <span className="min-w-0 flex-1 truncate">{t("nav.browser")}{base && ` · ${exitDevice}`}</span>
       {base && <>
         <Button variant="ghost" size="sm" disabled={busy} onClick={() => void newTab()} aria-label={t("agent.newTabLabel")}><Icon name="Plus" className="size-4" /></Button>
-        <select aria-label={t("browser.tabs")} value={selected} onChange={e => setSelected(e.target.value)} className="max-w-48 min-w-0 rounded border border-border bg-background px-2 py-1">
-          {targets.map(target => <option key={target.id} value={target.id}>{target.title || target.url}</option>)}
-        </select>
+        <Select value={selected} onValueChange={setSelected} disabled={targets.length === 0}>
+          <SelectTrigger aria-label={t("browser.tabs")} className="h-8 w-auto min-w-0 max-w-48 text-xs">
+            <SelectValue placeholder={t("browser.tabs")} />
+          </SelectTrigger>
+          <SelectContent>
+            {targets.map(target => <SelectItem key={target.id} value={target.id}>{target.title || target.url}</SelectItem>)}
+          </SelectContent>
+        </Select>
         {inspector && <a href={inspector} target="_blank" rel="noreferrer" className="rounded px-2 py-1 hover:bg-state-hover">{t("browser.expand")}</a>}
         <Button variant="ghost" size="sm" disabled={busy} onClick={() => void stop()}>{t("browser.stop")}</Button>
       </>}
@@ -94,10 +100,14 @@ export function BrowserPanel({ device, visible = true }: { device: string; visib
     {!base ? <form onSubmit={e => { e.preventDefault(); void start(); }} className="m-auto flex w-full max-w-sm flex-col gap-3 p-6">
       <p className="text-sm text-muted-foreground">{t("browser.intro")}</p>
       <label className="flex flex-col gap-1 text-xs">{t("browser.exitDevice")}
-        <select disabled={busy} value={exitDevice} onChange={e => { setExitDevice(e.target.value); setPassword(getDevicePassword(e.target.value)); }} className="h-9 rounded-md border border-border bg-background px-2">
-          <option value="">{t("agent.selectDeviceShort")}</option>
-          {devices.map(d => <option key={d.id} value={d.id}>{d.id}</option>)}
-        </select>
+        <Select disabled={busy} value={exitDevice} onValueChange={value => { setExitDevice(value); setPassword(getDevicePassword(value)); }}>
+          <SelectTrigger aria-label={t("browser.exitDevice")} className="w-full">
+            <SelectValue placeholder={t("agent.selectDeviceShort")} />
+          </SelectTrigger>
+          <SelectContent>
+            {devices.map(d => <SelectItem key={d.id} value={d.id}>{d.id}</SelectItem>)}
+          </SelectContent>
+        </Select>
       </label>
       <Input disabled={busy} type="password" aria-label={t("browser.password")} placeholder={t("browser.password")} value={password} onChange={e => setPassword(e.target.value)} />
       <Button type="submit" disabled={!online || busy}>{t(busy ? "common.loading" : "browser.start")}</Button>
