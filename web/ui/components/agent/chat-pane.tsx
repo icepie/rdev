@@ -51,7 +51,7 @@ import {
 } from "../dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../tooltip";
 import { Icon } from "../icon";
-import { OsIcon } from "../os-icon";
+import { DeviceIcon } from "../device-icon";
 import { ApprovalCard } from "./approval-card";
 import { AskCard } from "./ask-card";
 import { ContextWindowIndicator } from "./context-window-indicator";
@@ -1157,7 +1157,7 @@ export function ChatPaneView({
         {/* bb footer strip: device + connection | permission mode + context usage */}
         <div className="mt-1 max-md:mt-0 flex min-h-6 max-h-6 max-md:pointer-coarse:min-h-11 max-md:pointer-coarse:max-h-11 select-none items-center justify-between gap-2 overflow-hidden pl-[15px] pr-3.5">
           <span className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden text-xs text-muted-foreground">
-            <OsIcon os={deviceOs} className="size-4 shrink-0" />
+            {device && <DeviceIcon device={device} os={deviceOs} className="size-4" />}
             <span className="min-w-0 truncate">
               {/* Short placeholder: the empty body above already shows the
                * full guidance; repeating it here duplicates the line. */}

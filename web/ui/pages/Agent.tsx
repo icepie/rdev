@@ -73,7 +73,7 @@ import {
   DropdownMenuTrigger,
 } from "../components/dropdown-menu";
 import { Icon } from "../components/icon";
-import { OsIcon } from "../components/os-icon";
+import { DeviceIcon } from "../components/device-icon";
 import { useCopy } from "../lib/clipboard";
 import { SERVER_AGENT_ID } from "../components/agent/protocol";
 import { ChatPaneView } from "../components/agent/chat-pane";
@@ -2176,9 +2176,7 @@ export function AgentPage() {
         openInFocusedPane(th);
       }}
     >
-      {sidebarView.organize === "flat" && (th.device === SERVER_AGENT_ID
-        ? <Icon name="Bot" className="size-3.5 shrink-0 text-subtle-foreground" />
-        : <OsIcon os={th.os} className="size-3.5 shrink-0 text-subtle-foreground" />)}
+      {sidebarView.organize === "flat" && <DeviceIcon device={th.device} os={th.os} />}
       {renamingId === `${th.device}:${th.id}` ? (
         /* bb inline rename: input replaces the title; Enter/blur commits,
          * Escape cancels. */
@@ -2558,7 +2556,7 @@ export function AgentPage() {
                       className="flex min-h-9 min-w-0 flex-1 cursor-pointer items-center gap-1.5 rounded-md px-1 text-left hover:bg-state-hover hover:text-foreground"
                     >
                       <Icon name="ChevronRight" className={cn("size-3 shrink-0 transition-transform", !collapsed && "rotate-90")} />
-                      {g.device === SERVER_AGENT_ID ? <Icon name="Bot" className="size-3.5 shrink-0" /> : <OsIcon os={g.os} className="size-3.5 shrink-0" />}
+                      <DeviceIcon device={g.device} os={g.os} />
                       <span className="min-w-0 flex-1 truncate font-medium">{g.device === SERVER_AGENT_ID ? t("agent.server") : g.device}</span>
                       <span className="shrink-0 text-2xs tabular-nums text-subtle-foreground">{g.rows.length}</span>
                       <span className={cn("size-1.5 shrink-0 rounded-full", sidebarDevices.some((d) => d.id === g.device && d.online) ? "bg-success" : "bg-muted-foreground/40")} />
@@ -2661,7 +2659,7 @@ export function AgentPage() {
               <DropdownMenuContent side="top" align="start">
                 <DropdownMenuItem onSelect={() => updateSidebarView({ deviceFilter: "" })}>{t("agent.allThreads")}</DropdownMenuItem>
                 <DropdownMenuSeparator />
-                {sidebarDevices.map((d) => <DropdownMenuItem key={d.id} onSelect={() => { updateSidebarView({ deviceFilter: "" }); setDevice(d.id); }}><OsIcon os={d.os} className="size-3.5" /><span className="max-w-64 truncate">{d.id === SERVER_AGENT_ID ? t("agent.server") : d.id}</span>{d.id === device && <Icon name="Check" className="size-3.5" />}</DropdownMenuItem>)}
+                {sidebarDevices.map((d) => <DropdownMenuItem key={d.id} onSelect={() => { updateSidebarView({ deviceFilter: "" }); setDevice(d.id); }}><DeviceIcon device={d.id} os={d.os} /><span className="max-w-64 truncate">{d.id === SERVER_AGENT_ID ? t("agent.server") : d.id}</span>{d.id === device && <Icon name="Check" className="size-3.5" />}</DropdownMenuItem>)}
               </DropdownMenuContent>
             </DropdownMenu>
           </div>

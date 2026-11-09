@@ -1,7 +1,14 @@
 import { cn } from "../lib/utils";
+import { Icon } from "./icon";
 
-/* OS brand marks (Simple Icons / Microsoft logo geometry), drawn as
- * currentColor fills so they inherit text color like bb icons. */
+/* Like BB provider icons, identity marks have separate light/dark tints.
+ * Keep geometry monochrome; color-scheme follows the selected app theme. */
+const OS_TINTS: Record<string, string> = {
+  linux: "light-dark(#946200, #e9b949)",
+  macos: "light-dark(#64748b, #cbd5e1)",
+  windows: "light-dark(#0078d4, #60baff)",
+  android: "light-dark(#218547, #65d992)",
+};
 
 const OS_PATHS: Record<string, { d: string; viewBox: string }> = {
   linux: {
@@ -40,13 +47,14 @@ export function OsIcon({
   className?: string;
 }) {
   const key = normalizeOs(os);
-  if (!key) return null;
+  if (!key) return <Icon name="Monitor" className={cn("size-3.5 shrink-0", className)} style={{ color: "light-dark(#64748b, #94a3b8)" }} aria-hidden="true" />;
   const icon = OS_PATHS[key];
   return (
     <svg
       viewBox={icon.viewBox}
       fill="currentColor"
       aria-hidden="true"
+      style={{ color: OS_TINTS[key] }}
       className={cn("size-3.5 shrink-0 align-middle", className)}
     >
       <path d={icon.d} />
