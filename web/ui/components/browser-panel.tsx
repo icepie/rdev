@@ -5,15 +5,17 @@ import { useI18n } from "../lib/i18n";
 import { Button } from "./button";
 import { Input } from "./input";
 import { Icon } from "./icon";
+import { DeviceIcon } from "./device-icon";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./select";
 
 interface Target { id: string; title: string; url: string }
 
 /** Chrome's own inspector frontend includes its interactive Screencast app. */
-export function BrowserPanel({ device, visible = true }: { device: string; visible?: boolean }) {
+export function BrowserPanel({ device, visible = true, deviceSelection = "inline" }: { device: string; visible?: boolean; deviceSelection?: "inline" | "sidebar" }) {
   const { t } = useI18n();
   const { devices } = useDevices();
-  const [exitDevice, setExitDevice] = useState(device === "@server" ? "" : device);
+  const [selectedDevice, setExitDevice] = useState(device === "@server" ? "" : device);
+  const exitDevice = deviceSelection === "sidebar" ? device : selectedDevice;
   const [password, setPassword] = useState(() => getDevicePassword(device));
   const [base, setBase] = useState("");
   const [targets, setTargets] = useState<Target[]>([]);
@@ -80,7 +82,7 @@ export function BrowserPanel({ device, visible = true }: { device: string; visib
   return <div className="flex min-h-0 flex-1 flex-col bg-background">
     <div className="flex min-h-11 flex-wrap items-center gap-2 border-b border-border-seam px-3 py-2 text-xs">
       <Icon name="Globe" className="size-4 text-muted-foreground" />
-      <span className="min-w-0 flex-1 truncate">{t("nav.browser")}{base && ` · ${exitDevice}`}</span>
+      <span className="min-w-0 flex-1 truncate">{t("nav.browser")}{exitDevice && ` · ${exitDevice}`}</span>
       {base && <>
         <Button variant="ghost" size="sm" disabled={busy} onClick={() => void newTab()} aria-label={t("agent.newTabLabel")}><Icon name="Plus" className="size-4" /></Button>
         <Select value={selected} onValueChange={setSelected} disabled={targets.length === 0}>
@@ -99,7 +101,12 @@ export function BrowserPanel({ device, visible = true }: { device: string; visib
     {!online && base && <p role="status" className="px-3 py-2 text-xs text-muted-foreground">{t("browser.offline")}</p>}
     {!base ? <form onSubmit={e => { e.preventDefault(); void start(); }} className="m-auto flex w-full max-w-sm flex-col gap-3 p-6">
       <p className="text-sm text-muted-foreground">{t("browser.intro")}</p>
-      <label className="flex flex-col gap-1 text-xs">{t("browser.exitDevice")}
+      {deviceSelection === "sidebar" ? (
+        exitDevice ? <div className="flex min-w-0 items-center gap-2 text-sm">
+          <DeviceIcon device={exitDevice} os={devices.find(d => d.id === exitDevice)?.os} />
+          <span className="min-w-0 truncate" title={exitDevice}>{exitDevice}</span>
+        </div> : <p className="text-sm text-muted-foreground">{t("browser.selectFromSidebar")}</p>
+      ) : <label className="flex flex-col gap-1 text-xs">{t("browser.exitDevice")}
         <Select disabled={busy} value={exitDevice} onValueChange={value => { setExitDevice(value); setPassword(getDevicePassword(value)); }}>
           <SelectTrigger aria-label={t("browser.exitDevice")} className="w-full">
             <SelectValue placeholder={t("agent.selectDeviceShort")} />
@@ -108,9 +115,11 @@ export function BrowserPanel({ device, visible = true }: { device: string; visib
             {devices.map(d => <SelectItem key={d.id} value={d.id}>{d.id}</SelectItem>)}
           </SelectContent>
         </Select>
-      </label>
-      <Input disabled={busy} type="password" aria-label={t("browser.password")} placeholder={t("browser.password")} value={password} onChange={e => setPassword(e.target.value)} />
-      <Button type="submit" disabled={!online || busy}>{t(busy ? "common.loading" : "browser.start")}</Button>
+      </label>}
+      {exitDevice && <>
+        {devices.find(d => d.id === exitDevice)?.hasPassword && <Input disabled={busy} type="password" aria-label={t("browser.password")} placeholder={t("browser.password")} value={password} onChange={e => setPassword(e.target.value)} />}
+        <Button type="submit" disabled={!online || busy}>{t(busy ? "common.loading" : "browser.start")}</Button>
+      </>}
       <p className="text-xs text-muted-foreground">{t("browser.lifetime")}</p>
     </form> : inspector && visible ? <iframe title={t("browser.preview")} src={inspector} referrerPolicy="no-referrer" className="min-h-0 w-full flex-1 border-0" allow="clipboard-read; clipboard-write" /> : <p role="status" className="p-4 text-xs text-muted-foreground">{t("common.loading")}</p>}
   </div>;

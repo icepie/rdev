@@ -12,7 +12,7 @@ export function BrowserPage() {
   return <SplitPageShell storageKey="rdev.browser.rail" selectedDevice={device} onDevicePick={id => setParams({ device: id })}>
     <div className="flex h-full min-h-0 flex-col">
       <div className="md:hidden"><MobileSidebarTrigger /></div>
-      <BrowserPanel key={device} device={device} />
+      <BrowserPanel key={device} device={device} deviceSelection="sidebar" />
     </div>
   </SplitPageShell>;
 }

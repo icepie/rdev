@@ -10,7 +10,8 @@ vi.mock("../ui/lib/devices", () => ({ useDevices: () => ({ devices: [{ id: "lapt
 vi.mock("../ui/components/icon", () => ({ Icon: () => null }));
 const { BrowserPanel } = await import("../ui/components/browser-panel");
 
-it("starts only on request, connects native DevTools over wss and releases the browser", async () => {
+it.each(["inline", "sidebar"])("%s selection starts the chosen device, connects DevTools and releases the browser", async deviceSelection => {
+ apiFetch.mockReset();
  const dom = new JSDOM('<div id="root"></div>', { url: "https://rdev.test/browser" });
  Object.assign(globalThis, { window: dom.window, document: dom.window.document, location: dom.window.location, IS_REACT_ACT_ENVIRONMENT: true });
  apiFetch.mockResolvedValue(new Response(JSON.stringify({ base: "/api/browser/view/test-cap" })));
@@ -22,8 +23,10 @@ it("starts only on request, connects native DevTools over wss and releases the b
  globalThis.fetch = fetched;
  const root = createRoot(document.getElementById("root"));
  try {
-  await act(() => root.render(createElement(BrowserPanel,{device:"laptop"})));
+  await act(() => root.render(createElement(BrowserPanel,{device:"laptop",deviceSelection})));
   expect(apiFetch).not.toHaveBeenCalled();
+  expect(!!document.querySelector('[role="combobox"]')).toBe(deviceSelection === "inline");
+  expect(document.querySelector('input[type="password"]')).toBeNull();
   await act(async () => document.querySelector("form").dispatchEvent(new dom.window.Event("submit",{bubbles:true,cancelable:true})));
   expect(JSON.parse(apiFetch.mock.calls[0][1].body)).toEqual({device:"laptop",password:""});
   const frame = document.querySelector("iframe");
