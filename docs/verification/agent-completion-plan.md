@@ -6,7 +6,7 @@ Goal remains active until every item is implemented and verified. Browser/CDP (i
 - [ ] Grouping and merged dispatch
 - [ ] Scheduled dispatch
 - [ ] Drag reorder
-- [ ] Edit holds prevent automatic admission; expire/release safely
+- [x] Edit holds prevent automatic admission; expire/release safely
 - [ ] Failure status and explicit retry
 - Existing foundation: identity-based edit/reorder with stale-write rejection; attachments retained.
 
@@ -43,3 +43,12 @@ Validation must cover user-visible behavior and concurrency, not merely code pre
 - Full Web suite: 77 files / 298 tests passed. Typecheck and production build passed.
 - Markdown images now use native lazy loading and async decoding; existing conversation image thumbnails already had these attributes. Full large-image memory/rendering verification remains open.
 - No claim of complete offline UX, Agent recovery, permissions/audit, or queue parity is made by this increment.
+
+## Increment 2 evidence
+
+- Queue editing now acquires a socket-owned, token-scoped 60-second lease before opening; the UI renews every 20 seconds and releases on close, save, thread switch or unmount.
+- Server disconnect releases owned leases. Stale renewal timers cannot expire newer leases. FIFO admission pauses at a held head; native and RPC promotion cannot take a held item.
+- Queue resumption shares atomic turn admission and model application with normal draining. Deleting a held head unblocks subsequent work; ordinary deletion keeps existing behavior.
+- `agent_queue_hold_test.go` covers ownership conflicts, stale renewal timer, expiration, disconnect cleanup, deleted thread rejection, and eight simultaneous resume calls producing exactly one provider request (race tests passed).
+- Composer regression covers acquiring before editing and releasing on cancel. Full Web suite: 77 files / 298 tests passed; typecheck and build passed.
+- Grouping, scheduling, drag ordering, retry and remaining goal items remain outstanding.

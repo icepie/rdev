@@ -163,9 +163,19 @@ export function ChatPaneView({
   const { state, ops } = sink;
   const { items, todos, queue, queueIds, queueModes = [], queueError = "", running, stopping, turnUsage, currentTool, workingSince } = state;
 
-  const [queueEdit, setQueueEdit] = useState<{ id: string; original: string; text: string } | null>(null);
+  const [queueEdit, setQueueEdit] = useState<{ id: string; original: string; text: string; token: string } | null>(null);
   const [queueSaving, setQueueSaving] = useState(false);
   useEffect(() => setQueueEdit(null), [device, threadId]);
+  const editID = queueEdit?.id, editToken = queueEdit?.token, editOriginal = queueEdit?.original;
+  useEffect(() => {
+    if (!editID || !editToken) return;
+    const timer = window.setInterval(() => sendRaw({ op: "hold_queue", thread: threadId,
+      queueId: editID, editToken, expectedText: editOriginal }), 20000);
+    return () => {
+      window.clearInterval(timer);
+      sendRaw({ op: "release_queue", thread: threadId, queueId: editID, editToken });
+    };
+  }, [editID, editToken, editOriginal, threadId, sendRaw]);
   const draftKey = JSON.stringify([device, threadId]);
   useEffect(() => () => clearQueueReturns(ops.queueReturns.current), [draftKey, ops.queueReturns]);
   const [input, setInput] = useComposerTextDraft(draftKey);
@@ -797,7 +807,7 @@ export function ChatPaneView({
                 <Button size="sm" disabled={!ready || queueSaving || !queueIds.includes(queueEdit.id)} onClick={() => {
                   setQueueSaving(true);
                   requestQueueMutation(ops.queueReturns.current, sendRaw, { op: "update_queue", thread: threadId,
-                    queueId: queueEdit.id, expectedText: queueEdit.original, text: queueEdit.text },
+                    queueId: queueEdit.id, editToken: queueEdit.token, expectedText: queueEdit.original, text: queueEdit.text },
                     () => setQueueEdit(null), () => setQueueSaving(false));
                 }}>{t("common.save")}</Button>
               </div>
@@ -816,7 +826,12 @@ export function ChatPaneView({
                   title={t("agent.queueEditHint")}
                   disabled={!ready || !queueIds[i] || queueSaving || queueModes[i] === "steer" || queueModes[i] === "notification"}
                   className="min-w-0 flex-1 cursor-pointer truncate text-left transition-colors hover:text-foreground"
-                  onClick={() => setQueueEdit({ id: queueIds[i], original: q, text: q })}
+                  onClick={() => {
+                    const edit = { id: queueIds[i], original: q, text: q, token: crypto.randomUUID() };
+                    setQueueSaving(true);
+                    requestQueueMutation(ops.queueReturns.current, sendRaw, { op: "hold_queue", thread: threadId,
+                      queueId: edit.id, expectedText: q, editToken: edit.token }, () => setQueueEdit(edit), () => setQueueSaving(false));
+                  }}
                 >
                   {q || t("agent.queuedImages")}
                 </button>

@@ -3,6 +3,7 @@ package server
 import (
 	"slices"
 	"strings"
+	"time"
 )
 
 // Edit in place under the same lock as admission. A message already claimed
@@ -20,6 +21,7 @@ func (h *agentWSHandler) handleQueueMutation(ac *agentConn, msg agentMsg) {
 	}
 	th := ac.entry.threads[threadID]
 	failure := "Queued message is no longer available."
+	var leaseUntil time.Time
 	if th != nil {
 		for i := range th.queue {
 			item := &th.queue[i]
@@ -30,7 +32,28 @@ func (h *agentWSHandler) handleQueueMutation(ac *agentConn, msg agentMsg) {
 				failure = "Only pending follow-up messages can be edited or reordered."
 				break
 			}
-			if msg.Op == "update_queue" {
+			held := time.Now().Before(item.editUntil)
+			owns := item.editOwner == ac.socket && item.editToken == msg.EditToken
+			if held && !owns {
+				failure = "This queued message is being edited in another window."
+				break
+			}
+			if msg.Op == "hold_queue" {
+				if msg.EditToken == "" || len(msg.EditToken) > 128 || msg.ExpectedText == nil || *msg.ExpectedText != item.text {
+					failure = "The message changed. Reopen it to edit."
+					break
+				}
+				item.editOwner, item.editToken, item.editUntil = ac.socket, msg.EditToken, time.Now().Add(queueEditLease)
+				leaseUntil = item.editUntil
+				failure = ""
+			} else if msg.Op == "release_queue" {
+				if owns {
+					item.editOwner = nil
+					item.editToken = ""
+					item.editUntil = time.Time{}
+				}
+				failure = ""
+			} else if msg.Op == "update_queue" {
 				switch {
 				case msg.ExpectedText == nil || *msg.ExpectedText != item.text:
 					failure = "This queued message changed in another window. Reopen it before saving."
@@ -40,6 +63,9 @@ func (h *agentWSHandler) handleQueueMutation(ac *agentConn, msg agentMsg) {
 					failure = "Queued message cannot be empty."
 				default:
 					item.text = msg.Text
+					item.editOwner = nil
+					item.editToken = ""
+					item.editUntil = time.Time{}
 					failure = ""
 				}
 			} else {
@@ -76,9 +102,15 @@ func (h *agentWSHandler) handleQueueMutation(ac *agentConn, msg agentMsg) {
 		}
 	}
 	s.agentSessionsMu.Unlock()
+	if !leaseUntil.IsZero() {
+		time.AfterFunc(time.Until(leaseUntil), func() { s.expireQueueEdit(ac.entry, th, msg.QueueID, msg.EditToken, leaseUntil) })
+	}
 	success := failure == ""
 	ac.writeJSON(agentMsg{Op: "queue_updated", Thread: threadID, ID: msg.ID, QueueID: msg.QueueID, IsError: failure != "", Message: failure, Success: &success})
 	if th != nil {
 		s.broadcastQueue(ac.entry, th)
+		if failure == "" && msg.Op != "hold_queue" {
+			s.resumeAgentQueue(ac.entry, th)
+		}
 	}
 }

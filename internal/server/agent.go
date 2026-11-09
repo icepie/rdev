@@ -118,6 +118,7 @@ type agentMsg struct {
 	// Index is the dequeue payload: position of the queued follow-up to drop.
 	Index            int      `json:"index,omitempty"`
 	QueueID          string   `json:"queueId,omitempty"`
+	EditToken        string   `json:"editToken,omitempty"`
 	ExpectedText     *string  `json:"expectedText,omitempty"`
 	ExpectedQueueIDs []string `json:"expectedQueueIds,omitempty"`
 	BeforeID         string   `json:"beforeId,omitempty"`
@@ -287,12 +288,15 @@ const agentApprovalTimeout = 5 * time.Minute
 
 // agentQueuedChat is one chat message waiting behind a running turn.
 type agentQueuedChat struct {
-	id       string
-	steering bool // inject at the next settled model/tool boundary
-	display  json.RawMessage
-	text     string
-	images   []agent.MessageImage
-	model    string // requested model ("" = keep the thread's)
+	editOwner *gws.Conn
+	editToken string
+	editUntil time.Time
+	id        string
+	steering  bool // inject at the next settled model/tool boundary
+	display   json.RawMessage
+	text      string
+	images    []agent.MessageImage
+	model     string // requested model ("" = keep the thread's)
 }
 
 // takeQueuedChat releases the removed slot, including original image data.
@@ -1332,6 +1336,7 @@ func (h *agentWSHandler) OnClose(socket *gws.Conn, err error) {
 		h.srv.agentSessionsMu.Lock()
 		delete(ac.entry.subs, socket)
 		h.srv.agentSessionsMu.Unlock()
+		h.srv.releaseQueueEdits(ac)
 	}
 }
 
@@ -1439,7 +1444,7 @@ func (h *agentWSHandler) OnMessage(socket *gws.Conn, message *gws.Message) {
 		h.handleAskResponse(ac, msg.ID, msg.Answer)
 	case "steer":
 		h.handleSteer(ac, msg.Text, msg.Thread, msg.Images)
-	case "update_queue", "reorder_queue":
+	case "hold_queue", "release_queue", "update_queue", "reorder_queue":
 		h.handleQueueMutation(ac, msg)
 	case "promote_queue":
 		h.handlePromoteQueued(ac, msg.Thread, msg.QueueID)
@@ -1647,13 +1652,14 @@ func (h *agentWSHandler) handleChatWithImages(ac *agentConn, entry *agentSession
 		}
 		return
 	}
-	if th.running {
+	if th.running || (len(th.queue) > 0 && (entry.deviceID == agentServerDeviceID || entry.client != nil)) {
 		// Queue the message; it becomes a follow-up turn when the current
 		// one finishes. Queued chats remember their requested model.
 		th.queue = append(th.queue, agentQueuedChat{text: text, images: images, model: modelRef})
 		entry.lastActive = time.Now()
 		srv.agentSessionsMu.Unlock()
 		srv.broadcastQueue(entry, th)
+		srv.resumeAgentQueue(entry, th)
 		return
 	}
 	// Pick up a device reconnect that happened while a turn was running.
@@ -1771,6 +1777,9 @@ func (h *agentWSHandler) handleDequeueItem(ac *agentConn, threadRef string, inde
 	}
 	if th != nil {
 		srv.broadcastQueue(entry, th)
+		if removed != nil && removed.editToken != "" {
+			srv.resumeAgentQueue(entry, th)
+		}
 	}
 }
 
@@ -2829,22 +2838,11 @@ func (s *Server) runAgentTurn(entry *agentSessionEntry, th *agentThread, turn ag
 	var next agentQueuedChat
 	var nextFrame agentMsg
 	var nextTurn agentTurnSnapshot
-	hasNext := len(th.queue) > 0 && (entry.deviceID == agentServerDeviceID || entry.client != nil)
+	hasNext := queueHeadReady(entry, th, time.Now())
 	prefsDirty := false
 	if hasNext {
 		next = takeQueuedChat(&th.queue, 0)
-		// A queued chat may carry a model switch; apply it before starting.
-		if next.model != "" && next.model != th.model {
-			if provider, model, canonical, err := s.Agent.Resolve(next.model); err == nil {
-				newSession := s.buildAgentSession(entry, th, entry.client, provider, model)
-				newSession.SetHistory(th.session.History())
-				th.session = newSession
-				th.sessionClient = entry.client
-				th.model = canonical
-				entry.model = canonical // last-used default for new threads
-				prefsDirty = true
-			}
-		}
+		prefsDirty = s.applyQueuedModelLocked(entry, th, next)
 		nextFrame = s.startAgentTurnLocked(entry, th, next.text, next.images, next.display)
 		nextTurn = snapshotAgentTurnLocked(th)
 	}

@@ -54,6 +54,9 @@ func (h *agentWSHandler) handleRPCRemoveQueued(ac *agentConn, request agentMsg, 
 	ac.writeJSON(agentMsg{Type: "response", Command: request.Command, ID: request.ID, Success: &success, Data: raw})
 	if removed != nil {
 		s.broadcastQueue(ac.entry, th)
+		if removed.editToken != "" {
+			s.resumeAgentQueue(ac.entry, th)
+		}
 	}
 }
 
@@ -105,7 +108,7 @@ func (h *agentWSHandler) handleRPCPromoteQueued(ac *agentConn, request agentMsg)
 	}
 	index := -1
 	for i, item := range th.queue {
-		if item.steering || len(item.display) > 0 || queueMode(item, th.model) != "follow_up" || item.text != request.Message {
+		if item.steering || time.Now().Before(item.editUntil) || len(item.display) > 0 || queueMode(item, th.model) != "follow_up" || item.text != request.Message {
 			continue
 		}
 		if request.QueueID != "" && item.id != request.QueueID {

@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"strings"
+	"time"
 )
 
 // OMP promote_queued_message appends a follow-up to steering atomically. Use
@@ -59,6 +60,10 @@ func (h *agentWSHandler) handlePromoteQueued(ac *agentConn, threadRef, queueID s
 			}
 			if th.turnCommand {
 				message = "The current session command must finish before guidance can run."
+				break
+			}
+			if time.Now().Before(item.editUntil) {
+				message = "Finish editing this message before promoting it."
 				break
 			}
 			switch queueMode(item, th.model) {

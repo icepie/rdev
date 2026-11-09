@@ -112,7 +112,7 @@ func (h *agentWSHandler) handleAgentRPCFrame(ac *agentConn, raw []byte) bool {
 		fail("invalid_request", "RPC frames must not contain op")
 		return true
 	}
-	if ac.deviceID != agentServerDeviceID {
+	if ac.deviceID != "" && ac.deviceID != agentServerDeviceID {
 		if _, online := h.srv.GetClient(ac.deviceID); !online {
 			switch request.Command {
 			case "get_state", "get_messages", "get_models", "get_available_models", "get_commands", "get_session_stats":
@@ -393,7 +393,7 @@ func (h *agentWSHandler) handleRPCQueuedInput(ac *agentConn, request agentMsg) {
 		h.writeRPCError(ac, request, "invalid_request", "unknown thread")
 		return
 	}
-	queued := th.running
+	queued := th.running || len(th.queue) > 0
 	var start agentMsg
 	var turn agentTurnSnapshot
 	if queued {
@@ -416,6 +416,7 @@ func (h *agentWSHandler) handleRPCQueuedInput(ac *agentConn, request agentMsg) {
 	ac.writeJSON(agentMsg{Type: "response", Command: request.Command, ID: request.ID, Success: &success})
 	if queued {
 		s.broadcastQueue(ac.entry, th)
+		s.resumeAgentQueue(ac.entry, th)
 	} else {
 		s.agentBroadcastTurn(ac.entry, th, start)
 		s.goAgent(func() { s.runAgentTurn(ac.entry, th, turn, text, images) })

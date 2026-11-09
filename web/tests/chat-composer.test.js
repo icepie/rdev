@@ -317,12 +317,15 @@ it("preserves composer intent across modified keys, image loading and thread swi
     expect(document.querySelector('button[title="agent.queueEditHint"]').textContent).toBe("agent.queuedImages");
     await act(async () => document.querySelector('button[title="agent.queueEditHint"]').click());
     const removal = sent.at(-1);
-    expect(removal).not.toMatchObject({ op: "dequeue", queueId: "image-row" });
+    expect(removal).toMatchObject({ op: "hold_queue", queueId: "image-row", expectedText: "" });
+    expect(document.querySelector('textarea[aria-label="agent.queueEdit"]')).toBeNull();
+    await act(async () => acceptQueueRemoval(props.sink.ops.queueReturns.current, { id: removal.id, removed: true, text: "" }));
     const queuedEditor = document.querySelector('textarea[aria-label="agent.queueEdit"]');
     expect(queuedEditor).not.toBeNull();
     expect(document.querySelector('textarea[role="combobox"]').value).toBe("");
     await act(async () => [...document.querySelectorAll("button")].find(button => button.textContent === "common.cancel").click());
     expect(document.querySelector('textarea[aria-label="agent.queueEdit"]')).toBeNull();
+    expect(sent.at(-1)).toMatchObject({ op: "release_queue", queueId: "image-row", editToken: removal.editToken });
     props.sink.state.running = true;
     await render();
     await attach("unreadable.png");
