@@ -266,7 +266,13 @@ final class RDevGpuTunnel {
                 if (frame == null || frame.opcode != 1) return;
                 String text = new String(frame.payload, "UTF-8");
                 Log.i(TAG, "desktop ws " + text);
-                if (text.contains("GetClipboard")) {
+                if (text.equals("\"GetScreenshot\"")) {
+                    AndroidVideoHub.screenshot((png, error) -> {
+                        try {
+                            sendWsText(id, new JSONObject().put(error == null ? "Screenshot" : "Error", error == null ? png : error).toString());
+                        } catch (Exception e) { Log.w(TAG, "screenshot response failed", e); }
+                    });
+                } else if (text.contains("GetClipboard")) {
                     handleGetClipboard(id);
                 } else if (text.contains("SetClipboard")) {
                     handleSetClipboard(id, text);
@@ -466,7 +472,7 @@ final class RDevGpuTunnel {
 
     private void sendInitialCapabilities(long streamId) {
         try {
-            sendWsText(streamId, new JSONObject().put("CapturableList", new org.json.JSONArray().put("Android Screen (MediaProjection)")).toString());
+            sendWsText(streamId, new JSONObject().put("AgentCapabilities", new JSONObject().put("version", 1)).toString());
             sendWsText(streamId, encoderCapabilities());
             sendWsText(streamId, inputCapabilities());
             sendWsText(streamId, clipboardCapabilities());

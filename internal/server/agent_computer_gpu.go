@@ -1,14 +1,14 @@
 package server
 
 import (
-	"bufio"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"image/jpeg"
+	"image/png"
 	"net"
-	"os/exec"
 	"strconv"
 	"strings"
 	"sync"
@@ -18,36 +18,28 @@ import (
 	"github.com/lxzan/gws"
 )
 
-// GPU clients expose native input and fragmented MP4 through their existing
-// desktop tunnel, not desktop_start. Keep the control/decoder session between
+// GPU clients expose native input and on-demand images through their existing
+// desktop tunnel, not desktop_start. Keep the control/capture session between
 // tool calls; neither the web viewer nor the device capture is restarted.
 type gpuAgentDesktop struct {
 	gws.BuiltinEventHandler
-	client     *ClientConn
-	tunnel     *gpuDesktopTunnel
-	socket     *gws.Conn
-	messages   chan json.RawMessage
-	video      chan []byte
-	frames     chan []byte
-	done       chan struct{}
-	once       sync.Once
-	mu         sync.Mutex
-	cancel     context.CancelFunc
-	touched    atomic.Int64
-	source     string
-	sourceName string
-	configured bool
-	names      []string
+	client       *ClientConn
+	tunnel       *gpuDesktopTunnel
+	socket       *gws.Conn
+	messages     chan json.RawMessage
+	agentVersion int
+	done         chan struct{}
+	once         sync.Once
+	touched      atomic.Int64
+	source       string
+	sourceName   string
+	configured   bool
+	names        []string
 }
 
 func (d *gpuAgentDesktop) close() {
 	d.once.Do(func() {
 		close(d.done)
-		d.mu.Lock()
-		if d.cancel != nil {
-			d.cancel()
-		}
-		d.mu.Unlock()
 		if d.socket != nil {
 			_ = d.socket.NetConn().Close()
 		}
@@ -56,13 +48,6 @@ func (d *gpuAgentDesktop) close() {
 func (d *gpuAgentDesktop) OnClose(_ *gws.Conn, _ error) { d.close() }
 func (d *gpuAgentDesktop) OnMessage(_ *gws.Conn, m *gws.Message) {
 	defer m.Close()
-	if m.Opcode == gws.OpcodeBinary {
-		select {
-		case d.video <- bytes.Clone(m.Bytes()):
-		case <-d.done:
-		}
-		return
-	}
 	if m.Opcode == gws.OpcodeText {
 		select {
 		case d.messages <- bytes.Clone(m.Bytes()):
@@ -93,6 +78,12 @@ func (d *gpuAgentDesktop) wait(ctx context.Context, name string) (json.RawMessag
 			var fields map[string]json.RawMessage
 			if json.Unmarshal(raw, &fields) != nil {
 				continue
+			}
+			if value := fields["AgentCapabilities"]; value != nil {
+				var caps struct{ Version int }
+				if json.Unmarshal(value, &caps) == nil {
+					d.agentVersion = caps.Version
+				}
 			}
 			for _, key := range []string{"Error", "ConfigError"} {
 				if value, ok := fields[key]; ok {
@@ -156,7 +147,7 @@ func (s *Server) newGPUAgentDesktop(ctx context.Context, client *ClientConn) (*g
 	if tunnel == nil {
 		return nil, fmt.Errorf("GPU desktop tunnel is not connected; wait for the device to reconnect")
 	}
-	d := &gpuAgentDesktop{client: client, tunnel: tunnel, messages: make(chan json.RawMessage, 32), video: make(chan []byte, 16), frames: make(chan []byte, 1), done: make(chan struct{})}
+	d := &gpuAgentDesktop{client: client, tunnel: tunnel, messages: make(chan json.RawMessage, 32), done: make(chan struct{})}
 	socket, _, err := gws.NewClient(d, &gws.ClientOption{Addr: "ws://127.0.0.1:1701/ws", HandshakeTimeout: 5 * time.Second, ReadMaxPayloadSize: 8 << 20, NewDialer: func() (gws.Dialer, error) { return gpuAgentDialer{tunnel}, nil }})
 	if err != nil {
 		return nil, err
@@ -186,123 +177,46 @@ func (s *Server) newGPUAgentDesktop(ctx context.Context, client *ClientConn) (*g
 	return d, nil
 }
 
-// Decode locally, preserving the captured frame's pixel dimensions. A bounded
-// latest-frame mailbox prevents slow models from accumulating video in memory.
-func (d *gpuAgentDesktop) startDecoder() error {
-	executable, err := exec.LookPath("ffmpeg")
-	if err != nil {
-		return fmt.Errorf("GPU screenshots require FFmpeg on the server; install ffmpeg and retry")
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	cmd := exec.CommandContext(ctx, executable, "-hide_banner", "-loglevel", "error", "-threads", "1", "-protocol_whitelist", "pipe", "-probesize", "32768", "-analyzeduration", "0", "-f", "mp4", "-i", "pipe:0", "-an", "-threads", "1", "-f", "image2pipe", "-vcodec", "mjpeg", "-q:v", "6", "pipe:1")
-	input, err := cmd.StdinPipe()
-	if err != nil {
-		cancel()
-		return err
-	}
-	output, err := cmd.StdoutPipe()
-	if err != nil {
-		cancel()
-		input.Close()
-		return err
-	}
-	if err = cmd.Start(); err != nil {
-		cancel()
-		input.Close()
-		output.Close()
-		return err
-	}
-	// Published before any decoder goroutine can close the connection.
-	d.mu.Lock()
-	d.cancel = cancel
-	select {
-	case <-d.done:
-		cancel()
-	default:
-	}
-	d.mu.Unlock()
-	go func() {
-		defer input.Close()
-		for {
-			select {
-			case <-d.done:
-				return
-			case data := <-d.video:
-				if _, err := input.Write(data); err != nil {
-					return
-				}
-			}
-		}
-	}()
-	go func() {
-		defer d.close()
-		defer cmd.Wait()
-		reader := bufio.NewReader(output)
-		for {
-			frame, err := readGPUJPEG(reader)
-			if err != nil {
-				cancel()
-				return
-			}
-			select {
-			case d.frames <- frame:
-			default:
-				select {
-				case <-d.frames:
-				default:
-				}
-				select {
-				case d.frames <- frame:
-				default:
-				}
-			}
-		}
-	}()
-	return nil
-}
-func readGPUJPEG(r *bufio.Reader) ([]byte, error) {
-	var frame []byte
-	for {
-		part, err := r.ReadSlice(0xd9)
-		frame = append(frame, part...)
-		if len(frame) > 700*1024 {
-			return nil, fmt.Errorf("GPU screenshot exceeds image size limit")
-		}
-		if err != nil && err != bufio.ErrBufferFull {
-			return nil, err
-		}
-		if len(frame) > 1 && frame[len(frame)-2] == 0xff && frame[len(frame)-1] == 0xd9 {
-			if !bytes.HasPrefix(frame, []byte{0xff, 0xd8}) {
-				return nil, fmt.Errorf("invalid GPU screenshot")
-			}
-			return frame, nil
-		}
-	}
-}
+// Request one image from the client's capture worker. No video stream or decoder.
 func (d *gpuAgentDesktop) freshFrame(ctx context.Context) ([]byte, error) {
-	select {
-	case <-d.frames:
-	default:
+	if d.agentVersion < 1 {
+		return nil, fmt.Errorf("update this device's client to enable native Agent screenshots")
 	}
-	for {
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-d.done:
-			return nil, fmt.Errorf("GPU capture ended; check the device capture permissions and server FFmpeg decoder")
-		case frame := <-d.frames:
-			return frame, nil
-		case raw := <-d.messages:
-			var msg map[string]json.RawMessage
-			if json.Unmarshal(raw, &msg) == nil {
-				for _, k := range []string{"Error", "ConfigError"} {
-					if e := msg[k]; e != nil {
-						return nil, fmt.Errorf("GPU desktop: %s", e)
-					}
-				}
-			}
-		}
+	if err := d.send("GetScreenshot"); err != nil {
+		return nil, err
 	}
+	raw, err := d.wait(ctx, "Screenshot")
+	if err != nil {
+		return nil, err
+	}
+	var encoded string
+	if err = json.Unmarshal(raw, &encoded); err != nil {
+		return nil, err
+	}
+	if len(encoded) > 5<<20 {
+		return nil, fmt.Errorf("screenshot exceeds image size limit")
+	}
+	data, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return nil, err
+	}
+	// Native clients use PNG to avoid codec dependencies; normalize for vision tools.
+	cfg, err := png.DecodeConfig(bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+	if cfg.Width <= 0 || cfg.Height <= 0 || cfg.Width > 1280 || cfg.Height > 720 {
+		return nil, fmt.Errorf("invalid native screenshot dimensions")
+	}
+	img, err := png.Decode(bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+	var out bytes.Buffer
+	if err = jpeg.Encode(&out, img, &jpeg.Options{Quality: 80}); err != nil {
+		return nil, err
+	}
+	return out.Bytes(), nil
 }
 func gpuSourceIndex(source string, n int) (int, error) {
 	if source == "" || source == "auto" {
@@ -346,7 +260,7 @@ func (t *computerTool) executeGPU(ctx context.Context, client *ClientConn, a com
 		t.state.gpu[client.ID] = d
 	}
 	d.touched.Store(time.Now().UnixNano())
-	// Failed/canceled actions must not leave a stuck input or stale decoder.
+	// Failed/canceled actions must not leave a stuck input or stale capture.
 	success := false
 	defer func() {
 		if !success {
@@ -383,6 +297,9 @@ func (t *computerTool) executeGPU(ctx context.Context, client *ClientConn, a com
 		return marshalJobResult(map[string]any{"device": client.ID, "transport": "gpu-desktop-tunnel", "sources": sources, "desktop": client.Desktop})
 	}
 	screen := t.state.screens[client.ID]
+	if a.Source == "" && screen.client == client {
+		a.Source = screen.source
+	}
 	if a.Action != "screenshot" {
 		if screen.client != client || time.Since(screen.at) > 2*time.Minute {
 			return "", fmt.Errorf("take a fresh screenshot before desktop input")
@@ -400,22 +317,10 @@ func (t *computerTool) executeGPU(ctx context.Context, client *ClientConn, a com
 	}
 	source := fmt.Sprintf("gpu:%d", index)
 	if d.configured && (d.source != source || d.sourceName != names[index]) {
-		d.close()
-		delete(t.state.gpu, client.ID)
 		if a.Action != "screenshot" {
 			return "", fmt.Errorf("GPU screen changed; take a fresh screenshot")
 		}
-		d, err = t.srv.newGPUAgentDesktop(ctx, client)
-		if err != nil {
-			return "", err
-		}
-		t.state.gpu[client.ID] = d
-		if err = d.send("GetCapturableList"); err != nil {
-			return "", err
-		}
-		if _, err = d.wait(ctx, "CapturableList"); err != nil {
-			return "", err
-		}
+		d.configured = false
 	}
 	if err = t.claim(client.ID); err != nil {
 		return "", err
@@ -424,13 +329,13 @@ func (t *computerTool) executeGPU(ctx context.Context, client *ClientConn, a com
 		if a.Action != "screenshot" {
 			return "", fmt.Errorf("GPU desktop reconnected; take a new screenshot")
 		}
-		if err = d.startDecoder(); err != nil {
-			return "", err
+		if d.agentVersion < 1 {
+			return "", fmt.Errorf("update this device's client to enable native Agent screenshots")
 		}
 		d.source = source
 		d.sourceName = names[index]
 		d.names = names
-		config := map[string]any{"capturable_id": index, "capture_cursor": false, "max_width": 1280, "max_height": 720, "frame_rate": 2, "client_name": "rdev-agent", "encoder": "auto", "pointer_backend": "auto", "keyboard_backend": "auto"}
+		config := map[string]any{"capturable_id": index, "capture_cursor": false, "max_width": 1280, "max_height": 720, "frame_rate": 0, "client_name": "rdev-agent", "encoder": "auto", "pointer_backend": "auto", "keyboard_backend": "auto"}
 		if err = d.send(map[string]any{"Config": config}); err != nil {
 			return "", err
 		}
@@ -440,15 +345,15 @@ func (t *computerTool) executeGPU(ctx context.Context, client *ClientConn, a com
 		d.configured = true
 	}
 	t.publish(automationView{Kind: "desktop", Device: client.ID, Source: source, Action: a.Action})
-	frame, err := d.freshFrame(ctx)
-	if err != nil {
-		return "", err
-	}
-	cfg, err := jpeg.DecodeConfig(bytes.NewReader(frame))
-	if err != nil {
-		return "", err
-	}
 	if a.Action == "screenshot" {
+		frame, err := d.freshFrame(ctx)
+		if err != nil {
+			return "", err
+		}
+		cfg, err := jpeg.DecodeConfig(bytes.NewReader(frame))
+		if err != nil {
+			return "", err
+		}
 		result, err := automationImage(frame)
 		if err != nil {
 			return "", err
@@ -459,9 +364,6 @@ func (t *computerTool) executeGPU(ctx context.Context, client *ClientConn, a com
 		t.state.screens[client.ID] = automationScreen{client: client, source: source, width: cfg.Width, height: cfg.Height, at: time.Now()}
 		success = true
 		return result, nil
-	}
-	if cfg.Width != screen.width || cfg.Height != screen.height {
-		return "", fmt.Errorf("screen dimensions changed; take a new screenshot")
 	}
 	if err = gpuDesktopInput(ctx, d, a, raw, screen.width, screen.height); err != nil {
 		return "", err

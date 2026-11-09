@@ -27,6 +27,7 @@ func desktopSourcesByBackendFrom(sources []protocol.DesktopSource, backend strin
 func desktopCapabilities() *protocol.DesktopCapabilities {
 	videoCodecs, encoderBackends := desktopVideoCodecs()
 	caps := &protocol.DesktopCapabilities{
+		AgentVersion:    1,
 		Platform:        runtime.GOOS,
 		Supported:       false,
 		ViewOnly:        false,

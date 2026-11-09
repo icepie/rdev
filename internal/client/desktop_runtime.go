@@ -1,10 +1,12 @@
 package client
 
 import (
+	"bytes"
 	"encoding/base64"
 	"errors"
 	"fmt"
 	"image"
+	"image/jpeg"
 	"log"
 	"runtime"
 	"sync"
@@ -25,6 +27,7 @@ type desktopSourceReporter interface {
 
 type desktopSession struct {
 	stop      chan struct{}
+	snapshot  chan struct{}
 	input     desktopInput
 	clipboard desktopClipboard
 
@@ -96,7 +99,7 @@ func (c *Client) handleDesktopStart(msg *protocol.Message) {
 		c.mu.Unlock()
 		return
 	}
-	session := &desktopSession{stop: make(chan struct{})}
+	session := &desktopSession{stop: make(chan struct{}), snapshot: make(chan struct{}, 1)}
 	c.desktopSessions[msg.SessionID] = session
 	c.mu.Unlock()
 
@@ -112,9 +115,11 @@ func (c *Client) handleDesktopStart(msg *protocol.Message) {
 	inputBackend := chooseDesktopInputBackend(msg.InputBackend, availableInputs)
 	if inputBackend != "" {
 		if input, active := openDesktopInput(inputBackend, availableInputs, newDesktopInput); input != nil {
+			session.inputMu.Lock()
 			session.input = input
+			session.inputMu.Unlock()
 			inputBackend = active
-			defer input.Close()
+			defer session.closeInput()
 		} else {
 			inputBackend = ""
 		}
@@ -142,9 +147,11 @@ func (c *Client) handleDesktopStart(msg *protocol.Message) {
 	defer capturer.Close()
 
 	bounds := capturer.Bounds()
+	session.inputMu.Lock()
 	if boundsInput, ok := session.input.(desktopInputBounds); ok {
 		boundsInput.SetBounds(bounds)
 	}
+	session.inputMu.Unlock()
 	caps := desktopCapabilities()
 	caps.Supported = true
 	caps.ViewOnly = false
@@ -190,6 +197,12 @@ func (c *Client) handleDesktopStart(msg *protocol.Message) {
 		if source := reporter.Source(); source.ID != "" {
 			sourceName = source.ID
 		}
+	}
+	if msg.OnDemand {
+		c.send(&protocol.Message{Type: protocol.MsgDesktopReady, SessionID: msg.SessionID,
+			DesktopCapabilities: caps, Width: size.X, Height: size.Y, Format: "mjpeg", Source: sourceID})
+		c.runDesktopSnapshots(msg.SessionID, session, capturer, size, quality)
+		return
 	}
 	requestedFormat := normalizeDesktopFormat(msg.Format)
 	encoder := newDesktopEncoder(requestedFormat, size.X, size.Y, quality, fps)
@@ -351,7 +364,7 @@ func (c *Client) handleDesktopInput(msg *protocol.Message) {
 	if msg.InputType == "mouse_move" || msg.InputType == "mouse_down" || msg.InputType == "mouse_up" || msg.InputType == "wheel" || msg.InputType == "cursor_move" {
 		session.setCursor(x, y)
 	}
-	if msg.InputType == "cursor_move" || session.input == nil {
+	if msg.InputType == "cursor_move" {
 		return
 	}
 	event := desktopInputEvent{
@@ -373,6 +386,9 @@ func (c *Client) handleDesktopInput(msg *protocol.Message) {
 	}
 	session.inputMu.Lock()
 	defer session.inputMu.Unlock()
+	if session.input == nil {
+		return
+	}
 	if err := session.input.Apply(event); err != nil {
 		log.Printf("desktop input error: %v", err)
 	}
@@ -390,5 +406,68 @@ func (c *Client) handleDesktopClose(sessionID string) {
 	c.mu.Unlock()
 	if session != nil {
 		close(session.stop)
+	}
+}
+
+// Each native capturer remains on its owning OS thread. Input uses the existing
+// lightweight control path; screenshots neither start a ticker nor a video codec.
+func (c *Client) runDesktopSnapshots(id string, session *desktopSession, capturer desktopCapturer, size image.Point, quality int) {
+	idle := time.NewTimer(2 * time.Minute)
+	defer idle.Stop()
+	var scratch *image.RGBA
+	for {
+		select {
+		case <-session.stop:
+			return
+		case <-idle.C:
+			c.send(&protocol.Message{Type: protocol.MsgDesktopClose, SessionID: id})
+			return
+		case <-session.snapshot:
+			idle.Reset(2 * time.Minute)
+			img, err := capturer.Capture()
+			if err == nil {
+				var frame *image.RGBA
+				frame, err = resizeDesktopFrameToSize(scratch, img, size.X, size.Y)
+				if err == nil {
+					if frame != img {
+						scratch = frame
+					}
+					session.setFrame(capturer.Bounds(), size.X, size.Y)
+					var encoded bytes.Buffer
+					err = jpeg.Encode(&encoded, frame, &jpeg.Options{Quality: quality})
+					if err == nil {
+						err = c.sendBinary(protocol.BinDesktopFrame, id, encoded.Bytes())
+					}
+				}
+			}
+			if err != nil {
+				c.send(&protocol.Message{Type: protocol.MsgDesktopClose, SessionID: id, Error: err.Error()})
+				return
+			}
+		}
+	}
+}
+
+func (c *Client) handleDesktopSnapshot(msg *protocol.Message) {
+	c.mu.Lock()
+	session := c.desktopSessions[msg.SessionID]
+	c.mu.Unlock()
+	if session == nil {
+		c.send(&protocol.Message{Type: protocol.MsgDesktopClose, SessionID: msg.SessionID, Error: "capture session expired"})
+		return
+	}
+	select {
+	case session.snapshot <- struct{}{}:
+	default:
+	}
+}
+
+// Idle expiry/disconnect may coincide with the last input command.
+func (s *desktopSession) closeInput() {
+	s.inputMu.Lock()
+	defer s.inputMu.Unlock()
+	if s.input != nil {
+		_ = s.input.Close()
+		s.input = nil
 	}
 }

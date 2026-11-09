@@ -201,6 +201,8 @@ pub struct LogEntry {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct DesktopCapabilities {
+    #[serde(default)]
+    pub agent_version: u32,
     pub platform: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub display_server: String,

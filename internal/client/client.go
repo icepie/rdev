@@ -952,6 +952,8 @@ func (c *Client) handleMessage(msg *protocol.Message) {
 		c.handleManagedTransferCancel(msg.TaskID)
 	case protocol.MsgDesktopStart:
 		go c.handleDesktopStart(msg)
+	case protocol.MsgDesktopSnapshot:
+		c.handleDesktopSnapshot(msg)
 	case protocol.MsgDesktopInput:
 		c.handleDesktopInput(msg)
 	case protocol.MsgDesktopClipboard:

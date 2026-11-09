@@ -67,10 +67,12 @@ Automation validation: 83 frontend test files / 317 tests, TypeScript check and 
 
 `computer` 根据设备能力选择传输。Go 客户端继续使用普通桌面协议；GPU 客户端使用已经注册的 GPU 桌面隧道，读取 `CapturableList` 并发送原生 Config / PointerEvent / KeyboardEvent / TextInputEvent，不再向 GPU 客户端发送它不支持的 `desktop_start`。
 
-GPU 截图需要**服务端安装 FFmpeg**；Docker 运行镜像已包含。仅在服务端解码客户端现有的 fMP4/H.264 输出，不读取服务端桌面；原有 GPU 客户端不需要为此升级。截图保持解码后的像素尺寸，键鼠坐标映射到对应的捕获源；Unicode 文本使用 GPU 服务原生 TextInputEvent，不修改剪贴板。当前适配针对内嵌 RDev Desktop 的 fMP4 协议，不声明支持所有移动端私有视频封包格式。
+Agent 截图不再依赖服务端 FFmpeg，也不再传输/解码连续视频。Rust GPU 与 Android 通过原有已认证的隧道声明 `AgentCapabilities.version=1`，接收 `GetScreenshot`，返回 `Screenshot`（PNG base64）。服务端检查图片尺寸和大小后转为 JPEG，供视觉模型使用。Rust 在原生捕获工作线程复用 Recorder，Agent Config 使用 `frame_rate=0`，不启动视频编码器。Android 复用 MediaProjection 和 VirtualDisplay，截图临时切到 ImageReader，完成后恢复视频 Surface；不创建第二个投屏授权或重连网页，但已有视频可能短暂停帧。
 
-同一 Agent 会话/设备的 GPU 控制与解码连接持续复用，连续工具调用不会重新 Config 或重新连接。显式释放、用户接管、会话删除/重置、连接替换或两分钟空闲会关闭通道。截图等待新帧；输入前检查连接、来源与分辨率，拒绝旧截图坐标。
+Go 客户端声明 `desktop.agentVersion=1`，通过 `desktop_start` 的 `onDemand=true` 开启可复用捕获会话，再由 `desktop_snapshot` 请求一帧 JPEG；键鼠仍走轻量控制通道。该公共实现覆盖 Go Windows/macOS/Linux 的已有捕获后端，不改变各平台权限要求或凭空补足不支持的捕获后端。Rust GPU 各构建变体共享原生截图实现；Android 支持原有 MediaProjection 平台范围，输入仍需无障碍权限。
+
+同一 Agent 会话/设备复用控制连接和捕获源，键鼠操作不额外截图。显式释放、用户接管、会话删除/重置、连接替换或两分钟空闲关闭 Agent 通道。输入检查截图对应的设备连接、来源与两分钟有效期；操作后需再次截图验证结果，发送成功不等于应用已处理。Go 旧客户端保留原桌面协议回退；GPU/Android 旧客户端缺少原生截图能力时明确提示升级，不再要求安装服务端 FFmpeg。新接口需要同时更新服务端和客户端。
 
 已经打开的 Agent 桌面面板按设备保持稳定组件身份；收到工具动作不重新挂载。GPU 屏幕改变时在原连接上更新 Config，同一屏幕不重复配置。网页查看通道和 Agent 控制通道各自独立、均复用；没有让工具依赖用户浏览器必须在线。
 
-验证：真实 FFmpeg 编码/解码 + GPU WebSocket/隧道协议 fixture 验证截图、点击、Unicode、键盘和连续五次调用只建立一条连接/一次 Config；React 回归测试验证已打开桌面跨工具动作/屏幕变更不重新挂载。物理设备仍需实机验收。
+验证：原生 PNG WebSocket/隧道 fixture 验证截图、点击、Unicode、键盘及五次调用仅建立一条连接/一次 Config/两次截图；Go 测试覆盖按需捕获、会话复用、释放与旧协议回退；Rust 测试覆盖像素通道、stride、非法缓冲区和缩放；Android 单元测试覆盖截图不订阅视频。跨平台物理设备仍需实机验收。

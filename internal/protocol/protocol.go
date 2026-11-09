@@ -50,6 +50,7 @@ const (
 	MsgFileTransferCancel MessageType = "file_transfer_cancel" // bidir: cancel transfer
 
 	// Remote desktop (text frames for control, binary for frames)
+	MsgDesktopSnapshot  MessageType = "desktop_snapshot"  // S->C: capture one image in an on-demand session
 	MsgDesktopStart     MessageType = "desktop_start"     // S->C: start desktop capture
 	MsgDesktopReady     MessageType = "desktop_ready"     // C->S: desktop capture status/metadata
 	MsgDesktopInput     MessageType = "desktop_input"     // S->C: inject desktop mouse/keyboard input
@@ -182,6 +183,7 @@ type Message struct {
 	Description         []byte               `json:"description,omitempty"`
 	Source              string               `json:"source,omitempty"`
 	Quality             int                  `json:"quality,omitempty"`
+	OnDemand            bool                 `json:"onDemand,omitempty"`
 	FPS                 int                  `json:"fps,omitempty"`
 	InputType           string               `json:"inputType,omitempty"`
 	InputBackend        string               `json:"inputBackend,omitempty"`
@@ -237,6 +239,7 @@ type LogEntry struct {
 
 // DesktopCapabilities describes remote desktop support reported by a device.
 type DesktopCapabilities struct {
+	AgentVersion    int                   `json:"agentVersion,omitempty"`
 	Platform        string                `json:"platform"`
 	DisplayServer   string                `json:"displayServer,omitempty"`
 	Supported       bool                  `json:"supported"`

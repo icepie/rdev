@@ -1,14 +1,17 @@
 package server
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"image"
+	"image/png"
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"os/exec"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -23,10 +26,14 @@ type gpuAgentFixture struct {
 	gws.BuiltinEventHandler
 	connections atomic.Int32
 	configs     atomic.Int32
+	snapshots   atomic.Int32
 	inputs      chan string
 }
 
-func (h *gpuAgentFixture) OnOpen(_ *gws.Conn) { h.connections.Add(1) }
+func (h *gpuAgentFixture) OnOpen(c *gws.Conn) {
+	h.connections.Add(1)
+	_ = c.WriteMessage(gws.OpcodeText, []byte(`{"AgentCapabilities":{"version":1}}`))
+}
 func (h *gpuAgentFixture) OnClose(c *gws.Conn, _ error) {
 	if value, ok := c.Session().Load("cancel"); ok {
 		value.(context.CancelFunc)()
@@ -36,6 +43,13 @@ func (h *gpuAgentFixture) OnMessage(c *gws.Conn, m *gws.Message) {
 	defer m.Close()
 	var name string
 	if json.Unmarshal(m.Bytes(), &name) == nil {
+		if name == "GetScreenshot" {
+			h.snapshots.Add(1)
+			var out bytes.Buffer
+			_ = png.Encode(&out, image.NewRGBA(image.Rect(0, 0, 320, 180)))
+			data, _ := json.Marshal(map[string]string{"Screenshot": base64.StdEncoding.EncodeToString(out.Bytes())})
+			_ = c.WriteMessage(gws.OpcodeText, data)
+		}
 		if name == "GetCapturableList" {
 			_ = c.WriteMessage(gws.OpcodeText, []byte(`{"CapturableList":["Primary","Secondary"]}`))
 		}
@@ -45,35 +59,14 @@ func (h *gpuAgentFixture) OnMessage(c *gws.Conn, m *gws.Message) {
 	_ = json.Unmarshal(m.Bytes(), &fields)
 	if fields["Config"] != nil {
 		h.configs.Add(1)
-		ctx, cancel := context.WithCancel(context.Background())
-		c.Session().Store("cancel", cancel)
-		cmd := exec.CommandContext(ctx, "ffmpeg", "-hide_banner", "-loglevel", "error", "-re", "-f", "lavfi", "-i", "testsrc=size=320x180:rate=4", "-c:v", "libx264", "-threads", "1", "-preset", "ultrafast", "-tune", "zerolatency", "-pix_fmt", "yuv420p", "-g", "1", "-movflags", "frag_keyframe+empty_moov+default_base_moof", "-f", "mp4", "pipe:1")
-		output, err := cmd.StdoutPipe()
-		if err != nil {
-			cancel()
-			return
+		var config struct {
+			FrameRate float64 `json:"frame_rate"`
 		}
-		if err = cmd.Start(); err != nil {
-			cancel()
-			return
+		_ = json.Unmarshal(fields["Config"], &config)
+		if config.FrameRate != 0 {
+			panic("Agent started continuous video")
 		}
 		_ = c.WriteMessage(gws.OpcodeText, []byte(`"ConfigOk"`))
-		go func() {
-			defer cancel()
-			defer cmd.Wait()
-			buf := make([]byte, 32*1024)
-			for {
-				n, err := output.Read(buf)
-				if n > 0 {
-					if e := c.WriteMessage(gws.OpcodeBinary, buf[:n]); e != nil {
-						return
-					}
-				}
-				if err != nil {
-					return
-				}
-			}
-		}()
 		return
 	}
 	for _, key := range []string{"PointerEvent", "KeyboardEvent", "WheelEvent", "TextInputEvent"} {
@@ -154,9 +147,6 @@ func gpuFixtureTunnel(t *testing.T, device, address string) *gpuDesktopTunnel {
 	return tunnel
 }
 func TestComputerGPUTunnelCaptureInputAndSessionReuse(t *testing.T) {
-	if _, err := exec.LookPath("ffmpeg"); err != nil {
-		t.Skip("FFmpeg is required for GPU decode integration")
-	}
 	fixture := &gpuAgentFixture{inputs: make(chan string, 32)}
 	upgrade := gws.NewUpgrader(fixture, nil)
 	web := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -175,7 +165,7 @@ func TestComputerGPUTunnelCaptureInputAndSessionReuse(t *testing.T) {
 	srv.gpuDesktopTunnels[client.ID] = tunnel
 	base := testAutomation(t, srv, "gpu-device", "thread")
 	tool := computerTool{base}
-	defer func() { base.state.opMu.Lock(); closeGPUAutomation(base.state); base.state.opMu.Unlock() }()
+	defer func() { base.state.opMu.Lock(); closeDesktopAutomation(base.state); base.state.opMu.Unlock() }()
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 	defer cancel()
 	run := func(args string) string {
@@ -197,6 +187,9 @@ func TestComputerGPUTunnelCaptureInputAndSessionReuse(t *testing.T) {
 	if fixture.connections.Load() != 1 || fixture.configs.Load() != 1 {
 		t.Fatalf("reconnected per action: connections=%d configs=%d", fixture.connections.Load(), fixture.configs.Load())
 	}
+	if fixture.snapshots.Load() != 2 {
+		t.Fatalf("input captured extra frames: %d", fixture.snapshots.Load())
+	}
 	if got := base.state.screens[client.ID]; got.width != 320 || got.height != 180 || got.source != "gpu:0" {
 		t.Fatalf("wrong capture coordinates: %+v", got)
 	}
@@ -213,6 +206,11 @@ func TestComputerGPUTunnelCaptureInputAndSessionReuse(t *testing.T) {
 	if !textSeen {
 		t.Fatal("native Unicode input missing")
 	}
+	run(`{"action":"screenshot","source":"gpu:1"}`)
+	run(`{"action":"screenshot"}`)
+	if fixture.connections.Load() != 1 || fixture.configs.Load() != 2 || fixture.snapshots.Load() != 4 {
+		t.Fatal("source switch reconnected or did not retain selected screen")
+	}
 	run(`{"action":"release"}`)
 	if len(base.state.gpu) != 0 {
 		t.Fatal("release retained capture connection")
@@ -226,5 +224,13 @@ func TestGPUDesktopSourceValidation(t *testing.T) {
 	}
 	if id, err := gpuSourceIndex("gpu:1", 2); err != nil || id != 1 {
 		t.Fatal(fmt.Sprint(id, err))
+	}
+}
+
+func TestGPUOldClientRequiresUpgradeWithoutStartingDecoder(t *testing.T) {
+	d := &gpuAgentDesktop{}
+	_, err := d.freshFrame(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "update this device") {
+		t.Fatalf("missing capability should fail before sending a request: %v", err)
 	}
 }

@@ -87,6 +87,7 @@ public class RDevAgentService extends Service {
     @Override public void onDestroy() {
         stopping = true;
         AndroidVideoHub.setDemandListener(null);
+        AndroidVideoHub.setScreenshotProvider(null);
         if (capture != null) {
             capture.releaseProjection();
             capture = null;
@@ -281,6 +282,7 @@ public class RDevAgentService extends Service {
             JSONObject desktop = new JSONObject()
                 .put("platform", "android")
                 .put("displayServer", "mediaprojection")
+                .put("agentVersion", 1)
                 .put("supported", true)
                 .put("viewOnly", !RDevAccessibilityService.isActive())
                 .put("input", RDevAccessibilityService.isActive())
@@ -630,6 +632,7 @@ public class RDevAgentService extends Service {
         }
         if (capture != null) capture.releaseProjection();
         capture = new ScreenCapturePipeline(this, projection);
+        AndroidVideoHub.setScreenshotProvider(capture::screenshot);
         if (AndroidVideoHub.hasListeners()) {
             startCaptureIfNeeded();
         } else {

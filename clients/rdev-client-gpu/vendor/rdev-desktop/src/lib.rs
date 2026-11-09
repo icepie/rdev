@@ -1,4 +1,5 @@
 mod clipboard;
+mod snapshot;
 
 pub mod capturable;
 pub mod cerror;

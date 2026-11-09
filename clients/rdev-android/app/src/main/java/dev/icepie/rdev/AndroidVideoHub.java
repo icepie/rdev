@@ -4,6 +4,16 @@ import java.util.ArrayList;
 import java.util.List;
 
 final class AndroidVideoHub {
+    interface ScreenshotCallback { void complete(String png, String error); }
+    interface ScreenshotProvider { void capture(ScreenshotCallback callback); }
+    private static volatile ScreenshotProvider screenshotProvider;
+    static void setScreenshotProvider(ScreenshotProvider provider) { screenshotProvider = provider; }
+    static void screenshot(ScreenshotCallback callback) {
+        ScreenshotProvider provider = screenshotProvider;
+        if (provider == null) callback.complete(null, "Screen sharing permission is required on the device");
+        else provider.capture(callback);
+    }
+
     interface Listener {
         void onVideoConfig(int width, int height, byte[] sps, byte[] pps);
         void onVideoSample(byte[] data, long ptsUs, boolean keyFrame);

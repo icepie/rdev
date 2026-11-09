@@ -193,7 +193,8 @@ func TestJobsCommandsWithoutModelAndThreadIsolation(t *testing.T) {
 	}
 	snapshot, _ := local.Read(job.ID)
 	untouched, _ := other.Read(foreign.ID)
-	if !snapshot.CancelRequested || untouched.CancelRequested || untouched.State != "running" {
+	// The worker may finish cancellation before Read; both states are valid.
+	if (!snapshot.CancelRequested && snapshot.State != "canceled") || untouched.CancelRequested || untouched.State != "running" {
 		t.Fatalf("wrong cancellation scope: local=%+v other=%+v", snapshot, untouched)
 	}
 }

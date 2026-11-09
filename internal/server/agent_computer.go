@@ -70,7 +70,7 @@ func (s *Server) takeDesktopControl(device string) {
 	lease.owner.mu.Unlock()
 	lease.owner.opMu.Lock()
 	lease.owner.screens = nil
-	closeGPUAutomation(lease.owner)
+	closeDesktopAutomation(lease.owner)
 	lease.owner.opMu.Unlock()
 	s.releaseAutomationDesktop(lease.owner)
 	lease.tool.publish(view)
@@ -116,6 +116,11 @@ func (t *computerTool) Execute(ctx context.Context, raw json.RawMessage) (string
 			return "", fmt.Errorf("wait for the current desktop operation before releasing")
 		}
 		defer t.state.opMu.Unlock()
+		if d := t.state.desktop[client.ID]; d != nil {
+			d.close()
+			delete(t.state.desktop, client.ID)
+		}
+		delete(t.state.screens, client.ID)
 		if d := t.state.gpu[client.ID]; d != nil {
 			d.close()
 			delete(t.state.gpu, client.ID)
@@ -153,6 +158,9 @@ func (t *computerTool) Execute(ctx context.Context, raw json.RawMessage) (string
 	}
 	defer finish()
 	screen := t.state.screens[client.ID]
+	if a.Source == "" && screen.client == client {
+		a.Source = screen.source
+	}
 	if a.Action != "screenshot" {
 		if screen.client != client || time.Since(screen.at) > 2*time.Minute {
 			return "", fmt.Errorf("take a fresh screenshot before desktop input")
@@ -168,43 +176,18 @@ func (t *computerTool) Execute(ctx context.Context, raw json.RawMessage) (string
 		return "", err
 	}
 	t.publish(automationView{Kind: "desktop", Device: client.ID, Source: a.Source, Action: a.Action})
-	id := generateID()
-	capture := &automationDesktop{messages: make(chan *protocol.Message, 8), frames: make(chan []byte, 1), done: make(chan struct{})}
-	t.srv.desktopMu.Lock()
-	if t.srv.desktops == nil {
-		t.srv.desktops = make(map[string]*desktopRoute)
-	}
-	t.srv.desktops[id] = &desktopRoute{id: id, clientID: client.ID, automation: capture}
-	t.srv.desktopMu.Unlock()
-	defer func() {
-		t.srv.desktopMu.Lock()
-		delete(t.srv.desktops, id)
-		t.srv.desktopMu.Unlock()
-		_ = client.Send(&protocol.Message{Type: protocol.MsgDesktopClose, SessionID: id})
-	}()
-	request := protocol.Message{Type: protocol.MsgDesktopStart, SessionID: id, Format: "mjpeg", FPS: 2, Quality: 80, Source: a.Source, Width: 1280, Height: 720}
-	if err = client.Send(&request); err != nil {
+	session, err := t.openDesktop(ctx, client, a.Source)
+	if err != nil {
 		return "", err
 	}
-	var ready *protocol.Message
-	for ready == nil {
-		select {
-		case <-ctx.Done():
-			return "", ctx.Err()
-		case <-capture.done:
-			return "", fmt.Errorf("device disconnected")
-		case msg := <-capture.messages:
-			if msg.Error != "" {
-				return "", fmt.Errorf("desktop: %s", msg.Error)
-			}
-			if msg.Type == protocol.MsgDesktopClose {
-				return "", fmt.Errorf("desktop closed")
-			}
-			if msg.Type == protocol.MsgDesktopReady {
-				ready = msg
-			}
+	id, capture, request, ready := session.id, session.capture, session.request, session.ready
+	success := false
+	defer func() {
+		if !request.OnDemand || !success {
+			session.close()
+			delete(t.state.desktop, client.ID)
 		}
-	}
+	}()
 	if ready.Width <= 0 || ready.Height <= 0 {
 		return "", fmt.Errorf("invalid desktop dimensions")
 	}
@@ -231,7 +214,14 @@ func (t *computerTool) Execute(ctx context.Context, raw json.RawMessage) (string
 	}
 	switch a.Action {
 	case "screenshot":
+		if request.OnDemand {
+			if err := client.Send(&protocol.Message{Type: protocol.MsgDesktopSnapshot, SessionID: id}); err != nil {
+				return "", err
+			}
+		}
 		select {
+		case msg := <-capture.messages:
+			return "", fmt.Errorf("desktop: %s", msg.Error)
 		case <-ctx.Done():
 			return "", ctx.Err()
 		case <-capture.done:
@@ -248,6 +238,7 @@ func (t *computerTool) Execute(ctx context.Context, raw json.RawMessage) (string
 				}
 				t.state.screens[client.ID] = automationScreen{client: client, source: a.Source, width: ready.Width, height: ready.Height, at: time.Now()}
 			}
+			success = err == nil
 			return result, err
 		}
 	case "click", "drag", "scroll":
@@ -332,6 +323,7 @@ func (t *computerTool) Execute(ctx context.Context, raw json.RawMessage) (string
 	if err != nil {
 		return "", err
 	}
+	success = true
 	return marshalJobResult(map[string]any{"device": client.ID, "action": a.Action, "width": ready.Width, "height": ready.Height, "status": "sent", "next": "Take a screenshot to verify the result; input delivery is not an application acknowledgement."})
 }
 func automationImage(data []byte) (string, error) {

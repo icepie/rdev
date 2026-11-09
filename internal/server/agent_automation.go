@@ -25,6 +25,7 @@ type automationPage struct {
 }
 type agentAutomation struct {
 	gpu     map[string]*gpuAgentDesktop
+	desktop map[string]*agentDesktopSession
 	opMu    sync.Mutex
 	mu      sync.Mutex
 	paused  bool
@@ -132,7 +133,7 @@ func (h *agentWSHandler) handleAutomation(ac *agentConn, msg agentMsg) {
 	if msg.Value {
 		state.opMu.Lock()
 		state.screens = nil
-		closeGPUAutomation(state)
+		closeDesktopAutomation(state)
 		state.opMu.Unlock()
 		h.srv.releaseAutomationDesktop(state)
 	}
@@ -184,12 +185,16 @@ func (s *Server) retireAutomation(state *agentAutomation) {
 		}
 		state.pages = nil
 		state.screens = nil
-		closeGPUAutomation(state)
+		closeDesktopAutomation(state)
 	})
 }
 
 // Caller holds opMu, so cleanup cannot interrupt a paired input release.
-func closeGPUAutomation(state *agentAutomation) {
+func closeDesktopAutomation(state *agentAutomation) {
+	for _, d := range state.desktop {
+		d.close()
+	}
+	state.desktop = nil
 	for _, d := range state.gpu {
 		d.close()
 	}

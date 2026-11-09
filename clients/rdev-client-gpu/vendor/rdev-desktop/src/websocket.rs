@@ -13,13 +13,13 @@ use tracing::{debug, info, trace, warn};
 use crate::clipboard::ClipboardBridge;
 
 use crate::capturable::{get_capturables, Capturable, Recorder, RecorderPreferences};
+use crate::cerror::CErrorCode;
 use crate::input::device::{InputDevice, InputDeviceType};
 use crate::protocol::{
     ClientConfiguration, ClipboardEvent, EncoderCapabilities, EncoderOption, InputCapabilities,
     InputOption, KeyboardEvent, MessageInbound, MessageOutbound, PointerEvent, RuntimeStatus,
     TextInputEvent, WeylusReceiver, WeylusSender, WheelEvent,
 };
-use crate::cerror::CErrorCode;
 use crate::video::{EncoderOptions, VideoEncoder};
 fn is_expected_disconnect(err: &WebSocketError) -> bool {
     match err {
@@ -46,6 +46,7 @@ struct VideoConfig {
 
 enum VideoCommands {
     Start(VideoConfig),
+    Screenshot,
     Pause,
     Resume,
     Restart,
@@ -460,6 +461,7 @@ impl<S, R, FnUInput> WeylusClientHandler<S, R, FnUInput> {
         S: WeylusSender + Clone + Send + Sync + 'static,
         FnUInput: Fn(),
     {
+        self.send_message(MessageOutbound::AgentCapabilities { version: 1 });
         self.send_message(MessageOutbound::EncoderCapabilities(encoder_capabilities(
             self.config.encoder_options,
         )));
@@ -483,6 +485,13 @@ impl<S, R, FnUInput> WeylusClientHandler<S, R, FnUInput> {
                         MessageInbound::SetClipboard(event) => self.set_clipboard(event),
                         MessageInbound::ReleaseKeyboard => self.release_keyboard(),
                         MessageInbound::GetCapturableList => self.send_capturable_list(),
+                        MessageInbound::GetScreenshot => {
+                            if self.video_sender.send(VideoCommands::Screenshot).is_err() {
+                                self.send_message(MessageOutbound::Error(
+                                    "Capture worker stopped".into(),
+                                ));
+                            }
+                        }
                         MessageInbound::Config(config) => self.update_config(config),
                         MessageInbound::PauseVideo => {
                             self.video_sender.send(VideoCommands::Pause).unwrap()
@@ -1256,16 +1265,7 @@ fn handle_video<S: WeylusSender + Clone + 'static>(
     let mut paused = false;
 
     loop {
-        let now = Instant::now();
-        let elapsed = now - last_frame;
-        let frames_passed = (elapsed.as_secs_f64() / frame_duration.as_secs_f64()) as u32;
-        let next_frame = last_frame + (frames_passed + 1) * frame_duration;
-        let timeout = next_frame - now;
-        last_frame = next_frame;
-
-        if frames_passed > 0 {
-            trace!("Dropped {frames_passed} frame(s)!");
-        }
+        let timeout = frame_duration.saturating_sub(last_frame.elapsed());
 
         match receiver.recv_timeout(if paused { EFFECTIVE_INIFINITY } else { timeout }) {
             Ok(VideoCommands::Start(config)) => {
@@ -1285,7 +1285,7 @@ fn handle_video<S: WeylusSender + Clone + 'static>(
                 const RETRY_DELAY: Duration = Duration::from_millis(500);
                 active_encoder_options =
                     encoder_options_for_selection(encoder_options, config.encoder.as_deref());
-                drm_prime_enabled = active_encoder_options.try_vaapi;
+                drm_prime_enabled = config.frame_rate > 0.0 && active_encoder_options.try_vaapi;
                 let mut result = recorder_for_capturable(
                     config.capturable.as_ref(),
                     config.capture_cursor,
@@ -1348,6 +1348,22 @@ fn handle_video<S: WeylusSender + Clone + 'static>(
                 };
                 frame_duration = frame_duration.min(EFFECTIVE_INIFINITY);
             }
+            Ok(VideoCommands::Screenshot) => {
+                let result = match recorder.as_mut() {
+                    Some(recorder) => recorder
+                        .capture()
+                        .map_err(|e| e.to_string())
+                        .and_then(|pixels| crate::snapshot::encode(pixels, max_width, max_height)),
+                    None => Err("Configure capture before requesting a screenshot".into()),
+                };
+                send_message(
+                    &mut sender,
+                    match result {
+                        Ok(data) => MessageOutbound::Screenshot(data),
+                        Err(error) => MessageOutbound::Error(error),
+                    },
+                );
+            }
             Ok(VideoCommands::Pause) => {
                 paused = true;
             }
@@ -1367,6 +1383,7 @@ fn handle_video<S: WeylusSender + Clone + 'static>(
                 send_runtime_status(&mut sender, &capture_backend, &encoder_backend);
             }
             Err(RecvTimeoutError::Timeout) => {
+                last_frame = Instant::now();
                 if recorder.is_none() {
                     warn!("Screen capture not initalized, can not send video frame!");
                     continue;

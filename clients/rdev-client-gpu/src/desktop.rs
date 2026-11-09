@@ -20,6 +20,7 @@ pub fn capabilities(enabled: bool) -> DesktopCapabilities {
         return DesktopCapabilities {
             platform: std::env::consts::OS.to_string(),
             display_server: display_server(),
+            agent_version: 1,
             supported: true,
             view_only: false,
             input: true,

@@ -32,6 +32,7 @@ pub enum MessageInbound {
     SetClipboard(ClipboardEvent),
     ReleaseKeyboard,
     GetCapturableList,
+    GetScreenshot,
     Config(ClientConfiguration),
     PauseVideo,
     ResumeVideo,
@@ -42,6 +43,8 @@ pub enum MessageInbound {
 #[derive(Serialize, Deserialize, Debug)]
 pub enum MessageOutbound {
     CapturableList(Vec<String>),
+    AgentCapabilities { version: u32 },
+    Screenshot(String),
     NewVideo,
     ConfigOk,
     RuntimeStatus(RuntimeStatus),

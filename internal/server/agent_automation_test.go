@@ -197,3 +197,46 @@ func TestBrowserStatusDoesNotLaunchChrome(t *testing.T) {
 		t.Fatal("status started Chrome")
 	}
 }
+
+func TestComputerOnDemandSessionReuseAndRelease(t *testing.T) {
+	s, client, transport := newProxyTestServer(t, "device", "")
+	client.Desktop = &protocol.DesktopCapabilities{AgentVersion: 1, Supported: true, Input: true, Sources: []protocol.DesktopSource{{ID: "screen:primary"}}}
+	base := testAutomation(t, s, "device", "native")
+	defer closeDesktopAutomation(base.state)
+	tool := computerTool{base}
+	var frame bytes.Buffer
+	_ = jpeg.Encode(&frame, image.NewRGBA(image.Rect(0, 0, 1280, 720)), nil)
+	starts, shots, closes := 0, 0, 0
+	transport.onSend = func(m *protocol.Message) {
+		switch m.Type {
+		case protocol.MsgDesktopStart:
+			starts++
+			if !m.OnDemand {
+				t.Error("continuous capture requested")
+			}
+			s.handleDesktopMessage(&protocol.Message{Type: protocol.MsgDesktopReady, SessionID: m.SessionID, Width: 1280, Height: 720})
+		case protocol.MsgDesktopSnapshot:
+			shots++
+			s.handleDesktopFrame(m.SessionID, frame.Bytes())
+		case protocol.MsgDesktopClose:
+			closes++
+		}
+	}
+	for _, args := range []string{`{"action":"screenshot","source":"screen:primary"}`, `{"action":"click","x":2,"y":3}`, `{"action":"key","key":"Enter"}`, `{"action":"screenshot"}`} {
+		if _, err := tool.Execute(context.Background(), json.RawMessage(args)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if starts != 1 || shots != 2 || closes != 0 {
+		t.Fatalf("starts=%d shots=%d closes=%d", starts, shots, closes)
+	}
+	if _, err := tool.Execute(context.Background(), json.RawMessage(`{"action":"release"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if closes != 1 || len(s.desktops) != 0 || len(base.state.desktop) != 0 {
+		t.Fatal("release leaked capture")
+	}
+	if _, err := tool.Execute(context.Background(), json.RawMessage(`{"action":"click","x":2,"y":3}`)); err == nil {
+		t.Fatal("release retained stale screenshot")
+	}
+}
