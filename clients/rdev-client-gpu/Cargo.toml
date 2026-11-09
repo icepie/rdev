@@ -11,6 +11,7 @@ default = []
 embedded-rdev-desktop = ["dep:rdev-desktop"]
 embedded-rdev-desktop-vaapi = ["embedded-rdev-desktop", "rdev-desktop/va-static"]
 embedded-rdev-desktop-wayland = ["embedded-rdev-desktop-vaapi", "rdev-desktop/pipewire"]
+embedded-rdev-desktop-hw = ["embedded-rdev-desktop-vaapi", "rdev-desktop/nvenc"]
 cua-native = ["dep:rdev-cua-bridge", "rdev-cua-bridge/cua-native"]
 
 [dependencies]
