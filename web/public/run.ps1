@@ -2,12 +2,12 @@
 # Compatible with: PowerShell 2.0+ (Win7/8/8.1/10/11)
 #
 # One-liner:
-#   powershell -Command "iwr -useb http://SERVER/run.ps1 | iex; RDev ws://SERVER"
-#   powershell -Command "iwr -useb http://SERVER/run.ps1 | iex; RDev ws://SERVER -Id my-pc -Password secret"
-#   powershell -Command "iwr -useb http://SERVER/run.ps1 | iex; RDev ws://SERVER -RandomPassword"
+#   powershell -Command "iwr -useb http://SERVER/run.ps1 | iex; RDev"
+#   powershell -Command "iwr -useb http://SERVER/run.ps1 | iex; RDev -Id my-pc -Password secret"
+#   powershell -Command "iwr -useb http://SERVER/run.ps1 | iex; RDev -RandomPassword"
 #
 # PS 2.0 (Win7/8):
-#   powershell -Command "$wc=New-Object Net.WebClient; $wc.DownloadString('http://SERVER/run.ps1') | iex; RDev ws://SERVER"
+#   powershell -Command "$wc=New-Object Net.WebClient; $wc.DownloadString('http://SERVER/run.ps1') | iex; RDev"
 
 # -- TLS compat ------------------------------------------------
 try {
@@ -320,8 +320,8 @@ function global:RDev {
     #>
     [CmdletBinding()]
     param(
-        [Parameter(Position=0, Mandatory=$true)]
-        [object]$Server,
+        [Parameter(Position=0)]
+        [object]$Server = '{{.Server}}',
 
         [string]$Id = '',
         [string]$Password = '',
@@ -337,6 +337,7 @@ function global:RDev {
     if ($Server -is [Array]) { $Server = ($Server -join ',') }
     $Server = [string]$Server
     $Server = $Server.Trim()
+    if ($Server.StartsWith('{')) { $Server = '' }
     if (-not $Server) { Write-Error "Server is required"; return }
 
     # An explicit -Password always wins.

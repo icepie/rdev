@@ -2156,6 +2156,10 @@ func (s *Server) StaticHandler() http.Handler {
 	// no-cache forces a (cheap) refetch on every navigation.
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-cache")
+		if r.URL.Path == "/run.sh" || r.URL.Path == "/run.ps1" {
+			s.serveRunner(w, r, sub)
+			return
+		}
 		http.FileServer(http.FS(sub)).ServeHTTP(w, r)
 	})
 }

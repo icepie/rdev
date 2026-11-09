@@ -4,15 +4,18 @@
 # Compatible with: POSIX sh, bash, dash, ash, zsh, ksh, busybox sh
 #
 # Usage:
-#   curl -sL http://SERVER:PORT/run.sh | sh -s -- ws://SERVER:PORT
-#   curl -sL http://SERVER:PORT/run.sh | sh -s -- ws://SERVER:PORT --client rs
-#   curl -sL http://SERVER:PORT/run.sh | sh -s -- ws://SERVER:PORT --client cgo
-#   wget -qO- http://SERVER:PORT/run.sh | sh -s -- ws://SERVER:PORT
+#   curl -sL http://SERVER:PORT/run.sh | sh -s --
+#   curl -sL http://SERVER:PORT/run.sh | sh -s -- --client rs
+#   curl -sL http://SERVER:PORT/run.sh | sh -s -- --client cgo
+#   wget -qO- http://SERVER:PORT/run.sh | sh
 
 set -e
 
+# Downloaded from rdev: server defaults are filled by the server template.
 # ── Defaults ────────────────────────────────────────────────
-RDEV_SERVER=""
+RDEV_SERVER='{{.Server}}'
+# Raw repository copies still accept an explicit server argument.
+case "$RDEV_SERVER" in '{'*) RDEV_SERVER="" ;; esac
 RDEV_ID=""
 RDEV_PASSWORD=""
 RDEV_RANDOM_PASSWORD=0
@@ -42,7 +45,7 @@ while [ $# -gt 0 ]; do
         --cgo)         RDEV_CLIENT="cgo"; shift ;;
         --no-mirror)   MIRRORS=""; shift ;;
         -h|--help)
-            echo "Usage: sh run.sh SERVER_URL [options]"
+            echo "Usage: sh run.sh [SERVER_URL] [options]"
             echo ""
             echo "  Downloads a client to /tmp and runs it directly."
             echo "  Default client is compatible Go; use --client rs for performance Rust, --client cgo for feature x264 H.264."

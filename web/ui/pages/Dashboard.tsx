@@ -346,18 +346,17 @@ export function DashboardPage() {
 
   /* Install commands */
   const cmds = useMemo(() => {
-    const servers = serverList();
     return {
-      curl: `curl -sL '${HTTP}${H}/run.sh' | sh -s -- '${servers}' -p '${pwPlaceholder}'${clientArg}`,
-      wget: `wget -qO- '${HTTP}${H}/run.sh' | sh -s -- '${servers}' -p '${pwPlaceholder}'${clientArg}`,
-      openSh: `curl -sL '${HTTP}${H}/run.sh' | sh -s -- '${servers}'${clientArg}`,
-      ps: `powershell -Command "iwr -useb '${HTTP}${H}/run.ps1' | iex; RDev '${servers}' -Password '${pwPlaceholder}'${clientPSArg}"`,
-      psOpen: `powershell -Command "iwr -useb '${HTTP}${H}/run.ps1' | iex; RDev '${servers}'${clientPSArg}"`,
+      curl: `curl -sL '${HTTP}${H}/run.sh' | sh -s -- -p '${pwPlaceholder}'${clientArg}`,
+      wget: `wget -qO- '${HTTP}${H}/run.sh' | sh -s -- -p '${pwPlaceholder}'${clientArg}`,
+      openSh: `curl -sL '${HTTP}${H}/run.sh' | sh${clientArg ? ' -s --' + clientArg : ''}`,
+      ps: `powershell -Command "iwr -useb '${HTTP}${H}/run.ps1' | iex; RDev -Password '${pwPlaceholder}'${clientPSArg}"`,
+      psOpen: `powershell -Command "iwr -useb '${HTTP}${H}/run.ps1' | iex; RDev${clientPSArg}"`,
       w7Path: `%SystemRoot%\\system32\\WindowsPowerShell\\v1.0\\powershell.exe`,
-      w7Pw: `[Net.ServicePointManager]::SecurityProtocol=[Enum]::ToObject([Net.SecurityProtocolType],3072); $wc=New-Object Net.WebClient; $wc.DownloadString('${HTTP}${H}/run.ps1') | iex; RDev '${servers}' -Password '${pwPlaceholder}'${clientPSArg}`,
-      w7Open: `[Net.ServicePointManager]::SecurityProtocol=[Enum]::ToObject([Net.SecurityProtocolType],3072); $wc=New-Object Net.WebClient; $wc.DownloadString('${HTTP}${H}/run.ps1') | iex; RDev '${servers}'${clientPSArg}`,
+      w7Pw: `[Net.ServicePointManager]::SecurityProtocol=[Enum]::ToObject([Net.SecurityProtocolType],3072); $wc=New-Object Net.WebClient; $wc.DownloadString('${HTTP}${H}/run.ps1') | iex; RDev -Password '${pwPlaceholder}'${clientPSArg}`,
+      w7Open: `[Net.ServicePointManager]::SecurityProtocol=[Enum]::ToObject([Net.SecurityProtocolType],3072); $wc=New-Object Net.WebClient; $wc.DownloadString('${HTTP}${H}/run.ps1') | iex; RDev${clientPSArg}`,
     };
-  }, [serverList, pwPlaceholder, clientArg, clientPSArg]);
+  }, [pwPlaceholder, clientArg, clientPSArg]);
 
   const copyRandom = useCallback(
     (id: string, cmd: string) => {
