@@ -3,12 +3,14 @@ import { useI18n } from "../lib/i18n";
 import { Button } from "./button";
 
 /** Uses the inspector's existing CDP session; no second controller/socket. */
-export function BrowserPreview({ src }: { src: string }) {
+export function BrowserPreview({ src, visible = true }: { src: string; visible?: boolean }) {
   const { t } = useI18n();
   const frameRef = useRef<HTMLIFrameElement>(null);
   const [showTools, setShowTools] = useState(false);
   const [ready, setReady] = useState(false);
   const [error, setError] = useState("");
+  const visibleRef = useRef(visible);
+  visibleRef.current = visible;
   const toolsRef = useRef(showTools);
   toolsRef.current = showTools;
 
@@ -17,6 +19,7 @@ export function BrowserPreview({ src }: { src: string }) {
       if (event.origin !== location.origin || event.source !== frameRef.current?.contentWindow) return;
       if (event.data?.type === "rdev-browser-ready") {
         setReady(true);
+        frameRef.current?.contentWindow?.postMessage({ type: "rdev-browser-visible", visible: visibleRef.current }, location.origin);
         frameRef.current?.contentWindow?.postMessage({ type: "rdev-browser-tools", visible: toolsRef.current }, location.origin);
       } else if (event.data?.type === "rdev-browser-bridge-error") {
         setError(t("browser.previewUnsupported"));
@@ -29,6 +32,10 @@ export function BrowserPreview({ src }: { src: string }) {
       window.removeEventListener("message", receive);
     };
   }, [t]);
+
+  useEffect(() => {
+    if (ready) frameRef.current?.contentWindow?.postMessage({ type: "rdev-browser-visible", visible }, location.origin);
+  }, [ready, visible]);
 
   return <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
     <div className="flex shrink-0 flex-wrap justify-end gap-1 border-b border-border-seam px-2 py-1">

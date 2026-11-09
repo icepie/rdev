@@ -135,6 +135,6 @@ export function BrowserPanel({ device, visible = true, deviceSelection = "inline
         <Button type="submit" disabled={!online || busy}>{t(busy ? "common.loading" : "browser.start")}</Button>
       </>}
       <p className="text-xs text-muted-foreground">{t("browser.lifetime")}</p>
-    </form> : inspector ? <BrowserPreview key={inspector} src={inspector} /> : <p role="status" className="p-4 text-xs text-muted-foreground">{t("common.loading")}</p>}
+    </form> : inspector ? <BrowserPreview key={inspector} src={inspector} visible={visible} /> : <p role="status" className="p-4 text-xs text-muted-foreground">{t("common.loading")}</p>}
   </div>;
 }

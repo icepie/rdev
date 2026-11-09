@@ -123,6 +123,7 @@ export function installBrowserInput(app, notify) {
     return false;
   } });
   let pointerDown = false;
+  let handingOffFocus = false;
   let canvas;
   const wrapped = new Map();
   const prepareView = () => {
@@ -132,6 +133,9 @@ export function installBrowserInput(app, notify) {
     wrapped.set(model, original);
     // Composition must commit before a click changes remote input focus.
     model.emitMouseEvent = function(event, ...args) {
+      // DevTools synthesizes mouseup at (0,0) on canvas blur. The real
+      // release already arrived before our IME host takes keyboard focus.
+      if (handingOffFocus && event.type === "mouseup") return;
       const modifiers = new Set(["Alt", "Control", "Meta", "Shift"].filter(name => event.getModifierState(name)));
       const snapshot = { type: event.type, offsetX: event.offsetX, offsetY: event.offsetY, button: event.button, detail: event.detail, getModifierState: name => modifiers.has(name) };
       enqueue(() => original.call(this, snapshot, ...args));
@@ -148,7 +152,12 @@ export function installBrowserInput(app, notify) {
     host.style.left = `${Math.max(0, Math.min(event.clientX, innerWidth - 2))}px`;
     host.style.top = `${Math.max(0, Math.min(event.clientY, innerHeight - 22))}px`;
   };
-  const focus = () => { if (!disposed && canvas?.isConnected) host.focus({ preventScroll: true }); };
+  const focus = () => {
+    if (disposed || !canvas?.isConnected) return;
+    handingOffFocus = true;
+    try { host.focus({ preventScroll: true }); }
+    finally { handingOffFocus = false; }
+  };
   const down = event => {
     if (!isCanvasEvent(event)) return;
     input.finish(); pointerDown = true; position(event);

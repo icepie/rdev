@@ -2,6 +2,28 @@
 // Only rdev's parent frame may control the preview layout.
 let app;
 let showTools = false;
+let visible = false;
+let activating;
+// Activate on user intent, never on every visibility event: several preview
+// frames can share Chrome and must not keep stealing the foreground tab.
+const activate = () => {
+  if (!visible || document.visibilityState === "hidden" || activating) return;
+  const target = app?.screenCaptureModel?.target();
+  if (!target) return;
+  activating = target.pageAgent().invoke_bringToFront().then(result => {
+    if (result.getError?.()) throw new Error(result.getError());
+  }).catch(() => notify({ type: "rdev-browser-input-error" })).finally(() => { activating = null; });
+};
+const enterPreview = event => {
+  const surface = app?.screencastView?.contentElement;
+  if (!surface || !event.composedPath().includes(surface)) return;
+  if (event.type === "pointerover" && event.relatedTarget && surface.contains(event.relatedTarget)) return;
+  activate();
+};
+document.addEventListener("pointerover", enterPreview, true);
+document.addEventListener("pointerdown", enterPreview, true);
+window.addEventListener("focus", activate);
+document.addEventListener("visibilitychange", activate);
 const notify = message => parent.postMessage(message, location.origin);
 const applyLayout = () => {
   if (!app?.rootSplitWidget || !app.screencastView) return;
@@ -10,6 +32,10 @@ const applyLayout = () => {
 };
 window.addEventListener("message", async event => {
   if (event.origin !== location.origin || event.source !== parent) return;
+  if (event.data?.type === "rdev-browser-visible") {
+    visible = event.data.visible === true;
+    if (visible) activate();
+  }
   if (event.data?.type === "rdev-browser-tools") {
     showTools = event.data.visible === true;
     applyLayout();
