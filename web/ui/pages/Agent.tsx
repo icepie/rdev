@@ -761,6 +761,7 @@ export function AgentPage() {
         );
         setManagementError("");
         break;
+      case "thread_pinned":
       case "thread_renamed":
         takePendingResponse(pendingRenameRef.current, asString(msg.id), JSON.stringify([asString(msg.device), frameThread]));
         break;
@@ -1717,6 +1718,12 @@ export function AgentPage() {
     });
   }, [sidebarRows, sidebarView, threadQuery]);
 
+  const pinnedRows = useMemo(
+    () => filteredRows.filter(row => row.pinnedAt).sort((a, b) => (b.pinnedAt ?? 0) - (a.pinnedAt ?? 0)),
+    [filteredRows],
+  );
+  const unpinnedRows = useMemo(() => filteredRows.filter(row => !row.pinnedAt), [filteredRows]);
+
   /* Organize → By device: group the filtered rows; the current device
    * floats to the top, then device id ascending (bb section order). */
   const sidebarGroups: { device: string; os?: string; rows: SidebarRow[] }[] | null =
@@ -1728,7 +1735,7 @@ export function AgentPage() {
           if (!sidebarView.deviceFilter || sidebarView.deviceFilter === d.id) map.set(d.id, { device: d.id, os: d.os, rows: [] });
         }
       }
-      for (const row of filteredRows) {
+      for (const row of unpinnedRows) {
         const g = map.get(row.device);
         if (g) {
           g.rows.push(row);
@@ -1741,7 +1748,7 @@ export function AgentPage() {
           Number(b.device === device) - Number(a.device === device) ||
           a.device.localeCompare(b.device),
       );
-    }, [filteredRows, sidebarView.organize, sidebarView.showAll, sidebarView.deviceFilter, device, sidebarDevices, threadQuery]);
+    }, [unpinnedRows, sidebarView.organize, sidebarView.showAll, sidebarView.deviceFilter, device, sidebarDevices, threadQuery]);
 
   const visibleGroups =
     sidebarGroups?.filter((g) => threadQuery.trim() || !sidebarView.hiddenGroups.includes(g.device)) ??
@@ -2227,6 +2234,15 @@ export function AgentPage() {
             </button>
           </DropdownMenuTrigger>
           <DropdownMenuContent side="right" align="start" sideOffset={8}>
+            <DropdownMenuItem onSelect={() => {
+              const id = crypto.randomUUID();
+              if (sendRaw({ op: "pin_thread", id, device: th.device, thread: th.id, pinned: !th.pinnedAt })) {
+                pendingRenameRef.current.set(JSON.stringify([th.device, th.id]), { id });
+              } else setManagementError(t("common.disconnected"));
+            }}>
+              <Icon name="Pin" className="size-4 shrink-0" />
+              {t(th.pinnedAt ? "agent.unpin" : "agent.pin")}
+            </DropdownMenuItem>
             <DropdownMenuItem onSelect={() => setRenamingId(`${th.device}:${th.id}`)}>
               <Icon name="Edit" className="size-4 shrink-0" />
               {t("agent.rename")}
@@ -2512,11 +2528,15 @@ export function AgentPage() {
           </div>
           {managementError && !deleteTarget && <p role="alert" className="px-3 py-2 text-xs text-destructive-text">{managementError}</p>}
           <div className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto px-2 py-2">
+            {pinnedRows.length > 0 && <section aria-label={t("agent.pinned")} className="mb-2">
+              <div className="flex h-8 items-center gap-2 px-2 text-xs font-medium text-muted-foreground"><Icon name="Pin" className="size-3.5" />{t("agent.pinned")}</div>
+              {pinnedRows.map(renderSidebarRow)}
+            </section>}
             {visibleGroups === null ? (
-              filteredRows.length === 0 ? (
-                sidebarEmpty
+              unpinnedRows.length === 0 ? (
+                pinnedRows.length ? null : sidebarEmpty
               ) : (
-                filteredRows.map(renderSidebarRow)
+                unpinnedRows.map(renderSidebarRow)
               )
             ) : visibleGroups.length === 0 ? (
               sidebarEmpty

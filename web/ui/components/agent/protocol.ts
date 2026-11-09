@@ -116,6 +116,7 @@ export function parseThreads(v: unknown): ThreadInfo[] {
     if (!x || typeof x !== "object") return [];
     const o = x as {
       id?: unknown;
+      pinnedAt?: unknown;
       title?: unknown;
       updatedAt?: unknown;
       running?: unknown;
@@ -131,6 +132,7 @@ export function parseThreads(v: unknown): ThreadInfo[] {
     return [
       {
         id,
+        pinnedAt: typeof o.pinnedAt === "number" && Number.isSafeInteger(o.pinnedAt) && o.pinnedAt > 0 ? o.pinnedAt : undefined,
         title: asString(o.title),
         model: asString(o.model) || undefined,
         updatedAt: asString(o.updatedAt),

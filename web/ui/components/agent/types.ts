@@ -92,6 +92,7 @@ export interface TodoItem {
 }
 
 export interface ThreadInfo {
+  pinnedAt?: number;
   model?: string;
   outcomeAt?: string;
   outcome?: "done" | "error" | "stopped";

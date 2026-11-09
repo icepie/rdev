@@ -40,6 +40,7 @@ import (
 // device, not by a browser connection: events are broadcast to every
 // attached socket and a reopened tab reattaches mid-run (auth_ok.running).
 type agentMsg struct {
+	Pinned             bool                `json:"pinned,omitempty"`
 	Offline            bool                `json:"offline,omitempty"`
 	OfflineConfirmed   bool                `json:"offlineConfirmed,omitempty"`
 	Type               string              `json:"type,omitempty"`
@@ -262,6 +263,7 @@ type agentWorking struct {
 
 // agentThreadInfo is one thread in a thread_list / auth_ok broadcast.
 type agentThreadInfo struct {
+	PinnedAt       int64  `json:"pinnedAt,omitempty"`
 	OutcomeAt      string `json:"outcomeAt,omitempty"`
 	Outcome        string `json:"outcome,omitempty"`
 	BackgroundJobs int    `json:"backgroundJobs,omitempty"`
@@ -347,6 +349,7 @@ func queueTexts(q []agentQueuedChat) []string {
 // history, todo list, message queue and (at most one) in-flight turn.
 // Guarded by Server.agentSessionsMu.
 type agentThread struct {
+	pinnedAt         int64
 	pendingReasoning bool // rebuild at the next turn boundary after an effort change
 	turnDisplay      json.RawMessage
 	turnCommand      bool // compact/tool commands do not consume model-boundary steering
@@ -742,6 +745,7 @@ func (s *Server) agentSessionFor(deviceID string, client *ClientConn) (*agentSes
 		for _, meta := range store.listThreads(deviceID) {
 			msgs, savedModel, cwd, title := store.load(deviceID, meta.ID)
 			th := s.newAgentThreadLocked(entry, meta.ID, msgs, cwd, title)
+			th.pinnedAt = prefs.Pinned[meta.ID]
 			th.updatedAt = meta.UpdatedAt
 			th.lastOutcome = restoredAgentOutcome(meta.Outcome)
 			th.outcomeAt = meta.OutcomeAt
@@ -943,6 +947,7 @@ func agentThreadListLocked(entry *agentSessionEntry) []agentThreadInfo {
 		}
 		info := agentThreadInfo{
 			ID:        th.id,
+			PinnedAt:  th.pinnedAt,
 			Title:     title,
 			UpdatedAt: th.updatedAt.UTC().Format(time.RFC3339),
 			Running:   th.running,
@@ -1010,12 +1015,14 @@ func (s *Server) collectAllThreads() []agentDeviceThreads {
 		if seen[dirID] {
 			continue
 		}
-		os := s.loadAgentPrefs(dirID).OS
+		prefs := s.loadAgentPrefs(dirID)
+		os := prefs.OS
 		metas := store.listThreads(dirID)
 		threads := make([]agentThreadInfo, 0, len(metas))
 		for _, m := range metas {
 			threads = append(threads, agentThreadInfo{
 				ID:        m.ID,
+				PinnedAt:  prefs.Pinned[m.ID],
 				Outcome:   restoredAgentOutcome(m.Outcome),
 				OutcomeAt: m.OutcomeAt,
 				Title:     m.Title,
@@ -1509,7 +1516,7 @@ func (h *agentWSHandler) OnMessage(socket *gws.Conn, message *gws.Message) {
 		h.handlePeekThread(ac, msg.Thread)
 	case "delete_thread":
 		h.handleThreadAction(ac, msg)
-	case "rename_thread":
+	case "rename_thread", "pin_thread":
 		h.handleThreadAction(ac, msg)
 	case "set_cwd":
 		h.handleSetCwd(ac, msg.Path)

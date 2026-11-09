@@ -1,6 +1,12 @@
 import { expect, it } from "vitest";
 import { parseThreads } from "../ui/components/agent/protocol";
 
+it("restores pin timestamps and ignores invalid or absent pin metadata", () => {
+  const values = [1730000000000, 0, -1, 1.5, "1730000000000", Infinity, undefined];
+  expect(parseThreads(values.map((pinnedAt, i) => ({ id: String(i), pinnedAt })))
+    .map(row => row.pinnedAt)).toEqual([1730000000000, undefined, undefined, undefined, undefined, undefined, undefined]);
+});
+
 it("restores supported waiting states only for running threads", () => {
   const rows = parseThreads([
     { id: "a", running: true, waiting: "approval" },

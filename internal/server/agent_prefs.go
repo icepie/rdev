@@ -11,10 +11,11 @@ import (
 // <dataDir>/agent/prefs/<device>.json (unlike history, prefs are kept
 // regardless of AgentSessionTTL). Writes are atomic (tmp + rename).
 type agentPrefs struct {
-	Model          string `json:"model,omitempty"`
-	PermissionMode string `json:"permissionMode,omitempty"`
-	ReasoningLevel string `json:"reasoningLevel,omitempty"`
-	CurrentThread  string `json:"currentThread,omitempty"`
+	Pinned         map[string]int64 `json:"pinned,omitempty"`
+	Model          string           `json:"model,omitempty"`
+	PermissionMode string           `json:"permissionMode,omitempty"`
+	ReasoningLevel string           `json:"reasoningLevel,omitempty"`
+	CurrentThread  string           `json:"currentThread,omitempty"`
 	// OS is the last known device OS, kept so the global thread list can
 	// show an OS icon for devices that are currently offline.
 	OS string `json:"os,omitempty"`
@@ -81,7 +82,17 @@ func (s *Server) writeAgentPrefs(entry *agentSessionEntry) {
 
 // agentPrefsLocked snapshots preferences while agentSessionsMu is held.
 func (s *Server) agentPrefsLocked(entry *agentSessionEntry) agentPrefs {
+	var pinned map[string]int64
+	for id, th := range entry.threads {
+		if th.pinnedAt > 0 {
+			if pinned == nil {
+				pinned = make(map[string]int64)
+			}
+			pinned[id] = th.pinnedAt
+		}
+	}
 	return agentPrefs{
+		Pinned:         pinned,
 		Model:          entry.model,
 		PermissionMode: entry.permMode,
 		ReasoningLevel: entry.reasoningLevel,

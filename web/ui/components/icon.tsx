@@ -1,3 +1,4 @@
+import PinIcon from "@hugeicons/core-free-icons/PinIcon";
 import {
   Component,
   createContext,
@@ -233,6 +234,7 @@ const CORE_ICON_MAP = {
   FolderUnknown: FolderUnknownIcon,
   GitBranch: GitBranchIcon,
   Folder02: Folder02Icon,
+  Pin: PinIcon,
   Home: Home07Icon,
   Info: InformationCircleIcon,
   Inbox: InboxIcon,
