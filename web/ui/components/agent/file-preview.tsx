@@ -1,3 +1,4 @@
+import { DocumentFilePreview } from "./document-file-preview";
 import { useFileLineReveal } from "./file-line-reveal";
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from "react";
 import { File as PierreFile, type FileContents, type FileOptions } from "@pierre/diffs/react";
@@ -128,6 +129,8 @@ function FilePreviewContent({
           >
             {state.encoding === "url" && state.mime?.startsWith("video/") ? (
               <VideoFilePreview key={state.content} src={state.content} name={base} visible={visible} t={t} />
+            ) : state.encoding === "url" && (state.mime?.startsWith("audio/") || state.mime === "application/pdf") ? (
+              <DocumentFilePreview key={state.content} src={state.content} mime={state.mime} name={base} visible={visible} t={t} />
             ) : state.encoding === "base64" && state.mime ? (
               <FileImagePreview key={state.content} src={`data:${state.mime};base64,${state.content}`} name={base}
                 connected={connected} onRefresh={onRefresh} t={t} />

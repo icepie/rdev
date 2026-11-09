@@ -109,3 +109,18 @@
   .file-workspace-grid { grid-template-columns: minmax(0, 1fr) 0px; }
   .file-workspace-grid[data-tasks-open="true"] { grid-template-columns: minmax(0, 1fr) 288px; }
 }
+
+/* Editor-style files: narrow panes use one surface without unmounting tabs. */
+.file-editor-workspace { display:grid; min-width:0; min-height:0; grid-template-columns:minmax(0,1fr); }
+.file-explorer-region { display:flex; flex-direction:column; }
+.file-explorer-region > :last-child { min-height:0; }
+.file-editor-region { display:none; flex-direction:column; }
+.file-editor-workspace[data-editor-open="true"] > .file-explorer-region { display:none; }
+.file-editor-workspace[data-editor-open="true"] > .file-editor-region { display:flex; }
+@container files (min-width: 720px) {
+  .file-editor-workspace { grid-template-columns:minmax(220px,30%) minmax(0,1fr); }
+  .file-editor-workspace[data-details="true"] { grid-template-columns:minmax(340px,45%) minmax(0,1fr); }
+  .file-editor-workspace[data-editor-open="true"] > .file-explorer-region { display:flex; }
+  .file-editor-region { display:flex; }
+  .file-explorer-back { display:none; }
+}

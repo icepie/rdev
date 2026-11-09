@@ -41,6 +41,30 @@ func videoMIME(path string) string {
 	return ""
 }
 
+// Stream document/audio previews through the same bounded, authorized Range API.
+func streamPreviewMIME(path string) string {
+	if mime := videoMIME(path); mime != "" {
+		return mime
+	}
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".pdf":
+		return "application/pdf"
+	case ".mp3":
+		return "audio/mpeg"
+	case ".wav":
+		return "audio/wav"
+	case ".ogg", ".oga", ".opus":
+		return "audio/ogg"
+	case ".m4a":
+		return "audio/mp4"
+	case ".aac":
+		return "audio/aac"
+	case ".flac":
+		return "audio/flac"
+	}
+	return ""
+}
+
 func isHTMLPreviewPath(path string) bool {
 	ext := strings.ToLower(filepath.Ext(path))
 	return ext == ".html" || ext == ".htm"
@@ -168,7 +192,7 @@ func (s *Server) HandleMedia(w http.ResponseWriter, r *http.Request) {
 	}
 	modTime, _ := time.Parse(time.RFC3339, meta.ModTime)
 	reader := &mediaReader{srv: s, client: client, ctx: ctx, path: grant.path, size: meta.Size, modTime: meta.ModTime}
-	w.Header().Set("Content-Type", videoMIME(grant.path))
+	w.Header().Set("Content-Type", streamPreviewMIME(grant.path))
 	w.Header().Set("Cache-Control", "private, no-store")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Referrer-Policy", "no-referrer")

@@ -1,6 +1,12 @@
 // Ported from web/public/i18n.js (vanilla UI). Keys unchanged.
 export const dictionaries = {
   "en": {
+    "files.pdfFallback": "Open PDF in a new tab",
+    "files.mediaFailed": "This format could not be played. Download the file to open it locally.",
+    "files.selectPreview": "Select a file to preview",
+    "files.openFiles": "Open files",
+    "files.listView": "Details",
+    "files.explorer": "Explorer",
     "browser.textFailed": "Browser input could not be synchronized. Check the connection and try again.",
     "browser.previewUnsupported": "Preview controls are unavailable for this Chrome version. Use full view.",
 
@@ -677,6 +683,12 @@ export const dictionaries = {
     "files.transferNoTarget": "Target pane has no device selected"
   },
   "zh": {
+    "files.pdfFallback": "在新标签页打开 PDF",
+    "files.mediaFailed": "无法播放此格式，可下载后在本地打开。",
+    "files.selectPreview": "选择文件以预览",
+    "files.openFiles": "已打开文件",
+    "files.listView": "详细列表",
+    "files.explorer": "资源管理器",
     "browser.textFailed": "网页输入未能同步，请检查连接后重试。",
     "browser.previewUnsupported": "当前 Chrome 版本暂不支持预览控制，请使用独立窗口。",
 

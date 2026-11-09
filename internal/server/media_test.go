@@ -195,3 +195,35 @@ func TestHTMLPreviewResponseSandboxAndSizeLimit(t *testing.T) {
 		t.Fatal("oversized read not canceled")
 	}
 }
+
+func TestDocumentAndAudioPreviewRanges(t *testing.T) {
+	for _, tc := range []struct{ path, mime string }{
+		{"/report.PDF", "application/pdf"}, {"/song.mp3", "audio/mpeg"},
+		{"/recording.wav", "audio/wav"}, {"/song.flac", "audio/flac"},
+		{"/voice.opus", "audio/ogg"}, {"/song.m4a", "audio/mp4"},
+	} {
+		t.Run(tc.path, func(t *testing.T) {
+			s, c, tr := newMediaTestServer(t)
+			url, err := s.grantFilePreview(c, tc.path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			r := httptest.NewRequest("GET", url, nil)
+			r.Header.Set("Range", "bytes=10-29")
+			w := httptest.NewRecorder()
+			s.HandleMedia(w, r)
+			if w.Code != 206 || w.Header().Get("Content-Type") != tc.mime || !bytes.Equal(w.Body.Bytes(), tr.data[10:30]) {
+				t.Fatalf("invalid preview response: %d %v", w.Code, w.Header())
+			}
+			c.Password = "changed"
+			w = httptest.NewRecorder()
+			s.HandleMedia(w, r)
+			if w.Code != 404 {
+				t.Fatal("old document grant survived password change")
+			}
+		})
+	}
+	if streamPreviewMIME("file.docx") != "" {
+		t.Fatal("unsupported file advertised as streamable")
+	}
+}

@@ -1,7 +1,6 @@
-import { readFilePreviewReply } from "../lib/file-preview-reply";
-import { FilePreview } from "../components/agent/file-preview";
-import type { FilePreviewState } from "../components/agent/types";
-import { Dialog, DialogContent, DialogTitle } from "../components/dialog";
+import { useFilePreviewTabs } from "../lib/file-preview-tabs";
+import { FileEditorTabs } from "../components/file-editor-tabs";
+import { FileExplorer } from "../components/file-explorer";
 import { FilesPaneLayout } from "../components/files-pane-layout";
 import { isImeComposing } from "../lib/keyboard";
 import { createKeyedRequest } from "../lib/keyed-request";
@@ -236,20 +235,11 @@ export function FilesBrowser({
 
   const [device, setDeviceState] = useState("");
   useEffect(() => { onDeviceChange?.(device); }, [device, onDeviceChange]);
-  const [preview, setPreview] = useState<{ id: string; device: string; path: string; state: FilePreviewState } | null>(null);
-  const previewRequest = useRef("");
-  const closePreview = useCallback(() => { previewRequest.current = ""; setPreview(null); }, []);
-  useEffect(() => {
-    if (!preview || preview.state.status !== "loading") return;
-    const id = preview.id;
-    const timer = window.setTimeout(() => {
-      if (previewRequest.current !== id) return;
-      previewRequest.current = "";
-      setPreview(current => current?.id === id ? { ...current, state: { ...current.state, status: "error", message: t("files.previewTimeout") } } : current);
-    }, 30000);
-    return () => window.clearTimeout(timer);
-  }, [preview, t]);
-  useEffect(() => () => { previewRequest.current = ""; }, []);
+  const previews = useFilePreviewTabs(t("files.previewTimeout"));
+  const { accept: acceptPreview, reset: closePreview, failPending: failPreviews } = previews;
+  const [treeRevision, setTreeRevision] = useState(0);
+  const [details, setDetails] = useState(false);
+  const [showEditor, setShowEditor] = useState(false);
   const [pathInput, setPathInput] = useState("");
   const [entries, setEntries] = useState<FileEntry[]>([]);
   const [listView, setListView] = useState<ListView>({ truncated: false, shown: 0, total: 0 });
@@ -420,21 +410,15 @@ export function FilesBrowser({
     });
   }, [send, requireConnectedDevice, saveTasks, bump]);
 
-  const openPreview = useCallback((path: string) => {
+  const openPreview = useCallback((path: string, refresh = false) => {
     const device = activeDeviceRef.current;
-    const id = makeId();
-    previewRequest.current = id;
-    setPreview({ id, device, path, state: { status: "loading", content: "", message: "", truncated: false } });
-    void requireConnectedDevice(device).then(() => {
-      if (previewRequest.current === id && activeDeviceRef.current === device) {
-        send({ op: "read", deviceId: device, requestId: id, path });
-      }
-    }).catch(error => {
-      if (previewRequest.current !== id) return;
-      previewRequest.current = "";
-      setPreview(current => current?.id === id ? { ...current, state: { ...current.state, status: "error", message: String(error instanceof Error ? error.message : error) } } : current);
-    });
-  }, [requireConnectedDevice, send]);
+    setShowEditor(true);
+    previews.open(device, path, async id => {
+      await requireConnectedDevice(device);
+      if (activeDeviceRef.current !== device) throw new Error(tRef.current("files.connectionLost"));
+      send({ op: "read", deviceId: device, requestId: id, path });
+    }, refresh);
+  }, [requireConnectedDevice, send, previews.open]);
 
   /* ── Downloads ── */
 
@@ -690,13 +674,7 @@ export function FilesBrowser({
         if (msg.op !== "auth_required" || (!msg.taskId && !msg.requestId)) return;
         msg = { ...msg, op: "error" };
       }
-      const previewReply = readFilePreviewReply(previewRequest.current, activeDeviceRef.current, msg);
-      if (previewReply) {
-        const id = previewRequest.current;
-        previewRequest.current = "";
-        setPreview(current => current?.id === id ? { ...current, state: previewReply } : current);
-        return;
-      }
+      if (acceptPreview(msg)) return;
       if (msg.op === "file_content") return; // obsolete preview, never a directory response
       const directoryRequest = typeof msg.requestId === "string" ? directoryWaiters.current.get(msg.requestId) : undefined;
       if (directoryRequest && (msg.op === "mkdir_result" || msg.op === "error")) {
@@ -834,7 +812,7 @@ export function FilesBrowser({
       }
       bump();
     },
-    [saveTasks, uploadLoop, completeDownload, bump, send, stopUpload],
+    [saveTasks, uploadLoop, completeDownload, bump, send, stopUpload, acceptPreview],
   );
 
   const onBinary = useCallback(
@@ -938,13 +916,7 @@ export function FilesBrowser({
       };
     };
     const endPendingRequests = () => {
-      const pendingPreview = previewRequest.current;
-      previewRequest.current = "";
-      if (!disposed && pendingPreview) {
-        setPreview(current => current?.id === pendingPreview && current.state.status === "loading"
-          ? { ...current, state: { ...current.state, status: "error", message: tRef.current("files.connectionLost") } }
-          : current);
-      }
+      if (!disposed) failPreviews(tRef.current("files.connectionLost"));
       connectionEpoch.current++;
       transferAuth.current.clear();
       pwReqRef.current?.resolve(null);
@@ -974,7 +946,7 @@ export function FilesBrowser({
         wsRef.current = null;
       }
     };
-  }, [onBinary, onText, resumeDownload, stopUpload, saveTasks, bump, ensureAuth]);
+  }, [onBinary, onText, resumeDownload, stopUpload, saveTasks, bump, ensureAuth, failPreviews]);
 
   /* Keep acknowledgments on the hot path; sample progress and persist at most
    * twice a second. Idle panes do not re-render. Terminal states save directly. */
@@ -1024,6 +996,7 @@ export function FilesBrowser({
           !listingGuard.current.accepts(requestId) || activeDeviceRef.current !== activeDevice) return;
       const targetPath = append ? currentPathRef.current : path;
       if (!append) {
+        setTreeRevision(value => value + 1);
         setEntries([]);
         listOffsetRef.current = 0;
         listTotalRef.current = 0;
@@ -1127,6 +1100,8 @@ export function FilesBrowser({
     },
     [requireConnectedDevice, send],
   );
+
+  const loadTreeDirectory = useCallback((path: string) => listDirAll(path, device), [listDirAll, device]);
 
   const createDirectory = useCallback(async (path: string, device: string): Promise<void> => {
     await requireConnectedDevice(device);
@@ -1414,11 +1389,16 @@ export function FilesBrowser({
         }} />
 
       <div className="file-workspace-grid min-h-0 flex-1 overflow-hidden" data-tasks-open={tasksOpen}>
-        {/* Browser (also a cross-pane transfer drop target) */}
+        <div className="file-editor-workspace" data-details={details} data-editor-open={showEditor && previews.tabs.length > 0}>
+          <div className="file-explorer-region min-h-0 min-w-0 overflow-hidden border-r border-border-seam" onDragOver={onPaneDragOver} onDrop={onDrop}>
+            <div className="flex shrink-0 items-center justify-end gap-1 border-b border-border-seam p-1">
+              <Button size="sm" variant="ghost" aria-pressed={!details} onClick={() => setDetails(false)}>{t("files.explorer")}</Button>
+              <Button size="sm" variant="ghost" aria-pressed={details} onClick={() => setDetails(true)}>{t("files.listView")}</Button>
+              {previews.tabs.length > 0 && <Button size="sm" variant="ghost" onClick={() => setShowEditor(true)}>{t("files.openFiles")}</Button>}
+            </div>
+            {details ? (
         <Card
           className="min-h-0 min-w-0 flex-1 overflow-auto rounded-none border-0 [&>div]:h-full"
-          onDragOver={onPaneDragOver}
-          onDrop={onDrop}
         >
           <Table className="table-fixed">
             <TableHeader className="sticky top-0 z-10 bg-background">
@@ -1581,6 +1561,25 @@ export function FilesBrowser({
           </Table>
         </Card>
 
+            ) : <FileExplorer key={JSON.stringify([device, currentPathRef.current, treeRevision])} path={currentPathRef.current} entries={entries}
+              notice={listView.notice} selected={previews.tabs.find(tab => tab.key === previews.active)?.path}
+              onDragStart={(entry, event) => {
+                event.dataTransfer.setData(FILE_DRAG_MIME, JSON.stringify({ src: leafId, items: [{ ...entry, size: entry.size || 0 }] }));
+                event.dataTransfer.effectAllowed = "copy";
+              }}
+              load={loadTreeDirectory} onOpen={openPreview} onNavigate={path => void list(path)} t={t} />}
+            {listView.truncated && !details && <Button variant="ghost" size="sm" onClick={() => void list(currentPathRef.current, true)}>{t("files.loadMore")}</Button>}
+          </div>
+          <div className="file-editor-region min-h-0 min-w-0 overflow-hidden">
+            <Button className="file-explorer-back shrink-0" variant="ghost" size="sm" onClick={() => setShowEditor(false)}><Icon name="ChevronLeft" />{t("files.explorer")}</Button>
+            <div className="min-h-0 flex-1">
+              <FileEditorTabs tabs={previews.tabs} active={previews.active} onSelect={previews.select} onClose={previews.close}
+                onRefresh={path => openPreview(path, true)} connected={!!device && wsRef.current?.readyState === WebSocket.OPEN}
+                onDownload={tab => startDownload(tab.path, tab.path.split(/[\\/]/).pop() || "download", 0, undefined, tab.device)} t={t} />
+            </div>
+          </div>
+        </div>
+
         {/* Tasks */}
         <div className="file-task-region min-h-0 min-w-0 overflow-hidden" inert={!tasksOpen} aria-hidden={!tasksOpen}>
         <Card className="h-full min-h-0 min-w-0 overflow-y-auto rounded-none border-0 border-t border-border-seam bg-sidebar p-3 @min-[800px]/files:border-t-0 @min-[800px]/files:border-l">
@@ -1702,22 +1701,6 @@ export function FilesBrowser({
           </form>
         </AlertDialogContent>
       </AlertDialog>
-
-      <Dialog open={preview !== null} onOpenChange={open => { if (!open) closePreview(); }}>
-        <DialogContent className="flex h-[min(80dvh,800px)] min-h-0 w-full md:w-[calc(100vw-2rem)] max-w-5xl flex-col overflow-hidden p-0">
-          <DialogTitle className="sr-only">{preview?.path || t("files.name")}</DialogTitle>
-          {preview && <div className="min-h-0 flex-1 md:pt-8">
-            <FilePreview key={preview.device + ":" + preview.path} path={preview.path} state={preview.state}
-              connected={device === preview.device} onRefresh={() => openPreview(preview.path)} t={t} />
-          </div>}
-          <div className="flex shrink-0 justify-end gap-2 border-t border-border-seam px-3 py-2">
-            <Button variant="outline" size="sm" onClick={() => {
-              if (preview) startDownload(preview.path, preview.path.split(/[\\/]/).pop() || "download", 0, undefined, preview.device);
-            }}>{t("files.download")}</Button>
-            <Button variant="ghost" size="sm" onClick={closePreview}>{t("common.close")}</Button>
-          </div>
-        </DialogContent>
-      </Dialog>
 
       {/* Async error alert (auth_fail / auth_required) */}
       <AlertDialog open={!!alertMsg} onOpenChange={(open) => !open && setAlertMsg("")}>

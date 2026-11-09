@@ -352,3 +352,27 @@ it("defers hidden HTML loads and aborts in-flight checks when its panel is hidde
  } finally {await dispose();}
  expect(requests[1].options.signal.aborted).toBe(true);
 });
+
+it("renders PDF previews and releases the embedded document while hidden", async () => {
+ const props={path:'/report.pdf',state:{status:'ready',encoding:'url',mime:'application/pdf',content:'/api/media/pdf-ticket'}};
+ const {host,render,dispose}=await mount(props);
+ try {
+  expect(host.querySelector('iframe').getAttribute('src')).toBe('/api/media/pdf-ticket');
+  expect(host.querySelector('a[target="_blank"]').getAttribute('href')).toBe('/api/media/pdf-ticket');
+  await render({...props,visible:false});expect(host.querySelector('iframe')).toBeNull();
+  await render(props);expect(host.querySelector('iframe')).not.toBeNull();
+ } finally {await dispose();}
+});
+it("plays audio with bounded fetching and pauses when its tab is hidden", async () => {
+ const load=vi.spyOn(HTMLMediaElement.prototype,'load').mockImplementation(()=>{});
+ const pause=vi.spyOn(HTMLMediaElement.prototype,'pause').mockImplementation(()=>{});
+ const props={path:'/voice.mp3',state:{status:'ready',encoding:'url',mime:'audio/mpeg',content:'/api/media/audio-ticket'}};
+ const {host,render,dispose}=await mount(props);
+ try {
+  expect(host.querySelector('audio').getAttribute('src')).toBe('/api/media/audio-ticket');
+  expect(host.querySelector('audio').getAttribute('preload')).toBe('metadata');
+  await render({...props,visible:false});
+  expect(pause).toHaveBeenCalled();expect(host.querySelector('audio').hasAttribute('src')).toBe(false);
+  await render(props);expect(load).toHaveBeenCalledTimes(3);
+ } finally {await dispose();}
+});

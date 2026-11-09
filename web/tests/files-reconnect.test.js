@@ -50,6 +50,7 @@ it.each([false, true])("isolates reconnect attempts and waits for device authent
   const root = createRoot(document.getElementById("root"));
   try {
     await act(async () => root.render(createElement(MemoryRouter, { initialEntries: ["/files?device=device-a"] }, createElement(FilesPage))));
+    await act(async () => [...document.querySelectorAll("button")].find(button => button.textContent === "files.listView").click());
     const first = sockets[0];
     await act(async () => first.open());
     if (protectedDevice) {
