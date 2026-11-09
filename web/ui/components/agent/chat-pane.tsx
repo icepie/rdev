@@ -872,14 +872,11 @@ export function ChatPaneView({
       </div>}
       {/* Composer (bb footer: same 760px column and padding as the content) */}
       <div className="mx-auto w-full max-w-[760px] shrink-0 px-4 pb-2">
+        <div className="grid grid-cols-[minmax(0,1fr)] gap-2">
         <JobsPanel open={jobsOpen} onOpenChange={setJobsOpen} full={jobsFull} sink={sink} threadId={threadId} ready={ready} sendRaw={sendRaw} t={t} />
         {/* bb prompt-stack banner: the todo checklist card sits directly
          * above the composer. */}
-        {todos.length > 0 && (
-          <div className="mb-2">
-            <TodoCard todos={todos} t={t} />
-          </div>
-        )}
+        {todos.length > 0 && <TodoCard todos={todos} t={t} />}
         <div className="relative w-full rounded-xl border border-border bg-background shadow-lift">
           {slashOpen && (
             <div id={slashListId} role="listbox" aria-label={t("agent.slashCommands")} className="absolute inset-x-2 bottom-full z-20 mb-1 max-h-[min(20rem,45dvh)] overflow-y-auto rounded-lg border border-border bg-surface-raised-solid shadow-lift">
@@ -1153,6 +1150,7 @@ export function ChatPaneView({
               )}
             </div>
           </div>
+        </div>
         </div>
         {/* bb footer strip: device + connection | permission mode + context usage */}
         <div className="mt-1 max-md:mt-0 flex min-h-6 max-h-6 max-md:pointer-coarse:min-h-11 max-md:pointer-coarse:max-h-11 select-none items-center justify-between gap-2 overflow-hidden pl-[15px] pr-3.5">
