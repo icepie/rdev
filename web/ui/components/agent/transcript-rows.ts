@@ -226,7 +226,7 @@ export function imageMimeOf(path: string): string | null {
 const BINARY_RESULT_PREFIX = /^\[binary file, \d+ bytes, base64-encoded\]\n/;
 
 export function toolImageDataUrl(tool: ToolItem): string | null {
-  if (workKindOf(tool.name) !== "file-read") return null;
+  if (workKindOf(tool.name) !== "file-read" && tool.name !== "browser" && tool.name !== "computer") return null;
   const preview = /^\[image preview\]\n(data:image\/jpeg;base64,[A-Za-z0-9+/]+={0,2})$/.exec(tool.result);
   if (preview) return preview[1];
   const mime = imageMimeOf(rowTarget(tool));

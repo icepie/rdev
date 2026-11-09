@@ -38,3 +38,21 @@ it.each(["inline", "sidebar"])("%s selection starts the chosen device, connects 
   expect(document.querySelector("iframe")).toBeNull();
  } finally { await act(() => root.unmount()); globalThis.fetch = originalFetch; vi.unstubAllGlobals(); dom.window.close(); }
 });
+
+it("attaches the conversation target without silently selecting another thread's tab", async () => {
+ const dom = new JSDOM('<div id="root"></div>', { url: "https://rdev.test/agent" });
+ Object.assign(globalThis, { window: dom.window, document: dom.window.document, location: dom.window.location, IS_REACT_ACT_ENVIRONMENT: true });
+ for (const key of ["HTMLFormElement", "HTMLSelectElement", "HTMLElement", "Element", "Node", "MutationObserver", "Event", "CustomEvent"]) vi.stubGlobal(key, dom.window[key]);
+ const originalFetch = globalThis.fetch;
+ apiFetch.mockReset();
+ globalThis.fetch = vi.fn(async () => new Response(JSON.stringify([{id:"other-thread",title:"Other",url:"about:blank"}])));
+ const root = createRoot(document.getElementById("root"));
+ try {
+   const automation = {kind:"browser", device:"laptop", target:"owned-page", base:`/api/browser/view/${"a".repeat(64)}`, paused:false, action:"navigate"};
+   await act(() => root.render(createElement(BrowserPanel,{device:"laptop",automation})));
+   expect(apiFetch).not.toHaveBeenCalled();
+   expect(new URL(document.querySelector("iframe").src).searchParams.get("wss")).toContain("/page/owned-page");
+   expect(document.querySelector('[role="combobox"]').disabled).toBe(true);
+   expect([...document.querySelectorAll("button")].find(b=>b.textContent==="browser.stop").disabled).toBe(true);
+ } finally {await act(() => root.unmount());globalThis.fetch=originalFetch;vi.unstubAllGlobals();dom.window.close();}
+});

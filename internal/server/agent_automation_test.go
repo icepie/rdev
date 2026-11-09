@@ -1,0 +1,199 @@
+package server
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"image"
+	"image/jpeg"
+	"strings"
+	"testing"
+	"time"
+
+	"rdev/internal/protocol"
+)
+
+func testAutomation(t *testing.T, s *Server, device, thread string) automationTool {
+	t.Helper()
+	entry := &agentSessionEntry{deviceID: device, threads: make(map[string]*agentThread)}
+	th := &agentThread{id: thread, automation: &agentAutomation{pages: make(map[string]automationPage)}}
+	entry.threads[thread] = th
+	return automationTool{srv: s, entry: entry, thread: th, state: th.automation}
+}
+func TestAutomationDeviceAuthorization(t *testing.T) {
+	s := NewServer()
+	s.clients = map[string]*ClientConn{"one": {ID: "one"}, "protected": {ID: "protected", Password: "password"}}
+	bound := testAutomation(t, s, "one", "a")
+	for _, device := range []string{"protected", "@server", "absent"} {
+		if _, err := bound.client(device); err == nil {
+			t.Fatalf("cross-device access: %s", device)
+		}
+	}
+	if c, err := bound.client(""); err != nil || c.ID != "one" {
+		t.Fatalf("default device: %v", err)
+	}
+	server := testAutomation(t, s, "@server", "b")
+	for _, device := range []string{"", "@server", "protected", "absent"} {
+		if _, err := server.client(device); err == nil {
+			t.Fatalf("unauthorized server routing: %s", device)
+		}
+	}
+	if _, err := server.client("one"); err != nil {
+		t.Fatal(err)
+	}
+}
+func TestAutomationTakeoverCancelsAndSerializes(t *testing.T) {
+	s := NewServer()
+	base := testAutomation(t, s, "device", "a")
+	tool := computerTool{base}
+	ctx, finish, err := base.begin(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := base.begin(context.Background()); err == nil {
+		t.Fatal("concurrent operation accepted")
+	}
+	if err := tool.claim("device"); err != nil {
+		t.Fatal(err)
+	}
+	other := computerTool{testAutomation(t, s, "device", "b")}
+	if err := other.claim("device"); err == nil {
+		t.Fatal("another thread took screen")
+	}
+	returned := make(chan struct{})
+	go func() { s.takeDesktopControl("device"); close(returned) }()
+	select {
+	case <-ctx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("takeover did not cancel")
+	}
+	select {
+	case <-returned:
+		t.Fatal("takeover acknowledged before operation released")
+	default:
+	}
+	finish()
+	select {
+	case <-returned:
+	case <-time.After(time.Second):
+		t.Fatal("takeover hung")
+	}
+	if _, _, err := base.begin(context.Background()); err == nil {
+		t.Fatal("agent ran after takeover")
+	}
+	if err := other.claim("device"); err != nil {
+		t.Fatal("lease not released", err)
+	}
+}
+func TestComputerCaptureInputAndStaleCoordinates(t *testing.T) {
+	s, client, transport := newProxyTestServer(t, "device", "")
+	client.Desktop = &protocol.DesktopCapabilities{Supported: true, Input: true, Clipboard: true, Sources: []protocol.DesktopSource{{ID: "screen:primary"}}}
+	base := testAutomation(t, s, "device", "a")
+	tool := computerTool{base}
+	var frame bytes.Buffer
+	_ = jpeg.Encode(&frame, image.NewRGBA(image.Rect(0, 0, 1280, 720)), nil)
+	transport.onSend = func(m *protocol.Message) {
+		switch m.Type {
+		case protocol.MsgDesktopStart:
+			s.handleDesktopMessage(&protocol.Message{Type: protocol.MsgDesktopReady, SessionID: m.SessionID, Width: 1280, Height: 720, Format: "mjpeg"})
+			s.handleDesktopFrame(m.SessionID, frame.Bytes())
+		case protocol.MsgDesktopClipboard:
+			s.handleDesktopMessage(&protocol.Message{Type: protocol.MsgDesktopClipboard, SessionID: m.SessionID, ClipboardAction: "content"})
+		}
+	}
+	run := func(raw string) (string, error) { return tool.Execute(context.Background(), json.RawMessage(raw)) }
+	if _, err := run(`{"action":"click","x":10,"y":20}`); err == nil {
+		t.Fatal("input without screenshot")
+	}
+	result, err := run(`{"action":"screenshot","source":"screen:primary"}`)
+	if err != nil || !strings.HasPrefix(result, "[image preview]") {
+		t.Fatalf("capture: %v", err)
+	}
+	if _, err := run(`{"action":"click","x":10,"y":20}`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := run(`{"action":"drag","x":10,"y":20,"toX":40,"toY":50}`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := run(`{"action":"text","text":"你好🌏"}`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := run(`{"action":"click","x":1280,"y":20}`); err == nil {
+		t.Fatal("out of bounds coordinate accepted")
+	}
+	if _, err := run(`{"action":"click","source":"other","x":10,"y":20}`); err == nil {
+		t.Fatal("unknown screen accepted")
+	}
+	transport.mu.Lock()
+	var inputs []string
+	for _, m := range transport.msgs {
+		if m.Type == protocol.MsgDesktopInput {
+			inputs = append(inputs, m.InputType)
+		}
+	}
+	transport.mu.Unlock()
+	if strings.Join(inputs, ",") != "mouse_down,mouse_up,mouse_down,mouse_move,mouse_up,key_down,key_up" {
+		t.Fatalf("input order: %v", inputs)
+	}
+	s.desktopMu.RLock()
+	routes := len(s.desktops)
+	s.desktopMu.RUnlock()
+	if routes != 0 {
+		t.Fatal("capture route leaked")
+	}
+	s.mu.Lock()
+	s.clients[client.ID] = &ClientConn{ID: client.ID, Desktop: client.Desktop, Transport: transport}
+	s.mu.Unlock()
+	if _, err := run(`{"action":"click","x":10,"y":20}`); err == nil {
+		t.Fatal("old capture survived reconnect")
+	}
+}
+func TestBrowserNavigationURL(t *testing.T) {
+	for _, raw := range []string{"file:///etc/passwd", "chrome://settings", "javascript:alert(1)", "http://u:p@example.test", "example.test"} {
+		if browserNavigationURL(raw) == nil {
+			t.Fatalf("accepted %q", raw)
+		}
+	}
+	for _, raw := range []string{"https://example.test/path", "http://127.0.0.1:9000"} {
+		if err := browserNavigationURL(raw); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestAutomationRetirementReleasesDesktopAndRejectsOldTools(t *testing.T) {
+	s := NewServer()
+	base := testAutomation(t, s, "device", "a")
+	tool := computerTool{base}
+	if err := tool.claim("device"); err != nil {
+		t.Fatal(err)
+	}
+	s.retireAutomation(base.state)
+	s.agentWG.Wait()
+	if _, _, err := base.begin(context.Background()); err == nil {
+		t.Fatal("retired tools can run")
+	}
+	s.automationMu.Lock()
+	owners := len(s.desktopOwners)
+	s.automationMu.Unlock()
+	if owners != 0 {
+		t.Fatal("retired conversation owns desktop")
+	}
+}
+
+func TestBrowserStatusDoesNotLaunchChrome(t *testing.T) {
+	s, _, _ := newProxyTestServer(t, "device", "")
+	s.BrowserEnabled = true
+	t.Setenv("RDEV_CHROME_PATH", "/missing/test-chrome")
+	tool := browserTool{testAutomation(t, s, "device", "a")}
+	result, err := tool.Execute(context.Background(), json.RawMessage(`{"action":"status"}`))
+	if err != nil || !strings.Contains(result, `"running":false`) {
+		t.Fatalf("status: %s %v", result, err)
+	}
+	s.browserMu.Lock()
+	started := len(s.browsers)
+	s.browserMu.Unlock()
+	if started != 0 {
+		t.Fatal("status started Chrome")
+	}
+}

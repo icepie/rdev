@@ -33,11 +33,13 @@ func providerMessages(history []Message) []Message {
 	return messages
 }
 
-// Recognize only the complete bounded read_file preview envelope. Older
+// Recognize complete bounded tool image envelopes (file previews and captures). Older
 // compacted/truncated previews remain text instead of sending broken images.
+const toolImageMax = 1024 * 1024
+
 func toolPreviewImage(content string) (MessageImage, bool) {
 	const prefix = "[image preview]\ndata:image/jpeg;base64,"
-	if !strings.HasPrefix(content, prefix) || len(content) > toolOutputMax {
+	if !strings.HasPrefix(content, prefix) || len(content) > toolImageMax {
 		return MessageImage{}, false
 	}
 	encoded := strings.TrimPrefix(content, prefix)

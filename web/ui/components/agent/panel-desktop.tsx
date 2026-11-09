@@ -248,10 +248,12 @@ function loadSettings(): Settings {
 /* ── Panel component ── */
 
 export function PanelDesktop({
+  initialSource,
   device,
   visible,
   t,
 }: {
+  initialSource?: string;
   device: string;
   /* false while another panel tab is active: the socket is closed and all
    * window-level capture is detached; the stage DOM stays mounted so tab
@@ -259,7 +261,7 @@ export function PanelDesktop({
   visible: boolean;
   t: Translator;
 }) {
-  const [settingsState, setSettingsState] = useState<Settings>(loadSettings);
+  const [settingsState, setSettingsState] = useState<Settings>(() => ({ ...loadSettings(), ...(initialSource ? { source: initialSource } : {}) }));
   const [status, setStatusState] = useState<{ text: string; cls: StatusCls }>({
     text: "",
     cls: "",

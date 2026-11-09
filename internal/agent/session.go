@@ -235,8 +235,11 @@ const (
 
 // truncateToolOutput caps a tool result at toolOutputMax bytes, keeping the
 // head and tail and replacing the middle with a marker. Rune boundaries are
-// preserved.
+// preserved. Valid tool images have a separate bounded envelope and stay intact.
 func truncateToolOutput(s string) string {
+	if _, ok := toolPreviewImage(s); ok {
+		return s
+	}
 	if len(s) > toolOutputMax {
 		if result, ok := mapShellStreams(s, func(stream string) string {
 			return truncateOutputText(stream, 5000, 3000, 1800)

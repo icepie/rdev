@@ -166,3 +166,28 @@ func TestSessionSendsReadPreviewAsImageOnNextRound(t *testing.T) {
 		}
 	}
 }
+
+func TestLargeToolScreenshotSurvivesTruncationAndReachesVision(t *testing.T) {
+	img := image.NewRGBA(image.Rect(0, 0, 640, 480))
+	for i := range img.Pix {
+		img.Pix[i] = byte((i*37 + i/13) % 255)
+	}
+	var encoded bytes.Buffer
+	if err := jpeg.Encode(&encoded, img, &jpeg.Options{Quality: 80}); err != nil {
+		t.Fatal(err)
+	}
+	preview := "[image preview]\ndata:image/jpeg;base64," + base64.StdEncoding.EncodeToString(encoded.Bytes())
+	if len(preview) <= toolOutputMax {
+		t.Fatal("fixture too small")
+	}
+	if got := truncateToolOutput(preview); got != preview {
+		t.Fatal("screenshot truncated")
+	}
+	messages := providerMessages([]Message{{Role: "tool", Content: preview}})
+	if len(messages) != 2 || len(messages[1].Images) != 1 || strings.Contains(messages[0].Content, "base64") {
+		t.Fatal("image did not reach vision message")
+	}
+	if _, ok := toolPreviewImage(preview + strings.Repeat("a", toolImageMax)); ok {
+		t.Fatal("oversized image accepted")
+	}
+}

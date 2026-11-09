@@ -56,11 +56,12 @@ type desktopMsg struct {
 }
 
 type desktopRoute struct {
-	id       string
-	clientID string
-	conn     *desktopBrowserConn
-	vnc      *vncConn
-	stream   *vncDesktopStream
+	automation *automationDesktop
+	id         string
+	clientID   string
+	conn       *desktopBrowserConn
+	vnc        *vncConn
+	stream     *vncDesktopStream
 }
 
 type desktopBrowserConn struct {
@@ -155,6 +156,9 @@ func (h *desktopWSHandler) OnMessage(socket *gws.Conn, message *gws.Message) {
 		input, ok := bc.prepareInput(msg)
 		if !ok {
 			return
+		}
+		if msg.InputType != "cursor_move" {
+			bc.srv.takeDesktopControl(bc.deviceID)
 		}
 		bc.client.Send(input)
 	case "clipboard_get":
@@ -503,6 +507,9 @@ func (bc *desktopBrowserConn) clampPoint(x, y int) (int, int) {
 }
 
 func (bc *desktopBrowserConn) inputError(message string) {
+	if bc.socket == nil {
+		return
+	}
 	now := time.Now()
 	if now.Sub(bc.lastInputError) < 2*time.Second {
 		return
@@ -536,6 +543,10 @@ func (s *Server) handleDesktopMessage(msg *protocol.Message) {
 	route := s.desktops[msg.SessionID]
 	s.desktopMu.RUnlock()
 	if route == nil {
+		return
+	}
+	if route.automation != nil {
+		route.automation.message(msg)
 		return
 	}
 	switch msg.Type {
@@ -596,6 +607,10 @@ func (s *Server) handleDesktopFrame(sessionID string, data []byte) {
 	if route == nil || len(data) == 0 {
 		return
 	}
+	if route.automation != nil {
+		route.automation.frame(data)
+		return
+	}
 	if route.vnc != nil {
 		route.vnc.enqueueFrame(data)
 		return
@@ -611,6 +626,9 @@ func (s *Server) handleDesktopFrame(sessionID string, data []byte) {
 }
 
 func (s *Server) closeDesktopForClient(clientID string) {
+	s.automationMu.Lock()
+	delete(s.desktopOwners, clientID)
+	s.automationMu.Unlock()
 	s.desktopMu.Lock()
 	var routes []*desktopRoute
 	for id, route := range s.desktops {
@@ -621,6 +639,10 @@ func (s *Server) closeDesktopForClient(clientID string) {
 	}
 	s.desktopMu.Unlock()
 	for _, route := range routes {
+		if route.automation != nil {
+			close(route.automation.done)
+			continue
+		}
 		if route.stream != nil {
 			route.stream.closeDeviceDisconnected()
 			continue

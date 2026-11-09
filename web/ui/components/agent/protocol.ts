@@ -183,6 +183,7 @@ export function parseAllThreads(v: unknown): AllThreadsDevice[] {
  * no pane shows it. auth_ok / thread_switched are deliberately absent (they
  * switch the view). */
 export const THREAD_SCOPED_OPS: Record<string, true> = {
+  automation: true,
   assistant_start: true,
   thread_peeked: true,
   turn_start: true,

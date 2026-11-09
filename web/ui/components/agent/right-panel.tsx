@@ -1,3 +1,4 @@
+import type { AutomationView } from "./automation";
 import { useServerCapabilities } from "../../lib/server-capabilities";
 import { BrowserPanel } from "../browser-panel";
 import { FilePreview } from "./file-preview";
@@ -727,10 +728,14 @@ export function AgentRightPanel({
   onHide,
   openFileSignal,
   openDiffSignal,
+  automation,
+  onAutomationControl,
   panelFull,
   onSetDock,
   onToggleFull,
 }: {
+  automation?: AutomationView | null;
+  onAutomationControl?: (paused: boolean) => void;
   changes: ChangesState | null;
   /* Per-path get_diff replies, keyed by file path; missing = not fetched. */
   diffs: Record<string, DiffState>;
@@ -836,6 +841,12 @@ export function AgentRightPanel({
       /* storage full/blocked — strip state stays session-only */
     }
   }, [threadKey, dynTabs, active, recent, browserEnabled, capabilitiesLoading]);
+
+  useEffect(() => {
+    if (!automation || (automation.kind === "browser" && !browserEnabled)) return;
+    setDynTabs(tabs => tabs.some(tab => tab.kind === automation.kind) ? tabs : [...tabs, { kind: automation.kind }]);
+    setActive(automation.kind);
+  }, [automation, browserEnabled]);
 
   /* Stop the refresh spinner once fresh changes land; safety timeout in
    * case the device never answers. */
@@ -1213,6 +1224,11 @@ export function AgentRightPanel({
         </div>
       </div>
 
+      {automation && active === automation.kind && <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border-seam bg-background px-3 py-2 text-xs">
+        <span className="min-w-0 flex-1 truncate" title={automation.device}>{t(automation.kind === "browser" ? "automation.browser" : "automation.desktop")} · {automation.device}</span>
+        <span className="text-muted-foreground" role="status">{t(automation.paused ? "automation.manual" : "automation.agent")}</span>
+        <Button variant="outline" size="sm" disabled={!connected} onClick={() => onAutomationControl?.(!automation.paused)}>{t(automation.paused ? "automation.resume" : "automation.takeover")}</Button>
+      </div>}
       <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-sidebar">
       {active === "info" ? (
         /* Info tab */
@@ -1331,13 +1347,15 @@ export function AgentRightPanel({
                 onOpenFile={openFileTab}
               />
             ) : tab.kind === "browser" ? (
-              <BrowserPanel key={info.device} device={info.device} visible={visible && active === tabId(tab)} />
+              <div className="flex min-h-0 flex-1 flex-col" inert={automation?.kind === "browser" && !automation.paused}>
+                <BrowserPanel key={automation?.kind === "browser" ? `${automation.device}:${automation.target}` : info.device} device={automation?.kind === "browser" ? automation.device : info.device} automation={automation?.kind === "browser" ? automation : undefined} visible={visible && active === tabId(tab)} />
+              </div>
             ) : (
-              <PanelDesktop
-                device={info.device}
-                visible={visible && active === tabId(tab)}
-                t={t}
-              />
+              <div className="flex min-h-0 flex-1 flex-col" inert={automation?.kind === "desktop" && !automation.paused}>
+                <PanelDesktop initialSource={automation?.kind === "desktop" ? automation.source || "auto" : undefined} key={automation?.kind === "desktop" ? `${automation.device}:${automation.source}` : info.device}
+                  device={automation?.kind === "desktop" ? automation.device : info.device}
+                  visible={visible && active === tabId(tab)} t={t} />
+              </div>
             )}
           </div>
         ) : (

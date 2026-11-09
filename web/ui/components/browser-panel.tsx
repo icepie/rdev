@@ -1,3 +1,4 @@
+import type { AutomationView } from "./agent/automation";
 import { BrowserPreview } from "./browser-preview";
 import { useEffect, useState } from "react";
 import { apiFetch, getDevicePassword } from "../lib/api";
@@ -12,7 +13,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 interface Target { id: string; title: string; url: string }
 
 /** Chrome's own inspector frontend includes its interactive Screencast app. */
-export function BrowserPanel({ device, visible = true, deviceSelection = "inline" }: { device: string; visible?: boolean; deviceSelection?: "inline" | "sidebar" }) {
+export function BrowserPanel({ device, visible = true, deviceSelection = "inline", automation }: { automation?: AutomationView; device: string; visible?: boolean; deviceSelection?: "inline" | "sidebar" }) {
   const { t, lang } = useI18n();
   const { devices } = useDevices();
   const [selectedDevice, setExitDevice] = useState(device === "@server" ? "" : device);
@@ -24,6 +25,12 @@ export function BrowserPanel({ device, visible = true, deviceSelection = "inline
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const online = devices.some(d => d.id === exitDevice);
+  useEffect(() => {
+    if (!automation?.base || !automation.target) return;
+    setExitDevice(automation.device);
+    setBase(automation.base);
+    setSelected(automation.target);
+  }, [automation?.base, automation?.target, automation?.device]);
 
   useEffect(() => {
     if (!base || !visible) return;
@@ -36,7 +43,7 @@ export function BrowserPanel({ device, visible = true, deviceSelection = "inline
         const rows: Target[] = await response.json();
         if (controller.signal.aborted) return;
         setTargets(rows);
-        setSelected(current => rows.some(row => row.id === current) ? current : rows[0]?.id ?? "");
+        setSelected(current => automation?.target ?? (rows.some(row => row.id === current) ? current : rows[0]?.id ?? ""));
         setError("");
       } catch (e) {
         if (!controller.signal.aborted) setError(e instanceof Error ? e.message : String(e));
@@ -46,7 +53,7 @@ export function BrowserPanel({ device, visible = true, deviceSelection = "inline
     };
     void refresh();
     return () => { controller.abort(); clearTimeout(timer); };
-  }, [base, visible, t]);
+  }, [base, visible, t, automation?.target]);
 
   const start = async () => {
     if (busy || !online) return;
@@ -85,8 +92,8 @@ export function BrowserPanel({ device, visible = true, deviceSelection = "inline
       <Icon name="Globe" className="size-4 text-muted-foreground" />
       <span className="min-w-0 flex-1 truncate">{t("nav.browser")}{exitDevice && ` · ${exitDevice}`}</span>
       {base && <>
-        <Button variant="ghost" size="sm" disabled={busy} onClick={() => void newTab()} aria-label={t("agent.newTabLabel")}><Icon name="Plus" className="size-4" /></Button>
-        <Select value={selected} onValueChange={setSelected} disabled={targets.length === 0}>
+        <Button variant="ghost" size="sm" disabled={busy || !!automation} onClick={() => void newTab()} aria-label={t("agent.newTabLabel")}><Icon name="Plus" className="size-4" /></Button>
+        <Select value={selected} onValueChange={setSelected} disabled={targets.length === 0 || !!automation}>
           <SelectTrigger aria-label={t("browser.tabs")} className="h-8 w-auto min-w-0 max-w-48 text-xs">
             <SelectValue placeholder={t("browser.tabs")} />
           </SelectTrigger>
@@ -95,7 +102,7 @@ export function BrowserPanel({ device, visible = true, deviceSelection = "inline
           </SelectContent>
         </Select>
         {inspector && <a href={inspector} target="_blank" rel="noreferrer" className="rounded px-2 py-1 hover:bg-state-hover">{t("browser.expand")}</a>}
-        <Button variant="ghost" size="sm" disabled={busy} onClick={() => void stop()}>{t("browser.stop")}</Button>
+        <Button variant="ghost" size="sm" disabled={busy || !!automation} onClick={() => void stop()}>{t("browser.stop")}</Button>
       </>}
     </div>
     {error && <p role="alert" className="px-3 py-2 text-xs text-destructive-text">{error}</p>}

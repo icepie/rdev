@@ -40,6 +40,7 @@ import (
 // device, not by a browser connection: events are broadcast to every
 // attached socket and a reopened tab reattaches mid-run (auth_ok.running).
 type agentMsg struct {
+	Automation         *automationView     `json:"automation,omitempty"`
 	Pinned             bool                `json:"pinned,omitempty"`
 	Offline            bool                `json:"offline,omitempty"`
 	OfflineConfirmed   bool                `json:"offlineConfirmed,omitempty"`
@@ -349,6 +350,7 @@ func queueTexts(q []agentQueuedChat) []string {
 // history, todo list, message queue and (at most one) in-flight turn.
 // Guarded by Server.agentSessionsMu.
 type agentThread struct {
+	automation       *agentAutomation
 	pinnedAt         int64
 	pendingReasoning bool // rebuild at the next turn boundary after an effort change
 	turnDisplay      json.RawMessage
@@ -619,6 +621,7 @@ func (s *Server) buildAgentSession(entry *agentSessionEntry, th *agentThread, cl
 		th.jobs = jobs
 	}
 	tools := s.agentBaseTools(entry, client, th.cwd)
+	tools = append(tools, s.automationTools(entry, th)...)
 	if entry.deviceID != agentServerDeviceID && client != nil {
 		tools = append(tools, &backgroundTool{jobs: th.jobs, shell: &shellTool{srv: s, client: client, Cwd: th.cwd}})
 	} else if entry.deviceID == agentServerDeviceID {
@@ -1192,6 +1195,7 @@ func (s *Server) requestApproval(entry *agentSessionEntry, th *agentThread, tc a
 // agentThreadSnapshot is the replay state of one thread for auth_ok,
 // thread_switched, thread_peeked and delete-thread remaps.
 type agentThreadSnapshot struct {
+	automation *automationView
 	history    []agentHistoryEntry
 	todos      []todoItem
 	queue      []string
@@ -1217,6 +1221,12 @@ func (s *Server) threadSnapshotLocked(entry *agentSessionEntry, th *agentThread)
 		queueModes: queueModes(th),
 		running:    th.running,
 		usage:      th.lastUsage,
+	}
+	if th.automation != nil {
+		th.automation.mu.Lock()
+		view := th.automation.view
+		snap.automation = &view
+		th.automation.mu.Unlock()
 	}
 	if snap.todos == nil {
 		snap.todos = []todoItem{}
@@ -1320,6 +1330,7 @@ func (h *agentWSHandler) establish(ac *agentConn, client *ClientConn) {
 		Cwd:            threadCwd,
 		Branch:         threadBranch,
 		Live:           snap.live,
+		Automation:     snap.automation,
 		Usage:          snap.usage,
 	})
 	// The sidebar shows threads of every device (not partitioned per
@@ -1409,6 +1420,8 @@ func (h *agentWSHandler) OnMessage(socket *gws.Conn, message *gws.Message) {
 		}
 	}
 	switch msg.Op {
+	case "automation_control":
+		h.handleAutomation(ac, msg)
 	case "get_jobs":
 		h.handleJobs(ac, msg.Thread, msg.ID, false)
 	case "cancel_job":
@@ -1811,6 +1824,8 @@ func (h *agentWSHandler) handleReset(ac *agentConn, threadRef string) {
 	}
 	defer th.persistMu.Unlock()
 	cancel := th.cancel
+	oldAutomation := th.automation
+	th.automation = nil
 	th.epoch++
 	th.running = false
 	th.cancel = nil
@@ -1840,6 +1855,7 @@ func (h *agentWSHandler) handleReset(ac *agentConn, threadRef string) {
 	th.updatedAt = time.Now()
 	denyApprovalsLocked(th)
 	srv.agentSessionsMu.Unlock()
+	srv.retireAutomation(oldAutomation)
 	if cancel != nil {
 		cancel()
 	}
@@ -1934,6 +1950,7 @@ func (h *agentWSHandler) handleSwitchThread(ac *agentConn, threadID string) {
 		Running:    snap.running,
 		Working:    snap.working,
 		Live:       snap.live,
+		Automation: snap.automation,
 		Usage:      snap.usage,
 	})
 	srv.writeAgentPrefs(entry)
@@ -1974,6 +1991,7 @@ func (h *agentWSHandler) handlePeekThread(ac *agentConn, threadID string) {
 		Running:    snap.running,
 		Working:    snap.working,
 		Live:       snap.live,
+		Automation: snap.automation,
 		Usage:      snap.usage,
 	})
 }
@@ -2010,6 +2028,8 @@ func (h *agentWSHandler) handleDeleteThread(ac *agentConn, threadID string) {
 	// final save cannot recreate the deleted conversation.
 	th.epoch++
 	cancel := th.cancel
+	oldAutomation := th.automation
+	th.automation = nil
 	th.queue = nil
 	th.turnFiles = nil
 	denyApprovalsLocked(th)
@@ -2055,6 +2075,7 @@ func (h *agentWSHandler) handleDeleteThread(ac *agentConn, threadID string) {
 		switchModel = cur.model
 	}
 	srv.agentSessionsMu.Unlock()
+	srv.retireAutomation(oldAutomation)
 	if cancel != nil {
 		cancel()
 	}
@@ -2085,6 +2106,7 @@ func (h *agentWSHandler) handleDeleteThread(ac *agentConn, threadID string) {
 				Running:    snap.running,
 				Working:    snap.working,
 				Live:       snap.live,
+				Automation: snap.automation,
 				Usage:      snap.usage,
 			})
 		}

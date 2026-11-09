@@ -561,6 +561,8 @@ func (f *ReverseForward) Result() (uint32, string) {
 
 // Server manages WebSocket clients and SSH proxy
 type Server struct {
+	automationMu       sync.Mutex
+	desktopOwners      map[string]desktopAutomationLease
 	BrowserEnabled     bool // explicit opt-in for server-hosted Chrome
 	browserMu          sync.Mutex
 	browsers           map[string]*browserSession

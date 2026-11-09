@@ -1,3 +1,4 @@
+import { parseAutomation, type AutomationView } from "../components/agent/automation";
 import { MobileWorkspaceNavigation } from "../shell/AppShell";
 import { createFileReadRequests } from "../components/agent/file-read-requests";
 import { useThreadModels } from "../components/agent/use-thread-models";
@@ -301,6 +302,7 @@ export function AgentPage() {
   /* Disable the open/close width transition while dragging (bb rubber-band
    * lag fix, same as the right panel). */
   const [sidebarDragging, setSidebarDragging] = useState(false);
+  const [automationViews, setAutomationViews] = useState<Record<string, AutomationView>>({});
   const [panelOpen, setPanelOpen] = useState(
     () => localStorage.getItem(PANEL_OPEN_KEY) === "1",
   );
@@ -723,6 +725,17 @@ export function AgentPage() {
      * they carry the NEW thread id and update threadRef themselves. */
     const op = String(msg.op);
     const frameThread = asString(msg.thread);
+    if (op === "automation" || op === "auth_ok" || op === "thread_switched" || op === "reset_ok") {
+      const view = parseAutomation(msg.automation);
+      const key = JSON.stringify([sourceDevice, frameThread]);
+      setAutomationViews(current => {
+        const next = { ...current };
+        if (view) next[key] = view; else delete next[key];
+        return next;
+      });
+      if (op === "automation" && view && frameThread === threadRef.current) setPanelOpen(true);
+      if (op === "automation") return;
+    }
     if (
       frameThread !== "" &&
       threadRef.current !== "" &&
@@ -1931,7 +1944,10 @@ export function AgentPage() {
 
   /* Shared between the inline resizable panel and the narrow-screen drawer
    * (never mounted at the same time). */
+  const automationView = automationViews[JSON.stringify([device, thread])] ?? null;
   const rightPanelProps = {
+    automation: automationView,
+    onAutomationControl: (paused: boolean) => { sendRaw({ op: "automation_control", thread, value: paused }); },
     visible: panelOpen,
     changes,
     diffs,
