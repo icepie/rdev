@@ -2,12 +2,13 @@ package server
 
 // Web tools (omp web_search/read-URL parity): web_fetch retrieves one URL
 // server-side and converts HTML to readable markdown-ish text; web_search
-// runs a keyless DuckDuckGo HTML query and returns ranked results. Both run
+// queries keyless search backends and returns ranked results. Both run
 // on the SERVER (not the device) — the device may have no internet access.
 
 import (
 	"context"
 	"encoding/json"
+	"encoding/xml"
 	"fmt"
 	"io"
 	"net/http"
@@ -238,12 +239,132 @@ func collapseWhitespace(s string) string {
 
 // --- web_search ---
 
-type webSearchTool struct{}
+type webSearchTool struct {
+	// Optional dependencies keep backend failures testable without public network access.
+	client   *http.Client
+	backends []webSearchBackend
+}
+
+type webSearchBackend struct {
+	name     string
+	endpoint string
+	parse    func(string, int) []ddgHit
+}
+
+func parseBingRSS(doc string, limit int) []ddgHit {
+	var feed struct {
+		XMLName xml.Name `xml:"rss"`
+		Channel struct {
+			Items []struct {
+				Title       string `xml:"title"`
+				Link        string `xml:"link"`
+				Description string `xml:"description"`
+			} `xml:"item"`
+		} `xml:"channel"`
+	}
+	if xml.Unmarshal([]byte(doc), &feed) != nil {
+		return nil
+	}
+	var hits []ddgHit
+	for _, item := range feed.Channel.Items {
+		hits = append(hits, ddgHit{item.Title, item.Link, htmlToMarkdown(item.Description, nil)})
+		if len(hits) >= limit {
+			break
+		}
+	}
+	return hits
+}
+
+func (t *webSearchTool) search(ctx context.Context, query string, limit int) ([]ddgHit, string, error) {
+	backends := t.backends
+	if backends == nil {
+		backends = []webSearchBackend{
+			{"Bing", "https://www.bing.com/search?format=rss&q=", parseBingRSS},
+			{"DuckDuckGo", "https://html.duckduckgo.com/html/?q=", parseDDGResults},
+		}
+	}
+	client := t.client
+	if client == nil {
+		client = webHTTPClient
+	}
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	type result struct {
+		hits   []ddgHit
+		source string
+		err    error
+	}
+	results := make(chan result, len(backends))
+	for _, backend := range backends {
+		go func() {
+			hits, err := querySearchBackend(ctx, client, backend, query, limit)
+			results <- result{hits, backend.name, err}
+		}()
+	}
+	var failures []string
+	for range backends {
+		select {
+		case <-ctx.Done():
+			return nil, "", fmt.Errorf("search unavailable: %w; check server internet access or HTTPS_PROXY", ctx.Err())
+		case result := <-results:
+			if result.err == nil && len(result.hits) > 0 {
+				if err := ctx.Err(); err != nil {
+					return nil, "", err
+				}
+				return result.hits, result.source, nil
+			}
+			failures = append(failures, fmt.Sprintf("%s: %v", result.source, result.err))
+		}
+	}
+	return nil, "", fmt.Errorf("search unavailable (%s); try a shorter query or check server internet access / HTTPS_PROXY", strings.Join(failures, "; "))
+}
+
+func querySearchBackend(ctx context.Context, client *http.Client, backend webSearchBackend, query string, limit int) ([]ddgHit, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, backend.endpoint+url.QueryEscape(query), nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36")
+	resp, err := client.Do(req)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, fmt.Errorf("network request failed")
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+	const maxBody = 2 << 20
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBody+1))
+	if err != nil {
+		return nil, fmt.Errorf("read response: %w", err)
+	}
+	if len(body) > maxBody {
+		return nil, fmt.Errorf("response too large")
+	}
+	hits := backend.parse(string(body), limit)
+	valid := hits[:0]
+	seen := make(map[string]bool)
+	for _, hit := range hits {
+		u, err := url.Parse(hit.url)
+		if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") || strings.TrimSpace(hit.title) == "" || seen[hit.url] {
+			continue
+		}
+		seen[hit.url] = true
+		valid = append(valid, hit)
+	}
+	if len(valid) == 0 {
+		return nil, fmt.Errorf("no usable results (empty results, challenge, or changed response format)")
+	}
+	return valid, nil
+}
 
 func (t *webSearchTool) Name() string { return "web_search" }
 
 func (t *webSearchTool) Description() string {
-	return "Search the web from the server (keyless DuckDuckGo). Returns ranked results with title, URL and snippet. Follow up with web_fetch on a result URL to read the page."
+	return "Search the web from the server using keyless Bing and DuckDuckGo backends. Returns ranked results with title, URL and snippet. Follow up with web_fetch on a result URL to read the page."
 }
 
 func (t *webSearchTool) Schema() json.RawMessage {
@@ -285,32 +406,12 @@ func (t *webSearchTool) Execute(ctx context.Context, raw json.RawMessage) (strin
 		limit = webSearchMaxHits
 	}
 
-	endpoint := "https://html.duckduckgo.com/html/?q=" + url.QueryEscape(args.Query)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	hits, source, err := t.search(ctx, strings.TrimSpace(args.Query), limit)
 	if err != nil {
 		return "", err
 	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36")
-
-	resp, err := webHTTPClient.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("search: %v", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("search: HTTP %d from backend", resp.StatusCode)
-	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
-	if err != nil {
-		return "", fmt.Errorf("search: %v", err)
-	}
-
-	hits := parseDDGResults(string(body), limit)
-	if len(hits) == 0 {
-		return fmt.Sprintf("no results for %q", args.Query), nil
-	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "results for %q:\n", args.Query)
+	fmt.Fprintf(&b, "results for %q (source: %s):\n", args.Query, source)
 	for i, h := range hits {
 		fmt.Fprintf(&b, "%d. %s\n   %s\n", i+1, h.title, h.url)
 		if h.snippet != "" {
