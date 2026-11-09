@@ -1324,8 +1324,8 @@ export function AgentRightPanel({
       )}
       {/* Terminal/files/desktop tabs stay mounted (hidden) while their tab
        * exists: terminal keeps its shell + scrollback, the file manager
-       * keeps running transfers, and the desktop disconnects itself while
-       * hidden (visible=false) and reconnects on activation. */}
+       * keeps running transfers, and browser/desktop retain their session
+       * state while hidden (GPU video pauses without disconnecting). */}
       {dynTabs.flatMap((tab) =>
         tab.kind === "terminal" ||
         tab.kind === "files" ||

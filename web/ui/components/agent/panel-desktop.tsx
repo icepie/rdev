@@ -10,10 +10,8 @@ import { paintDesktopCanvas, paintDesktopImage } from "../../lib/desktop-frame";
  *
  * Differences from the page:
  * - The device comes from a prop (no device picker / URL mirroring).
- * - The transport lives only while the tab is visible: hiding the tab closes
- *   the socket (a hidden stage is 0x0 and would push degenerate sizes) and
- *   showing it reconnects. Window-level input capture and clipboard polling
- *   are attached only while visible.
+ * - Folding keeps the transport and display state. GPU video pauses while
+ *   hidden; input, clipboard access and adaptive resizing are visibility-gated.
  * - Settings persist under rdevDesktop.panel.* / rdevGpuDesktop.panel.* so
  *   panel and page never clobber each other; clipboard sync defaults to off.
  * - Device passwords are collected through TabAuthOverlay (legacy sends an
@@ -965,7 +963,7 @@ export function PanelDesktop({
         keyboard_backend: s.gpuKeyboardBackend || "auto",
       },
     });
-    gpuSend(s.gpuEnableVideo ? "ResumeVideo" : "PauseVideo");
+    gpuSend(s.gpuEnableVideo && visibleRef.current && !document.hidden ? "ResumeVideo" : "PauseVideo");
   };
 
   const gpuSetSources = (list: string[]) => {
@@ -1558,10 +1556,10 @@ export function PanelDesktop({
   };
 
   const scheduleAdaptiveReconnect = () => {
-    if (!wsRef.current) return;
+    if (!visibleRef.current || !wsRef.current) return;
     clearTimeout(resizeTimerRef.current);
     resizeTimerRef.current = window.setTimeout(() => {
-      if (!wsRef.current) return;
+      if (!visibleRef.current || !wsRef.current) return;
       if (connModeRef.current === "gpu") {
         const next = gpuMaxVideoSize();
         const last = lastAdaptiveSizeRef.current;
@@ -2159,24 +2157,36 @@ export function PanelDesktop({
     }
   }, [initialSource]);
 
-  /* ── Device caps loading + visibility-gated connect ── */
-
+  /* A fold is not a disconnect. Keep capture/decoder/auth state, but do not
+   * start a hidden tab or resize an existing capture to a hidden stage. */
+  const connectionDeviceRef = useRef(device);
   useEffect(() => {
     let cancelled = false;
-    if (!visible) {
-      // Hidden tab: tear the session down so nothing streams in the
-      // background.
+    if (connectionDeviceRef.current !== device) {
       apiRef.current.disconnect();
+      connectionDeviceRef.current = device;
+      deviceCapsRef.current = null;
+      passwordRef.current = "";
+      manualDisconnectRef.current = false;
+    }
+    if (!visible) {
+      clearTimeout(resizeTimerRef.current);
+      apiRef.current.gpuReleaseKeyboard();
+      if (connModeRef.current === "gpu") apiRef.current.gpuSend("PauseVideo");
       return;
     }
     const cached = deviceCapsRef.current;
     if (cached && cached.id === device) {
-      apiRef.current.connect();
+      if (gpuAuthPendingRef.current) return;
+      const socket = wsRef.current;
+      if (socket && socket.readyState <= WebSocket.OPEN) {
+        if (connModeRef.current === "gpu" && settingsRef.current.gpuEnableVideo && !document.hidden)
+          apiRef.current.gpuSend("ResumeVideo");
+      } else if (!manualDisconnectRef.current) {
+        apiRef.current.connect();
+      }
       return;
     }
-    apiRef.current.disconnect();
-    deviceCapsRef.current = null;
-    passwordRef.current = "";
     apiJSON<DesktopDevice[]>("/api/devices")
       .then((list) => {
         if (cancelled) return;

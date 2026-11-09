@@ -33,6 +33,16 @@ it.each(["inline", "sidebar"])("%s selection starts the chosen device, connects 
   const source = new URL(frame.src);
   expect(source.searchParams.get("wss")).toBe("rdev.test/api/browser/view/test-cap/devtools/page/page-1");
   expect(source.searchParams.has("token")).toBe(false);
+  await act(() => window.dispatchEvent(new dom.window.MessageEvent("message", {origin:location.origin, source:frame.contentWindow, data:{type:"rdev-browser-ready"}})));
+  const tools = [...document.querySelectorAll("button")].find(b=>b.textContent==="DevTools");
+  await act(() => tools.click());
+  expect(tools.getAttribute("aria-pressed")).toBe("true");
+  await act(() => root.render(createElement(BrowserPanel,{device:"laptop",deviceSelection,visible:false})));
+  expect(document.querySelector("iframe")).toBe(frame);
+  await act(() => root.render(createElement(BrowserPanel,{device:"laptop",deviceSelection,visible:true})));
+  expect(document.querySelector("iframe")).toBe(frame);
+  expect([...document.querySelectorAll("button")].find(b=>b.textContent==="DevTools").getAttribute("aria-pressed")).toBe("true");
+  expect(apiFetch).toHaveBeenCalledTimes(1);
   await act(async () => [...document.querySelectorAll("button")].find(b=>b.textContent==="browser.stop").click());
   expect(fetched).toHaveBeenCalledWith("/api/browser/view/test-cap/session",{method:"DELETE"});
   expect(document.querySelector("iframe")).toBeNull();
