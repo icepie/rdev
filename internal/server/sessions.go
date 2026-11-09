@@ -346,6 +346,7 @@ func (s *Server) HandleSessionAttachWS(w http.ResponseWriter, r *http.Request) {
 			Enabled:               true,
 			ServerContextTakeover: true,
 			ClientContextTakeover: true,
+			ClientMaxWindowBits:   15, // Do not impose client_max_window_bits on OkHttp.
 			Threshold:             128,
 		},
 	})

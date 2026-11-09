@@ -148,10 +148,12 @@ Use only when:
 - Reuse existing `/ws` registration.
 - Add Android capabilities to `DesktopCapabilities` values only; no server protocol change required initially.
 - Start GPU tunnel only after receiving server register response and final device ID.
+- WebSocket compression must leave the client window at 15 bits (32 KiB). With context takeover enabled, gws otherwise defaults to 12 and emits `client_max_window_bits=12`, which OkHttp rejects before sending registration. Set `ClientMaxWindowBits: 15` on compressed server upgraders; retain compression and the existing server window. A successful HTTP 101 alone does not prove registration: verify the device list and a remote shell command.
 
 ### Phase 2: GPU Desktop Tunnel
 
 - APK implements local Android desktop service over loopback.
+- WebSocket URL normalization adds `/ws` only to a server root. Preserve explicit endpoint paths and encoded query parameters, especially `/gpu-desktop-tunnel`; appending `/ws` to that tunnel produces HTTP 404 even when registration and screen-capture permission succeed.
 - APK opens server `/gpu-desktop-tunnel` using the same 9-byte tunnel frame header:
 
 ```text

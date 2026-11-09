@@ -670,7 +670,10 @@ func NewServer() *Server {
 			Enabled:               true,
 			ServerContextTakeover: true,
 			ClientContextTakeover: true,
-			Threshold:             256,
+			// gws defaults to 12 with takeover, but OkHttp cannot negotiate
+			// client_max_window_bits. 15 accepts its standard 32 KiB window.
+			ClientMaxWindowBits: 15,
+			Threshold:           256,
 		},
 	})
 	return s

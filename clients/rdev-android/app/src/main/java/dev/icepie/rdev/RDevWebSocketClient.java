@@ -108,7 +108,7 @@ final class RDevWebSocketClient implements RDevControlConnection {
         if (closedNotified.compareAndSet(false, true)) listener.onClosed(error);
     }
 
-    private static String normalizeUrl(String value) {
+    static String normalizeUrl(String value) {
         String url = value == null ? "" : value.trim();
         if (url.startsWith("https://")) url = "wss://" + url.substring(8);
         else if (url.startsWith("http://")) url = "ws://" + url.substring(7);
@@ -116,13 +116,15 @@ final class RDevWebSocketClient implements RDevControlConnection {
         try {
             URI uri = URI.create(url);
             String path = uri.getRawPath();
+            if (path != null && path.length() > 0 && !"/".equals(path)) return url;
+            // Only a server root denotes the control endpoint. Tunnel URLs are
+            // complete endpoints; preserve their paths and encoded credentials.
             String query = uri.getRawQuery();
-            if (path == null || path.length() == 0 || "/".equals(path)) path = "/ws";
-            else if (!path.endsWith("/ws")) path = path.endsWith("/") ? path + "ws" : path + "/ws";
-            URI rebuilt = new URI(uri.getScheme(), uri.getUserInfo(), uri.getHost(), uri.getPort(), path, query, uri.getFragment());
-            return rebuilt.toString();
-        } catch (Throwable ignored) {
-            if (!url.endsWith("/ws")) url += "/ws";
+            String fragment = uri.getRawFragment();
+            return uri.getScheme() + "://" + uri.getRawAuthority() + "/ws"
+                + (query == null ? "" : "?" + query)
+                + (fragment == null ? "" : "#" + fragment);
+        } catch (IllegalArgumentException ignored) {
             return url;
         }
     }
