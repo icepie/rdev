@@ -190,8 +190,15 @@ type fileStream struct {
 	mode os.FileMode
 }
 
-// Client is the rdev client that connects to the server
+type pendingTCPDial struct {
+	ctx    context.Context
+	cancel context.CancelFunc
+}
+
+// Client is the rdev client that connects to the server.
 type Client struct {
+	tcpDials map[string]*pendingTCPDial // guarded by mu; pending outbound connects
+
 	serverURL       string
 	clientID        string
 	requestedID     string
@@ -420,6 +427,10 @@ func (h *wsEventHandler) OnClose(socket *gws.Conn, err error) {
 	for sid, sess := range h.client.sessions {
 		sess.close()
 		delete(h.client.sessions, sid)
+	}
+	for id, pending := range h.client.tcpDials {
+		pending.cancel()
+		delete(h.client.tcpDials, id)
 	}
 	for fid, tcpConn := range h.client.forwards {
 		tcpConn.Close()
@@ -857,6 +868,10 @@ func (c *Client) closeCurrentTransport(transport clientTransport, conn net.Conn)
 	for sid, sess := range c.sessions {
 		sess.close()
 		delete(c.sessions, sid)
+	}
+	for id, pending := range c.tcpDials {
+		pending.cancel()
+		delete(c.tcpDials, id)
 	}
 	for fid, tcpConn := range c.forwards {
 		tcpConn.Close()
@@ -1631,7 +1646,40 @@ func (c *Client) handleTCPConnect(msg *protocol.Message) {
 	addr := net.JoinHostPort(msg.Host, fmt.Sprintf("%d", msg.Port))
 	log.Printf("forward: connecting to %s (id=%s)", addr, msg.ForwardID)
 
-	conn, err := net.DialTimeout("tcp", addr, 10*time.Second)
+	c.mu.Lock()
+	if c.tcpDials == nil {
+		c.tcpDials = make(map[string]*pendingTCPDial)
+	}
+	if len(c.tcpDials) >= 64 || c.tcpDials[msg.ForwardID] != nil || c.forwards[msg.ForwardID] != nil {
+		c.mu.Unlock()
+		c.send(&protocol.Message{Type: protocol.MsgTCPFail, ForwardID: msg.ForwardID, Error: "TCP dial capacity or duplicate forward"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	pending := &pendingTCPDial{ctx: ctx, cancel: cancel}
+	c.tcpDials[msg.ForwardID] = pending
+	c.mu.Unlock()
+	go c.finishTCPConnect(msg, addr, pending)
+}
+
+func (c *Client) finishTCPConnect(msg *protocol.Message, addr string, pending *pendingTCPDial) {
+	defer pending.cancel()
+	conn, err := (&net.Dialer{}).DialContext(pending.ctx, "tcp", addr)
+	c.mu.Lock()
+	current := c.tcpDials[msg.ForwardID] == pending
+	if c.tcpDials[msg.ForwardID] == pending {
+		delete(c.tcpDials, msg.ForwardID)
+	}
+	if current && err == nil {
+		c.forwards[msg.ForwardID] = conn
+	}
+	c.mu.Unlock()
+	if !current {
+		if conn != nil {
+			conn.Close()
+		}
+		return
+	}
 	if err != nil {
 		log.Printf("forward: connect to %s failed: %v", addr, err)
 		c.send(&protocol.Message{
@@ -1641,10 +1689,6 @@ func (c *Client) handleTCPConnect(msg *protocol.Message) {
 		})
 		return
 	}
-
-	c.mu.Lock()
-	c.forwards[msg.ForwardID] = conn
-	c.mu.Unlock()
 
 	// Fast path: dedicated raw WebSocket for this stream. On any dial-back
 	// failure fall through to the framed control-channel path.
@@ -1657,6 +1701,13 @@ func (c *Client) handleTCPConnect(msg *protocol.Message) {
 		}
 	}
 
+	c.mu.Lock()
+	active := c.forwards[msg.ForwardID] == conn
+	c.mu.Unlock()
+	if !active {
+		conn.Close()
+		return
+	}
 	c.send(&protocol.Message{Type: protocol.MsgTCPOpen, ForwardID: msg.ForwardID})
 
 	// Read TCP response → binary frames
@@ -1670,7 +1721,9 @@ func (c *Client) handleTCPConnect(msg *protocol.Message) {
 			if err != nil {
 				c.send(&protocol.Message{Type: protocol.MsgTCPClose, ForwardID: msg.ForwardID})
 				c.mu.Lock()
-				delete(c.forwards, msg.ForwardID)
+				if c.forwards[msg.ForwardID] == conn {
+					delete(c.forwards, msg.ForwardID)
+				}
 				c.mu.Unlock()
 				return
 			}
@@ -1782,6 +1835,10 @@ func (c *Client) handleTCPClose(msg *protocol.Message) {
 		return
 	}
 	c.mu.Lock()
+	if pending := c.tcpDials[msg.ForwardID]; pending != nil {
+		pending.cancel()
+		delete(c.tcpDials, msg.ForwardID)
+	}
 	conn, ok := c.forwards[msg.ForwardID]
 	if ok {
 		delete(c.forwards, msg.ForwardID)
@@ -1903,6 +1960,10 @@ func (c *Client) cleanup() {
 	for sid, sess := range c.sessions {
 		sess.close()
 		delete(c.sessions, sid)
+	}
+	for id, pending := range c.tcpDials {
+		pending.cancel()
+		delete(c.tcpDials, id)
 	}
 	for fid, conn := range c.forwards {
 		conn.Close()

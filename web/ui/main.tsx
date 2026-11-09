@@ -16,12 +16,14 @@ const FilesPage = lazy(() => import("./pages/Files").then((m) => ({ default: m.F
 const BatchPage = lazy(() => import("./pages/Batch").then((m) => ({ default: m.BatchPage })));
 const DesktopPage = lazy(() => import("./pages/Desktop").then((m) => ({ default: m.DesktopPage })));
 
+const BrowserPage = lazy(() => import("./pages/Browser").then(m => ({ default: m.BrowserPage })));
+
 function TitleSync() {
   const { t } = useI18n();
   const { pathname } = useLocation();
   useEffect(() => {
     const titles: Record<string, string> = {
-      "/terminal": "title.terminal", "/remote-desktop": "title.desktop",
+      "/browser": "nav.browser", "/terminal": "title.terminal", "/remote-desktop": "title.desktop",
       "/batch": "title.batch", "/sessions": "title.sessions", "/files": "title.files",
     };
     document.title = pathname === "/agent" ? `RDev - ${t("nav.agent")}` : t(titles[pathname] ?? "title.index");
@@ -41,6 +43,7 @@ createRoot(document.getElementById("root")!).render(
                 <Routes>
                   <Route element={<AppShell />}>
                     <Route path="/" element={<DashboardPage />} />
+                    <Route path="/browser" element={<BrowserPage />} />
                     <Route path="/agent" element={<AgentPage />} />
                     <Route path="/terminal" element={<TerminalPage />} />
                     <Route path="/sessions" element={<SessionsPage />} />

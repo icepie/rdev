@@ -8,9 +8,11 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"rdev/internal/server"
@@ -401,6 +403,10 @@ Examples:
 	}
 
 	mux := http.NewServeMux()
+	defer srv.CloseBrowsers()
+	mux.HandleFunc("/browser", srv.StaticPageHandler("app.html"))
+	mux.HandleFunc("/api/browser", srv.HandleBrowserAPI)
+	mux.HandleFunc("/api/browser/view/", srv.HandleBrowserView)
 	mux.HandleFunc("/ws", srv.HandleWS)
 	mux.HandleFunc("/tcp-tunnel", srv.HandleTCPTunnel)
 	mux.HandleFunc("/terminal", splitPageAndWebSocket(srv.StaticPageHandler("app.html"), srv.HandleTerminalWS))
@@ -506,8 +512,24 @@ Examples:
 	updater.Start(context.Background(), updater.Config{App: "server", Version: version, Enabled: autoUpdate, Interval: updateInterval})
 
 	log.Printf("HTTP server listening on %s", httpAddr)
-	if err := http.Serve(httpListener, mux); err != nil {
-		log.Fatalf("HTTP server error: %v", err)
+	httpServer := &http.Server{Handler: mux}
+	shutdown, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stopSignals()
+	shutdownDone := make(chan struct{})
+	go func() {
+		defer close(shutdownDone)
+		<-shutdown.Done()
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if httpServer.Shutdown(ctx) != nil {
+			_ = httpServer.Close()
+		}
+	}()
+	if err := httpServer.Serve(httpListener); err != nil && err != http.ErrServerClosed {
+		log.Printf("HTTP server error: %v", err)
+	}
+	if shutdown.Err() != nil {
+		<-shutdownDone
 	}
 }
 

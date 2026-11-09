@@ -60,9 +60,11 @@ func (p *proxyServer) serve(ln net.Listener) {
 }
 
 type proxyConn struct {
-	srv    *Server
-	conn   net.Conn
-	reader *bufio.Reader
+	// Only set by a private, loopback-only browser listener after device auth.
+	boundClient *ClientConn
+	srv         *Server
+	conn        net.Conn
+	reader      *bufio.Reader
 }
 
 func (c *proxyConn) run() {
@@ -223,12 +225,17 @@ func (c *proxyConn) handleHTTP() {
 	if err != nil {
 		return
 	}
-	username, password, ok := parseProxyAuth(req.Header.Get("Proxy-Authorization"))
-	if !ok {
-		writeProxyAuthRequired(c.conn)
-		return
+	client := c.boundClient
+	ok := false
+	if client != nil {
+		current, connected := c.srv.GetClient(client.ID)
+		ok = connected && current == client
+	} else {
+		username, password, supplied := parseProxyAuth(req.Header.Get("Proxy-Authorization"))
+		if supplied {
+			client, ok = c.srv.authenticateProxyDevice(username, password)
+		}
 	}
-	client, ok := c.srv.authenticateProxyDevice(username, password)
 	if !ok {
 		writeProxyAuthRequired(c.conn)
 		return

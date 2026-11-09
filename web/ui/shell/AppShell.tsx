@@ -34,6 +34,7 @@ const NAV_ITEMS = [
   { to: "/batch", key: "nav.batch", icon: "Workflow" },
   { to: "/sessions", key: "nav.sessions", icon: "Radio" },
   { to: "/files", key: "nav.files", icon: "Files" },
+  { to: "/browser", key: "nav.browser", icon: "Globe" },
   { to: "/agent", key: "nav.agent", icon: "Bot" },
 ] as const;
 

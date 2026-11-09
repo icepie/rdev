@@ -561,6 +561,8 @@ func (f *ReverseForward) Result() (uint32, string) {
 
 // Server manages WebSocket clients and SSH proxy
 type Server struct {
+	browserMu          sync.Mutex
+	browsers           map[string]*browserSession
 	clients            map[string]*ClientConn
 	deviceWatchers     map[chan struct{}]struct{}
 	mu                 sync.RWMutex

@@ -1,6 +1,20 @@
 // Ported from web/public/i18n.js (vanilla UI). Keys unchanged.
 export const dictionaries = {
   "en": {
+    "nav.browser": "Browser",
+    "browser.tabs": "Browser tabs",
+    "browser.expand": "Open full view",
+    "browser.stop": "Close browser",
+    "browser.stopFailed": "Could not close browser",
+    "browser.expired": "Browser session ended. Close and reopen it to reconnect.",
+    "browser.offline": "Exit device is offline. Browsing is paused.",
+    "browser.intro": "Run Chrome on the server and browse through a connected device.",
+    "browser.exitDevice": "Network exit device",
+    "browser.password": "Device password (if required)",
+    "browser.start": "Open browser",
+    "browser.lifetime": "Shares the browser for this device. Closing it clears its cookies and tabs. Idle sessions close after 30 minutes.",
+    "browser.preview": "Chrome DevTools interactive preview",
+
     "theme.toggle": "Theme",
     "terminal.splitPanes": "Terminal panes",
     "terminal.pane": "Pane {number}",
@@ -652,6 +666,20 @@ export const dictionaries = {
     "files.transferNoTarget": "Target pane has no device selected"
   },
   "zh": {
+    "nav.browser": "浏览器",
+    "browser.tabs": "浏览器标签页",
+    "browser.expand": "独立窗口",
+    "browser.stop": "关闭浏览器",
+    "browser.stopFailed": "无法关闭浏览器",
+    "browser.expired": "浏览器会话已结束，请关闭后重新打开。",
+    "browser.offline": "出口设备已离线，网页访问已暂停。",
+    "browser.intro": "Chrome 在服务端运行，通过已连接设备的网络浏览网页。",
+    "browser.exitDevice": "网络出口设备",
+    "browser.password": "设备密码（如需）",
+    "browser.start": "打开浏览器",
+    "browser.lifetime": "同一设备共享浏览器；关闭后清除 Cookie 和标签页。空闲 30 分钟自动关闭。",
+    "browser.preview": "Chrome DevTools 交互预览",
+
     "common.loading": "正在加载…",
     "common.retry": "重试",
     "index.logLevel": "日志级别",

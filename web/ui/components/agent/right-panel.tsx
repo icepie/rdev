@@ -1,3 +1,4 @@
+import { BrowserPanel } from "../browser-panel";
 import { FilePreview } from "./file-preview";
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import {
@@ -62,26 +63,17 @@ type DynTab =
   | { kind: "terminal"; num: number }
   | { kind: "files" }
   | { kind: "desktop" }
+  | { kind: "browser" }
   | { kind: "new" };
 
 function tabId(tab: DynTab): string {
-  return tab.kind === "file"
-    ? "file:" + tab.path
-    : tab.kind === "terminal"
-      ? "term:" + tab.num
-      : tab.kind === "files"
-        ? "files"
-        : tab.kind === "desktop"
-          ? "desktop"
-          : "new";
+  if (tab.kind === "file") return "file:" + tab.path;
+  if (tab.kind === "terminal") return "term:" + tab.num;
+  return tab.kind;
 }
 
 /* Persisted dynamic tabs (everything except the new-tab launcher). */
-type StoredDynTab =
-  | { kind: "file"; path: string }
-  | { kind: "terminal"; num: number }
-  | { kind: "files" }
-  | { kind: "desktop" };
+type StoredDynTab = Exclude<DynTab, { kind: "new" }>;
 
 /* Per-thread persisted strip: file + terminal tabs (NOT the new-tab
  * launcher), the active tab, and the recently-closed paths shown on the
@@ -113,7 +105,7 @@ function readPanelTabs(): Record<string, PanelTabStore> {
         if (o.kind === "terminal" && typeof o.num === "number") {
           return { kind: "terminal", num: o.num };
         }
-        if (o.kind === "files" || o.kind === "desktop") {
+        if (o.kind === "files" || o.kind === "desktop" || o.kind === "browser") {
           return { kind: o.kind };
         }
         return null;
@@ -374,7 +366,7 @@ function SortablePanelTab({
           ? "Folder"
           : tab.kind === "desktop"
             ? "Monitor"
-            : "NewTab";
+            : tab.kind === "browser" ? "Globe" : "NewTab";
   const label =
     tab.kind === "file"
       ? splitPath(tab.path).base
@@ -384,7 +376,7 @@ function SortablePanelTab({
           ? t("agent.filesTab")
           : tab.kind === "desktop"
             ? t("agent.desktopTab")
-            : t("agent.newTabLabel");
+            : tab.kind === "browser" ? t("nav.browser") : t("agent.newTabLabel");
   return (
     <ContextMenu modal={false}>
       <ContextMenuTrigger asChild>
@@ -460,6 +452,7 @@ export function NewTabPage({
   onOpenTerminal,
   onOpenFiles,
   onOpenDesktop,
+  onOpenBrowser,
   onOpenFile,
   onSearchFiles,
   t,
@@ -470,6 +463,7 @@ export function NewTabPage({
   onOpenTerminal: () => void;
   onOpenFiles: () => void;
   onOpenDesktop: () => void;
+  onOpenBrowser?: () => void;
   onOpenFile: (path: string) => void;
   onSearchFiles: (q: string) => Promise<string[]>;
   t: Translator;
@@ -672,6 +666,7 @@ export function NewTabPage({
           <Icon name="Monitor" className="size-4 shrink-0 text-muted-foreground" />
           {t("agent.openDesktop")}
         </button>
+        <button type="button" onClick={onOpenBrowser} className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-sm hover:bg-state-hover"><Icon name="Globe" className="size-4" />{t("nav.browser")}</button>
       </div>
       <div>
         <div className="px-2 pb-2 text-xs font-normal leading-5 text-subtle-foreground/75">
@@ -815,12 +810,12 @@ export function AgentRightPanel({
           x.kind === "file" ||
           x.kind === "terminal" ||
           x.kind === "files" ||
-          x.kind === "desktop",
+          x.kind === "desktop" || x.kind === "browser",
       ),
       active:
         active === "info" || active === "diff"
           ? { kind: active }
-          : active === "files" || active === "desktop"
+          : active === "files" || active === "desktop" || active === "browser"
             ? { kind: active }
             : active.startsWith("file:")
               ? { kind: "file", path: active.slice(5) }
@@ -919,7 +914,7 @@ export function AgentRightPanel({
 
   /* Singleton device-scoped tabs: one file manager and one desktop per
    * strip (both bind to info.device). */
-  const openSingletonTab = (kind: "files" | "desktop") => {
+  const openSingletonTab = (kind: "files" | "desktop" | "browser") => {
     if (!dynTabs.some((x) => x.kind === kind)) {
       setDynTabs([...dynTabs, { kind }]);
     }
@@ -1239,6 +1234,7 @@ export function AgentRightPanel({
           onOpenTerminal={openTerminalTab}
           onOpenFiles={() => openSingletonTab("files")}
           onOpenDesktop={() => openSingletonTab("desktop")}
+          onOpenBrowser={() => openSingletonTab("browser")}
           onOpenFile={openFileTab}
           onSearchFiles={onSearchFiles}
           t={t}
@@ -1261,7 +1257,7 @@ export function AgentRightPanel({
         />
       ) : active.startsWith("term:") ||
         active === "files" ||
-        active === "desktop" ? (
+        active === "desktop" || active === "browser" ? (
         /* Terminal/files/desktop tabs render below (kept mounted). */
         null
       ) : (
@@ -1306,7 +1302,7 @@ export function AgentRightPanel({
       {dynTabs.flatMap((tab) =>
         tab.kind === "terminal" ||
         tab.kind === "files" ||
-        tab.kind === "desktop" ? (
+        tab.kind === "desktop" || tab.kind === "browser" ? (
           <div
             key={tabId(tab)}
             className={
@@ -1328,6 +1324,8 @@ export function AgentRightPanel({
                 t={t}
                 onOpenFile={openFileTab}
               />
+            ) : tab.kind === "browser" ? (
+              <BrowserPanel key={info.device} device={info.device} visible={visible && active === tabId(tab)} />
             ) : (
               <PanelDesktop
                 device={info.device}
