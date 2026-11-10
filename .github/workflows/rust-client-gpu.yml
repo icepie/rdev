@@ -184,17 +184,16 @@ jobs:
             arch: arm64
           - name: windows-amd64
             os: ubuntu-latest
-            target: x86_64-pc-windows-gnullvm
+            target: x86_64-pc-windows-gnu
             artifact: rdev-client-gpu.exe
             asset: rdev-client-gpu-windows-amd64
             llvm_mingw: msvcrt
             desktop_features: embedded-rdev-desktop,cua-native
           - name: windows-arm64
-            os: ubuntu-latest
-            target: aarch64-pc-windows-gnullvm
+            os: windows-11-arm
+            target: aarch64-pc-windows-msvc
             artifact: rdev-client-gpu.exe
             asset: rdev-client-gpu-windows-arm64
-            llvm_mingw: ucrt
             desktop_features: embedded-rdev-desktop,cua-native
           - name: windows-win7-amd64
             os: ubuntu-latest

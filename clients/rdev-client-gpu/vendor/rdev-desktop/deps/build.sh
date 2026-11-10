@@ -97,7 +97,7 @@ if [ "$TARGET_OS" == "windows" ]; then
             --enable-mediafoundation --enable-d3d11va"
         export FFMPEG_CFLAGS="-I$DIST/include"
         export FFMPEG_LIBRARY_PATH="-LIBPATH:$DIST/lib"
-        export X264_EXTRA_ARGS="--host=aarch64-w64-mingw32 --disable-asm"
+        export X264_EXTRA_ARGS="--disable-asm"
     else
         export CC="cl"
         export FFMPEG_EXTRA_ARGS="--toolchain=msvc --disable-nvenc --disable-ffnvcodec \
