@@ -529,6 +529,12 @@ jobs:
                 --scan-executable "dist/${{ matrix.asset }}/rdev-client-gpu" \
                 --destination "dist/${{ matrix.asset }}/Frameworks" \
                 --platform macosx
+              # Modern macOS must load its system Swift runtime before the
+              # bundled pre-10.14.4 compatibility libraries.
+              if ! otool -l "dist/${{ matrix.asset }}/rdev-client-gpu" | grep -Fq 'path /usr/lib/swift '; then
+                install_name_tool -add_rpath /usr/lib/swift \
+                  "dist/${{ matrix.asset }}/rdev-client-gpu"
+              fi
               install_name_tool -add_rpath "@executable_path/Frameworks" \
                 "dist/${{ matrix.asset }}/rdev-client-gpu"
             fi

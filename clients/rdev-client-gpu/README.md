@@ -48,6 +48,8 @@ On Windows-hosted builds, FFmpeg's archive response files are written by GNU mak
 
 The native video wrapper includes POSIX string helpers only for VAAPI and uses Windows CRT file-descriptor APIs on Windows, so MSVC builds do not require POSIX compatibility headers. Global rational constants use direct aggregate initialization rather than compound literals for compatibility with MSVC's C compiler.
 
+macOS packages search `/usr/lib/swift` before the bundled `Frameworks` directory. Modern macOS therefore uses its system Swift runtime; the bundled libraries remain a fallback for older systems. CI runs the packaged executable with `--version` to catch loader failures.
+
 The optional Linux cross-build script for Windows ARM64 requires a Rust toolchain providing `aarch64-pc-windows-gnullvm` (not the release CI target) and LLVM MinGW providing `aarch64-w64-mingw32-clang`:
 
 ```bash
