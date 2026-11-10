@@ -184,16 +184,17 @@ jobs:
             arch: arm64
           - name: windows-amd64
             os: ubuntu-latest
-            target: x86_64-pc-windows-gnu
+            target: x86_64-pc-windows-gnullvm
             artifact: rdev-client-gpu.exe
             asset: rdev-client-gpu-windows-amd64
             llvm_mingw: msvcrt
             desktop_features: embedded-rdev-desktop,cua-native
           - name: windows-arm64
-            os: windows-11-arm
-            target: aarch64-pc-windows-msvc
+            os: ubuntu-latest
+            target: aarch64-pc-windows-gnullvm
             artifact: rdev-client-gpu.exe
             asset: rdev-client-gpu-windows-arm64
+            llvm_mingw: ucrt
             desktop_features: embedded-rdev-desktop,cua-native
           - name: windows-win7-amd64
             os: ubuntu-latest
@@ -505,10 +506,19 @@ jobs:
             mkdir -p "dist/${{ matrix.asset }}"
             cp "target/${{ matrix.target }}/release/${{ matrix.artifact }}" "dist/${{ matrix.asset }}/rdev-client-gpu"
             chmod +x "dist/${{ matrix.asset }}/rdev-client-gpu"
-            "dist/${{ matrix.asset }}/rdev-client-gpu" --version > "dist/${{ matrix.asset }}/VERSION.txt"
+            if [[ "${{ matrix.target }}" == *apple-darwin ]]; then
+              xcrun swift-stdlib-tool --copy \
+                --scan-executable "dist/${{ matrix.asset }}/rdev-client-gpu" \
+                --destination "dist/${{ matrix.asset }}/Frameworks" \
+                --platform macosx
+              install_name_tool -add_rpath "@executable_path/Frameworks" \
+                "dist/${{ matrix.asset }}/rdev-client-gpu"
+            fi
+            echo "rdev-client-gpu ${GITHUB_REF_NAME}" > "dist/${{ matrix.asset }}/VERSION.txt"
             if command -v otool >/dev/null 2>&1; then
               otool -L "dist/${{ matrix.asset }}/rdev-client-gpu" > "dist/${{ matrix.asset }}/BUILD_INFO.txt" || true
             fi
+            "dist/${{ matrix.asset }}/rdev-client-gpu" --version
             tar -C dist -czf "dist/${{ matrix.asset }}.tar.gz" "${{ matrix.asset }}"
           fi
 

@@ -64,13 +64,13 @@ EOF
   apt-get install -y --no-install-recommends \
     ca-certificates curl git build-essential pkg-config nasm yasm python3 make \
     autoconf automake libtool \
-    libx11-dev libx11-xcb-dev libxext-dev libxrandr-dev libxfixes-dev libxcomposite-dev libxi-dev libxtst-dev libxv-dev \
+    libx11-dev libx11-xcb-dev libxext-dev libxrandr-dev libxfixes-dev libxcomposite-dev libxi-dev libxtst-dev libxv-dev libxkbcommon-dev \
     libxcb1-dev libxcb-dri3-dev libdrm-dev libepoxy-dev libdbus-1-dev \
     $pipewire_deps \
     || apt-get install -y --no-install-recommends --no-upgrade \
     ca-certificates curl git build-essential pkg-config nasm yasm python3 make \
     autoconf automake libtool \
-    libx11-dev libx11-xcb-dev libxext-dev libxrandr-dev libxfixes-dev libxcomposite-dev libxi-dev libxtst-dev libxv-dev \
+    libx11-dev libx11-xcb-dev libxext-dev libxrandr-dev libxfixes-dev libxcomposite-dev libxi-dev libxtst-dev libxv-dev libxkbcommon-dev \
     libxcb1-dev libxcb-dri3-dev libdrm-dev libepoxy-dev libdbus-1-dev \
     $pipewire_deps
   rm -rf /var/lib/apt/lists/*
