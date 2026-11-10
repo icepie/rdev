@@ -25,7 +25,7 @@ func TestBrowserAgentChromeIntegration(t *testing.T) {
 	}
 	site := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		fmt.Fprint(w, `<!doctype html><title>Device route fixture</title><input id="name"><button id="go" onclick="document.querySelector('#out').textContent=document.querySelector('#name').value">Apply</button><p id="out">Waiting</p>`)
+		fmt.Fprint(w, `<!doctype html><title>Device route fixture</title><input id="name"><button id="go" onclick="document.querySelector('#out').textContent=document.querySelector('#name').value">Apply</button><p id="out">Waiting</p><select id="choice"><option value="a">Alpha</option><option value="b">Beta</option></select><button id="hover" onmouseover="this.textContent='Hovered'">Hover me</button>`)
 	}))
 	defer site.Close()
 	s, client, transport := newProxyTestServer(t, "exit-device", "")
@@ -95,6 +95,13 @@ func TestBrowserAgentChromeIntegration(t *testing.T) {
 	if !strings.Contains(snapshot, "#name") || !strings.Contains(snapshot, "Device route fixture") {
 		t.Fatalf("bad snapshot: %s", snapshot)
 	}
+	run(first, map[string]any{"action": "wait_for", "selector": "#choice"})
+	run(first, map[string]any{"action": "select", "selector": "#choice", "text": "b"})
+	run(first, map[string]any{"action": "hover", "selector": "#hover"})
+	observed := run(first, map[string]any{"action": "snapshot"})
+	if !strings.Contains(observed, "Hovered") || !strings.Contains(observed, `"value":"b","label":"Beta","selected":true`) {
+		t.Fatalf("select/hover failed: %s", observed)
+	}
 	run(first, map[string]any{"action": "fill", "selector": "#name", "text": "你好🌏 'quoted'"})
 	run(first, map[string]any{"action": "click", "selector": "#go"})
 	snapshot = run(first, map[string]any{"action": "snapshot"})
@@ -121,6 +128,21 @@ func TestBrowserAgentChromeIntegration(t *testing.T) {
 	}
 	if err = c.call(ctx, "Rdev.nonexistent", map[string]any{}, nil); err == nil {
 		t.Fatal("CDP errors ignored")
+	}
+	if _, err = browserEvaluate(ctx, c, `setTimeout(()=>{const e=document.createElement('button');e.id='delayed';e.textContent='Ready';document.body.append(e)},200);'scheduled'`); err != nil {
+		t.Fatal(err)
+	}
+	run(first, map[string]any{"action": "wait_for", "selector": "#delayed"})
+	waitCtx, stopWait := context.WithTimeout(ctx, 150*time.Millisecond)
+	rawWait, _ := json.Marshal(map[string]any{"device": client.ID, "action": "wait_for", "selector": "#never-present"})
+	if _, err := first.Execute(waitCtx, rawWait); err == nil {
+		t.Fatal("wait_for ignored timeout")
+	}
+	stopWait()
+	run(first, map[string]any{"action": "snapshot"}) // A timed-out wait must release the conversation lock.
+	rawSelect, _ := json.Marshal(map[string]any{"device": client.ID, "action": "select", "selector": "#choice", "text": "missing"})
+	if _, err := first.Execute(ctx, rawSelect); err == nil {
+		t.Fatal("select accepted missing option")
 	}
 	c.close()
 	s.retireAutomation(first.state)

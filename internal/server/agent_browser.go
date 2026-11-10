@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	_ "embed"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -13,11 +14,11 @@ type browserTool struct{ automationTool }
 
 func (*browserTool) Name() string { return "browser" }
 func (*browserTool) Description() string {
-	return "Use server-hosted Chrome through the selected device's network (not its installed browser or login profile). Each conversation owns a separate tab. Use snapshot for page text and CSS selectors, screenshot for vision, then click/fill/scroll/key. Never infer page state from an earlier conversation. Device is required in server mode."
+	return "Use server-hosted Chrome through the selected device's network (not its installed browser or login profile). Each conversation owns a separate tab. Use snapshot for page text and CSS selectors, screenshot for vision, then click/fill/select/hover/scroll/key. Use wait_for with a selector before interacting with asynchronously loaded content. Select uses the option value in text. Re-snapshot after actions to verify their effect. Never infer page state from an earlier conversation. Device is required in server mode."
 }
 func (*browserTool) Summary(raw json.RawMessage) string { return automationSummary(raw) }
 func (*browserTool) Schema() json.RawMessage {
-	return json.RawMessage(`{"type":"object","properties":{"device":{"type":"string"},"action":{"type":"string","enum":["status","open","navigate","snapshot","screenshot","click","fill","scroll","key","close"]},"url":{"type":"string"},"selector":{"type":"string"},"text":{"type":"string","maxLength":20000},"key":{"type":"string","enum":["Enter","Tab","Escape","Backspace","Delete","ArrowUp","ArrowDown","ArrowLeft","ArrowRight","Home","End","PageUp","PageDown"]},"x":{"type":"integer","minimum":0},"y":{"type":"integer","minimum":0},"deltaX":{"type":"integer","minimum":-2000,"maximum":2000},"deltaY":{"type":"integer","minimum":-2000,"maximum":2000}},"required":["action"],"additionalProperties":false}`)
+	return json.RawMessage(`{"type":"object","properties":{"device":{"type":"string"},"action":{"type":"string","enum":["status","open","navigate","snapshot","screenshot","click","fill","select","hover","wait_for","scroll","key","close"]},"url":{"type":"string"},"selector":{"type":"string"},"text":{"type":"string","maxLength":20000},"key":{"type":"string","enum":["Enter","Tab","Escape","Backspace","Delete","ArrowUp","ArrowDown","ArrowLeft","ArrowRight","Home","End","PageUp","PageDown"]},"x":{"type":"integer","minimum":0},"y":{"type":"integer","minimum":0},"deltaX":{"type":"integer","minimum":-2000,"maximum":2000},"deltaY":{"type":"integer","minimum":-2000,"maximum":2000}},"required":["action"],"additionalProperties":false}`)
 }
 
 type browserAction struct {
@@ -118,11 +119,39 @@ func (t *browserTool) Execute(ctx context.Context, raw json.RawMessage) (string,
 		selector, _ := json.Marshal(a.Selector)
 		text, _ := json.Marshal(a.Text)
 		return browserEvaluate(ctx, c, fmt.Sprintf(`(()=>{const e=document.querySelector(%s);if(!e)throw Error('Element not found');e.focus();if(e instanceof HTMLInputElement || e instanceof HTMLTextAreaElement){const p=e instanceof HTMLInputElement?HTMLInputElement.prototype:HTMLTextAreaElement.prototype;Object.getOwnPropertyDescriptor(p,'value').set.call(e,%s)}else if(e.isContentEditable){e.textContent=%s}else{throw Error('Element is not editable')}e.dispatchEvent(new Event('input',{bubbles:true}));e.dispatchEvent(new Event('change',{bubbles:true}));return 'Text entered'})()`, selector, text, text))
-	case "click":
+	case "wait_for":
+		if a.Selector == "" {
+			return "", fmt.Errorf("wait_for requires a selector")
+		}
+		selector, _ := json.Marshal(a.Selector)
+		ticker := time.NewTicker(100 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			result, e := browserEvaluate(ctx, c, fmt.Sprintf(`(()=>{const e=document.querySelector(%s);return !!e&&e.getClientRects().length>0&&getComputedStyle(e).visibility!=='hidden'})()`, selector))
+			if e != nil {
+				return "", e
+			}
+			if result == "true" {
+				break
+			}
+			select {
+			case <-ctx.Done():
+				return "", fmt.Errorf("waiting for element %q: %w", a.Selector, ctx.Err())
+			case <-ticker.C:
+			}
+		}
+	case "select":
+		if a.Selector == "" {
+			return "", fmt.Errorf("select requires a selector from snapshot")
+		}
+		selector, _ := json.Marshal(a.Selector)
+		value, _ := json.Marshal(a.Text)
+		return browserEvaluate(ctx, c, fmt.Sprintf(`(()=>{const e=document.querySelector(%s);if(!(e instanceof HTMLSelectElement))throw Error('Select element not found');if(e.disabled)throw Error('Element is disabled');const o=[...e.options].find(o=>o.value===%s);if(!o)throw Error('Option value not found');if(o.disabled||o.parentElement.disabled)throw Error('Option is disabled');e.value=o.value;e.dispatchEvent(new Event('input',{bubbles:true}));e.dispatchEvent(new Event('change',{bubbles:true}));return 'Option selected'})()`, selector, value))
+	case "click", "hover":
 		x, y := a.X, a.Y
 		if a.Selector != "" {
 			selector, _ := json.Marshal(a.Selector)
-			rect, e := browserEvaluate(ctx, c, fmt.Sprintf(`(()=>{const e=document.querySelector(%s);if(!e)throw Error('Element not found');e.scrollIntoView({block:'center',inline:'center'});const r=e.getBoundingClientRect();if(!r.width||!r.height)throw Error('Element is not visible');return JSON.stringify({x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)})})()`, selector))
+			rect, e := browserEvaluate(ctx, c, fmt.Sprintf(browserTargetScript, selector))
 			if e != nil {
 				return "", e
 			}
@@ -135,8 +164,12 @@ func (t *browserTool) Execute(ctx context.Context, raw json.RawMessage) (string,
 			var fields map[string]json.RawMessage
 			_ = json.Unmarshal(raw, &fields)
 			if fields["x"] == nil || fields["y"] == nil {
-				return "", fmt.Errorf("click requires a selector or x/y from a recent screenshot")
+				return "", fmt.Errorf("click/hover requires a selector or x/y from a recent screenshot")
 			}
+		}
+		if a.Action == "hover" {
+			err = c.call(ctx, "Input.dispatchMouseEvent", map[string]any{"type": "mouseMoved", "x": x, "y": y}, nil)
+			break
 		}
 		down := map[string]any{"type": "mousePressed", "x": x, "y": y, "button": "left", "clickCount": 1}
 		up := map[string]any{"type": "mouseReleased", "x": x, "y": y, "button": "left", "clickCount": 1}
@@ -205,11 +238,11 @@ func browserKeyCode(key string) int {
 	return map[string]int{"Enter": 13, "Tab": 9, "Escape": 27, "Backspace": 8, "Delete": 46, "ArrowUp": 38, "ArrowDown": 40, "ArrowLeft": 37, "ArrowRight": 39, "Home": 36, "End": 35, "PageUp": 33, "PageDown": 34}[key]
 }
 
-const browserSnapshotScript = `(()=>{
- const selector=e=>{if(e===document.body)return 'body';if(e.id)return '#'+CSS.escape(e.id);const path=[];while(e&&e.nodeType===1&&e!==document.body){let i=1,p=e;while(p=p.previousElementSibling)if(p.tagName===e.tagName)i++;path.unshift(e.tagName.toLowerCase()+':nth-of-type('+i+')');e=e.parentElement}return 'body > '+path.join(' > ')};
- const elements=[...document.querySelectorAll('a,button,input,textarea,select,[role="button"],[contenteditable="true"]')].filter(e=>e.getClientRects().length).slice(0,150).map(e=>({selector:selector(e),role:e.getAttribute('role')||e.tagName.toLowerCase(),label:(e.getAttribute('aria-label')||e.getAttribute('placeholder')||e.innerText||'').slice(0,200),type:e.getAttribute('type')||undefined}));
- const snapshot={url:location.href.slice(0,2048),title:document.title.slice(0,200),width:innerWidth,height:innerHeight,text:(document.body?.innerText||'').slice(0,6000),elements};while(new TextEncoder().encode(JSON.stringify(snapshot)).length>10000){if(snapshot.elements.length)snapshot.elements.pop();else snapshot.text=snapshot.text.slice(0,Math.floor(snapshot.text.length/2));if(!snapshot.text&&!snapshot.elements.length)break}return JSON.stringify(snapshot)
-})()`
+//go:embed browser_snapshot.js
+var browserSnapshotScript string
+
+//go:embed browser_target.js
+var browserTargetScript string
 
 // CDP disconnects do not release held buttons/keys. On cancellation, use a
 // short independent connection to release before acknowledging user takeover.

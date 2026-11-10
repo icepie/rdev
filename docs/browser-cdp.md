@@ -82,3 +82,17 @@ Go 客户端声明 `desktop.agentVersion=1`，通过 `desktop_start` 的 `onDema
 仅服务端 Agent 提供 `agent_sessions`（list/read，历史支持 offset/limit）和 `manage_agent_session`（create/rename/delete，必须指定 device）。离线设备已有历史也可管理，权限检查沿用跨设备会话管理规则；受保护设备及离线跨设备管理需要管理员认证。修改操作沿用工具审批，删除复用 UI 的取消工作、持久化清理和广播流程，禁止删除正在执行该工具的调用方对话。管理不会向目标会话发送消息，也不会切换当前浏览器聊天视图。
 
 右侧每个文件管理页签的传输记录独立存储。跨设备文件预览通过该设备已授权的 Files 连接读取，请求和回复同时校验设备及请求 ID，不使用服务端会话的同名文件路径。
+
+## Browser interaction alignment (2026-11-10)
+
+Compared against `shiwenwen/hope-agent` at `c230286`, especially `crates/ha-browser/src/tool/mod.rs` and `docs/architecture/core/browser.md`. This increment keeps RDev's existing tool schema and server Chrome/device-network architecture:
+
+- `hover`: selector or screenshot coordinates, dispatching a native CDP mouse move.
+- `select`: native HTML select by `selector` and option value in `text`; rejects missing/disabled options and dispatches input/change events. Custom combobox widgets still use snapshot/click/key.
+- `wait_for`: poll a selector until visible, bounded by the existing operation timeout and caller cancellation. No unbounded sleeps.
+- Snapshots include associated/ARIA labels, current non-password values, checked/disabled state and up to 30 options per select, within the existing 10 KB output bound.
+- Selector-based click/hover rejects ambiguous, hidden, disabled or covered targets, and clicks the visible portion after scrolling. Models should take another snapshot after actions to verify the page effect.
+
+The new operations publish through the existing conversation-scoped automation events and retain the panel's existing hide/reveal behavior. This is not full Hope parity: stable element references, multi-tab management within one conversation, frame/shadow-root traversal, runtime observation, uploads and downloads remain separate work.
+
+Validation: DOM behavior tests plus real Chrome integration for route isolation, fill/click/select/hover, delayed elements, wait cancellation and recovery, and invalid option rejection. These tests use local fixtures, not arbitrary production websites.
