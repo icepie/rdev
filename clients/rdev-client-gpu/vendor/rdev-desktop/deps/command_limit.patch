@@ -1,9 +1,12 @@
 diff --git a/ffbuild/library.mak b/ffbuild/library.mak
-index ad09f20..e63196d 100644
 --- a/ffbuild/library.mak
 +++ b/ffbuild/library.mak
-@@ -37 +37,3 @@ $(SUBDIR)$(LIBNAME): $(OBJS) $(STLIBOBJS)
--	$(AR) $(ARFLAGS) $(AR_O) $^
-+	$(file >$@.ar.txt, $^)
-+	$(AR) $(ARFLAGS) $(AR_O) @$@.ar.txt
-+	$(RM) $@.ar.txt
+@@ -36,7 +36,7 @@
+ $(SUBDIR)$(LIBNAME): $(OBJS) $(STLIBOBJS)
+ 	$(RM) $@
+ ifeq ($(RESPONSE_FILES),yes)
+-	$(Q)echo $^ > $@.objs
++	$(file >$@.objs,$^)
+ 	$(AR) $(ARFLAGS) $(AR_O) @$@.objs
+ else
+ 	$(AR) $(ARFLAGS) $(AR_O) $^

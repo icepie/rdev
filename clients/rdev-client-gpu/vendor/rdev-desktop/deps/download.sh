@@ -55,7 +55,9 @@ fi
 
 if [ "$TARGET_OS" == "windows" ] && [ "$HOST_OS" == "windows" ]; then
     cd ffmpeg
-    git apply ../command_limit.patch || true
+    if ! git apply --reverse --check ../command_limit.patch 2>/dev/null; then
+        git apply ../command_limit.patch
+    fi
     git apply ../awk.patch || {
         cat > msvc_dep.awk <<'EOF'
 /including/ { sub(/^.*file: */, ""); gsub(/\\/, "/"); if (!match($0, / /)) print target ":", $0 }

@@ -190,7 +190,7 @@ jobs:
             llvm_mingw: msvcrt
             desktop_features: embedded-rdev-desktop,cua-native
           - name: windows-arm64
-            os: windows-11-arm
+            os: windows-2025
             target: aarch64-pc-windows-msvc
             artifact: rdev-client-gpu.exe
             asset: rdev-client-gpu-windows-arm64
@@ -259,7 +259,7 @@ jobs:
         if: matrix.target == 'aarch64-pc-windows-msvc'
         uses: ilammy/msvc-dev-cmd@v1
         with:
-          arch: arm64
+          arch: amd64_arm64
 
       - name: Install Windows pkg-config
         if: matrix.target == 'aarch64-pc-windows-msvc'
@@ -518,7 +518,7 @@ jobs:
                 [ -f "$runtime_dir/$dll" ] && cp "$runtime_dir/$dll" "dist/${{ matrix.asset }}/"
               done
             fi
-            "dist/${{ matrix.asset }}/rdev-client-gpu.exe" --version > "dist/${{ matrix.asset }}/VERSION.txt" || true
+            echo "rdev-client-gpu ${GITHUB_REF_NAME}" > "dist/${{ matrix.asset }}/VERSION.txt"
             (cd dist && python3 -m zipfile -c "${{ matrix.asset }}.zip" "${{ matrix.asset }}")
           else
             mkdir -p "dist/${{ matrix.asset }}"
