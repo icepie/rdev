@@ -17,6 +17,46 @@ try {
     try { [Net.ServicePointManager]::SecurityProtocol = [Enum]::ToObject([Net.SecurityProtocolType], 768) } catch {}
 }
 
+# WinHTTP uses Windows SChannel directly, avoiding .NET 2.0's TLS enum limit.
+function Invoke-RDevWinHttp([string]$Url) {
+    $request = New-Object -ComObject WinHttp.WinHttpRequest.5.1
+    $request.SetTimeouts(15000, 15000, 30000, 120000)
+    $request.Open('GET', $Url, $false)
+    $request.Option(9) = 2048 # TLS 1.2; never disable certificate validation
+    $request.Option(12) = $false # Do not redirect HTTPS to HTTP
+    $request.SetRequestHeader('User-Agent', 'rdev-runner')
+    $request.Send()
+    if ($request.Status -lt 200 -or $request.Status -ge 300) {
+        throw "HTTP $($request.Status) downloading $Url"
+    }
+    return $request
+}
+
+function Get-RDevText([string]$Url) {
+    $web = New-Object Net.WebClient
+    try {
+        $web.Headers.Add('User-Agent', 'rdev-runner')
+        return $web.DownloadString($Url)
+    } catch {
+        return (Invoke-RDevWinHttp $Url).ResponseText
+    } finally {
+        $web.Dispose()
+    }
+}
+
+function Save-RDevDownload([string]$Url, [string]$Out) {
+    $web = New-Object Net.WebClient
+    try {
+        $web.Headers.Add('User-Agent', 'rdev-runner')
+        $web.DownloadFile($Url, $Out)
+    } catch {
+        $request = Invoke-RDevWinHttp $Url
+        [IO.File]::WriteAllBytes($Out, [byte[]]$request.ResponseBody)
+    } finally {
+        $web.Dispose()
+    }
+}
+
 # ── Mirror list ─────────────────────────────────────────────
 $script:Mirrors = @(
     'gh.idayer.com',
@@ -86,16 +126,12 @@ function Get-RDevLatestTag([string]$Server) {
     $Base = Get-RDevServerHttpBase $Server
     if ($Base) {
         try {
-            $w = New-Object Net.WebClient
-            $w.Headers.Add('User-Agent', 'rdev-runner')
-            $json = $w.DownloadString("$Base/api/release/latest")
+            $json = Get-RDevText "$Base/api/release/latest"
             if ($json -match '"tag"\s*:\s*"([^"]+)"') { return $Matches[1] }
         } catch {}
     }
     try {
-        $w = New-Object Net.WebClient
-        $w.Headers.Add('User-Agent', 'rdev-runner')
-        $json = $w.DownloadString("https://api.github.com/repos/$script:Repo/releases/latest")
+        $json = Get-RDevText "https://api.github.com/repos/$script:Repo/releases/latest"
         if ($json -match '"tag_name"\s*:\s*"([^"]+)"') { return $Matches[1] }
     } catch {}
     Write-Host "  Latest tag could not be resolved; using cache key 'latest'." -ForegroundColor DarkGray
@@ -412,9 +448,7 @@ function global:RDev {
     # ── Download helper ──────────────────────────────────────
     function Dl([string]$Url, [string]$Out) {
         try {
-            $w = New-Object Net.WebClient
-            $w.Headers.Add('User-Agent', 'rdev-runner')
-            $w.DownloadFile($Url, $Out)
+            Save-RDevDownload $Url $Out
             return $true
         } catch {
             Write-Host "  Download error: $($_.Exception.Message)" -ForegroundColor DarkGray

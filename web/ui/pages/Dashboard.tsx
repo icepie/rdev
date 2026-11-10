@@ -1,3 +1,4 @@
+import { legacyWindowsBootstrap } from "../lib/windows-bootstrap";
 import {
   useCallback,
   useContext,
@@ -292,8 +293,8 @@ export function DashboardPage() {
       ps: `powershell -Command "iwr -useb '${HTTP}${H}/run.ps1' | iex; RDev -Password '${pwPlaceholder}'${clientPSArg}"`,
       psOpen: `powershell -Command "iwr -useb '${HTTP}${H}/run.ps1' | iex; RDev${clientPSArg}"`,
       w7Path: `%SystemRoot%\\system32\\WindowsPowerShell\\v1.0\\powershell.exe`,
-      w7Pw: `[Net.ServicePointManager]::SecurityProtocol=[Enum]::ToObject([Net.SecurityProtocolType],3072); $wc=New-Object Net.WebClient; $wc.DownloadString('${HTTP}${H}/run.ps1') | iex; RDev -Password '${pwPlaceholder}'${clientPSArg}`,
-      w7Open: `[Net.ServicePointManager]::SecurityProtocol=[Enum]::ToObject([Net.SecurityProtocolType],3072); $wc=New-Object Net.WebClient; $wc.DownloadString('${HTTP}${H}/run.ps1') | iex; RDev${clientPSArg}`,
+      w7Pw: `${legacyWindowsBootstrap(`${HTTP}${H}/run.ps1`)}; RDev -Password '${pwPlaceholder}'${clientPSArg}`,
+      w7Open: `${legacyWindowsBootstrap(`${HTTP}${H}/run.ps1`)}; RDev${clientPSArg}`,
     };
   }, [pwPlaceholder, clientArg, clientPSArg]);
 
@@ -722,6 +723,7 @@ export function DashboardPage() {
             </TabsContent>
 
             <TabsContent value="win7" className="pt-2">
+              <p className="mb-3 text-xs text-muted-foreground">{t("index.win7TLSHint")}</p>
               <CmdGroup
                 label={t("index.win7Step1")}
                 cmd={cmds.w7Path}
