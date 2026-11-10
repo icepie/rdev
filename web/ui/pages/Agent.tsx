@@ -1,3 +1,4 @@
+import { Participants, parseParticipants, type Participant } from "../components/agent/participants";
 import { parseBrowserRecords, mergeBrowserRecords, type BrowserActionRecord } from "../components/agent/browser-history";
 import { createAutomationRevealTracker, parseAutomation, type AutomationView } from "../components/agent/automation";
 import { MobileWorkspaceNavigation } from "../shell/AppShell";
@@ -305,6 +306,9 @@ export function AgentPage() {
   const [sidebarDragging, setSidebarDragging] = useState(false);
   const dismissedAutomationPanelsRef = useRef(new Set<string>());
   const automationRevealRef = useRef(createAutomationRevealTracker());
+  const participantPasswordsRef = useRef(new Map<string,{device:string;password:string}>());
+  const [participantsByThread,setParticipantsByThread] = useState<Record<string,Participant[]>>({});
+  const [participantErrors,setParticipantErrors] = useState<Record<string,string>>({});
   const [browserReplayIDs, setBrowserReplayIDs] = useState<Record<string, string>>({});
   const [browserHistories, setBrowserHistories] = useState<Record<string, BrowserActionRecord[]>>({});
   const [automationViews, setAutomationViews] = useState<Record<string, AutomationView>>({});
@@ -731,6 +735,16 @@ export function AgentPage() {
      * they carry the NEW thread id and update threadRef themselves. */
     const op = String(msg.op);
     const frameThread = asString(msg.thread);
+    if (["participants","auth_ok","thread_switched","reset_ok"].includes(op)) {
+      const key=JSON.stringify([sourceDevice,frameThread]);
+      const pending=participantPasswordsRef.current.get(String(msg.id??""));
+      if(pending){participantPasswordsRef.current.delete(String(msg.id));if(!msg.error&&parseParticipants(msg.participants).some(p=>p.device===pending.device&&p.authorized))rememberDevicePassword(pending.device,pending.password);}
+
+      setParticipantsByThread(current=>({...current,[key]:parseParticipants(msg.participants)}));
+      setParticipantErrors(current=>({...current,[key]:typeof msg.error==="string"?msg.error:""}));
+      if(op==="participants")return;
+    }
+
     if (op === "browser_action" || op === "auth_ok" || op === "thread_switched" || op === "reset_ok") {
       const key = JSON.stringify([sourceDevice, frameThread]);
       const rows = parseBrowserRecords(op === "browser_action" ? [msg.browserAction] : msg.browserHistory);
@@ -1866,7 +1880,7 @@ export function AgentPage() {
       t,
       sendRaw,
       ready,
-      offline: device !== SERVER_AGENT_ID && !connectedDevices.some((item) => item.id === device),
+      offline: device !== SERVER_AGENT_ID && !connectedDevices.some((item) => item.id === device) && !(participantsByThread[JSON.stringify([device,resolvedTid])]??[]).some(p=>p.authorized&&connectedDevices.some(d=>d.id===p.device)),
       emptyHint: !device ? t("agent.selectDevice")
         : !ready ? (reconnecting ? t("agent.reconnecting") : t(`agent.status.${status}`))
         : device === SERVER_AGENT_ID ? t("agent.serverEmpty") : t("agent.empty"),
@@ -2807,6 +2821,7 @@ export function AgentPage() {
         <span className="min-w-0 flex-1 truncate text-sm text-foreground">
           {currentThreadTitle}
         </span>
+        {thread && device !== SERVER_AGENT_ID && <Participants key={JSON.stringify([device,thread])} primary={device} rows={participantsByThread[JSON.stringify([device,thread])]??[]} error={participantErrors[JSON.stringify([device,thread])]??""} ready={ready} t={t} onRefresh={()=>{sendRaw({op:"participants",mode:"list",thread});}} onUpdate={(mode,target,password,cwd)=>{const id=`participants_${++requestSeqRef.current}`;if(password)participantPasswordsRef.current.set(id,{device:target,password});if(!sendRaw({op:"participants",mode,thread,id,device:target,password,path:cwd}))participantPasswordsRef.current.delete(id);}} />}
         {thread && (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>

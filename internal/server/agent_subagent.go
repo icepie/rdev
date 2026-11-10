@@ -14,28 +14,34 @@ import (
 // tool instances. The launch approval delegates only the selected capabilities;
 // children cannot spawn further jobs or inherit the parent's full transcript.
 type subagentTool struct {
-	jobs   *agentJobs
-	config agent.Config
-	tools  func() []agent.Tool
+	deviceContext func(context.Context, string) (context.Context, func(), error)
+	deviceTools   func(string) ([]agent.Tool, error)
+	jobs          *agentJobs
+	config        agent.Config
+	tools         func() []agent.Tool
 }
 
 func (*subagentTool) Name() string    { return "subagent" }
 func (*subagentTool) Dangerous() bool { return true }
 func (*subagentTool) Description() string {
-	return "Delegate a self-contained task to a background subagent using the current model and device. Launch approval grants the explicitly selected tools for that task. Defaults to read-only tools. Children have isolated context, cannot spawn other jobs, and automatically report results to the parent. Inspect, cancel, or send additional guidance with jobs. Include all needed context in task."
+	return "Delegate a self-contained task to a background subagent using the current model and original device, or an explicitly joined device. Launch approval grants the explicitly selected tools for that task. Defaults to read-only tools. Children have isolated context, cannot spawn other jobs, and automatically report results to the parent. Inspect, cancel, or send additional guidance with jobs. Include all needed context in task."
 }
 func (*subagentTool) Schema() json.RawMessage {
-	return json.RawMessage(`{"type":"object","properties":{"task":{"type":"string","description":"Self-contained task, context, constraints, and expected result"},"tools":{"type":"array","items":{"type":"string"},"description":"Subset of device tool names to delegate; omitted defaults to list_dir, read_file, grep, glob, web_search, web_fetch"}},"required":["task"],"additionalProperties":false}`)
+	return json.RawMessage(`{"type":"object","properties":{"device":{"type":"string","description":"Joined device to run this task on; omitted uses the original device"},"task":{"type":"string","description":"Self-contained task, context, constraints, and expected result"},"tools":{"type":"array","items":{"type":"string"},"description":"Subset of device tool names to delegate; omitted defaults to list_dir, read_file, grep, glob, web_search, web_fetch"}},"required":["task"],"additionalProperties":false}`)
 }
 func (*subagentTool) Summary(raw json.RawMessage) string {
 	var args struct {
-		Task  string   `json:"task"`
-		Tools []string `json:"tools"`
+		Device string   `json:"device"`
+		Task   string   `json:"task"`
+		Tools  []string `json:"tools"`
 	}
 	if json.Unmarshal(raw, &args) != nil {
 		return ""
 	}
 	label := truncateRunes(args.Task, 80)
+	if args.Device != "" {
+		label = args.Device + ": " + label
+	}
 	if args.Tools != nil {
 		label += " [" + strings.Join(args.Tools, ", ") + "]"
 	}
@@ -43,8 +49,9 @@ func (*subagentTool) Summary(raw json.RawMessage) string {
 }
 func (t *subagentTool) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
 	var args struct {
-		Task  string   `json:"task"`
-		Tools []string `json:"tools"`
+		Device string   `json:"device"`
+		Task   string   `json:"task"`
+		Tools  []string `json:"tools"`
 	}
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return "", err
@@ -56,6 +63,16 @@ func (t *subagentTool) Execute(ctx context.Context, raw json.RawMessage) (string
 		return "", err
 	}
 	available := t.tools()
+	if args.Device != "" {
+		if t.deviceTools == nil {
+			return "", fmt.Errorf("device targeting is unavailable")
+		}
+		var err error
+		available, err = t.deviceTools(args.Device)
+		if err != nil {
+			return "", err
+		}
+	}
 	if args.Tools == nil {
 		for _, tool := range available {
 			switch tool.Name() {
@@ -89,9 +106,21 @@ func (t *subagentTool) Execute(ctx context.Context, raw json.RawMessage) (string
 	// foreground approval callback would tie a child to an already-ended turn.
 	cfg.Approve = nil
 	cfg.ApproveAll = nil
+	if args.Device != "" {
+		cfg.SystemPrompt = buildAgentSystemPrompt(args.Device, "")
+		cfg.SystemPrompt += "\nYour tools are bound to this device and its independently configured working directory. Do not reuse paths or operating system assumptions from the parent device."
+	}
 	cfg.SystemPrompt += "\nYou are a delegated subagent. Complete only the assigned task using the granted tools. Report results, evidence, and unresolved issues. Do not claim unverified outcomes."
 	guidance := &agentJobGuidance{}
 	job, err := t.jobs.start("subagent", truncateRunes(args.Task, 120), func(ctx context.Context, write func(string)) (string, error) {
+		if args.Device != "" && t.deviceContext != nil {
+			scoped, finish, err := t.deviceContext(ctx, args.Device)
+			if err != nil {
+				return "", err
+			}
+			defer finish()
+			ctx = scoped
+		}
 		childCtx, cancel := context.WithTimeout(ctx, 30*time.Minute)
 		defer cancel()
 		child := agent.New(cfg)

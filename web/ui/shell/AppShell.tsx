@@ -1,3 +1,4 @@
+import { RouteLoadingSkeleton } from "../components/loading-skeletons";
 import { useServerCapabilities } from "../lib/server-capabilities";
 import { DeviceRail } from "../components/device-rail";
 import { themePresets, type ThemePreset } from "../lib/themes";
@@ -280,7 +281,7 @@ export function AppShell() {
             close: () => setMobileNavOpen(false),
           }}
         >
-          <Suspense fallback={<div role="status" className="flex h-full min-h-48 items-center justify-center gap-2 text-sm text-muted-foreground"><Icon name="Spinner" className="size-4 animate-spin motion-reduce:animate-none" />{t("common.loading")}</div>}>
+          <Suspense fallback={<RouteLoadingSkeleton label={t("common.loading")} chat={location.pathname.startsWith("/agent")} />}>
             <Outlet />
           </Suspense>
         </MobileNavContext.Provider>

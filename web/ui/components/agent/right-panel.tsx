@@ -1,3 +1,4 @@
+import { SecondaryPanelContentSkeleton } from "../loading-skeletons";
 import type { BrowserActionRecord } from "./browser-history";
 import { createAutomationRevealTracker, type AutomationView } from "./automation";
 import { useServerCapabilities } from "../../lib/server-capabilities";
@@ -1292,9 +1293,7 @@ export function AgentRightPanel({
         /* Changes deck: one collapsible diff card per changed file. */
         changes === null ? (
           connected ? (
-            <div className="flex items-center justify-center py-8 text-muted-foreground">
-              <Icon name="Spinner" className="size-4 animate-spin" />
-            </div>
+            <SecondaryPanelContentSkeleton label={t("common.loading")} />
           ) : (
             <div className="px-4 py-8 text-center text-xs text-muted-foreground">
               {t("agent.noChanges")}

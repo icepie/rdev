@@ -1,3 +1,4 @@
+import { ThreadTimelineLoadingSkeleton } from "../loading-skeletons";
 import { useComposerAutosize } from "./use-composer-autosize";
 import { needsAttachmentRaster, rasterizeAttachment } from "./attachment-raster";
 import { settledAskCardKeys } from "./transcript-rows";
@@ -639,7 +640,8 @@ export function ChatPaneView({
         className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto"
       >
         <div ref={transcriptContentRef} className="mx-auto flex w-full max-w-[760px] min-w-0 flex-col gap-1 px-4 pt-3 pb-3">
-          {items.length === 0 && (
+          {items.length === 0 && !ready && connStatus === "connecting" && <ThreadTimelineLoadingSkeleton label={t("common.loading")} />}
+          {items.length === 0 && (ready || connStatus !== "connecting") && (
             <div className="px-4 py-12 text-center text-sm whitespace-pre-wrap text-muted-foreground">
               {emptyHint}
               {ready && device === SERVER_AGENT_ID && !input.trim() && pendingImages.length === 0 && (

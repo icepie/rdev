@@ -11,6 +11,7 @@ import (
 )
 
 type backgroundTool struct {
+	scope        *agentDeviceScope
 	jobs         *agentJobs
 	shell        *shellTool
 	resolveShell func(string) (*shellTool, error)
@@ -61,7 +62,7 @@ func (t *backgroundTool) Execute(ctx context.Context, raw json.RawMessage) (stri
 		return "", err
 	}
 	shell := t.shell
-	if t.resolveShell == nil && args.Device != "" && shell != nil && shell.client != nil && args.Device != shell.client.ID {
+	if t.scope == nil && t.resolveShell == nil && args.Device != "" && shell != nil && shell.client != nil && args.Device != shell.client.ID {
 		return "", fmt.Errorf("this conversation targets device %q, not %q", shell.client.ID, args.Device)
 	}
 	if t.resolveShell != nil {
@@ -71,16 +72,38 @@ func (t *backgroundTool) Execute(ctx context.Context, raw json.RawMessage) (stri
 			return "", err
 		}
 	}
+	if t.scope != nil {
+		c, cwd, err := t.scope.resolve(args.Device)
+		if err != nil {
+			return "", err
+		}
+		args.Device = c.ID
+		shell = &shellTool{srv: t.scope.srv, client: c, Cwd: cwd}
+	}
 	if shell == nil {
 		return "", fmt.Errorf("no device shell is available")
 	}
-	job, err := t.jobs.Start("shell", truncateRunes(args.Command, 120), func(ctx context.Context, output func(string)) (string, error) {
+	job, err := t.jobs.Start("shell", truncateRunes(args.Device+": "+args.Command, 120), func(ctx context.Context, output func(string)) (string, error) {
+		jobShell := shell
+		if t.scope != nil {
+			scoped, finish, err := t.scope.begin(ctx, args.Device)
+			if err != nil {
+				return "", err
+			}
+			defer finish()
+			ctx = scoped
+			c, cwd, err := t.scope.resolve(args.Device)
+			if err != nil {
+				return "", err
+			}
+			jobShell = &shellTool{srv: t.scope.srv, client: c, Cwd: cwd}
+		}
 		if args.Timeout > 0 {
 			var cancel context.CancelFunc
 			ctx, cancel = context.WithTimeout(ctx, time.Duration(args.Timeout)*time.Second)
 			defer cancel()
 		}
-		result, err := shell.runShellReporting(ctx, args.Command, output)
+		result, err := jobShell.runShellReporting(ctx, args.Command, output)
 		if err == nil && result.ExitCode != 0 {
 			if result.ExitCode < 0 {
 				err = fmt.Errorf("device disconnected without an exit code")

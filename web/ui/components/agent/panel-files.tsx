@@ -1,7 +1,9 @@
+import { FileExplorer } from "../file-explorer";
+import { FileWorkspaceDivider } from "../file-workspace-divider";
+import { createFileTreeRPC } from "../../lib/file-tree-rpc";
 import { FilePreview } from "./file-preview";
 import type { FilePreviewState } from "./types";
 import { readFilePreviewReply } from "../../lib/file-preview-reply";
-import { Dialog, DialogContent, DialogTitle } from "../dialog";
 import { createTransferAttempts } from "../../lib/file-transfer-attempts";
 import { uploadChunks } from "../../lib/upload-chunks";
 import { encodeFrame, decodeFrame } from "../../lib/file-transfer-frame";
@@ -191,6 +193,7 @@ export function PanelFiles({
   taskStorageRef.current = taskStorageKey;
   const [pathInput, setPathInput] = useState("");
   const [entries, setEntries] = useState<FileEntry[]>([]);
+  const [treeRevision, setTreeRevision] = useState(0);
   const [listView, setListView] = useState<ListView>({
     truncated: false,
     shown: 0,
@@ -277,7 +280,7 @@ export function PanelFiles({
     setPreview(current => current ? {...current, state:{...current.state,status:"error",message}} : current);
   }, []);
   const openPreview = (path: string) => {
-    if (onOpenFile) { onOpenFile(path); return; }
+
     const requestId = makeId();
     previewRequest.current = requestId;
     setPreview({path,state:{status:"loading",content:"",message:"",truncated:false}});
@@ -303,6 +306,7 @@ export function PanelFiles({
   const list = useCallback(
     (path: string, append = false) => {
       if (wsRef.current?.readyState !== WebSocket.OPEN) {
+        treeRPC.current?.cancel();
         failPreview(tRef.current("files.connectionLost"));
         listingGuard.current.invalidate();
         setListView(previous => ({ ...previous, notice: tRef.current("files.connectionLost") }));
@@ -311,7 +315,7 @@ export function PanelFiles({
       const targetPath = append ? currentPathRef.current : path;
       const offset = append ? listOffsetRef.current : 0;
       if (append) setListView(previous => ({ ...previous, pageError: undefined }));
-      if (!append) {
+      if (!append && targetPath !== currentPathRef.current) {
         setEntries([]);
         listOffsetRef.current = 0;
         listTotalRef.current = 0;
@@ -563,8 +567,14 @@ export function PanelFiles({
 
   /* ── WS message handlers ── */
 
+  const treeRPC = useRef<ReturnType<typeof createFileTreeRPC> | null>(null);
+  if (!treeRPC.current) treeRPC.current = createFileTreeRPC(send);
+  useEffect(() => () => treeRPC.current?.cancel(), [device]);
+
+  const loadTreeDirectory = useCallback((path:string)=>treeRPC.current!.request(device,'list',{path}),[device]);
   const onText = useCallback(
     (msg: Record<string, unknown>) => {
+      if (treeRPC.current?.accept(msg)) return;
       const reply = readFilePreviewReply(previewRequest.current, deviceRef.current, msg);
       if (reply) {
         previewRequest.current = "";
@@ -645,6 +655,7 @@ export function PanelFiles({
           typeof msg.parent === "string" && msg.parent ? msg.parent : resultPath;
         setPathInput(resultPath);
         setEntries((prev) => (append ? prev.concat(newEntries) : newEntries));
+        if (!append) setTreeRevision(value => value + 1);
         listOffsetRef.current = pagination.nextOffset;
         listTotalRef.current = pagination.total;
         listTruncatedRef.current = pagination.more;
@@ -843,6 +854,7 @@ export function PanelFiles({
         tasksRef.current!.forEach(stopUpload);
         wsRef.current = null;
         if (disposed) return;
+        treeRPC.current?.cancel();
         failPreview(tRef.current("files.connectionLost"));
         listingGuard.current.invalidate();
         setListView(previous => ({ ...previous, notice: tRef.current("files.connectionLost") }));
@@ -1068,102 +1080,25 @@ export function PanelFiles({
         }}
       />
 
-      {/* Entries + tasks (container queries gate the optional columns) */}
-      <div className="@container mt-2 min-h-0 flex-1 overflow-y-auto px-2 pb-2">
-        <div className="overflow-hidden rounded-lg border border-border">
-          {/* Header */}
-          <div className="flex items-center gap-2 border-b border-border bg-muted/50 px-2 py-1.5 text-xs font-medium text-muted-foreground">
-            <span className="min-w-0 flex-1">{t("files.name")}</span>
-            <span className="w-14 shrink-0 text-right @max-[320px]:hidden">
-              {t("files.size")}
-            </span>
-            <span className="w-36 shrink-0 @max-[480px]:hidden">
-              {t("files.modified")}
-            </span>
-            <span className="w-7 shrink-0" />
-          </div>
-
-          {listView.pageError && <p role="alert" className="border-b border-border px-2 py-2 text-xs break-words text-destructive-text">{listView.pageError}</p>}
-          {listView.notice ? (
-            <div className="px-2 py-8 text-center text-xs text-muted-foreground">
-              {listView.notice}
-            </div>
-          ) : (
-            <>
-              {showInfoRow && (
-                <div className="flex items-center gap-2 border-b border-border/50 bg-timeline-accent/5 px-2 py-1.5 text-xs text-muted-foreground">
-                  <span className="min-w-0 flex-1">
-                    {t("files.showing", {
-                      shown: listView.shown || entries.length,
-                      total: listView.total || entries.length,
-                    })}
-                  </span>
-                  {listView.truncated && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="h-6 shrink-0 px-2 text-xs"
-                      onClick={() => list(currentPathRef.current, true)}
-                    >
-                      {t("files.loadMore")}
-                    </Button>
-                  )}
-                </div>
-              )}
-              {entries.length === 0 ? (
-                <div className="px-2 py-8 text-center text-xs text-muted-foreground">
-                  {device ? t("files.emptyDir") : t("files.empty")}
-                </div>
-              ) : (
-                entries.map((entry) => (
-                  <div
-                    key={entry.path}
-                    className="flex items-center gap-2 border-b border-border/50 px-2 py-1 last:border-b-0 hover:bg-muted/30"
-                  >
-                    <button
-                      type="button"
-                      className="flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 rounded-sm text-left text-sm text-foreground hover:text-timeline-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                      onClick={() => {
-                        if (entry.isDir) list(entry.path);
-                        else openPreview(entry.path);
-                      }}
-                    >
-                      <Icon
-                        name={entry.isDir ? "Folder" : "File"}
-                        className="size-4 shrink-0"
-                      />
-                      <span className="truncate">{entry.name}</span>
-                    </button>
-                    <span className="w-14 shrink-0 text-right text-xs text-muted-foreground @max-[320px]:hidden">
-                      {entry.isDir ? "--" : fmtBytes(entry.size)}
-                    </span>
-                    <span className="w-36 shrink-0 truncate text-xs text-muted-foreground @max-[480px]:hidden">
-                      {entry.modTime
-                        ? new Date(entry.modTime).toLocaleString()
-                        : ""}
-                    </span>
-                    {!entry.isDir ? (
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="size-7 shrink-0"
-                        aria-label={`${t("files.download")} ${entry.name}`}
-                        onClick={() =>
-                          startDownload(entry.path, entry.name, entry.size)
-                        }
-                      >
-                        <Icon name="Download" className="size-3.5" />
-                      </Button>
-                    ) : (
-                      <span className="size-7 shrink-0" />
-                    )}
-                  </div>
-                ))
-              )}
-            </>
-          )}
+      <div className="agent-file-editor relative min-h-0 flex-1" data-file-preview={!!preview}>
+        <div className="agent-file-tree flex min-h-0 flex-col overflow-hidden">
+          {listView.pageError&&<p role="alert" className="px-2 py-1 text-xs text-destructive-text">{listView.pageError}</p>}
+          <FileExplorer refreshKey={treeRevision} key={JSON.stringify([device,currentPathRef.current])} stateKey={taskStorageKey} path={currentPathRef.current} entries={entries} loading={listView.notice===t("common.connecting")} notice={listView.notice} selected={preview?.path} load={loadTreeDirectory} onOpen={openPreview} onNavigate={list} t={t}
+            onDownload={entry=>startDownload(entry.path,entry.name,entry.size||0)}
+            onOperation={async(op,entry,name)=>{
+              if(op==='newFile'){startUpload(new File([],name),{device,path:entry.path});return;}
+              await treeRPC.current!.request(device,op,{path:entry.path,...(op==='mkdir'?{path:entry.path.replace(/[\\/]$/,'')+'/'+name}:{}),...(op==='rename'?{from:entry.path,to:entry.path.replace(/[^\\/]+$/,'')+name}:{}),...(op==='delete'?{recursive:!!entry.isDir}:{})});
+              list(currentPathRef.current);
+            }}/>
+          {listView.truncated&&<Button variant="ghost" size="sm" onClick={()=>list(currentPathRef.current,true)}>{t('files.loadMore')}</Button>}
         </div>
-
+        {preview&&<><FileWorkspaceDivider axis="y" storageKey={JSON.stringify(['file-split',taskStorageKey])} label={t('files.resizeExplorer')}/>
+         <div className="flex min-h-0 flex-col overflow-hidden border-t border-border-seam">
+          <div className="flex shrink-0 justify-end gap-1"><Button variant="ghost" size="sm" onClick={closePreview}>{t('files.explorer')}</Button>{onOpenFile&&<Button variant="ghost" size="sm" onClick={()=>onOpenFile(preview.path)}>{t('files.openFiles')}</Button>}</div>
+          <div className="min-h-0 flex-1"><FilePreview path={preview.path} state={preview.state} connected={wsRef.current?.readyState===WebSocket.OPEN} visible={visible} onRefresh={()=>openPreview(preview.path)} t={t}/></div>
+         </div></>}
+      </div>
+      <div className="max-h-[25%] shrink-0 overflow-y-auto px-2 pb-2">
         {/* Tasks */}
         <div className="mt-2 rounded-lg border border-border p-2">
           <h2 className="mb-2 flex items-center gap-1.5 text-sm font-semibold">
@@ -1266,15 +1201,7 @@ export function PanelFiles({
         </div>
       </div>
 
-      <Dialog open={visible && preview !== null} onOpenChange={open => { if (!open) closePreview(); }}>
-        <DialogContent className="flex h-[80dvh] max-w-5xl flex-col overflow-hidden p-0">
-          <DialogTitle className="sr-only">{preview?.path || t("files.name")}</DialogTitle>
-          {preview && <div className="flex min-h-0 flex-1 flex-col pt-8">
-            <FilePreview path={preview.path} state={preview.state} connected={wsRef.current?.readyState === WebSocket.OPEN}
-              visible={visible} onRefresh={() => openPreview(preview.path)} t={t} />
-          </div>}
-        </DialogContent>
-      </Dialog>
+
       {/* Device password prompt (auto-submits a remembered password once) */}
       {authOpen && (
         <TabAuthOverlay

@@ -65,6 +65,10 @@ func (t *automationTool) client(device string) (*ClientConn, error) {
 	if device == "" || device == agentServerDeviceID {
 		return nil, fmt.Errorf("select an explicit connected device using list_devices")
 	}
+	if t.thread.deviceScope != nil {
+		client, _, err := t.thread.deviceScope.resolve(device)
+		return client, err
+	}
 	if t.entry.deviceID != agentServerDeviceID && device != t.entry.deviceID {
 		return nil, fmt.Errorf("this conversation is bound to device %q", t.entry.deviceID)
 	}

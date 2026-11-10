@@ -47,6 +47,60 @@ impl FileManager {
         Self::default()
     }
 
+    pub async fn mutate(&self, msg: Message, outbound: mpsc::Sender<OutboundEvent>) {
+        let rename = matches!(msg.ty, Some(MessageType::FileRename));
+        let result: Result<()> = async {
+            if msg.path.trim().is_empty() {
+                return Err(anyhow!("path is required"));
+            }
+            let path = std::path::absolute(&msg.path)?;
+            // Canonical parent resolves '..' without following a final symlink.
+            let parent = path
+                .parent()
+                .ok_or_else(|| anyhow!("cannot modify a filesystem root"))?;
+            let parent = fs::canonicalize(parent).await?;
+            let name = path.file_name().ok_or_else(|| anyhow!("invalid path"))?;
+            let path = parent.join(name);
+            if rename {
+                if msg.file_path.trim().is_empty() {
+                    return Err(anyhow!("destination is required"));
+                }
+                match fs::symlink_metadata(&msg.file_path).await {
+                    Ok(_) => return Err(anyhow!("destination already exists")),
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(e) => return Err(e.into()),
+                }
+                fs::rename(&path, &msg.file_path).await?;
+            } else {
+                let meta = fs::symlink_metadata(&path).await?;
+                if meta.is_dir() {
+                    if msg.success {
+                        fs::remove_dir_all(&path).await?;
+                    } else {
+                        fs::remove_dir(&path).await?;
+                    }
+                } else {
+                    fs::remove_file(&path).await?;
+                }
+            }
+            Ok(())
+        }
+        .await;
+        let response = Message {
+            ty: Some(if rename {
+                MessageType::FileRenameResult
+            } else {
+                MessageType::FileDeleteResult
+            }),
+            request_id: msg.request_id,
+            path: msg.path,
+            success: result.is_ok(),
+            error: result.err().map(|e| e.to_string()).unwrap_or_default(),
+            ..Default::default()
+        };
+        let _ = outbound.send(OutboundEvent::Message(response)).await;
+    }
+
     pub async fn mkdir(&self, msg: Message, outbound: mpsc::Sender<OutboundEvent>) {
         let result = if msg.path.trim().is_empty() {
             Err(std::io::Error::new(
@@ -474,6 +528,69 @@ async fn send_transfer_error(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn mutation_refuses_overwrite_and_requires_recursive_delete() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a");
+        let b = dir.path().join("b");
+        fs::write(&a, b"keep").await.unwrap();
+        fs::write(&b, b"existing").await.unwrap();
+        let manager = FileManager::new();
+        let (tx, mut rx) = mpsc::channel(1);
+        manager
+            .mutate(
+                Message {
+                    ty: Some(MessageType::FileRename),
+                    path: a.to_string_lossy().into_owned(),
+                    file_path: b.to_string_lossy().into_owned(),
+                    ..Default::default()
+                },
+                tx.clone(),
+            )
+            .await;
+        match rx.recv().await.unwrap() {
+            OutboundEvent::Message(m) => assert!(!m.success),
+            _ => panic!("wrong response"),
+        }
+        fs::remove_file(&b).await.unwrap();
+        manager
+            .mutate(
+                Message {
+                    ty: Some(MessageType::FileRename),
+                    path: a.to_string_lossy().into_owned(),
+                    file_path: b.to_string_lossy().into_owned(),
+                    ..Default::default()
+                },
+                tx.clone(),
+            )
+            .await;
+        match rx.recv().await.unwrap() {
+            OutboundEvent::Message(m) => assert!(m.success, "{}", m.error),
+            _ => panic!("wrong response"),
+        }
+        assert_eq!(fs::read(&b).await.unwrap(), b"keep");
+        let nested = dir.path().join("nested");
+        fs::create_dir(&nested).await.unwrap();
+        fs::write(nested.join("child"), b"data").await.unwrap();
+        for recursive in [false, true] {
+            manager
+                .mutate(
+                    Message {
+                        ty: Some(MessageType::FileDelete),
+                        path: nested.to_string_lossy().into_owned(),
+                        success: recursive,
+                        ..Default::default()
+                    },
+                    tx.clone(),
+                )
+                .await;
+            match rx.recv().await.unwrap() {
+                OutboundEvent::Message(m) => assert_eq!(m.success, recursive, "{}", m.error),
+                _ => panic!("wrong response"),
+            }
+        }
+    }
 
     #[tokio::test]
     async fn mkdir_preserves_empty_directories_and_reports_conflicts() {

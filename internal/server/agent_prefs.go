@@ -11,6 +11,8 @@ import (
 // <dataDir>/agent/prefs/<device>.json (unlike history, prefs are kept
 // regardless of AgentSessionTTL). Writes are atomic (tmp + rename).
 type agentPrefs struct {
+	Participants map[string][]agentParticipant `json:"participants,omitempty"`
+
 	Pinned         map[string]int64 `json:"pinned,omitempty"`
 	Model          string           `json:"model,omitempty"`
 	PermissionMode string           `json:"permissionMode,omitempty"`
@@ -82,8 +84,12 @@ func (s *Server) writeAgentPrefs(entry *agentSessionEntry) {
 
 // agentPrefsLocked snapshots preferences while agentSessionsMu is held.
 func (s *Server) agentPrefsLocked(entry *agentSessionEntry) agentPrefs {
+	participants := make(map[string][]agentParticipant)
 	var pinned map[string]int64
 	for id, th := range entry.threads {
+		if th.deviceScope != nil {
+			participants[id] = th.deviceScope.saved()
+		}
 		if th.pinnedAt > 0 {
 			if pinned == nil {
 				pinned = make(map[string]int64)
@@ -93,6 +99,7 @@ func (s *Server) agentPrefsLocked(entry *agentSessionEntry) agentPrefs {
 	}
 	return agentPrefs{
 		Pinned:         pinned,
+		Participants:   participants,
 		Model:          entry.model,
 		PermissionMode: entry.permMode,
 		ReasoningLevel: entry.reasoningLevel,

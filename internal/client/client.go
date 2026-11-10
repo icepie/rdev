@@ -928,6 +928,8 @@ func (c *Client) handleMessage(msg *protocol.Message) {
 		c.handleTCPListen(msg)
 	case protocol.MsgTCPClose:
 		c.handleTCPClose(msg)
+	case protocol.MsgFileDelete, protocol.MsgFileRename:
+		go func() { c.send(mutateFileEntry(msg)) }()
 	case protocol.MsgFileMkdir:
 		go c.handleFileMkdir(msg)
 	case protocol.MsgFileListRequest:
@@ -946,8 +948,8 @@ func (c *Client) handleMessage(msg *protocol.Message) {
 		c.handleDesktopSnapshot(msg)
 	case protocol.MsgDesktopInput:
 		c.handleDesktopInput(msg)
-    case protocol.MsgDesktopCua:
-        go c.handleDesktopCua(msg)
+	case protocol.MsgDesktopCua:
+		go c.handleDesktopCua(msg)
 	case protocol.MsgDesktopClipboard:
 		c.handleDesktopClipboard(msg)
 	case protocol.MsgDesktopClose:

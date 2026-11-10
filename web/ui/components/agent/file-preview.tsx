@@ -1,3 +1,4 @@
+import { SourceLoadingSkeleton } from "../loading-skeletons";
 import { DocumentFilePreview } from "./document-file-preview";
 import { useFileLineReveal } from "./file-line-reveal";
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from "react";
@@ -105,9 +106,7 @@ function FilePreviewContent({
         loading={!state || state.status === "loading"} previewLoading={isHTML && viewMode === "preview" && htmlLoading} connected={connected} hasPreview={hasPreview}
         viewMode={viewMode} onViewModeChange={setViewMode} wrap={wrap} onWrapChange={setWrap} onRefresh={onRefresh} t={t} />
       {state === undefined || state.status === "loading" ? (
-        <div className="flex flex-1 items-center justify-center text-muted-foreground">
-          <Icon name="Spinner" className="size-4 animate-spin motion-reduce:animate-none" />
-        </div>
+        <SourceLoadingSkeleton label={t("common.loading")} />
       ) : state.status === "error" ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-3 px-3 text-center text-xs break-words text-muted-foreground">
           <span role="status">{state.message}</span>

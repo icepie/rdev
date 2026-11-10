@@ -1,3 +1,5 @@
+import { FileWorkspaceDivider } from "../components/file-workspace-divider";
+import { createFileTreeRPC } from "../lib/file-tree-rpc";
 import { useFilePreviewTabs } from "../lib/file-preview-tabs";
 import { FileEditorTabs } from "../components/file-editor-tabs";
 import { FileExplorer } from "../components/file-explorer";
@@ -647,8 +649,13 @@ export function FilesBrowser({
 
   /* ── WS message handlers ── */
 
+  const treeRPC = useRef<ReturnType<typeof createFileTreeRPC> | null>(null);
+  if (!treeRPC.current) treeRPC.current = createFileTreeRPC(message => {const ws=wsRef.current;if(!ws||ws.readyState!==WebSocket.OPEN)return false;ws.send(JSON.stringify(message));return true;});
+  useEffect(() => () => treeRPC.current?.cancel(), [device]);
+
   const onText = useCallback(
     (msg: Record<string, unknown>) => {
+      if (treeRPC.current?.accept(msg)) return;
       if (msg.op === "auth_ok" || msg.op === "auth_fail" || msg.op === "auth_required") {
         const id = typeof msg.deviceId === "string" ? msg.deviceId : "";
         const waiters = authWaitersRef.current;
@@ -750,6 +757,7 @@ export function FilesBrowser({
           typeof msg.parent === "string" && msg.parent ? msg.parent : resultPath;
         setPathInput(resultPath);
         setEntries((prev) => (append ? prev.concat(newEntries) : newEntries));
+        if (!append) setTreeRevision(value => value + 1);
         listOffsetRef.current = pagination.nextOffset;
         listTotalRef.current = pagination.total;
         listTruncatedRef.current = pagination.more;
@@ -922,6 +930,7 @@ export function FilesBrowser({
       pwReqRef.current?.resolve(null);
       pwReqRef.current = null;
       if (!disposed) setPwDialog(null);
+      treeRPC.current?.cancel();
       for (const waiter of listWaitersRef.current.values()) waiter.reject(new Error(tRef.current("files.connectionLost")));
       listWaitersRef.current.clear();
       for (const waiter of directoryWaiters.current.values()) waiter.reject(new Error(tRef.current("files.connectionLost")));
@@ -995,8 +1004,7 @@ export function FilesBrowser({
       if (!activeDevice || !(await ensureAuth(activeDevice)) ||
           !listingGuard.current.accepts(requestId) || activeDeviceRef.current !== activeDevice) return;
       const targetPath = append ? currentPathRef.current : path;
-      if (!append) {
-        setTreeRevision(value => value + 1);
+      if (!append && targetPath !== currentPathRef.current) {
         setEntries([]);
         listOffsetRef.current = 0;
         listTotalRef.current = 0;
@@ -1561,8 +1569,14 @@ export function FilesBrowser({
           </Table>
         </Card>
 
-            ) : <FileExplorer key={JSON.stringify([device, currentPathRef.current, treeRevision])} path={currentPathRef.current} entries={entries}
-              notice={listView.notice} selected={previews.tabs.find(tab => tab.key === previews.active)?.path}
+            ) : <FileExplorer key={JSON.stringify([device, currentPathRef.current])} refreshKey={treeRevision} path={currentPathRef.current} entries={entries} stateKey={JSON.stringify([device,leafId])}
+              onDownload={entry=>startDownload(entry.path,entry.name,entry.size||0)}
+              onOperation={async(op,entry,name)=>{
+                if(op==='newFile'){startUpload(new File([],name),entry.path,device);return;}
+                await treeRPC.current!.request(device,op,{path:entry.path,...(op==='mkdir'?{path:entry.path.replace(/[\\/]$/,'')+'/'+name}:{}),...(op==='rename'?{from:entry.path,to:entry.path.replace(/[^\\/]+$/,'')+name}:{}),...(op==='delete'?{recursive:!!entry.isDir}:{})});
+                await list(currentPathRef.current);
+              }}
+              loading={listView.notice===t("common.connecting")} notice={listView.notice} selected={previews.tabs.find(tab => tab.key === previews.active)?.path}
               onDragStart={(entry, event) => {
                 event.dataTransfer.setData(FILE_DRAG_MIME, JSON.stringify({ src: leafId, items: [{ ...entry, size: entry.size || 0 }] }));
                 event.dataTransfer.effectAllowed = "copy";
@@ -1570,6 +1584,7 @@ export function FilesBrowser({
               load={loadTreeDirectory} onOpen={openPreview} onNavigate={path => void list(path)} t={t} />}
             {listView.truncated && !details && <Button variant="ghost" size="sm" onClick={() => void list(currentPathRef.current, true)}>{t("files.loadMore")}</Button>}
           </div>
+          <FileWorkspaceDivider storageKey={JSON.stringify(["file-split",device,leafId])} label={t("files.resizeExplorer")} />
           <div className="file-editor-region min-h-0 min-w-0 overflow-hidden">
             <Button className="file-explorer-back shrink-0" variant="ghost" size="sm" onClick={() => setShowEditor(false)}><Icon name="ChevronLeft" />{t("files.explorer")}</Button>
             <div className="min-h-0 flex-1">

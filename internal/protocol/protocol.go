@@ -37,6 +37,10 @@ const (
 	MsgFileResult MessageType = "file_result" // C->S: file write result {success, error}
 
 	// File manager (text frames for control/metadata, binary for data)
+	MsgFileDelete         MessageType = "file_delete"
+	MsgFileRename         MessageType = "file_rename"
+	MsgFileDeleteResult   MessageType = "file_delete_result"
+	MsgFileRenameResult   MessageType = "file_rename_result"
 	MsgFileMkdir          MessageType = "file_mkdir"
 	MsgFileMkdirResult    MessageType = "file_mkdir_result"
 	MsgFileListRequest    MessageType = "file_list"            // S->C: list a directory

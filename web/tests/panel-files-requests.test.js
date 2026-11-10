@@ -366,8 +366,9 @@ it('reads cross-device previews through the selected Files socket and rejects wr
   expect(document.querySelector('[data-preview]').textContent).toBe('loading:');
   await deliver(socket,{op:'file_content',requestId:request.requestId,deviceId:'one',content:'correct file'});
   expect(document.querySelector('[data-preview]').textContent).toBe('ready:correct file');
+  const previewElement=document.querySelector('[data-preview]');
   await render('one',false,null);
-  expect(document.querySelector('[data-preview]')).toBeNull();
+  expect(document.querySelector('[data-preview]')).toBe(previewElement);
   await render('one',true,null);
   expect(document.querySelector('[data-preview]').textContent).toBe('ready:correct file');
 });

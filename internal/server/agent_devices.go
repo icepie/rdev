@@ -48,7 +48,8 @@ func (s *Server) resolveDeviceTool(device, name string) (agent.Tool, error) {
 }
 
 type connectedDevicesTool struct {
-	srv *Server
+	scope *agentDeviceScope
+	srv   *Server
 }
 
 func (*connectedDevicesTool) Name() string { return "list_devices" }
@@ -59,6 +60,22 @@ func (*connectedDevicesTool) Schema() json.RawMessage {
 	return json.RawMessage(`{"type":"object","properties":{},"additionalProperties":false}`)
 }
 func (t *connectedDevicesTool) Execute(context.Context, json.RawMessage) (string, error) {
+	if t.scope != nil {
+		rows := []map[string]any{}
+		for _, member := range t.scope.snapshot() {
+			schemas := []map[string]any{}
+			if member.Authorized {
+				available, _ := t.scope.tools(member.Device)
+				for _, tool := range available {
+					if slices.Contains(agentRemoteToolNames, tool.Name()) {
+						schemas = append(schemas, map[string]any{"name": tool.Name(), "parameters": tool.Schema()})
+					}
+				}
+			}
+			rows = append(rows, map[string]any{"device": member.Device, "cwd": member.Cwd, "online": member.Online, "authorized": member.Authorized, "tools": schemas})
+		}
+		return marshalJobResult(rows)
+	}
 	t.srv.mu.RLock()
 	clients := make([]*ClientConn, 0, len(t.srv.clients))
 	for id, client := range t.srv.clients {
@@ -85,6 +102,7 @@ func (t *connectedDevicesTool) Execute(context.Context, json.RawMessage) (string
 }
 
 type remoteDeviceTool struct {
+	scope     *agentDeviceScope
 	srv       *Server
 	arguments agent.ToolArgumentValidator
 }
@@ -111,7 +129,25 @@ func (t *remoteDeviceTool) Execute(ctx context.Context, raw json.RawMessage) (st
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return "", err
 	}
-	tool, err := t.srv.resolveDeviceTool(args.Device, args.Tool)
+	var tool agent.Tool
+	var err error
+	if t.scope != nil {
+		var available []agent.Tool
+		available, err = t.scope.tools(args.Device)
+		if err == nil {
+			for _, candidate := range available {
+				if candidate.Name() == args.Tool && slices.Contains(agentRemoteToolNames, args.Tool) {
+					tool = candidate
+					break
+				}
+			}
+			if tool == nil {
+				err = fmt.Errorf("unknown device tool %q", args.Tool)
+			}
+		}
+	} else {
+		tool, err = t.srv.resolveDeviceTool(args.Device, args.Tool)
+	}
 	if err != nil {
 		return "", err
 	}

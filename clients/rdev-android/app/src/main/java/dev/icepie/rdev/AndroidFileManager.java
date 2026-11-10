@@ -1,6 +1,9 @@
 package dev.icepie.rdev;
 
 import android.os.Environment;
+import android.system.Os;
+import android.system.OsConstants;
+import android.system.ErrnoException;
 import android.util.Log;
 
 import org.json.JSONArray;
@@ -191,10 +194,10 @@ final class AndroidFileManager {
 
     void handleDelete(JSONObject msg) {
         String requestId = msg.optString("requestId", "");
-        String path = canonicalPath(msg.optString("path", ""));
+        String path = msg.optString("path", "");
         try {
-            File file = new File(path);
-            deleteRecursive(file, msg.optBoolean("recursive", msg.optBoolean("success", true)));
+            File file = mutationTarget(path);
+            deleteRecursive(file, msg.optBoolean("recursive", msg.optBoolean("success", false)));
             sendOpResult("file_delete_result", requestId, path, true, "");
         } catch (Exception e) {
             sendOpResult("file_delete_result", requestId, path, false, e.getMessage());
@@ -203,12 +206,12 @@ final class AndroidFileManager {
 
     void handleRename(JSONObject msg) {
         String requestId = msg.optString("requestId", "");
-        String from = canonicalPath(msg.optString("path", msg.optString("from", msg.optString("data", ""))));
-        String to = canonicalPath(msg.optString("to", msg.optString("filePath", "")));
-        if (to.length() == 0) to = canonicalPath(safeJoin(msg.optString("parentPath", ""), msg.optString("name", "")));
+        String from = msg.optString("path", msg.optString("from", msg.optString("data", "")));
+        String to = msg.optString("to", msg.optString("filePath", ""));
         try {
-            File source = new File(from);
-            File target = new File(to);
+            File source = mutationTarget(from);
+            File target = mutationTarget(to);
+            if (existsWithoutFollowing(target)) throw new IOException("destination already exists");
             File parent = target.getParentFile();
             if (parent != null && !parent.exists() && !parent.mkdirs()) throw new IOException("mkdir failed: " + parent);
             if (!source.renameTo(target)) throw new IOException("rename failed");
@@ -308,11 +311,32 @@ final class AndroidFileManager {
             .put("modTime", rfc3339(file.lastModified()));
     }
 
+    // Resolve parent directories, but never follow the final symbolic link.
+    private File mutationTarget(String path) throws IOException {
+        if (path == null || path.trim().isEmpty()) throw new IOException("missing path");
+        File absolute = new File(path).getAbsoluteFile();
+        if (absolute.getParentFile() == null || absolute.getName().equals(".") || absolute.getName().equals(".."))
+            throw new IOException("cannot modify filesystem root or relative marker");
+        return new File(absolute.getParentFile().getCanonicalFile(), absolute.getName());
+    }
+
+    private boolean existsWithoutFollowing(File file) throws IOException {
+        try { Os.lstat(file.getPath()); return true; }
+        catch (ErrnoException e) {
+            if (e.errno == OsConstants.ENOENT) return false;
+            throw new IOException(e);
+        }
+    }
+
     private void deleteRecursive(File file, boolean recursive) throws IOException {
-        if (!file.exists()) return;
-        if (file.isDirectory()) {
+        if (!existsWithoutFollowing(file)) return;
+        boolean directory;
+        try { directory = OsConstants.S_ISDIR(Os.lstat(file.getPath()).st_mode); }
+        catch (ErrnoException e) { throw new IOException(e); }
+        if (directory) {
             File[] children = file.listFiles();
-            if (children != null && children.length > 0 && !recursive) throw new IOException("directory not empty");
+            if (children == null) throw new IOException("cannot list directory");
+            if (children.length > 0 && !recursive) throw new IOException("directory not empty");
             if (children != null) for (File child : children) deleteRecursive(child, true);
         }
         if (!file.delete()) throw new IOException("delete failed: " + file);

@@ -40,6 +40,8 @@ import (
 // device, not by a browser connection: events are broadcast to every
 // attached socket and a reopened tab reattaches mid-run (auth_ok.running).
 type agentMsg struct {
+	Participants []agentParticipant `json:"participants,omitempty"`
+
 	BrowserAction  *browserActionRecord  `json:"browserAction,omitempty"`
 	BrowserHistory []browserActionRecord `json:"browserHistory,omitempty"`
 
@@ -353,6 +355,8 @@ func queueTexts(q []agentQueuedChat) []string {
 // history, todo list, message queue and (at most one) in-flight turn.
 // Guarded by Server.agentSessionsMu.
 type agentThread struct {
+	deviceScope *agentDeviceScope
+
 	automation       *agentAutomation
 	pinnedAt         int64
 	pendingReasoning bool // rebuild at the next turn boundary after an effort change
@@ -629,13 +633,19 @@ func (s *Server) buildAgentSession(entry *agentSessionEntry, th *agentThread, cl
 		jobs.onComplete = func(job agentJobSnapshot) { s.deliverAgentJob(entry, th, jobs, job) }
 		th.jobs = jobs
 	}
+	if entry.deviceID != agentServerDeviceID && th.deviceScope == nil {
+		th.deviceScope = newAgentDeviceScope(s, entry.deviceID, th.cwd)
+	}
 	tools := s.agentBaseTools(entry, client, th.cwd)
+	if th.deviceScope != nil {
+		tools = append(tools, &connectedDevicesTool{srv: s, scope: th.deviceScope}, &remoteDeviceTool{srv: s, scope: th.deviceScope})
+	}
 	if entry.deviceID == agentServerDeviceID {
 		tools = append(tools, &agentSessionsTool{srv: s, owner: entry, thread: th.id}, &agentSessionsTool{srv: s, owner: entry, thread: th.id, mutate: true})
 	}
 	tools = append(tools, s.automationTools(entry, th)...)
 	if entry.deviceID != agentServerDeviceID && client != nil {
-		tools = append(tools, &backgroundTool{jobs: th.jobs, shell: &shellTool{srv: s, client: client, Cwd: th.cwd}})
+		tools = append(tools, &backgroundTool{jobs: th.jobs, scope: th.deviceScope, shell: &shellTool{srv: s, client: client, Cwd: th.cwd}})
 	} else if entry.deviceID == agentServerDeviceID {
 		tools = append(tools, &backgroundTool{jobs: th.jobs, resolveShell: func(device string) (*shellTool, error) {
 			tool, err := s.resolveDeviceTool(device, "shell")
@@ -672,14 +682,47 @@ func (s *Server) buildAgentSession(entry *agentSessionEntry, th *agentThread, cl
 			return agentPermNeedsApproval(entry.permMode, false)
 		},
 	}
+	if th.deviceScope != nil {
+		cfg.SystemPrompt += "\nThis conversation supports joined devices. Use list_devices to see authorized participants and device_tool with an explicit device ID for cross-device work. Native tools default to the original device. Each participant has its own working directory. Never assume a path or operating system from another device. Subagents may target an explicitly joined device using device. Only the user can add participants."
+	}
 	cwd := th.cwd
 	cfg.Tools = append(cfg.Tools, &subagentTool{
 		jobs: th.jobs, config: cfg,
-		tools: func() []agent.Tool { return s.agentBaseTools(entry, client, cwd) },
+		tools: func() []agent.Tool {
+			if client == nil && entry.deviceID != agentServerDeviceID {
+				return nil
+			}
+			return s.agentBaseTools(entry, client, cwd)
+		},
+		deviceContext: func(ctx context.Context, device string) (context.Context, func(), error) {
+			if th.deviceScope == nil {
+				return nil, nil, fmt.Errorf("device targeting unavailable")
+			}
+			return th.deviceScope.begin(ctx, device)
+		},
+		deviceTools: func(device string) ([]agent.Tool, error) {
+			if th.deviceScope == nil {
+				return nil, fmt.Errorf("use server device_tool for remote routing")
+			}
+			return th.deviceScope.tools(device)
+		},
 	})
 	if entry.deviceID != agentServerDeviceID && client == nil {
+		availableTools := cfg.Tools
 		cfg.Tools = nil
-		cfg.SystemPrompt = "The device is offline. Discuss the existing conversation and historical context only. No tools are available. Do not claim to inspect or execute anything on the device. Historical observations may be outdated."
+		cfg.SystemPrompt = "The original device is offline. Historical observations may be outdated."
+		if th.deviceScope != nil && len(th.deviceScope.snapshot()) > 1 {
+			for _, tool := range availableTools {
+				switch tool.Name() {
+				case "list_devices", "device_tool", "computer", "browser", "autojs", "jobs", "subagent", "todo_write", "web_fetch", "web_search":
+					cfg.Tools = append(cfg.Tools, tool)
+				}
+			}
+			cfg.Tools = append(cfg.Tools, &backgroundTool{jobs: th.jobs, scope: th.deviceScope})
+			cfg.SystemPrompt += " Use list_devices and explicitly target an authorized online participant with device_tool. Never execute on the offline original device."
+		} else {
+			cfg.SystemPrompt += " Discuss existing context only; no tools are available."
+		}
 	}
 	th.pendingReasoning = false
 	return agent.New(cfg)
@@ -761,6 +804,13 @@ func (s *Server) agentSessionFor(deviceID string, client *ClientConn) (*agentSes
 			msgs, savedModel, cwd, title := store.load(deviceID, meta.ID)
 			th := s.newAgentThreadLocked(entry, meta.ID, msgs, cwd, title)
 			th.pinnedAt = prefs.Pinned[meta.ID]
+			if th.deviceScope != nil {
+				for _, member := range prefs.Participants[meta.ID] {
+					if member.Device != "" && member.Device != agentServerDeviceID && member.Device != deviceID {
+						th.deviceScope.members[member.Device] = member.Cwd
+					}
+				}
+			}
 			th.updatedAt = meta.UpdatedAt
 			th.lastOutcome = restoredAgentOutcome(meta.Outcome)
 			th.outcomeAt = meta.OutcomeAt
@@ -1207,6 +1257,8 @@ func (s *Server) requestApproval(entry *agentSessionEntry, th *agentThread, tc a
 // agentThreadSnapshot is the replay state of one thread for auth_ok,
 // thread_switched, thread_peeked and delete-thread remaps.
 type agentThreadSnapshot struct {
+	participants []agentParticipant
+
 	browserHistory []browserActionRecord
 
 	automation *automationView
@@ -1235,6 +1287,9 @@ func (s *Server) threadSnapshotLocked(entry *agentSessionEntry, th *agentThread)
 		queueModes: queueModes(th),
 		running:    th.running,
 		usage:      th.lastUsage,
+	}
+	if th.deviceScope != nil {
+		snap.participants = th.deviceScope.snapshot()
 	}
 	if th.automation != nil {
 		th.automation.mu.Lock()
@@ -1347,6 +1402,7 @@ func (h *agentWSHandler) establish(ac *agentConn, client *ClientConn) {
 		Live:           snap.live,
 		Automation:     snap.automation,
 		BrowserHistory: snap.browserHistory,
+		Participants:   snap.participants,
 		Usage:          snap.usage,
 	})
 	// The sidebar shows threads of every device (not partitioned per
@@ -1430,7 +1486,7 @@ func (h *agentWSHandler) OnMessage(socket *gws.Conn, message *gws.Message) {
 	}
 
 	if ac.deviceID != agentServerDeviceID {
-		if _, online := h.srv.GetClient(ac.deviceID); !online && (msg.Op == "steer" || msg.Op == "promote_queue" || msg.Op == "steer_job" || msg.Op == "steer_subagent") {
+		if _, online := h.srv.GetClient(ac.deviceID); !online && !h.hasOnlineParticipant(ac, msg.Thread) && (msg.Op == "steer" || msg.Op == "promote_queue" || msg.Op == "steer_job" || msg.Op == "steer_subagent") {
 			ac.sendErrorThread(msg.Thread, "Device offline: guidance and device jobs are unavailable")
 			return
 		}
@@ -1455,7 +1511,8 @@ func (h *agentWSHandler) OnMessage(socket *gws.Conn, message *gws.Message) {
 	case "chat":
 		if ac.deviceID != agentServerDeviceID {
 			live, online := h.srv.GetClient(ac.deviceID)
-			if !online && (!msg.OfflineConfirmed || strings.HasPrefix(strings.TrimSpace(msg.Text), "/")) {
+			collaboratorsOnline := h.hasOnlineParticipant(ac, msg.Thread)
+			if !online && !h.hasOnlineParticipant(ac, msg.Thread) && (!msg.OfflineConfirmed || strings.HasPrefix(strings.TrimSpace(msg.Text), "/")) {
 				ac.sendErrorThread(msg.Thread, "Device offline: confirm historical-context chat first; device commands are unavailable")
 				return
 			}
@@ -1464,7 +1521,7 @@ func (h *agentWSHandler) OnMessage(socket *gws.Conn, message *gws.Message) {
 			if threadID == "" {
 				threadID = ac.current
 			}
-			if th := ac.entry.threads[threadID]; !online && th != nil && th.running {
+			if th := ac.entry.threads[threadID]; !online && !collaboratorsOnline && th != nil && th.running {
 				h.srv.agentSessionsMu.Unlock()
 				ac.sendErrorThread(threadID, "Wait for the active turn to finish before starting offline discussion")
 				return
@@ -1547,6 +1604,8 @@ func (h *agentWSHandler) OnMessage(socket *gws.Conn, message *gws.Message) {
 		h.handleThreadAction(ac, msg)
 	case "rename_thread", "pin_thread":
 		h.handleThreadAction(ac, msg)
+	case "participants":
+		h.handleParticipants(ac, msg)
 	case "set_cwd":
 		h.handleSetCwd(ac, msg.Path)
 	case "get_changes":
@@ -1968,6 +2027,7 @@ func (h *agentWSHandler) handleSwitchThread(ac *agentConn, threadID string) {
 		Live:           snap.live,
 		Automation:     snap.automation,
 		BrowserHistory: snap.browserHistory,
+		Participants:   snap.participants,
 		Usage:          snap.usage,
 	})
 	srv.writeAgentPrefs(entry)
@@ -2010,6 +2070,7 @@ func (h *agentWSHandler) handlePeekThread(ac *agentConn, threadID string) {
 		Live:           snap.live,
 		Automation:     snap.automation,
 		BrowserHistory: snap.browserHistory,
+		Participants:   snap.participants,
 		Usage:          snap.usage,
 	})
 }
@@ -2126,6 +2187,7 @@ func (h *agentWSHandler) handleDeleteThread(ac *agentConn, threadID string) {
 				Live:           snap.live,
 				Automation:     snap.automation,
 				BrowserHistory: snap.browserHistory,
+				Participants:   snap.participants,
 				Usage:          snap.usage,
 			})
 		}
@@ -2187,6 +2249,11 @@ func (h *agentWSHandler) handleSetCwd(ac *agentConn, path string) {
 		return
 	}
 	th.cwd = path
+	if th.deviceScope != nil {
+		th.deviceScope.mu.Lock()
+		th.deviceScope.members[entry.deviceID] = path
+		th.deviceScope.mu.Unlock()
+	}
 	th.branch = ""
 	// Invalidate an already-running probe immediately. This matters when a
 	// probe for the same path races with a rapid cwd reset before the next

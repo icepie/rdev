@@ -31,3 +31,27 @@ Range reads. A changed device password invalidates old grants. No client upgrade
 is required for devices that support the existing file transfer protocol. Agent
 file previews use these same renderers. Office documents and archives do not yet
 have dedicated renderers; download them for a local application.
+
+## Shared tree interactions
+
+The standalone Files workspace and Agent Files panel now share the same tree:
+folder-first natural sorting, lazy loading, keyboard navigation, loaded-name
+filtering, and context menus for copying paths, download, rename and delete.
+Folder menus offer new files/folders. Expanded folders and selection are retained
+per device/workspace/root in session storage. New-file creation checks the current
+directory for name collisions before starting the normal upload; concurrent writes
+from other applications still follow the existing upload replacement semantics.
+
+Desktop tree/preview dividers support pointer and keyboard resizing and retain
+their split per workspace. Narrow standalone panes show either tree or preview;
+the Agent panel uses a vertical split, switching to one surface on mobile.
+Directory refresh invalidates child caches while retaining expanded paths. Lazy
+listing requests are isolated from navigation and preview requests and canceled on
+disconnection. Each lazy directory is bounded to 10,000 entries; larger directories
+can be opened directly and paged using Load more.
+
+Rename/delete require the updated Go or Rust client; Android already supports the
+protocol, and now rejects root mutation and existing rename destinations and does
+not follow final symlinks during deletion. Update these clients with the server/UI.
+Old clients without mutation support return a request timeout. Recursive deletion
+requires explicit confirmation and does not use a recycle bin.

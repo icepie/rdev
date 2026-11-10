@@ -55,6 +55,14 @@ func (t *autojsTool) Execute(ctx context.Context, raw json.RawMessage) (string, 
 		}
 		timeoutMS = min(*args.TimeoutMS, autojsMaxTimeoutMS)
 	}
+	if t.thread.deviceScope != nil {
+		scoped, release, scopeErr := t.thread.deviceScope.begin(ctx, args.Device)
+		if scopeErr != nil {
+			return "", scopeErr
+		}
+		defer release()
+		ctx = scoped
+	}
 	client, err := t.client(args.Device)
 	if err != nil {
 		return "", err

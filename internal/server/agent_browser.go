@@ -39,6 +39,14 @@ func (t *browserTool) Execute(ctx context.Context, raw json.RawMessage) (output 
 			return "", err
 		}
 	}
+	if t.thread.deviceScope != nil {
+		scoped, release, scopeErr := t.thread.deviceScope.begin(ctx, a.Device)
+		if scopeErr != nil {
+			return "", scopeErr
+		}
+		defer release()
+		ctx = scoped
+	}
 	client, err := t.client(a.Device)
 	if err != nil {
 		return "", err

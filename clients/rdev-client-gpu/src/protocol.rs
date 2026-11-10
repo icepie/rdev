@@ -46,6 +46,14 @@ pub enum MessageType {
     TcpListenOk,
     #[serde(rename = "tcp_accept")]
     TcpAccept,
+    #[serde(rename = "file_delete")]
+    FileDelete,
+    #[serde(rename = "file_delete_result")]
+    FileDeleteResult,
+    #[serde(rename = "file_rename")]
+    FileRename,
+    #[serde(rename = "file_rename_result")]
+    FileRenameResult,
     #[serde(rename = "file_mkdir")]
     FileMkdir,
     #[serde(rename = "file_mkdir_result")]
