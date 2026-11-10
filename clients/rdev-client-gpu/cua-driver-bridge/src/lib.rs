@@ -10,20 +10,6 @@ mod ffi;
 mod native;
 
 const MAX_ARGUMENTS: usize = 256 * 1024;
-const ALLOWED_TOOLS: &[&str] = &[
-    "list_apps",
-    "list_windows",
-    "get_window_state",
-    "get_desktop_state",
-    "bring_to_front",
-    "click",
-    "scroll",
-    "drag",
-    "press_key",
-    "type_text",
-    "set_value",
-    "perform_action",
-];
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
@@ -181,10 +167,7 @@ impl Session {
         }
         #[cfg(feature = "cua-native")]
         {
-            if let Request::Call { name, arguments } = &request {
-                if !ALLOWED_TOOLS.contains(&name.as_str()) {
-                    bail!("native CUA tool is not allowed: {name}");
-                }
+            if let Request::Call { arguments, .. } = &request {
                 validate_arguments(arguments)?;
                 if serde_json::to_vec(arguments)?.len() > MAX_ARGUMENTS {
                     bail!("native CUA arguments exceed size limit");
@@ -247,7 +230,7 @@ fn filter_tools(mut response: Value) -> Result<Value> {
     tools.retain(|tool| {
         tool.get("name")
             .and_then(Value::as_str)
-            .is_some_and(|name| ALLOWED_TOOLS.contains(&name))
+            .is_some_and(|name| !name.is_empty())
     });
     for tool in tools {
         if let Some(schema) = tool.get_mut("inputSchema") {
@@ -344,28 +327,24 @@ mod tests {
 
     #[cfg(feature = "cua-native")]
     #[test]
-    fn filters_sdk_inventory_and_hides_runtime_session_fields() {
+    fn exposes_all_sdk_tools_and_hides_runtime_session_fields() {
         let tools = filter_tools(serde_json::json!({
             "tools": [
                 {
                     "name": "list_apps",
                     "inputSchema": {
-                        "properties": {
-                            "session": {},
-                            "session_id": {},
-                            "window_id": {}
-                        },
+                        "properties": {"session": {}, "session_id": {}, "window_id": {}},
                         "required": ["session", "session_id", "window_id"]
                     }
                 },
-                {"name": "start_session"}
+                {"name": "set_agent_cursor_enabled", "inputSchema": {"type": "object"}},
+                {"name": ""}
             ]
         }))
         .unwrap();
-
         let tools = tools["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 1);
-        assert_eq!(tools[0]["name"], "list_apps");
+        assert_eq!(tools.len(), 2);
+        assert_eq!(tools[1]["name"], "set_agent_cursor_enabled");
         assert!(tools[0]["inputSchema"]["properties"]
             .get("session")
             .is_none());

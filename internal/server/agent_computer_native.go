@@ -35,8 +35,8 @@ func (t *computerTool) executeNativeCua(ctx context.Context, client *ClientConn,
 		if err := json.Unmarshal(raw, &args); err != nil {
 			return "", fmt.Errorf("invalid native Cua arguments: %w", err)
 		}
-		if args.Tool == "" || len(args.Tool) > 128 || !gpuCuaAllowedTool(args.Tool) {
-			return "", fmt.Errorf("native Cua tool is not allowed; use native_tools")
+		if args.Tool == "" || len(args.Tool) > 128 {
+			return "", fmt.Errorf("native Cua call requires a tool name from cua action=tools")
 		}
 		request = map[string]any{"action": "call", "name": args.Tool, "arguments": args.Arguments}
 	}

@@ -73,7 +73,7 @@ func (h *gpuAgentFixture) OnMessage(c *gws.Conn, m *gws.Message) {
 		}
 		_ = json.Unmarshal(request, &action)
 		if action.Action == "tools" {
-			_ = c.WriteMessage(gws.OpcodeText, []byte(`{"CuaResult":{"result":{"tools":[{"name":"list_apps","inputSchema":{"type":"object"}},{"name":"click","inputSchema":{"type":"object","required":["element_index"]}},{"name":"shell","inputSchema":{"type":"object"}}]}}}`))
+			_ = c.WriteMessage(gws.OpcodeText, []byte(`{"CuaResult":{"result":{"tools":[{"name":"list_apps","inputSchema":{"type":"object"}},{"name":"click","inputSchema":{"type":"object","required":["element_index"]}},{"name":"set_agent_cursor_enabled","inputSchema":{"type":"object","properties":{"enabled":{"type":"boolean"}}}},{"name":"shell","inputSchema":{"type":"object"}}]}}}`))
 		} else if !h.nativeBlock {
 			_ = c.WriteMessage(gws.OpcodeText, h.nativeResult)
 		}
@@ -317,8 +317,8 @@ func TestComputerCuaDiscoveryResultsAndSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(tools, `"shell"`) || !strings.Contains(tools, `"required":["element_index"]`) {
-		t.Fatalf("tool allowlist/schema not preserved: %s", tools)
+	if !strings.Contains(tools, `"set_agent_cursor_enabled"`) || !strings.Contains(tools, `"required":["element_index"]`) || !strings.Contains(tools, `"shell"`) {
+		t.Fatalf("complete tool inventory/schema not preserved: %s", tools)
 	}
 	for range 2 {
 		result, err := tool.Execute(ctx, json.RawMessage(`{"action":"native","tool":"click","arguments":{"element_index":7}}`))
@@ -410,10 +410,13 @@ func TestGPUCuaFramingAndBounds(t *testing.T) {
 			t.Fatalf("invalid result accepted: %.80s", raw)
 		}
 	}
-	for _, raw := range []string{`{"tool":"shell"}`, `{"tool":"list_apps","arguments":[]}`, `{"tool":""}`, `{"tool":"list_apps","arguments":{"text":"` + strings.Repeat("x", gpuCuaRequestMax) + `"}}`} {
+	for _, raw := range []string{`{"tool":"list_apps","arguments":[]}`, `{"tool":""}`, `{"tool":"list_apps","arguments":{"text":"` + strings.Repeat("x", gpuCuaRequestMax) + `"}}`} {
 		if _, err := gpuCuaRequest("native", json.RawMessage(raw)); err == nil {
 			t.Fatalf("invalid request accepted: %.80s", raw)
 		}
+	}
+	if _, err := gpuCuaRequest("native", json.RawMessage(`{"tool":"set_agent_cursor_enabled","arguments":{"enabled":true}}`)); err != nil {
+		t.Fatalf("valid discovered CUA tool rejected: %v", err)
 	}
 	d := &gpuAgentDesktop{messages: make(chan json.RawMessage, 1), done: make(chan struct{})}
 	d.messages <- json.RawMessage(`{"AgentCapabilities":{"version":1}}`)

@@ -1,4 +1,4 @@
-use super::{filter_tools, ALLOWED_TOOLS};
+use super::filter_tools;
 use anyhow::{Context, Result};
 use cua_driver_sdk::{
     ConfiguredDriverOptions, CuaDriver, RuntimeAuthorizationOptions, SessionPermissionMode,
@@ -80,11 +80,17 @@ impl SessionRuntime {
         name: &str,
         arguments: Map<String, Value>,
     ) -> Result<Value> {
-        if !ALLOWED_TOOLS.contains(&name) {
-            anyhow::bail!("native CUA tool is not allowed: {name}");
-        }
-        if self.tools.is_none() {
-            self.tools().await?;
+        let tools = self.tools().await?;
+        let available = tools
+            .get("tools")
+            .and_then(Value::as_array)
+            .is_some_and(|tools| {
+                tools
+                    .iter()
+                    .any(|tool| tool.get("name").and_then(Value::as_str) == Some(name))
+            });
+        if !available {
+            anyhow::bail!("native CUA tool is unavailable: {name}");
         }
         let encoded = serde_json::to_string(&arguments)?;
         let result = tokio::time::timeout(

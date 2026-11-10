@@ -112,15 +112,6 @@ func (d *gpuAgentDesktop) wait(ctx context.Context, name string) (json.RawMessag
 const gpuCuaRequestMax = 64 << 10
 const gpuCuaResultMax = 8 << 20
 
-func gpuCuaAllowedTool(name string) bool {
-	switch name {
-	case "list_apps", "list_windows", "get_window_state", "get_desktop_state", "bring_to_front", "click", "scroll", "drag", "press_key", "type_text", "set_value":
-		return true
-	default:
-		return false
-	}
-}
-
 func (d *gpuAgentDesktop) requireCua(ctx context.Context) error {
 	if !d.capabilities {
 		capCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
@@ -156,10 +147,7 @@ func gpuCuaRequest(action string, raw json.RawMessage) (json.RawMessage, error) 
 			return nil, fmt.Errorf("invalid native Cua arguments: %w", err)
 		}
 		if strings.TrimSpace(args.Tool) == "" || len(args.Tool) > 128 {
-			return nil, fmt.Errorf("native requires a tool name from native_tools (maximum 128 bytes)")
-		}
-		if !gpuCuaAllowedTool(args.Tool) {
-			return nil, fmt.Errorf("native Cua tool %q is not allowed; use native_tools", args.Tool)
+			return nil, fmt.Errorf("native Cua call requires a tool name from action=tools")
 		}
 		request.Action, request.Name, request.Arguments = "call", args.Tool, args.Arguments
 	} else if action != "native_tools" {
@@ -226,7 +214,7 @@ func (d *gpuAgentDesktop) discoverCuaTools(ctx context.Context) (string, error) 
 	if err := json.Unmarshal(envelope.Result["tools"], &tools); err != nil || tools == nil {
 		return "", fmt.Errorf("invalid Cua tools/list result")
 	}
-	allowed := make([]json.RawMessage, 0, len(tools))
+	available := make([]json.RawMessage, 0, len(tools))
 	names := make(map[string]bool)
 	for _, tool := range tools {
 		var schema struct {
@@ -235,12 +223,13 @@ func (d *gpuAgentDesktop) discoverCuaTools(ctx context.Context) (string, error) 
 		if err := json.Unmarshal(tool, &schema); err != nil {
 			return "", fmt.Errorf("invalid Cua tool schema: %w", err)
 		}
-		if gpuCuaAllowedTool(schema.Name) {
-			allowed = append(allowed, tool)
-			names[schema.Name] = true
+		if schema.Name == "" || len(schema.Name) > 128 {
+			return "", fmt.Errorf("invalid Cua tool name")
 		}
+		available = append(available, tool)
+		names[schema.Name] = true
 	}
-	envelope.Result["tools"], err = json.Marshal(allowed)
+	envelope.Result["tools"], err = json.Marshal(available)
 	if err != nil {
 		return "", err
 	}
@@ -451,7 +440,7 @@ func (t *computerTool) executeGPU(ctx context.Context, client *ClientConn, a com
 			return "", err
 		}
 		if !d.cuaTools[args.Tool] {
-			return "", fmt.Errorf("native Cua tool %q is unavailable on this device; use native_tools", args.Tool)
+			return "", fmt.Errorf("native Cua tool %q is unavailable on this device; discover tools with cua action=tools", args.Tool)
 		}
 		if err = ctx.Err(); err != nil {
 			return "", err
