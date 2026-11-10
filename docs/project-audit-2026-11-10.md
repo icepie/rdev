@@ -1,0 +1,38 @@
+# 项目检查（2026-11-10）
+
+本次覆盖 Go 服务端/客户端、Rust/Android 文件协议、Agent 多设备调度、前端请求生命周期、文件树和生产构建。结论来自源码和本地测试；没有线上负载、真实移动设备性能或全部操作系统的验收数据。检查期间工作区有另一组 CUA/依赖变更，未改动或代为提交。
+
+## 优先修复
+
+| 优先级 | 问题与触发条件 | 代码依据 | 建议与验收 |
+| --- | --- | --- | --- |
+| P1 | Rust/Android 同时向同一路径上传时，任务按 taskId 隔离，但共用目标 `.rdevpart`，可能互相改写。Go 已有路径占用保护。 | `clients/rdev-client-gpu/src/files.rs` 的 `open_upload`；`AndroidFileManager.java` 的 `handleUploadStart`；对照 `internal/client/managed_upload.go` | 统一规范化目标路径和占用租约，重复目标拒绝/明确排队，处理断线释放。测试双会话、路径别名、取消/恢复。此项为源码确认的竞态条件，未进行破坏性真机复现。 |
+| P1 | 新建文件先列目录，再走普通覆盖式上传，两步之间有竞态；重命名也使用“检查后 rename”，并非原子禁止覆盖。 | `web/ui/components/file-explorer.tsx:354`、`internal/client/file_mutations.go`、Rust `mutate`、Android `handleRename` | 新增明确的 exclusive-create/no-replace 语义，并由客户端原子执行。不能仅依赖前端检查。跨客户端测试并发创建/重命名，已有文件内容不得改变。 |
+| P1 | 文件请求只有前端 30 秒超时，服务端 `fileRequests` 没有对应截止时间。设备不响应且页面保持连接时，失败请求持续累积。 | `web/ui/lib/file-tree-rpc.ts:35`；`internal/server/files.go:312`、`closeFileSocket`、`forwardFileOpResult` | 路由增加设备、截止时间和容量限制；超时/断线立即清理并返回稳定错误码。测试无响应设备、重复刷新和迟到响应。 |
+| P2 | 设备列表的单次 fetch 无应用层超时；请求挂起时 `inFlight` 一直为 true，轮询和 SSE 更新只设置 dirty，无法恢复加载。 | `web/ui/lib/devices.tsx:52`；`web/ui/lib/api.ts:46` | 每次刷新增加 AbortController 和截止时间，卸载取消，保留已加载列表。模拟永不返回的请求，验证后续刷新可以恢复。 |
+| P2 | 自动化锁按整个会话设置；同时对不同设备操作也会返回 busy。跨会话访问同一设备的协调则需要一起审查，不能简单删除锁。 | `internal/server/agent_automation.go:84` | 按实际资源划分租约：桌面 device、浏览器 session/target。保留同资源输入顺序、人工输入中断和取消释放，验证跨设备并行及同资源互斥。 |
+| P2 | 旧客户端没有文件操作能力声明，重命名/删除菜单仍可点，最终等待超时。 | `internal/protocol/protocol.go` 的设备能力、`file-tree-rpc.ts`、`docs/file-workspace.md` | 增加 files capabilities 和稳定 unsupported 错误，UI 按能力显示菜单并提示升级；建立 Go/Rust/Android/旧版客户端契约矩阵。 |
+
+## 性能与交互改进
+
+1. **大目录分页重复扫描。** Rust `list_entries` 每页都遍历、读取所有条目元信息并排序，然后截取当前页。树请求按 200 条连续拉页，N 条目录会重复约 ceil(N/200) 次全量工作。建议有界、带版本的短期目录快照/游标，并在变更后失效；先记录 1k/10k/100k 条目延迟和内存基线再选策略。
+2. **文件树大小写判断过于保守。** 新建文件当前统一小写比较，在区分大小写的 Linux 目录中会拒绝合法的 `Foo`/`foo`。应把判定交给原子创建接口，而不是按客户端 OS 猜测文件系统语义。
+3. **首屏资源值得分析。** 本次构建主 JS 约 594.59 kB（gzip 186.50 kB），Agent 路由约 242.27 kB（gzip 70.30 kB）。部分语法语言块较大，但它们是分块资源，不能把其大小直接算作首屏加载。建议先测实际网络请求、解析时间和移动端长任务，再拆共享依赖。
+4. **页面职责集中。** Agent 约 3,078 行、Desktop 约 2,897 行、Files 约 1,784 行。优先抽离连接/请求状态机和设备资源生命周期，保留 BB 展示组件；按行为逐步迁移，避免仅把文件切碎。
+5. **Git fallback 取消链不完整。** `internal/client/git_fallback.go` 的 UploadPack/ReceivePack 使用 `context.TODO()`。建议连接取消贯穿快照构建和 pack 工作，并补断线后后台工作退出测试。
+6. **视觉验收补齐端到端矩阵。** 此轮主要是源码与构建检查。后续应覆盖明暗主题、窄屏、键盘/触控、离线重连，以及右侧文件/桌面/终端隐藏恢复。不能用 jsdom 测试替代真实浏览器布局和输入法验收。
+
+## 本次已修复
+
+文件分隔线拖动时原本每个 pointermove 都调用同步 sessionStorage.setItem。现在仍实时更新 CSS 分割比例，但仅在拖动结束/取消/丢失捕获时保存一次；键盘调整仍即时保存。新增测试检查多次移动零写入、结束一次写入和重复结束幂等。
+
+## 验证
+
+- `go test ./...`：通过。
+- `go vet ./...`：通过。
+- `bun run typecheck`：通过。
+- 前端完整基线：94 个测试文件、347 项通过。
+- 分隔线修改后的定向测试：4 项通过，包含新增持久化次数测试。
+- `bun run build`：通过；存在大 chunk 提示。
+
+本次没有发布服务端或客户端。建议执行顺序：文件原子性与上传互斥 → 请求回收/能力协商 → 自动化资源锁 → 大目录与首屏性能 → 页面状态机拆分。

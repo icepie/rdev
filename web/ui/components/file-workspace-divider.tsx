@@ -12,7 +12,17 @@ export function FileWorkspaceDivider({
   const ref = useRef<HTMLButtonElement>(null);
   const drag = useRef(false);
   const ratio = useRef(35);
-  const apply = (value: number) => {
+  const persist = () => {
+    try {
+      sessionStorage.setItem(storageKey, String(ratio.current));
+    } catch {}
+  };
+  const finishDrag = () => {
+    if (!drag.current) return;
+    drag.current = false;
+    persist();
+  };
+  const apply = (value: number, save = true) => {
     ratio.current = Math.max(20, Math.min(75, value));
     ref.current?.parentElement?.style.setProperty(
       "--file-tree-split",
@@ -22,9 +32,7 @@ export function FileWorkspaceDivider({
       "aria-valuenow",
       String(Math.round(ratio.current)),
     );
-    try {
-      sessionStorage.setItem(storageKey, String(ratio.current));
-    } catch {}
+    if (save) persist();
   };
   useEffect(() => {
     let value = axis === "x" ? 30 : 45;
@@ -57,18 +65,16 @@ export function FileWorkspaceDivider({
           apply(
             ((axis === "x" ? e.clientX - r.left : e.clientY - r.top) / size) *
               100,
+            false,
           );
       }}
       onPointerUp={(e) => {
-        drag.current = false;
-        e.currentTarget.releasePointerCapture(e.pointerId);
+        finishDrag();
+        if (e.currentTarget.hasPointerCapture(e.pointerId))
+          e.currentTarget.releasePointerCapture(e.pointerId);
       }}
-      onPointerCancel={() => {
-        drag.current = false;
-      }}
-      onLostPointerCapture={() => {
-        drag.current = false;
-      }}
+      onPointerCancel={finishDrag}
+      onLostPointerCapture={finishDrag}
       onKeyDown={(e) => {
         if (
           ["ArrowLeft", "ArrowUp", "ArrowRight", "ArrowDown"].includes(e.key)

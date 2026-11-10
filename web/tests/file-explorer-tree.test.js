@@ -56,3 +56,26 @@ it('persists divider changes per workspace and restores the default on another d
   await renderDivider('one');
   expect(document.querySelector('button').getAttribute('aria-valuenow')).toBe('32');
 });
+
+it('updates the divider live but persists only once when dragging finishes', async () => {
+  await act(async()=>root.render(createElement('div',null,createElement(FileWorkspaceDivider,{storageKey:'drag',label:'Resize'}))));
+  const divider = document.querySelector('button');
+  divider.setPointerCapture = () => {};
+  divider.hasPointerCapture = () => false;
+  divider.parentElement.getBoundingClientRect = () => ({left:0,top:0,width:100,height:100});
+  const save = vi.spyOn(dom.window.Storage.prototype, 'setItem');
+  const pointer = (type,x) => {
+    const event = new window.Event(type,{bubbles:true});
+    Object.defineProperties(event,{pointerId:{value:1},clientX:{value:x},clientY:{value:0}});
+    return act(async()=>divider.dispatchEvent(event));
+  };
+  await pointer('pointerdown',30);
+  for (const x of [35,40,45,50]) await pointer('pointermove',x);
+  expect(divider.parentElement.style.getPropertyValue('--file-tree-split')).toBe('50%');
+  expect(save).not.toHaveBeenCalled();
+  await pointer('pointerup',50);
+  await pointer('lostpointercapture',50);
+  expect(save).toHaveBeenCalledTimes(1);
+  expect(sessionStorage.getItem('drag')).toBe('50');
+  save.mockRestore();
+});
