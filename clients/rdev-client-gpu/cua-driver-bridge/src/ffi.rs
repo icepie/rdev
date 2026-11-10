@@ -89,7 +89,7 @@ pub extern "C" fn rdev_cua_supported() -> bool {
 }
 
 #[cfg(not(feature = "cua-native"))]
-fn futures_unavailable<F, T>(_future: F) -> Result<T, anyhow::Error> {
+fn futures_unavailable<F>(_future: F) -> Result<serde_json::Value, anyhow::Error> {
     Err(anyhow::anyhow!("native CUA is unsupported on this build"))
 }
 
