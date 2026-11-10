@@ -46,6 +46,8 @@ Windows release CI builds amd64 on Linux with GCC MinGW and the `x86_64-pc-windo
 
 On Windows-hosted builds, FFmpeg's archive response files are written by GNU make's `$(file ...)`, not a shell `echo`, to avoid Windows command-length limits. The required patch fails the dependency setup if it no longer applies.
 
+The native video wrapper includes POSIX string helpers only for VAAPI and uses Windows CRT file-descriptor APIs on Windows, so MSVC builds do not require POSIX compatibility headers.
+
 The optional Linux cross-build script for Windows ARM64 requires a Rust toolchain providing `aarch64-pc-windows-gnullvm` (not the release CI target) and LLVM MinGW providing `aarch64-w64-mingw32-clang`:
 
 ```bash

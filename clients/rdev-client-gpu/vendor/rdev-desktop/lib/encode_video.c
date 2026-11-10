@@ -1,8 +1,14 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef HAS_VAAPI
 #include <strings.h>
+#endif
+#ifdef _WIN32
+#include <io.h>
+#else
 #include <unistd.h>
+#endif
 #include <errno.h>
 
 #include <libavcodec/avcodec.h>
@@ -1370,7 +1376,13 @@ static void free_drm_prime_desc(void* opaque, uint8_t* data)
 	for (int i = 0; i < desc->nb_objects && i < AV_DRM_MAX_PLANES; i++)
 	{
 		if (desc->objects[i].fd >= 0)
+		{
+#ifdef _WIN32
+			_close(desc->objects[i].fd);
+#else
 			close(desc->objects[i].fd);
+#endif
+		}
 	}
 	av_free(desc);
 }
