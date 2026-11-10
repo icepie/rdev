@@ -309,15 +309,16 @@ jobs:
           tar -xf /tmp/llvm-mingw.tar.xz -C /opt/llvm-mingw --strip-components=1
           echo /opt/llvm-mingw/bin >> "$GITHUB_PATH"
           if [ '${{ matrix.target }}' = 'x86_64-pc-windows-gnu' ]; then
+            sudo apt-get install -y gcc-mingw-w64-x86-64-posix g++-mingw-w64-x86-64-posix
             {
-              echo 'CC_x86_64_pc_windows_gnu=x86_64-w64-mingw32-clang'
-              echo 'CXX_x86_64_pc_windows_gnu=x86_64-w64-mingw32-clang++'
-              echo 'AR_x86_64_pc_windows_gnu=llvm-ar'
-              echo 'MINGW_GCC=x86_64-w64-mingw32-clang'
-              echo 'RDEV_MINGW_CC=x86_64-w64-mingw32-clang'
-              echo 'RDEV_MINGW_CXX=x86_64-w64-mingw32-clang++'
+              echo 'CC_x86_64_pc_windows_gnu=/usr/bin/x86_64-w64-mingw32-gcc-posix'
+              echo 'CXX_x86_64_pc_windows_gnu=/usr/bin/x86_64-w64-mingw32-g++-posix'
+              echo 'AR_x86_64_pc_windows_gnu=/usr/bin/x86_64-w64-mingw32-ar'
+              echo 'MINGW_GCC=/usr/bin/x86_64-w64-mingw32-gcc-posix'
+              echo 'RDEV_MINGW_CC=/usr/bin/x86_64-w64-mingw32-gcc-posix'
+              echo 'RDEV_MINGW_CXX=/usr/bin/x86_64-w64-mingw32-g++-posix'
               echo 'RDEV_MINGW_CRT=msvcrt'
-              echo 'CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-clang'
+              echo 'CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=/usr/bin/x86_64-w64-mingw32-gcc-posix'
             } >> "$GITHUB_ENV"
           elif [ '${{ matrix.target }}' = 'x86_64-pc-windows-gnullvm' ]; then
             {
@@ -505,10 +506,18 @@ jobs:
               aarch64-*) runtime_arch="aarch64" ;;
               *) runtime_arch="x86_64" ;;
             esac
-            runtime_dir="/opt/llvm-mingw/${runtime_arch}-w64-mingw32/bin"
-            for dll in libunwind.dll libc++.dll libwinpthread-1.dll; do
-              [ -f "$runtime_dir/$dll" ] && cp "$runtime_dir/$dll" "dist/${{ matrix.asset }}/"
-            done
+            if [ "${{ matrix.target }}" = 'x86_64-pc-windows-gnu' ]; then
+              for dll in libgcc_s_seh-1.dll libstdc++-6.dll libwinpthread-1.dll; do
+                runtime_dll="$(/usr/bin/x86_64-w64-mingw32-g++-posix -print-file-name="$dll")"
+                test -f "$runtime_dll"
+                cp "$runtime_dll" "dist/${{ matrix.asset }}/"
+              done
+            else
+              runtime_dir="/opt/llvm-mingw/${runtime_arch}-w64-mingw32/bin"
+              for dll in libunwind.dll libc++.dll libwinpthread-1.dll; do
+                [ -f "$runtime_dir/$dll" ] && cp "$runtime_dir/$dll" "dist/${{ matrix.asset }}/"
+              done
+            fi
             "dist/${{ matrix.asset }}/rdev-client-gpu.exe" --version > "dist/${{ matrix.asset }}/VERSION.txt" || true
             (cd dist && python3 -m zipfile -c "${{ matrix.asset }}.zip" "${{ matrix.asset }}")
           else
