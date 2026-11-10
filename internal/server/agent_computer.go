@@ -114,6 +114,10 @@ func (t *computerTool) Execute(ctx context.Context, raw json.RawMessage) (string
 	if err != nil {
 		return "", err
 	}
+	bound := *t
+	bound.automationTool = t.forResource("desktop:" + client.ID)
+	t = &bound
+
 	if a.Action == "native_tools" || a.Action == "native" {
 		if client.Desktop != nil && client.Desktop.NativeCua {
 			return t.executeNativeCua(ctx, client, a, raw)

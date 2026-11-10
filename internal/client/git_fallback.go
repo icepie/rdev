@@ -72,10 +72,15 @@ func (w nopWriteCloser) Close() error { return nil }
 func (c *Client) startGitFallbackSession(sess *clientSession, cmd gitSmartCommand) (*clientSession, error) {
 	pr, pw := io.Pipe()
 	sess.stdinPipe = pw
+	ctx, cancel := context.WithCancel(context.Background())
+	sess.cancelExec = cancel
+	stopClosing := context.AfterFunc(ctx, func() { _ = pr.CloseWithError(ctx.Err()) })
 
 	go func() {
+		defer cancel()
+		defer stopClosing()
 		exitCode := 0
-		if err := c.serveGitFallback(cmd, pr, newCoalescingWriter(c, sess.id, protocol.BinData), newCoalescingWriter(c, sess.id, protocol.BinStderr)); err != nil {
+		if err := c.serveGitFallback(ctx, cmd, pr, newCoalescingWriter(c, sess.id, protocol.BinData), newCoalescingWriter(c, sess.id, protocol.BinStderr)); err != nil {
 			exitCode = 1
 			c.sendBinary(protocol.BinStderr, sess.id, []byte("rdev git fallback: "+err.Error()+"\n"))
 		}
@@ -88,23 +93,23 @@ func (c *Client) startGitFallbackSession(sess *clientSession, cmd gitSmartComman
 	return sess, nil
 }
 
-func (c *Client) serveGitFallback(cmd gitSmartCommand, stdin io.Reader, stdout io.Writer, stderr io.Writer) error {
+func (c *Client) serveGitFallback(ctx context.Context, cmd gitSmartCommand, stdin io.Reader, stdout io.Writer, stderr io.Writer) error {
 	switch cmd.Name {
 	case "git-upload-pack":
-		session, cleanup, err := newGitUploadPackSession(cmd.Path)
+		session, cleanup, err := newGitUploadPackSession(ctx, cmd.Path)
 		if cleanup != nil {
 			defer cleanup()
 		}
 		if err != nil {
 			return err
 		}
-		return serveUploadPack(stdin, nopWriteCloser{stdout}, session)
+		return serveUploadPack(ctx, stdin, nopWriteCloser{stdout}, session)
 	case "git-receive-pack":
 		session, err := newGitReceivePackSession(cmd.Path)
 		if err != nil {
 			return err
 		}
-		return serveReceivePack(stdin, nopWriteCloser{stdout}, session)
+		return serveReceivePack(ctx, stdin, nopWriteCloser{stdout}, session)
 	case "git-upload-archive":
 		return errors.New("git-upload-archive is not supported without system git")
 	default:
@@ -112,7 +117,7 @@ func (c *Client) serveGitFallback(cmd gitSmartCommand, stdin io.Reader, stdout i
 	}
 }
 
-func newGitUploadPackSession(path string) (transport.UploadPackSession, func(), error) {
+func newGitUploadPackSession(ctx context.Context, path string) (transport.UploadPackSession, func(), error) {
 	repo, err := git.PlainOpenWithOptions(path, &git.PlainOpenOptions{DetectDotGit: true, EnableDotGitCommonDir: true})
 	if err == nil {
 		session, err := newUploadPackSessionFromRepo(repo, path)
@@ -128,7 +133,7 @@ func newGitUploadPackSession(path string) (transport.UploadPackSession, func(), 
 	}
 	cleanup := func() { os.RemoveAll(tmp) }
 	barePath := filepath.Join(tmp, "snapshot.git")
-	if err := buildDirectorySnapshotRepo(path, barePath); err != nil {
+	if err := buildDirectorySnapshotRepo(ctx, path, barePath); err != nil {
 		cleanup()
 		return nil, nil, err
 	}
@@ -183,7 +188,10 @@ func loaderKey(path string) string {
 	return filepath.ToSlash(path)
 }
 
-func buildDirectorySnapshotRepo(src, dst string) error {
+func buildDirectorySnapshotRepo(ctx context.Context, src, dst string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	info, err := os.Stat(src)
 	if err != nil {
 		return err
@@ -206,7 +214,7 @@ func buildDirectorySnapshotRepo(src, dst string) error {
 	}
 
 	stats := &snapshotStats{}
-	if err := copySnapshotTree(src, workDir, stats); err != nil {
+	if err := copySnapshotTree(ctx, src, workDir, stats); err != nil {
 		return err
 	}
 	if _, err := wt.Add("."); err != nil {
@@ -222,7 +230,7 @@ func buildDirectorySnapshotRepo(src, dst string) error {
 	if err != nil {
 		return err
 	}
-	_, err = git.PlainClone(dst, true, &git.CloneOptions{URL: workDir})
+	_, err = git.PlainCloneContext(ctx, dst, true, &git.CloneOptions{URL: workDir})
 	return err
 }
 
@@ -231,8 +239,11 @@ type snapshotStats struct {
 	size  int64
 }
 
-func copySnapshotTree(src, dst string, stats *snapshotStats) error {
+func copySnapshotTree(ctx context.Context, src, dst string, stats *snapshotStats) error {
 	return filepath.WalkDir(src, func(path string, entry os.DirEntry, err error) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if err != nil {
 			return err
 		}
@@ -271,11 +282,11 @@ func copySnapshotTree(src, dst string, stats *snapshotStats) error {
 		if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
 			return err
 		}
-		return copyFile(path, target, info.Mode().Perm())
+		return copyFile(ctx, path, target, info.Mode().Perm())
 	})
 }
 
-func copyFile(src, dst string, mode os.FileMode) error {
+func copyFile(ctx context.Context, src, dst string, mode os.FileMode) error {
 	in, err := os.Open(src)
 	if err != nil {
 		return err
@@ -285,7 +296,7 @@ func copyFile(src, dst string, mode os.FileMode) error {
 	if err != nil {
 		return err
 	}
-	_, copyErr := io.Copy(out, in)
+	_, copyErr := io.Copy(out, gitContextReader{ctx, in})
 	closeErr := out.Close()
 	if copyErr != nil {
 		return copyErr
@@ -293,9 +304,10 @@ func copyFile(src, dst string, mode os.FileMode) error {
 	return closeErr
 }
 
-func serveUploadPack(stdin io.Reader, stdout io.WriteCloser, session transport.UploadPackSession) (err error) {
+func serveUploadPack(ctx context.Context, stdin io.Reader, stdout io.WriteCloser, session transport.UploadPackSession) (err error) {
+	defer session.Close()
 	defer stdout.Close()
-	ar, err := session.AdvertisedReferences()
+	ar, err := session.AdvertisedReferencesContext(ctx)
 	if err != nil {
 		return err
 	}
@@ -306,15 +318,16 @@ func serveUploadPack(stdin io.Reader, stdout io.WriteCloser, session transport.U
 	if err := req.Decode(stdin); err != nil {
 		return err
 	}
-	resp, err := session.UploadPack(context.TODO(), req)
+	resp, err := session.UploadPack(ctx, req)
 	if err != nil {
 		return err
 	}
 	return resp.Encode(stdout)
 }
 
-func serveReceivePack(stdin io.Reader, stdout io.WriteCloser, session transport.ReceivePackSession) error {
-	ar, err := session.AdvertisedReferences()
+func serveReceivePack(ctx context.Context, stdin io.Reader, stdout io.WriteCloser, session transport.ReceivePackSession) error {
+	defer session.Close()
+	ar, err := session.AdvertisedReferencesContext(ctx)
 	if err != nil {
 		return fmt.Errorf("internal error in advertised references: %s", err)
 	}
@@ -325,7 +338,7 @@ func serveReceivePack(stdin io.Reader, stdout io.WriteCloser, session transport.
 	if err := req.Decode(stdin); err != nil {
 		return fmt.Errorf("error decoding: %s", err)
 	}
-	report, err := session.ReceivePack(context.TODO(), req)
+	report, err := session.ReceivePack(ctx, req)
 	if report != nil {
 		if encErr := report.Encode(stdout); encErr != nil {
 			return fmt.Errorf("error in encoding report status %s", encErr)
@@ -335,4 +348,16 @@ func serveReceivePack(stdin io.Reader, stdout io.WriteCloser, session transport.
 		return fmt.Errorf("error in receive pack: %s", err)
 	}
 	return nil
+}
+
+type gitContextReader struct {
+	ctx    context.Context
+	reader io.Reader
+}
+
+func (r gitContextReader) Read(p []byte) (int, error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return r.reader.Read(p)
 }

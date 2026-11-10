@@ -1,6 +1,7 @@
 // Runs inside Chrome's native inspector, sharing its existing CDP connection.
 // Only rdev's parent frame may control the preview layout.
 let app;
+let resize;
 let showTools = false;
 let visible = false;
 let activating;
@@ -44,6 +45,7 @@ window.addEventListener("message", async event => {
       if (!target) throw new Error('Page unavailable');
       const result = await target.emulationAgent().invoke_setDeviceMetricsOverride({width,height,deviceScaleFactor:1,mobile:false});
       if (result.getError?.()) throw new Error(result.getError());
+      resize?.set({width,height});
       notify({type:"rdev-browser-viewport-applied",width,height});
     } catch { notify({type:"rdev-browser-viewport-error"}); }
   }
@@ -70,6 +72,8 @@ try {
   app.onScreencastEnabledChanged();
   const { installBrowserInput } = await import("./rdev-input.js");
   installBrowserInput(app, notify);
+  const { installBrowserResize } = await import("./rdev-resize.js");
+  resize = installBrowserResize(app, notify);
   reveal();
   notify({ type: "rdev-browser-ready" });
 } catch {

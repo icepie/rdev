@@ -18,6 +18,7 @@ import type { TreeEntry } from "../lib/file-tree-rpc";
 type Operation = "mkdir" | "rename" | "delete" | "newFile";
 type Props = {
   entries: TreeEntry[];
+  operations?: string[];
   selected?: string;
   load: (path: string) => Promise<TreeEntry[]>;
   onOpen: (path: string) => void;
@@ -200,22 +201,26 @@ function Branch({
               {entry.isDir && (
                 <>
                   <ContextMenuItem
+                    disabled={!props.operations?.includes("mkdir")}
                     onSelect={() => props.mutate("mkdir", entry)}
                   >
                     {props.t("files.newFolder")}
                   </ContextMenuItem>
                   <ContextMenuItem
+                    disabled={!props.operations?.includes("create")}
                     onSelect={() => props.mutate("newFile", entry)}
                   >
                     {props.t("files.newFile")}
                   </ContextMenuItem>
                 </>
               )}
-              <ContextMenuItem onSelect={() => props.mutate("rename", entry)}>
+              <ContextMenuItem disabled={!props.operations?.includes(entry.isDir ? "rename_directory" : "rename")}
+                onSelect={() => props.mutate("rename", entry)}>
                 {props.t("files.rename")}
               </ContextMenuItem>
               <ContextMenuItem
                 className="text-destructive-text"
+                disabled={!props.operations?.includes("delete")}
                 onSelect={() => props.mutate("delete", entry)}
               >
                 {props.t("files.delete")}
@@ -349,18 +354,10 @@ export function FileExplorer(
       setError(props.t("files.invalidName"));
       return;
     }
+    const capability = operation.op === "newFile" ? "create" : operation.op === "rename" && operation.entry.isDir ? "rename_directory" : operation.op;
+    if (!props.operations?.includes(capability)) { setError(props.t("files.updateClient")); return; }
     setBusy(true);
     try {
-      if (operation.op === "newFile") {
-        const existing = await props.load(operation.entry.path);
-        if (
-          existing.some(
-            (entry) =>
-              entry.name.toLocaleLowerCase() === name.toLocaleLowerCase(),
-          )
-        )
-          throw new Error(props.t("files.nameExists"));
-      }
       await props.onOperation(operation.op, operation.entry, name);
       setRevision((n) => n + 1);
       setOperation(null);
@@ -386,6 +383,7 @@ export function FileExplorer(
             variant="ghost"
             className="size-7"
             aria-label={props.t("files.newFolder")}
+            disabled={!props.operations?.includes("mkdir")}
             onClick={() =>
               mutate("mkdir", {
                 path: props.path,
@@ -398,6 +396,7 @@ export function FileExplorer(
           </Button>
         )}
       </div>
+      {props.onOperation && !props.operations?.length && <p role="status" className="px-2 py-1 text-xs text-muted-foreground">{props.t("files.updateClient")}</p>}
       {error && !operation && (
         <p role="alert" className="px-2 text-xs text-destructive-text">
           {error}

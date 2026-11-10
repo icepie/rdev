@@ -50,6 +50,10 @@ pub enum MessageType {
     FileDelete,
     #[serde(rename = "file_delete_result")]
     FileDeleteResult,
+    #[serde(rename = "file_create")]
+    FileCreate,
+    #[serde(rename = "file_create_result")]
+    FileCreateResult,
     #[serde(rename = "file_rename")]
     FileRename,
     #[serde(rename = "file_rename_result")]
@@ -169,6 +173,8 @@ pub struct Message {
     pub file_entries: Vec<FileEntry>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub desktop: Option<DesktopCapabilities>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub file_operations: Vec<String>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub error: String,
 }

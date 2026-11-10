@@ -214,6 +214,7 @@ type Client struct {
 	forwardOpen     map[string]chan struct{}
 	listeners       map[string]net.Listener
 	fileStreams     map[string]*fileStream
+	fileListings    fileListingCache
 	uploadMu        sync.Mutex // upload maps; never held during file I/O
 	uploadPaths     map[string]*managedUpload
 	uploads         map[string]*managedUpload
@@ -402,6 +403,7 @@ func (h *wsEventHandler) OnOpen(socket *gws.Conn) {
 		ClientOS:            runtime.GOOS,
 		Password:            h.client.password,
 		DesktopCapabilities: desktopCapabilities(),
+		FileOperations:      []string{"create", "mkdir", "delete", "rename", "rename_directory"},
 		ConfinedDownloads:   true,
 	}); err != nil {
 		log.Printf("register send error: %v", err)
@@ -806,6 +808,7 @@ func (c *Client) connectStream(kind, endpoint string) error {
 		ClientOS:            runtime.GOOS,
 		Password:            c.password,
 		DesktopCapabilities: desktopCapabilities(),
+		FileOperations:      []string{"create", "mkdir", "delete", "rename", "rename_directory"},
 		ConfinedDownloads:   true,
 	}); err != nil {
 		conn.Close()
@@ -928,8 +931,8 @@ func (c *Client) handleMessage(msg *protocol.Message) {
 		c.handleTCPListen(msg)
 	case protocol.MsgTCPClose:
 		c.handleTCPClose(msg)
-	case protocol.MsgFileDelete, protocol.MsgFileRename:
-		go func() { c.send(mutateFileEntry(msg)) }()
+	case protocol.MsgFileCreate, protocol.MsgFileDelete, protocol.MsgFileRename:
+		go func() { response := mutateFileEntry(msg); c.fileListings.invalidate(); c.send(response) }()
 	case protocol.MsgFileMkdir:
 		go c.handleFileMkdir(msg)
 	case protocol.MsgFileListRequest:
@@ -994,7 +997,9 @@ func fileParent(path string) string {
 }
 
 func (c *Client) handleFileMkdir(msg *protocol.Message) {
-	c.send(createFileDirectory(msg))
+	response := createFileDirectory(msg)
+	c.fileListings.invalidate()
+	c.send(response)
 }
 
 func createFileDirectory(msg *protocol.Message) *protocol.Message {
@@ -1021,7 +1026,7 @@ func (c *Client) handleFileListRequest(msg *protocol.Message) {
 		limit = 2000
 	}
 	offset := max(msg.Offset, 0)
-	entries, total, err := listFileEntries(path, offset, int(limit))
+	entries, total, err := c.fileListings.list(path, offset, int(limit))
 	if err != nil {
 		c.send(&protocol.Message{Type: protocol.MsgFileListResult, RequestID: msg.RequestID, Path: path, Error: err.Error()})
 		return

@@ -31,7 +31,17 @@ func mutateFileEntry(msg *protocol.Message) *protocol.Message {
 			} else if !os.IsNotExist(err) {
 				return err
 			}
-			return os.Rename(source, dest)
+			return renameFileNoReplace(source, dest)
+		}
+		if msg.Type == protocol.MsgFileCreate {
+			if strings.TrimSpace(msg.Path) == "" {
+				return fmt.Errorf("path is required")
+			}
+			f, err := os.OpenFile(msg.Path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0644)
+			if err != nil {
+				return err
+			}
+			return f.Close()
 		}
 		if strings.TrimSpace(msg.Path) == "" {
 			return fmt.Errorf("path is required")

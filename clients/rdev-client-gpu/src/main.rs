@@ -277,6 +277,9 @@ async fn run_once(
         client_version: version::client_version(),
         password: args.password.clone(),
         desktop: Some(desktop::capabilities(!args.no_desktop && desktop_enabled)),
+        file_operations: ["create", "mkdir", "delete", "rename", "rename_directory"]
+            .map(str::to_owned)
+            .to_vec(),
         ..Default::default()
     };
     write
@@ -458,6 +461,9 @@ async fn run_once_stream(
         client_version: version::client_version(),
         password: args.password.clone(),
         desktop: Some(desktop::capabilities(!args.no_desktop && desktop_enabled)),
+        file_operations: ["create", "mkdir", "delete", "rename", "rename_directory"]
+            .map(str::to_owned)
+            .to_vec(),
         ..Default::default()
     };
     stream_frame::write_frame(
@@ -584,7 +590,7 @@ async fn handle_text(
                 forwards.close_forward(&msg.forward_id).await;
             }
         }
-        Some(MessageType::FileDelete | MessageType::FileRename) => {
+        Some(MessageType::FileCreate | MessageType::FileDelete | MessageType::FileRename) => {
             let files = files.clone();
             let out_tx = out_tx.clone();
             modules.files.spawn(async move {

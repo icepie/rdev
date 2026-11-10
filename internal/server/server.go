@@ -91,6 +91,7 @@ type ClientConn struct {
 	Password          string
 	Sessions          map[string]*ProxySession
 	Forwards          map[string]*ProxyForward
+	FileOperations    []string
 	Desktop           *protocol.DesktopCapabilities
 	ConfinedDownloads bool
 	writeMu           sync.Mutex
@@ -575,7 +576,7 @@ type Server struct {
 	revForwards        map[string]*ReverseForward
 	revMu              sync.RWMutex
 	fileResults        map[string]chan *protocol.Message
-	fileRequests       map[string]*fileSocket
+	fileRequests       map[string]*fileRequestRoute
 	fileTasks          map[string]*fileTaskRoute
 	mediaMu            sync.Mutex
 	mediaGrants        map[string]mediaGrant
@@ -651,7 +652,7 @@ func NewServer() *Server {
 		forwards:          make(map[string]*ProxyForward),
 		revForwards:       make(map[string]*ReverseForward),
 		fileResults:       make(map[string]chan *protocol.Message),
-		fileRequests:      make(map[string]*fileSocket),
+		fileRequests:      make(map[string]*fileRequestRoute),
 		fileTasks:         make(map[string]*fileTaskRoute),
 		agentFileReqs:     make(map[string]chan *protocol.Message),
 		agentFileTasks:    make(map[string]*agentFileTask),
@@ -688,6 +689,7 @@ type wsHandler struct {
 }
 
 func closeClientResources(s *Server, client *ClientConn) {
+	s.failClientFileRequests(client)
 	client.mu.Lock()
 	defer client.mu.Unlock()
 	for sid, sess := range client.Sessions {
@@ -830,6 +832,7 @@ func (h *wsHandler) handleRegister(socket *gws.Conn, msg *protocol.Message) {
 		ConnectedAt:       time.Now(),
 		Password:          msg.Password,
 		Desktop:           cloneDesktopCapabilities(msg.DesktopCapabilities),
+		FileOperations:    append([]string(nil), msg.FileOperations...),
 		ConfinedDownloads: msg.ConfinedDownloads,
 		Sessions:          make(map[string]*ProxySession),
 		Forwards:          make(map[string]*ProxyForward),
@@ -1148,6 +1151,7 @@ func (s *Server) registerStreamClient(transport DeviceTransport, msg *protocol.M
 		ConnectedAt:       time.Now(),
 		Password:          msg.Password,
 		Desktop:           cloneDesktopCapabilities(msg.DesktopCapabilities),
+		FileOperations:    append([]string(nil), msg.FileOperations...),
 		ConfinedDownloads: msg.ConfinedDownloads,
 		Sessions:          make(map[string]*ProxySession),
 		Forwards:          make(map[string]*ProxyForward),
@@ -1269,8 +1273,8 @@ func (s *Server) handleClientMessage(client *ClientConn, msg *protocol.Message) 
 	case protocol.MsgFileResult:
 		s.handleFileResult(msg)
 	case protocol.MsgFileListResult, protocol.MsgFileUploadReady, protocol.MsgFileDownloadStart, protocol.MsgFileTransferEnd, protocol.MsgFileTransferError,
-		"file_stat_result", "file_mkdir_result", "file_delete_result", "file_rename_result", "file_copy_result":
-		s.handleFileManagerMessage(msg)
+		"file_create_result", "file_stat_result", "file_mkdir_result", "file_delete_result", "file_rename_result", "file_copy_result":
+		s.handleFileManagerMessage(msg, client.ID)
 	case protocol.MsgDesktopReady, protocol.MsgDesktopClose, protocol.MsgDesktopClipboard, protocol.MsgDesktopCuaResult:
 		s.handleDesktopMessage(msg)
 	}
@@ -1526,18 +1530,19 @@ func (s *Server) HandleAPI(w http.ResponseWriter, r *http.Request) {
 	defer s.mu.RUnlock()
 
 	type clientInfo struct {
-		ID          string                        `json:"id"`
-		RequestedID string                        `json:"requestedId,omitempty"`
-		InstanceID  string                        `json:"instanceId,omitempty"`
-		Version     string                        `json:"version,omitempty"`
-		OS          string                        `json:"os,omitempty"`
-		ConnectedAt string                        `json:"connectedAt"`
-		Sessions    int                           `json:"sessions"`
-		Forwards    int                           `json:"forwards"`
-		HasPassword bool                          `json:"hasPassword"`
-		Password    string                        `json:"password,omitempty"`
-		Desktop     *protocol.DesktopCapabilities `json:"desktop,omitempty"`
-		GPUDesktop  bool                          `json:"gpuDesktop,omitempty"`
+		ID             string                        `json:"id"`
+		RequestedID    string                        `json:"requestedId,omitempty"`
+		InstanceID     string                        `json:"instanceId,omitempty"`
+		Version        string                        `json:"version,omitempty"`
+		OS             string                        `json:"os,omitempty"`
+		ConnectedAt    string                        `json:"connectedAt"`
+		Sessions       int                           `json:"sessions"`
+		Forwards       int                           `json:"forwards"`
+		HasPassword    bool                          `json:"hasPassword"`
+		Password       string                        `json:"password,omitempty"`
+		FileOperations []string                      `json:"fileOperations,omitempty"`
+		Desktop        *protocol.DesktopCapabilities `json:"desktop,omitempty"`
+		GPUDesktop     bool                          `json:"gpuDesktop,omitempty"`
 	}
 
 	/* ?passwords=1 includes each device's access password: the endpoint is
@@ -1552,17 +1557,18 @@ func (s *Server) HandleAPI(w http.ResponseWriter, r *http.Request) {
 		f := len(c.Forwards)
 		c.mu.Unlock()
 		info := clientInfo{
-			ID:          c.ID,
-			RequestedID: c.RequestedID,
-			InstanceID:  c.InstanceID,
-			Version:     c.Version,
-			OS:          clientOS(c),
-			ConnectedAt: c.ConnectedAt.Format(time.RFC3339),
-			Sessions:    n,
-			Forwards:    f,
-			HasPassword: c.Password != "",
-			Desktop:     cloneDesktopCapabilities(c.Desktop),
-			GPUDesktop:  s.clientGPUDesktopAvailable(c),
+			ID:             c.ID,
+			RequestedID:    c.RequestedID,
+			InstanceID:     c.InstanceID,
+			Version:        c.Version,
+			OS:             clientOS(c),
+			ConnectedAt:    c.ConnectedAt.Format(time.RFC3339),
+			Sessions:       n,
+			Forwards:       f,
+			HasPassword:    c.Password != "",
+			Desktop:        cloneDesktopCapabilities(c.Desktop),
+			FileOperations: c.FileOperations,
+			GPUDesktop:     s.clientGPUDesktopAvailable(c),
 		}
 		if includePasswords {
 			info.Password = c.Password
@@ -2097,27 +2103,29 @@ func (s *Server) HandleTerminalAPI(w http.ResponseWriter, r *http.Request) {
 	defer s.mu.RUnlock()
 
 	type deviceInfo struct {
-		ID          string                        `json:"id"`
-		RequestedID string                        `json:"requestedId,omitempty"`
-		ConnectedAt string                        `json:"connectedAt"`
-		Version     string                        `json:"version,omitempty"`
-		OS          string                        `json:"os,omitempty"`
-		HasPassword bool                          `json:"hasPassword"`
-		Desktop     *protocol.DesktopCapabilities `json:"desktop,omitempty"`
-		GPUDesktop  bool                          `json:"gpuDesktop,omitempty"`
+		ID             string                        `json:"id"`
+		RequestedID    string                        `json:"requestedId,omitempty"`
+		ConnectedAt    string                        `json:"connectedAt"`
+		Version        string                        `json:"version,omitempty"`
+		OS             string                        `json:"os,omitempty"`
+		HasPassword    bool                          `json:"hasPassword"`
+		FileOperations []string                      `json:"fileOperations,omitempty"`
+		Desktop        *protocol.DesktopCapabilities `json:"desktop,omitempty"`
+		GPUDesktop     bool                          `json:"gpuDesktop,omitempty"`
 	}
 
 	devices := make([]deviceInfo, 0, len(s.clients))
 	for _, c := range s.clients {
 		devices = append(devices, deviceInfo{
-			ID:          c.ID,
-			RequestedID: c.RequestedID,
-			ConnectedAt: c.ConnectedAt.Format(time.RFC3339),
-			Version:     c.Version,
-			OS:          clientOS(c),
-			HasPassword: c.Password != "",
-			Desktop:     cloneDesktopCapabilities(c.Desktop),
-			GPUDesktop:  s.clientGPUDesktopAvailable(c),
+			ID:             c.ID,
+			RequestedID:    c.RequestedID,
+			ConnectedAt:    c.ConnectedAt.Format(time.RFC3339),
+			Version:        c.Version,
+			OS:             clientOS(c),
+			HasPassword:    c.Password != "",
+			Desktop:        cloneDesktopCapabilities(c.Desktop),
+			FileOperations: c.FileOperations,
+			GPUDesktop:     s.clientGPUDesktopAvailable(c),
 		})
 	}
 

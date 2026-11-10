@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -13,6 +14,7 @@ import (
 )
 
 type fileMsg struct {
+	Code       string               `json:"code,omitempty"`
 	Content    string               `json:"content,omitempty"`
 	PreviewURL string               `json:"previewUrl,omitempty"`
 	Encoding   string               `json:"encoding,omitempty"`
@@ -118,7 +120,10 @@ func (s *Server) closeFileSocket(fs *fileSocket) {
 	tasks := make(map[string]string)
 	s.fileMu.Lock()
 	for id, owner := range s.fileRequests {
-		if owner == fs {
+		if owner.socket == fs {
+			if owner.timer != nil {
+				owner.timer.Stop()
+			}
 			delete(s.fileRequests, id)
 		}
 	}
@@ -183,7 +188,7 @@ func (h *filesWSHandler) OnMessage(socket *gws.Conn, message *gws.Message) {
 		h.forwardTaskControl(fs, msg, protocol.MsgFileUploadEnd)
 	case "download_start":
 		h.handleDownloadStart(fs, msg)
-	case "stat", "mkdir", "delete", "rename", "move", "copy":
+	case "create", "stat", "mkdir", "delete", "rename", "move", "copy":
 		h.handleFileOp(fs, msg)
 	case "cancel":
 		h.handleCancel(fs, msg)
@@ -249,9 +254,10 @@ func (h *filesWSHandler) handleList(socket *fileSocket, msg fileMsg) {
 	if !ok {
 		return
 	}
-	h.srv.fileMu.Lock()
-	h.srv.fileRequests[msg.RequestID] = socket
-	h.srv.fileMu.Unlock()
+	if err := h.srv.registerFileRequest(msg.RequestID, socket, msg.DeviceID); err != nil {
+		socket.writeText(fileMsg{Op: "error", Code: "busy", RequestID: msg.RequestID, DeviceID: msg.DeviceID, Message: err.Error()})
+		return
+	}
 	if msg.Limit <= 0 {
 		msg.Limit = 200
 	}
@@ -308,9 +314,14 @@ func (h *filesWSHandler) handleFileOp(socket *fileSocket, msg fileMsg) {
 	if !ok {
 		return
 	}
-	h.srv.fileMu.Lock()
-	h.srv.fileRequests[msg.RequestID] = socket
-	h.srv.fileMu.Unlock()
+	if !slices.Contains(client.FileOperations, msg.Op) {
+		socket.writeText(fileMsg{Op: "error", Code: "unsupported", RequestID: msg.RequestID, DeviceID: msg.DeviceID, Message: "update this device's client to enable this file operation"})
+		return
+	}
+	if err := h.srv.registerFileRequest(msg.RequestID, socket, msg.DeviceID); err != nil {
+		socket.writeText(fileMsg{Op: "error", Code: "busy", RequestID: msg.RequestID, DeviceID: msg.DeviceID, Message: err.Error()})
+		return
+	}
 	typ := protocol.MessageType("file_" + msg.Op)
 	if err := client.Send(&protocol.Message{Type: typ, RequestID: msg.RequestID, Path: msg.Path, ParentPath: msg.ParentPath, Name: msg.Name, Success: msg.Recursive, Data: msg.From, FilePath: msg.To}); err != nil {
 		h.srv.removeFileRequest(msg.RequestID)
@@ -393,24 +404,19 @@ func (s *Server) removeFileTask(taskID string) {
 	s.fileMu.Unlock()
 }
 
-func (s *Server) removeFileRequest(requestID string) {
-	s.fileMu.Lock()
-	delete(s.fileRequests, requestID)
-	s.fileMu.Unlock()
-}
-
-func (s *Server) handleFileManagerMessage(msg *protocol.Message) {
+func (s *Server) handleFileManagerMessage(msg *protocol.Message, devices ...string) {
+	device := ""
+	if len(devices) > 0 {
+		device = devices[0]
+	}
 	if s.routeAgentFileMsg(msg) {
 		return
 	}
 	switch msg.Type {
 	case protocol.MsgFileListResult:
-		s.fileMu.Lock()
-		socket := s.fileRequests[msg.RequestID]
-		delete(s.fileRequests, msg.RequestID)
-		s.fileMu.Unlock()
-		if socket != nil {
-			socket.writeText(fileMsg{
+		route := s.takeFileRequest(msg.RequestID, device)
+		if route != nil {
+			route.socket.writeText(fileMsg{
 				Op:        "list_result",
 				RequestID: msg.RequestID,
 				Path:      msg.Path,
@@ -429,16 +435,18 @@ func (s *Server) handleFileManagerMessage(msg *protocol.Message) {
 		if route := s.getFileTask(msg.TaskID); route != nil {
 			route.socket.writeText(fileMsg{Op: "upload_ready", TaskID: msg.TaskID, Path: msg.Path, Offset: msg.Offset, Size: msg.Size})
 		}
+	case "file_create_result":
+		s.forwardFileOpResult(msg, "create_result", device)
 	case "file_stat_result":
-		s.forwardFileOpResult(msg, "stat_result")
+		s.forwardFileOpResult(msg, "stat_result", device)
 	case "file_mkdir_result":
-		s.forwardFileOpResult(msg, "mkdir_result")
+		s.forwardFileOpResult(msg, "mkdir_result", device)
 	case "file_delete_result":
-		s.forwardFileOpResult(msg, "delete_result")
+		s.forwardFileOpResult(msg, "delete_result", device)
 	case "file_rename_result":
-		s.forwardFileOpResult(msg, "rename_result")
+		s.forwardFileOpResult(msg, "rename_result", device)
 	case "file_copy_result":
-		s.forwardFileOpResult(msg, "copy_result")
+		s.forwardFileOpResult(msg, "copy_result", device)
 	case protocol.MsgFileDownloadStart:
 		if route := s.getFileTask(msg.TaskID); route != nil {
 			route.socket.writeText(fileMsg{Op: "download_start", TaskID: msg.TaskID, Path: msg.Path, Name: msg.Name, Size: msg.Size, Offset: msg.Offset, Length: msg.Length, ModTime: msg.ModTime})
@@ -456,19 +464,16 @@ func (s *Server) handleFileManagerMessage(msg *protocol.Message) {
 	}
 }
 
-func (s *Server) forwardFileOpResult(msg *protocol.Message, op string) {
-	s.fileMu.Lock()
-	socket := s.fileRequests[msg.RequestID]
-	delete(s.fileRequests, msg.RequestID)
-	s.fileMu.Unlock()
-	if socket == nil {
+func (s *Server) forwardFileOpResult(msg *protocol.Message, op, device string) {
+	route := s.takeFileRequest(msg.RequestID, device)
+	if route == nil {
 		return
 	}
 	var entry *protocol.FileEntry
 	if len(msg.FileEntries) > 0 {
 		entry = &msg.FileEntries[0]
 	}
-	socket.writeText(fileMsg{Op: op, RequestID: msg.RequestID, Path: msg.Path, Success: msg.Success, Error: msg.Error, Message: msg.Error, Entry: entry})
+	route.socket.writeText(fileMsg{DeviceID: route.device, Op: op, RequestID: msg.RequestID, Path: msg.Path, Success: msg.Success, Error: msg.Error, Message: msg.Error, Entry: entry})
 }
 
 func (s *Server) handleFileManagerBinary(raw []byte) bool {

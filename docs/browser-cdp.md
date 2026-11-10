@@ -97,10 +97,13 @@ The new operations publish through the existing conversation-scoped automation e
 
 Validation: DOM behavior tests plus real Chrome integration for route isolation, fill/click/select/hover, delayed elements, wait cancellation and recovery, and invalid option rejection. These tests use local fixtures, not arbitrary production websites.
 
-## Step replay and viewport controls
+## Viewport controls
 
-The Agent browser panel now shows a conversation/device-scoped interaction timeline, success/failure, timestamps and execution durations. Selecting a step displays its bounded JPEG preview and original viewport dimensions; **Back to live** returns to the existing inspector. Replay never sends input or re-executes a tool, and the live iframe remains mounted underneath an inert overlay. Closing/hiding the panel and switching conversations do not discard the server history. Auth/reconnect/thread-switch snapshots restore the ring without putting screenshots into the LLM transcript.
+Preview controls provide width/height inputs and common dimensions. Right, bottom
+and corner grips sit directly on the preview surface, like DevTools device mode.
+Dragging accounts for the current preview scale and changes the remote viewport
+through the existing CDP connection, bounded to 240–3840 by 240–2160 CSS pixels.
+Dimensions are retained per target in sessionStorage without capability URLs.
 
-The server keeps at most 200 records and 50 previews per conversation, each preview at most 12 KiB before base64 encoding. This is an in-memory ring, not a durable recording: server restart, session reset/deletion or session eviction clears it. Metadata excludes entered text and URLs; screenshots still depict visible page content. Captures are best effort with a 1.5-second budget, taken before releasing the conversation operation lock so a later Agent operation cannot be mistaken for the recorded step. Read-only queries do not generate timeline noise. Capture failure does not fail the operation.
-
-Preview controls provide width/height inputs, common dimensions and a bottom-right drag handle (also operable with arrow keys). Bounds are 240–3840 by 240–2160 CSS pixels. Changes are debounced and sent through the inspector's existing CDP session using `Emulation.setDeviceMetricsOverride`, with device scale factor 1 and no mobile user-agent/touch emulation. Per-target dimensions are kept in sessionStorage without storing capability URLs. Preview resizing changes the remote page viewport rather than stretching an image. Agent snapshots and subsequent replay frames see the same dimensions. Replay does not apply a historical size to the live page.
+Step replay has been removed, including timeline UI, thumbnail collection,
+server history caches and protocol fields. Explicit screenshot requests remain.

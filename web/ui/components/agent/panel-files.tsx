@@ -1,6 +1,7 @@
+import { useDevices } from "../../lib/devices";
 import { FileExplorer } from "../file-explorer";
 import { FileWorkspaceDivider } from "../file-workspace-divider";
-import { createFileTreeRPC } from "../../lib/file-tree-rpc";
+import { fileTreeMutation, createFileTreeRPC } from "../../lib/file-tree-rpc";
 import { FilePreview } from "./file-preview";
 import type { FilePreviewState } from "./types";
 import { readFilePreviewReply } from "../../lib/file-preview-reply";
@@ -192,6 +193,7 @@ export function PanelFiles({
   const taskStorageRef = useRef(taskStorageKey);
   taskStorageRef.current = taskStorageKey;
   const [pathInput, setPathInput] = useState("");
+  const { devices } = useDevices();
   const [entries, setEntries] = useState<FileEntry[]>([]);
   const [treeRevision, setTreeRevision] = useState(0);
   const [listView, setListView] = useState<ListView>({
@@ -1083,11 +1085,11 @@ export function PanelFiles({
       <div className="agent-file-editor relative min-h-0 flex-1" data-file-preview={!!preview}>
         <div className="agent-file-tree flex min-h-0 flex-col overflow-hidden">
           {listView.pageError&&<p role="alert" className="px-2 py-1 text-xs text-destructive-text">{listView.pageError}</p>}
-          <FileExplorer refreshKey={treeRevision} key={JSON.stringify([device,currentPathRef.current])} stateKey={taskStorageKey} path={currentPathRef.current} entries={entries} loading={listView.notice===t("common.connecting")} notice={listView.notice} selected={preview?.path} load={loadTreeDirectory} onOpen={openPreview} onNavigate={list} t={t}
+          <FileExplorer operations={devices.find(d=>d.id===device)?.fileOperations??[]} refreshKey={treeRevision} key={JSON.stringify([device,currentPathRef.current])} stateKey={taskStorageKey} path={currentPathRef.current} entries={entries} loading={listView.notice===t("common.connecting")} notice={listView.notice} selected={preview?.path} load={loadTreeDirectory} onOpen={openPreview} onNavigate={list} t={t}
             onDownload={entry=>startDownload(entry.path,entry.name,entry.size||0)}
             onOperation={async(op,entry,name)=>{
-              if(op==='newFile'){startUpload(new File([],name),{device,path:entry.path});return;}
-              await treeRPC.current!.request(device,op,{path:entry.path,...(op==='mkdir'?{path:entry.path.replace(/[\\/]$/,'')+'/'+name}:{}),...(op==='rename'?{from:entry.path,to:entry.path.replace(/[^\\/]+$/,'')+name}:{}),...(op==='delete'?{recursive:!!entry.isDir}:{})});
+              const mutation = fileTreeMutation(op, entry, name);
+              await treeRPC.current!.request(device, mutation.op, mutation.args);
               list(currentPathRef.current);
             }}/>
           {listView.truncated&&<Button variant="ghost" size="sm" onClick={()=>list(currentPathRef.current,true)}>{t('files.loadMore')}</Button>}

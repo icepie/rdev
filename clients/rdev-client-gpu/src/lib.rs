@@ -3,6 +3,7 @@ pub mod desktop;
 pub mod desktop_env;
 pub mod fileput;
 pub mod files;
+mod file_rename;
 pub mod forward;
 pub mod gpu_tunnel;
 pub mod identity;

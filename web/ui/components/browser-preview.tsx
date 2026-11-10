@@ -1,4 +1,4 @@
-import { dragBrowserViewport, loadBrowserViewport, viewportStorageKey } from "./browser-viewport";
+import { validBrowserViewport, loadBrowserViewport, viewportStorageKey } from "./browser-viewport";
 import { Input } from "./input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./select";
 import { useEffect, useRef, useState } from "react";
@@ -27,7 +27,6 @@ export function BrowserPreview({ src, visible = true }: { src: string; visible?:
   const [viewport, setViewport] = useState(() => loadBrowserViewport(src));
   const viewportRef = useRef(viewport);
   viewportRef.current = viewport;
-  const dragRef = useRef<{x:number;y:number;width:number;height:number} | null>(null);
   const [showTools, setShowTools] = useState(false);
   const [ready, setReady] = useState(false);
   const [error, setError] = useState("");
@@ -44,6 +43,8 @@ export function BrowserPreview({ src, visible = true }: { src: string; visible?:
         frameRef.current?.contentWindow?.postMessage({type:"rdev-browser-viewport", ...viewportRef.current},location.origin);
         frameRef.current?.contentWindow?.postMessage({ type: "rdev-browser-visible", visible: visibleRef.current }, location.origin);
         frameRef.current?.contentWindow?.postMessage({ type: "rdev-browser-tools", visible: toolsRef.current }, location.origin);
+      } else if (event.data?.type === "rdev-browser-resize" && validBrowserViewport(event.data)) {
+        setViewport({width:event.data.width,height:event.data.height});
       } else if (event.data?.type === "rdev-browser-viewport-error") {
         setError(t("browser.resizeFailed"));
       } else if (event.data?.type === "rdev-browser-viewport-applied") {
@@ -91,7 +92,6 @@ export function BrowserPreview({ src, visible = true }: { src: string; visible?:
     {error && <p role="alert" className="shrink-0 px-3 py-2 text-xs text-destructive-text">{error}</p>}
     <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
     <iframe ref={frameRef} title={t("browser.preview")} src={`${src}&rdevPreview=1`} referrerPolicy="no-referrer" className="min-h-0 min-w-0 w-full flex-1 border-0" allow="clipboard-read; clipboard-write" />
-      <button type="button" aria-label={t("browser.dragResize")} title={t("browser.dragResize")} className="absolute bottom-0 right-0 z-10 size-7 touch-none cursor-nwse-resize rounded-tl border border-border-seam bg-background text-muted-foreground" onPointerDown={e=>{e.currentTarget.setPointerCapture(e.pointerId);dragRef.current={x:e.clientX,y:e.clientY,...viewportRef.current};}} onPointerMove={e=>{const start=dragRef.current;if(start)setViewport(dragBrowserViewport(start,e.clientX-start.x,e.clientY-start.y));}} onPointerUp={e=>{dragRef.current=null;e.currentTarget.releasePointerCapture(e.pointerId);}} onPointerCancel={()=>{dragRef.current=null;}} onLostPointerCapture={()=>{dragRef.current=null;}} onKeyDown={e=>{const delta=e.shiftKey?100:10;if(['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(e.key)){e.preventDefault();setViewport(v=>dragBrowserViewport(v,e.key==='ArrowLeft'?-delta:e.key==='ArrowRight'?delta:0,e.key==='ArrowUp'?-delta:e.key==='ArrowDown'?delta:0));}}}>↘</button>
     </div>
   </div>;
 }

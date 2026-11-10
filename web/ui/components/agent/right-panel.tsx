@@ -1,5 +1,4 @@
 import { SecondaryPanelContentSkeleton } from "../loading-skeletons";
-import type { BrowserActionRecord } from "./browser-history";
 import { createAutomationRevealTracker, type AutomationView } from "./automation";
 import { useServerCapabilities } from "../../lib/server-capabilities";
 import { BrowserPanel } from "../browser-panel";
@@ -734,17 +733,11 @@ export function AgentRightPanel({
   openFileSignal,
   openDiffSignal,
   automation,
-  browserHistory,
-  browserReplayId,
-  onBrowserReplay,
   panelFull,
   onSetDock,
   onToggleFull,
 }: {
   automation?: AutomationView | null;
-  browserHistory?: BrowserActionRecord[];
-  browserReplayId?: string;
-  onBrowserReplay?: (id: string) => void;
   changes: ChangesState | null;
   /* Per-path get_diff replies, keyed by file path; missing = not fetched. */
   diffs: Record<string, DiffState>;
@@ -1349,7 +1342,7 @@ export function AgentRightPanel({
                   onOpenFile={target === info.device ? openFileTab : undefined} />
               ) : tab.kind === "browser" ? (
                 <div className="flex min-h-0 flex-1 flex-col">
-                  <BrowserPanel key={threadKey + target} replayId={browserReplayId} onReplay={onBrowserReplay} history={browserHistory?.filter(row => row.device === target)} device={target} deviceSelection="sidebar" automation={linkedAutomation(tab)} visible={visible && active === tabId(tab)} />
+                  <BrowserPanel key={threadKey + target} device={target} deviceSelection="sidebar" automation={linkedAutomation(tab)} visible={visible && active === tabId(tab)} />
                 </div>
               ) : (
                 <div className="flex min-h-0 flex-1 flex-col">

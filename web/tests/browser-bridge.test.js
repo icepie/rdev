@@ -19,11 +19,12 @@ it("defaults to preview only and restricts parent controls to the same origin", 
   parent, location: { origin: "https://rdev.test" },
   window: { addEventListener: (name, listener) => { if (name === "message") receive = listener; } },
   document: { addEventListener: (name, listener) => { documentListeners[name] = listener; }, visibilityState: "visible", getElementById: () => ({ remove() {} }) }, setTimeout,
+  loadResize: async () => ({ installBrowserResize: () => ({set:vi.fn()}) }),
   loadInput: async () => ({ installBrowserInput: vi.fn() }),
   loadScreencast: async () => ({ ScreencastApp: { ScreencastApp: { instance: () => app } } }),
  };
  // Replace only module loading; exercise the shipped bridge's event contract.
- await vm.runInNewContext(`(async () => {${original.replace('import("./panels/screencast/screencast.js")', 'loadScreencast()').replace('import("./rdev-input.js")', 'loadInput()')}})()`, context);
+ await vm.runInNewContext(`(async () => {${original.replace('import("./panels/screencast/screencast.js")', 'loadScreencast()').replace('import("./rdev-input.js")', 'loadInput()').replace('import("./rdev-resize.js")', 'loadResize()')}})()`, context);
  expect(app.rootSplitWidget.hideSidebar).toHaveBeenCalledOnce();
  expect(app.rootSplitWidget.showBoth).not.toHaveBeenCalled();
  const send = data => receive({ origin: context.location.origin, source: parent, data });

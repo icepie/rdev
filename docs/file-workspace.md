@@ -38,9 +38,9 @@ The standalone Files workspace and Agent Files panel now share the same tree:
 folder-first natural sorting, lazy loading, keyboard navigation, loaded-name
 filtering, and context menus for copying paths, download, rename and delete.
 Folder menus offer new files/folders. Expanded folders and selection are retained
-per device/workspace/root in session storage. New-file creation checks the current
-directory for name collisions before starting the normal upload; concurrent writes
-from other applications still follow the existing upload replacement semantics.
+per device/workspace/root in session storage. New-file creation uses an exclusive create operation, so concurrent creators cannot
+overwrite an existing file. Rename uses native no-replace semantics on Go, Rust
+and Android clients. File-system case sensitivity is respected.
 
 Desktop tree/preview dividers support pointer and keyboard resizing and retain
 their split per workspace. Narrow standalone panes show either tree or preview;
@@ -53,5 +53,11 @@ can be opened directly and paged using Load more.
 Rename/delete require the updated Go or Rust client; Android already supports the
 protocol, and now rejects root mutation and existing rename destinations and does
 not follow final symlinks during deletion. Update these clients with the server/UI.
-Old clients without mutation support return a request timeout. Recursive deletion
+Registration advertises supported file operations; unsupported actions are disabled
+and the server rejects them immediately. Outstanding requests have a 25-second
+deadline, bounded counts and device/disconnection isolation. Recursive deletion
 requires explicit confirmation and does not use a recycle bin.
+
+Directory pagination reuses short-lived snapshots (10 seconds, eight directories,
+32 MiB total per client). First-page requests refresh the snapshot; local mutations
+invalidate it. Rust and Android uploads reject concurrent writers to one path.

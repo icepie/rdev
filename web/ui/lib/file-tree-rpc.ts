@@ -113,3 +113,16 @@ export function createFileTreeRPC(
   };
   return { request, accept, cancel };
 }
+
+export type FileTreeOperation = 'mkdir' | 'rename' | 'delete' | 'newFile';
+/** Shared wire contract for standalone and Agent file trees. */
+export function fileTreeMutation(operation: FileTreeOperation, entry: TreeEntry, name: string) {
+  const separator = entry.path.includes('\\') ? '\\' : '/';
+  const child = entry.path.replace(/[\\/]$/, '') + separator + name;
+  switch (operation) {
+    case 'newFile': return { op: 'create', args: { path: child } };
+    case 'mkdir': return { op: 'mkdir', args: { path: child } };
+    case 'rename': return { op: 'rename', args: { path: entry.path, from: entry.path, to: entry.path.replace(/[^\\/]+$/, '') + name } };
+    case 'delete': return { op: 'delete', args: { path: entry.path, recursive: !!entry.isDir } };
+  }
+}

@@ -67,6 +67,10 @@ func (t *autojsTool) Execute(ctx context.Context, raw json.RawMessage) (string, 
 	if err != nil {
 		return "", err
 	}
+	bound := *t
+	bound.automationTool = t.forResource("desktop:" + client.ID)
+	t = &bound
+
 	if client.OS != "android" && (client.Desktop == nil || client.Desktop.Platform != "android") {
 		return "", fmt.Errorf("autojs requires an Android device")
 	}

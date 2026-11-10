@@ -41,3 +41,28 @@ it("refreshes on presence events, coalesces an in-flight change and closes its s
     host.remove(); delete globalThis.IS_REACT_ACT_ENVIRONMENT;
   }
 });
+
+it("aborts stalled refreshes, recovers on the next poll, and cancels on unmount", async () => {
+  vi.useFakeTimers();
+  globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  vi.stubGlobal('EventSource', undefined);
+  const signals=[];
+  const stall = signal => new Promise((_,reject)=>{
+    signals.push(signal);
+    signal.addEventListener('abort',()=>reject(signal.reason),{once:true});
+  });
+  api.fetchDevices.mockReset().mockImplementationOnce(stall).mockResolvedValueOnce([{id:'recovered'}]).mockImplementation(stall);
+  let state;
+  function Consumer(){state=useDevices();return null;}
+  const root=createRoot(document.createElement('div'));
+  try {
+    await act(async()=>root.render(createElement(DevicesProvider,null,createElement(Consumer))));
+    await act(async()=>vi.advanceTimersByTimeAsync(15000));
+    expect(signals[0].aborted).toBe(true);
+    expect(state.devices.map(d=>d.id)).toEqual(['recovered']);
+    await act(async()=>state.refresh());
+    expect(state.devices.map(d=>d.id)).toEqual(['recovered']);
+    await act(async()=>root.unmount());
+    expect(signals.at(-1).aborted).toBe(true);
+  } finally { vi.useRealTimers(); delete globalThis.IS_REACT_ACT_ENVIRONMENT; }
+});

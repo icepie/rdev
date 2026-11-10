@@ -4,6 +4,7 @@ import android.os.Environment;
 import android.system.Os;
 import android.system.OsConstants;
 import android.system.ErrnoException;
+import org.autojs.autojs.model.explorer.PrivilegedFileNative;
 import android.util.Log;
 
 import org.json.JSONArray;
@@ -19,6 +20,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Date;
 import java.util.List;
+import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
 import java.util.TimeZone;
@@ -29,6 +31,7 @@ final class AndroidFileManager {
     private static final int LIST_LIMIT = 200;
     private static final int CHUNK_SIZE = 16 * 1024;
     private final RDevAgentService service;
+    private final Map<String, DirectorySnapshot> directoryCache = new LinkedHashMap<>();
     private final Map<String, Upload> uploads = new ConcurrentHashMap<>();
     private final Map<String, Download> downloads = new ConcurrentHashMap<>();
 
@@ -42,13 +45,8 @@ final class AndroidFileManager {
         File dir = new File(path);
         Log.i(TAG, "list start request=" + requestId + " path=" + path);
         try {
-            File[] files = dir.listFiles();
-            if (files == null) throw new IOException("cannot list directory");
-            Arrays.sort(files, (a, b) -> {
-                if (a.isDirectory() != b.isDirectory()) return a.isDirectory() ? -1 : 1;
-                return a.getName().compareToIgnoreCase(b.getName());
-            });
             int offset = Math.max(0, msg.optInt("offset", 0));
+            File[] files = cachedDirectory(dir, offset);
             int limit = msg.has("limit") ? msg.optInt("limit", LIST_LIMIT) : (msg.optLong("size", 0) > 0 ? (int) msg.optLong("size", LIST_LIMIT) : LIST_LIMIT);
             limit = Math.max(1, Math.min(LIST_LIMIT, limit));
             boolean truncated = files.length > offset + limit;
@@ -81,7 +79,7 @@ final class AndroidFileManager {
         }
     }
 
-    void handleUploadStart(JSONObject msg) {
+    synchronized void handleUploadStart(JSONObject msg) {
         String taskId = msg.optString("taskId", "");
         Log.i(TAG, "upload start task=" + taskId + " path=" + msg.optString("path", "") + " parent=" + msg.optString("parentPath", "") + " name=" + msg.optString("name", ""));
         if (taskId.length() == 0) return;
@@ -96,7 +94,15 @@ final class AndroidFileManager {
             File target = new File(path);
             File parent = target.getParentFile();
             if (parent != null && !parent.exists() && !parent.mkdirs()) throw new IOException("mkdir failed: " + parent);
+            if (uploads.containsKey(taskId)) throw new IOException("upload already active for this task");
+            for (Upload active : uploads.values()) {
+                if (active.target.equals(target)) throw new IOException("upload already active for this destination");
+            }
             File part = new File(path + ".rdevpart");
+            long expected = msg.optLong("size", -1);
+            if (expected >= 0 && part.length() > expected) {
+                try (FileOutputStream reset = new FileOutputStream(part, false)) { reset.getFD().sync(); }
+            }
             FileOutputStream out = new FileOutputStream(part, true);
             long offset = part.length();
             Upload old = uploads.put(taskId, new Upload(target, part, out, msg.optLong("size", -1), offset));
@@ -112,7 +118,7 @@ final class AndroidFileManager {
         }
     }
 
-    void handleUploadChunk(String taskId, long offset, byte[] data) {
+    synchronized void handleUploadChunk(String taskId, long offset, byte[] data) {
         Upload upload = uploads.get(taskId);
         if (upload == null) {
             sendError(taskId, "", "upload not found");
@@ -128,7 +134,7 @@ final class AndroidFileManager {
         }
     }
 
-    void handleUploadEnd(JSONObject msg) {
+    synchronized void handleUploadEnd(JSONObject msg) {
         String taskId = msg.optString("taskId", "");
         Upload upload = uploads.remove(taskId);
         if (upload == null) {
@@ -141,6 +147,7 @@ final class AndroidFileManager {
             if (upload.size >= 0 && upload.offset != upload.size) throw new IOException("size mismatch: wrote " + upload.offset + " of " + upload.size);
             if (upload.target.exists() && !upload.target.delete()) throw new IOException("replace failed: " + upload.target);
             if (!upload.part.renameTo(upload.target)) throw new IOException("rename failed: " + upload.part);
+            synchronized (directoryCache) { directoryCache.clear(); }
             service.sendText(new JSONObject()
                 .put("type", "file_transfer_end")
                 .put("taskId", taskId)
@@ -175,6 +182,18 @@ final class AndroidFileManager {
                 .put("entries", new JSONArray().put(entry(new File(path)))));
         } catch (Exception e) {
             sendOpResult("file_stat_result", requestId, path, false, e.getMessage());
+        }
+    }
+
+    void handleCreate(JSONObject msg) {
+        String requestId = msg.optString("requestId", "");
+        String path = msg.optString("path", "");
+        try {
+            File target = mutationTarget(path);
+            if (!target.createNewFile()) throw new IOException("destination already exists");
+            sendOpResult("file_create_result", requestId, target.getPath(), true, "");
+        } catch (Exception e) {
+            sendOpResult("file_create_result", requestId, path, false, e.getMessage());
         }
     }
 
@@ -214,7 +233,8 @@ final class AndroidFileManager {
             if (existsWithoutFollowing(target)) throw new IOException("destination already exists");
             File parent = target.getParentFile();
             if (parent != null && !parent.exists() && !parent.mkdirs()) throw new IOException("mkdir failed: " + parent);
-            if (!source.renameTo(target)) throw new IOException("rename failed");
+            int errno = PrivilegedFileNative.renameNoReplace(source.getPath(), target.getPath());
+            if (errno != 0) throw new ErrnoException("renameat2", errno);
             sendOpResult("file_rename_result", requestId, target.getAbsolutePath(), true, "");
         } catch (Exception e) {
             sendOpResult("file_rename_result", requestId, from, false, e.getMessage());
@@ -238,14 +258,14 @@ final class AndroidFileManager {
         }
     }
 
-    void cancel(String taskId) {
+    synchronized void cancel(String taskId) {
         Upload upload = uploads.remove(taskId);
         if (upload != null) upload.close();
         Download download = downloads.remove(taskId);
         if (download != null) download.cancelled = true;
     }
 
-    void closeAll() {
+    synchronized void closeAll() {
         List<String> ids = new ArrayList<>(uploads.keySet());
         ids.addAll(downloads.keySet());
         for (String id : ids) cancel(id);
@@ -302,6 +322,49 @@ final class AndroidFileManager {
         }
     }
 
+    private static final class DirectorySnapshot {
+        final File[] files;
+        final long modified, at, bytes;
+        DirectorySnapshot(File[] files, long modified, long bytes) {
+            this.files = files; this.modified = modified; this.bytes = bytes;
+            this.at = android.os.SystemClock.elapsedRealtime();
+        }
+    }
+
+    private File[] cachedDirectory(File dir, int offset) throws IOException {
+        String path = dir.getCanonicalPath();
+        long now = android.os.SystemClock.elapsedRealtime();
+        long modified = dir.lastModified();
+        synchronized (directoryCache) {
+            directoryCache.entrySet().removeIf(entry -> now - entry.getValue().at >= 10000);
+            DirectorySnapshot snapshot = directoryCache.get(path);
+            if (offset > 0 && snapshot != null && snapshot.modified == modified) return snapshot.files;
+        }
+        File[] files = dir.listFiles();
+        if (files == null) throw new IOException("cannot list directory");
+        Map<File, Boolean> directories = new java.util.HashMap<>();
+        long bytes = 0;
+        for (File file : files) { directories.put(file, file.isDirectory()); bytes += file.getPath().length() * 2L + 96; }
+        Arrays.sort(files, (a, b) -> {
+            if (!directories.get(a).equals(directories.get(b))) return directories.get(a) ? -1 : 1;
+            int order = a.getName().compareToIgnoreCase(b.getName());
+            return order != 0 ? order : a.getName().compareTo(b.getName());
+        });
+        synchronized (directoryCache) {
+            directoryCache.remove(path);
+            if (bytes <= 32 * 1024 * 1024 && dir.lastModified() == modified) {
+                long total = bytes;
+                for (DirectorySnapshot snapshot : directoryCache.values()) total += snapshot.bytes;
+                while (!directoryCache.isEmpty() && (directoryCache.size() >= 8 || total > 32 * 1024 * 1024)) {
+                    String oldest = directoryCache.keySet().iterator().next();
+                    total -= directoryCache.remove(oldest).bytes;
+                }
+                directoryCache.put(path, new DirectorySnapshot(files, modified, bytes));
+            }
+        }
+        return files;
+    }
+
     private JSONObject entry(File file) throws Exception {
         return new JSONObject()
             .put("name", file.getName())
@@ -352,6 +415,7 @@ final class AndroidFileManager {
     }
 
     private void sendOpResult(String type, String requestId, String path, boolean success, String error) {
+        if (success) { synchronized (directoryCache) { directoryCache.clear(); } }
         try {
             JSONObject out = new JSONObject()
                 .put("type", type)

@@ -55,7 +55,7 @@ func receiveFileFrame[T any](t *testing.T, ch <-chan T) T {
 func TestFileSocketsNamespaceTasksAndRequests(t *testing.T) {
 	deviceMessages := make(chan *protocol.Message, 32)
 	tr := &fileNamespaceTransport{fakeDeviceTransport: fakeDeviceTransport{onSend: func(m *protocol.Message) { deviceMessages <- m }}, frames: make(chan []byte, 16)}
-	srv := &Server{clients: map[string]*ClientConn{"dev": {ID: "dev", Transport: tr}}, fileRequests: make(map[string]*fileSocket), fileTasks: make(map[string]*fileTaskRoute)}
+	srv := &Server{clients: map[string]*ClientConn{"dev": {ID: "dev", Transport: tr}}, fileRequests: make(map[string]*fileRequestRoute), fileTasks: make(map[string]*fileTaskRoute)}
 	server := httptest.NewServer(http.HandlerFunc(srv.HandleFilesWS))
 	defer server.Close()
 	connect := func() (*gws.Conn, *fileNamespaceRecorder) {

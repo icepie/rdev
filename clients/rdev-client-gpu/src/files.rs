@@ -2,8 +2,11 @@ use anyhow::{anyhow, Result};
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
-    time::SystemTime,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex,
+    },
+    time::{Duration, Instant, SystemTime},
 };
 use tokio::{
     fs::{self, File, OpenOptions},
@@ -32,8 +35,20 @@ struct UploadState {
 #[derive(Clone, Default)]
 pub struct FileManager {
     uploads: Arc<Mutex<HashMap<String, UploadState>>>,
+    upload_gate: Arc<tokio::sync::Mutex<()>>,
     downloads: Arc<Mutex<HashMap<String, DownloadHandle>>>,
+    listings: Arc<Mutex<HashMap<PathBuf, DirectorySnapshot>>>,
+    listing_generation: Arc<AtomicU64>,
 }
+
+struct DirectorySnapshot {
+    entries: Arc<Vec<FileEntry>>,
+    modified: Option<SystemTime>,
+    at: Instant,
+    bytes: usize,
+}
+const DIRECTORY_CACHE_BYTES: usize = 32 * 1024 * 1024;
+const DIRECTORY_CACHE_TTL: Duration = Duration::from_secs(10);
 
 #[derive(Debug)]
 struct DownloadHandle {
@@ -43,11 +58,18 @@ struct DownloadHandle {
 }
 
 impl FileManager {
+    fn invalidate_listings(&self) {
+        let mut cache = self.listings.lock().unwrap();
+        self.listing_generation.fetch_add(1, Ordering::Relaxed);
+        cache.clear();
+    }
+
     pub fn new() -> Self {
         Self::default()
     }
 
     pub async fn mutate(&self, msg: Message, outbound: mpsc::Sender<OutboundEvent>) {
+        let create = matches!(msg.ty, Some(MessageType::FileCreate));
         let rename = matches!(msg.ty, Some(MessageType::FileRename));
         let result: Result<()> = async {
             if msg.path.trim().is_empty() {
@@ -61,7 +83,13 @@ impl FileManager {
             let parent = fs::canonicalize(parent).await?;
             let name = path.file_name().ok_or_else(|| anyhow!("invalid path"))?;
             let path = parent.join(name);
-            if rename {
+            if create {
+                OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&path)
+                    .await?;
+            } else if rename {
                 if msg.file_path.trim().is_empty() {
                     return Err(anyhow!("destination is required"));
                 }
@@ -70,7 +98,7 @@ impl FileManager {
                     Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
                     Err(e) => return Err(e.into()),
                 }
-                fs::rename(&path, &msg.file_path).await?;
+                crate::file_rename::no_replace(&path, Path::new(&msg.file_path))?;
             } else {
                 let meta = fs::symlink_metadata(&path).await?;
                 if meta.is_dir() {
@@ -86,8 +114,11 @@ impl FileManager {
             Ok(())
         }
         .await;
+        self.invalidate_listings();
         let response = Message {
-            ty: Some(if rename {
+            ty: Some(if create {
+                MessageType::FileCreateResult
+            } else if rename {
                 MessageType::FileRenameResult
             } else {
                 MessageType::FileDeleteResult
@@ -110,6 +141,7 @@ impl FileManager {
         } else {
             fs::create_dir_all(&msg.path).await
         };
+        self.invalidate_listings();
         let response = Message {
             ty: Some(MessageType::FileMkdirResult),
             request_id: msg.request_id,
@@ -130,7 +162,7 @@ impl FileManager {
             msg.size.min(2000)
         };
         let offset = msg.offset.max(0);
-        let result = list_entries(&path, offset, limit as usize).await;
+        let result = self.list_page(&path, offset, limit as usize).await;
         let response = match result {
             Ok((entries, total)) => Message {
                 ty: Some(MessageType::FileListResult),
@@ -190,8 +222,10 @@ impl FileManager {
         data: Vec<u8>,
         outbound: mpsc::Sender<OutboundEvent>,
     ) {
+        let _gate = self.upload_gate.lock().await;
         let state = self.uploads.lock().unwrap().remove(task_id);
         let Some(mut state) = state else {
+            drop(_gate);
             send_transfer_error(
                 &outbound,
                 task_id,
@@ -216,6 +250,7 @@ impl FileManager {
                     .lock()
                     .unwrap()
                     .insert(task_id.to_string(), state);
+                drop(_gate);
                 let _ = outbound
                     .send(OutboundEvent::BinaryOffset {
                         typ: BIN_FILE_UPLOAD_ACK,
@@ -225,14 +260,21 @@ impl FileManager {
                     })
                     .await;
             }
-            Err(err) => send_transfer_error(&outbound, task_id, &state.path, err).await,
+            Err(err) => {
+                let path = state.path.clone();
+                drop(state);
+                drop(_gate);
+                send_transfer_error(&outbound, task_id, &path, err).await;
+            }
         }
     }
 
     pub async fn upload_end(&self, msg: Message, outbound: mpsc::Sender<OutboundEvent>) {
         let task_id = msg.task_id.clone();
+        let _gate = self.upload_gate.lock().await;
         let state = self.uploads.lock().unwrap().remove(&task_id);
         let Some(mut state) = state else {
+            drop(_gate);
             send_transfer_error(
                 &outbound,
                 &task_id,
@@ -257,6 +299,8 @@ impl FileManager {
             Ok::<_, anyhow::Error>(())
         }
         .await;
+        self.invalidate_listings();
+        drop(_gate);
         match result {
             Ok(()) => {
                 let _ = outbound
@@ -296,6 +340,7 @@ impl FileManager {
         if task_id.is_empty() {
             return;
         }
+        let _gate = self.upload_gate.lock().await;
         let upload = self.uploads.lock().unwrap().remove(task_id);
         if let Some(mut up) = upload {
             // Cancel also implements pause. Keep the partial file so a new
@@ -303,6 +348,7 @@ impl FileManager {
             let _ = up.file.flush().await;
         }
         let download = self.downloads.lock().unwrap().remove(task_id);
+        drop(_gate);
         if let Some(download) = download {
             download.handle.abort();
             send_transfer_error(
@@ -316,6 +362,7 @@ impl FileManager {
     }
 
     pub async fn close_all(&self) {
+        let _gate = self.upload_gate.lock().await;
         let uploads: Vec<_> = self
             .uploads
             .lock()
@@ -339,9 +386,105 @@ impl FileManager {
         }
     }
 
+    async fn list_page(
+        &self,
+        path: &Path,
+        offset: i64,
+        limit: usize,
+    ) -> Result<(Vec<FileEntry>, usize)> {
+        let path = fs::canonicalize(path).await?;
+        let generation = self.listing_generation.load(Ordering::Relaxed);
+        let modified = fs::metadata(&path).await?.modified().ok();
+        let cached = {
+            let mut cache = self.listings.lock().unwrap();
+            cache.retain(|_, entry| entry.at.elapsed() < DIRECTORY_CACHE_TTL);
+            if offset > 0 {
+                cache
+                    .get(&path)
+                    .filter(|entry| entry.modified == modified)
+                    .map(|entry| entry.entries.clone())
+            } else {
+                None
+            }
+        };
+        let entries = if let Some(entries) = cached {
+            entries
+        } else {
+            let entries = Arc::new(read_entries(&path).await?);
+            let bytes = entries
+                .iter()
+                .map(|e| {
+                    e.name.len()
+                        + e.path.len()
+                        + e.mod_time.len()
+                        + std::mem::size_of::<FileEntry>()
+                })
+                .sum::<usize>();
+            let unchanged = fs::metadata(&path).await?.modified().ok() == modified;
+            let mut cache = self.listings.lock().unwrap();
+            cache.remove(&path);
+            if unchanged
+                && generation == self.listing_generation.load(Ordering::Relaxed)
+                && bytes <= DIRECTORY_CACHE_BYTES
+            {
+                while cache.len() >= 8
+                    || cache.values().map(|e| e.bytes).sum::<usize>() + bytes
+                        > DIRECTORY_CACHE_BYTES
+                {
+                    let oldest = cache
+                        .iter()
+                        .min_by_key(|(_, e)| e.at)
+                        .map(|(p, _)| p.clone());
+                    if let Some(oldest) = oldest {
+                        cache.remove(&oldest);
+                    } else {
+                        break;
+                    }
+                }
+                cache.insert(
+                    path,
+                    DirectorySnapshot {
+                        entries: entries.clone(),
+                        modified,
+                        at: Instant::now(),
+                        bytes,
+                    },
+                );
+            }
+            entries
+        };
+        let start = (offset.max(0) as usize).min(entries.len());
+        let end = start.saturating_add(limit).min(entries.len());
+        Ok((entries[start..end].to_vec(), entries.len()))
+    }
+
     async fn open_upload(&self, task_id: &str, path: PathBuf, size: i64) -> Result<i64> {
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).await?;
+        let _gate = self.upload_gate.lock().await;
+        let absolute = std::path::absolute(&path)?;
+        let parent = absolute.parent().ok_or_else(|| anyhow!("missing parent"))?;
+        fs::create_dir_all(parent).await?;
+        let path = fs::canonicalize(parent).await?.join(
+            absolute
+                .file_name()
+                .ok_or_else(|| anyhow!("missing filename"))?,
+        );
+        let key = |p: &Path| {
+            let value = p.to_string_lossy().into_owned();
+            if cfg!(windows) {
+                value.to_lowercase()
+            } else {
+                value
+            }
+        };
+        {
+            let uploads = self.uploads.lock().unwrap();
+            if uploads.contains_key(task_id)
+                || uploads.values().any(|up| key(&up.path) == key(&path))
+            {
+                return Err(anyhow!(
+                    "upload already active for this task or destination"
+                ));
+            }
         }
         let part_path = PathBuf::from(format!("{}.rdevpart", path.to_string_lossy()));
         let mut file = OpenOptions::new()
@@ -444,7 +587,14 @@ async fn download_task(msg: Message, outbound: mpsc::Sender<OutboundEvent>) {
     }
 }
 
+#[cfg(test)]
 async fn list_entries(path: &Path, offset: i64, limit: usize) -> Result<(Vec<FileEntry>, usize)> {
+    let entries = read_entries(path).await?;
+    let total = entries.len();
+    let start = (offset.max(0) as usize).min(total);
+    Ok((entries.into_iter().skip(start).take(limit).collect(), total))
+}
+async fn read_entries(path: &Path) -> Result<Vec<FileEntry>> {
     let mut read_dir = fs::read_dir(path).await?;
     let mut entries = Vec::new();
     while let Some(ent) = read_dir.next_entry().await? {
@@ -457,15 +607,9 @@ async fn list_entries(path: &Path, offset: i64, limit: usize) -> Result<(Vec<Fil
             mod_time: system_time_rfc3339(meta.modified().ok()),
         });
     }
-    entries.sort_by(|a, b| {
-        b.is_dir
-            .cmp(&a.is_dir)
-            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
-            .then_with(|| a.name.cmp(&b.name))
-    });
-    let total = entries.len();
-    let start = (offset.max(0) as u64).min(total as u64) as usize;
-    Ok((entries.into_iter().skip(start).take(limit).collect(), total))
+    entries
+        .sort_by_cached_key(|entry| (!entry.is_dir, entry.name.to_lowercase(), entry.name.clone()));
+    Ok(entries)
 }
 
 fn upload_target(msg: &Message) -> PathBuf {
@@ -756,5 +900,76 @@ mod tests {
         let formatted = system_time_rfc3339(Some(ts));
         assert!(formatted.contains('T'));
         assert!(formatted.ends_with("+00:00"));
+    }
+}
+
+#[cfg(test)]
+mod concurrency_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn directory_snapshot_refreshes_and_mutations_invalidate() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("a"), b"a").await.unwrap();
+        fs::write(dir.path().join("b"), b"b").await.unwrap();
+        let manager = FileManager::new();
+        let (first, total) = manager.list_page(dir.path(), 0, 1).await.unwrap();
+        assert_eq!(total, 2);
+        assert_eq!(first[0].name, "a");
+        let (second, _) = manager.list_page(dir.path(), 1, 1).await.unwrap();
+        assert_eq!(second[0].name, "b");
+        assert_eq!(manager.listings.lock().unwrap().len(), 1);
+        manager.invalidate_listings();
+        assert!(manager.listings.lock().unwrap().is_empty());
+        fs::write(dir.path().join("c"), b"c").await.unwrap();
+        let (_, total) = manager.list_page(dir.path(), 0, 1).await.unwrap();
+        assert_eq!(total, 3);
+    }
+
+    #[tokio::test]
+    async fn only_one_task_can_own_a_destination_and_cancel_releases_it() {
+        let manager = FileManager::new();
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("file");
+        let (a, b) = tokio::join!(
+            manager.open_upload("a", target.clone(), 10),
+            manager.open_upload("b", target.clone(), 10)
+        );
+        assert_ne!(a.is_ok(), b.is_ok());
+        let owner = if a.is_ok() { "a" } else { "b" };
+        manager.cancel(owner).await;
+        manager.open_upload("next", target, 10).await.unwrap();
+        manager.close_all().await;
+    }
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn directory_alias_cannot_bypass_upload_ownership() {
+        let manager = FileManager::new();
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join("actual")).await.unwrap();
+        std::os::unix::fs::symlink(dir.path().join("actual"), dir.path().join("alias")).unwrap();
+        manager
+            .open_upload("a", dir.path().join("actual/file"), 1)
+            .await
+            .unwrap();
+        assert!(manager
+            .open_upload("b", dir.path().join("alias/file"), 1)
+            .await
+            .is_err());
+        manager.close_all().await;
+    }
+    #[test]
+    fn no_replace_rename_preserves_destination() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a");
+        let b = dir.path().join("b");
+        std::fs::write(&a, b"source").unwrap();
+        std::fs::write(&b, b"keep").unwrap();
+        assert!(crate::file_rename::no_replace(&a, &b).is_err());
+        assert_eq!(std::fs::read(&b).unwrap(), b"keep");
+        std::fs::remove_file(&b).unwrap();
+        crate::file_rename::no_replace(&a, &b).unwrap();
+        assert!(!a.exists());
+        assert_eq!(std::fs::read(&b).unwrap(), b"source");
     }
 }

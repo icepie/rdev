@@ -42,9 +42,6 @@ import (
 type agentMsg struct {
 	Participants []agentParticipant `json:"participants,omitempty"`
 
-	BrowserAction  *browserActionRecord  `json:"browserAction,omitempty"`
-	BrowserHistory []browserActionRecord `json:"browserHistory,omitempty"`
-
 	Automation         *automationView     `json:"automation,omitempty"`
 	Pinned             bool                `json:"pinned,omitempty"`
 	Offline            bool                `json:"offline,omitempty"`
@@ -1259,8 +1256,6 @@ func (s *Server) requestApproval(entry *agentSessionEntry, th *agentThread, tc a
 type agentThreadSnapshot struct {
 	participants []agentParticipant
 
-	browserHistory []browserActionRecord
-
 	automation *automationView
 	history    []agentHistoryEntry
 	todos      []todoItem
@@ -1293,7 +1288,6 @@ func (s *Server) threadSnapshotLocked(entry *agentSessionEntry, th *agentThread)
 	}
 	if th.automation != nil {
 		th.automation.mu.Lock()
-		snap.browserHistory = append([]browserActionRecord(nil), th.automation.browserHistory...)
 		view := th.automation.view
 		snap.automation = &view
 		th.automation.mu.Unlock()
@@ -1401,7 +1395,6 @@ func (h *agentWSHandler) establish(ac *agentConn, client *ClientConn) {
 		Branch:         threadBranch,
 		Live:           snap.live,
 		Automation:     snap.automation,
-		BrowserHistory: snap.browserHistory,
 		Participants:   snap.participants,
 		Usage:          snap.usage,
 	})
@@ -2014,21 +2007,20 @@ func (h *agentWSHandler) handleSwitchThread(ac *agentConn, threadID string) {
 
 	// thread_switched is per-connection: only the requester's view changes.
 	ac.writeJSON(agentMsg{
-		Op:             "thread_switched",
-		Thread:         threadID,
-		Model:          model,
-		History:        snap.history,
-		Todos:          snap.todos,
-		Queue:          snap.queue,
-		QueueIDs:       snap.queueIDs,
-		QueueModes:     snap.queueModes,
-		Running:        snap.running,
-		Working:        snap.working,
-		Live:           snap.live,
-		Automation:     snap.automation,
-		BrowserHistory: snap.browserHistory,
-		Participants:   snap.participants,
-		Usage:          snap.usage,
+		Op:           "thread_switched",
+		Thread:       threadID,
+		Model:        model,
+		History:      snap.history,
+		Todos:        snap.todos,
+		Queue:        snap.queue,
+		QueueIDs:     snap.queueIDs,
+		QueueModes:   snap.queueModes,
+		Running:      snap.running,
+		Working:      snap.working,
+		Live:         snap.live,
+		Automation:   snap.automation,
+		Participants: snap.participants,
+		Usage:        snap.usage,
 	})
 	srv.writeAgentPrefs(entry)
 	srv.broadcastThreadList(entry)
@@ -2058,20 +2050,19 @@ func (h *agentWSHandler) handlePeekThread(ac *agentConn, threadID string) {
 	srv.agentSessionsMu.Unlock()
 
 	ac.writeJSON(agentMsg{
-		Op:             "thread_peeked",
-		Thread:         threadID,
-		History:        snap.history,
-		Todos:          snap.todos,
-		Queue:          snap.queue,
-		QueueIDs:       snap.queueIDs,
-		QueueModes:     snap.queueModes,
-		Running:        snap.running,
-		Working:        snap.working,
-		Live:           snap.live,
-		Automation:     snap.automation,
-		BrowserHistory: snap.browserHistory,
-		Participants:   snap.participants,
-		Usage:          snap.usage,
+		Op:           "thread_peeked",
+		Thread:       threadID,
+		History:      snap.history,
+		Todos:        snap.todos,
+		Queue:        snap.queue,
+		QueueIDs:     snap.queueIDs,
+		QueueModes:   snap.queueModes,
+		Running:      snap.running,
+		Working:      snap.working,
+		Live:         snap.live,
+		Automation:   snap.automation,
+		Participants: snap.participants,
+		Usage:        snap.usage,
 	})
 }
 
@@ -2174,21 +2165,20 @@ func (h *agentWSHandler) handleDeleteThread(ac *agentConn, threadID string) {
 		// browsers stay on their thread.
 		for _, conn := range affected {
 			conn.writeJSON(agentMsg{
-				Op:             "thread_switched",
-				Thread:         switchedTo,
-				Model:          switchModel,
-				History:        snap.history,
-				Todos:          snap.todos,
-				Queue:          snap.queue,
-				QueueIDs:       snap.queueIDs,
-				QueueModes:     snap.queueModes,
-				Running:        snap.running,
-				Working:        snap.working,
-				Live:           snap.live,
-				Automation:     snap.automation,
-				BrowserHistory: snap.browserHistory,
-				Participants:   snap.participants,
-				Usage:          snap.usage,
+				Op:           "thread_switched",
+				Thread:       switchedTo,
+				Model:        switchModel,
+				History:      snap.history,
+				Todos:        snap.todos,
+				Queue:        snap.queue,
+				QueueIDs:     snap.queueIDs,
+				QueueModes:   snap.queueModes,
+				Running:      snap.running,
+				Working:      snap.working,
+				Live:         snap.live,
+				Automation:   snap.automation,
+				Participants: snap.participants,
+				Usage:        snap.usage,
 			})
 		}
 		srv.scheduleThreadMetaProbe(entry, switchedTo)

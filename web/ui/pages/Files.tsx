@@ -1,5 +1,5 @@
 import { FileWorkspaceDivider } from "../components/file-workspace-divider";
-import { createFileTreeRPC } from "../lib/file-tree-rpc";
+import { fileTreeMutation, createFileTreeRPC } from "../lib/file-tree-rpc";
 import { useFilePreviewTabs } from "../lib/file-preview-tabs";
 import { FileEditorTabs } from "../components/file-editor-tabs";
 import { FileExplorer } from "../components/file-explorer";
@@ -1569,11 +1569,11 @@ export function FilesBrowser({
           </Table>
         </Card>
 
-            ) : <FileExplorer key={JSON.stringify([device, currentPathRef.current])} refreshKey={treeRevision} path={currentPathRef.current} entries={entries} stateKey={JSON.stringify([device,leafId])}
+            ) : <FileExplorer operations={devices.find(d=>d.id===device)?.fileOperations??[]} key={JSON.stringify([device, currentPathRef.current])} refreshKey={treeRevision} path={currentPathRef.current} entries={entries} stateKey={JSON.stringify([device,leafId])}
               onDownload={entry=>startDownload(entry.path,entry.name,entry.size||0)}
               onOperation={async(op,entry,name)=>{
-                if(op==='newFile'){startUpload(new File([],name),entry.path,device);return;}
-                await treeRPC.current!.request(device,op,{path:entry.path,...(op==='mkdir'?{path:entry.path.replace(/[\\/]$/,'')+'/'+name}:{}),...(op==='rename'?{from:entry.path,to:entry.path.replace(/[^\\/]+$/,'')+name}:{}),...(op==='delete'?{recursive:!!entry.isDir}:{})});
+                const mutation = fileTreeMutation(op, entry, name);
+                await treeRPC.current!.request(device, mutation.op, mutation.args);
                 await list(currentPathRef.current);
               }}
               loading={listView.notice===t("common.connecting")} notice={listView.notice} selected={previews.tabs.find(tab => tab.key === previews.active)?.path}

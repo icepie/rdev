@@ -37,3 +37,9 @@ it('requires successful mutation acknowledgements and does not queue offline wri
   const offline = createFileTreeRPC(() => false);
   await expect(offline.request('a', 'mkdir', { path: '/new' })).rejects.toThrow('not connected');
 });
+
+it('uses exclusive creation and preserves Windows separators for both file workspaces', async () => {
+  const {fileTreeMutation}=await import('../ui/lib/file-tree-rpc');
+  expect(fileTreeMutation('newFile',{path:'C:\\work',name:'work',isDir:true},'Foo')).toEqual({op:'create',args:{path:'C:\\work\\Foo'}});
+  expect(fileTreeMutation('rename',{path:'/work/Foo',name:'Foo'},'foo')).toEqual({op:'rename',args:{path:'/work/Foo',from:'/work/Foo',to:'/work/foo'}});
+});

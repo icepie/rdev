@@ -37,6 +37,7 @@ export function DevicesProvider({ children }: { children: ReactNode }) {
     let lastLoaded = 0;
     let events: EventSource | null = null;
     let eventURL = "";
+    let activeRequest: AbortController | null = null;
     const connectEvents = () => {
       if (typeof EventSource === "undefined") return;
       const url = authURL("/api/clients/events");
@@ -54,8 +55,11 @@ export function DevicesProvider({ children }: { children: ReactNode }) {
       if (inFlight) { dirty = true; return; }
       dirty = false;
       inFlight = true;
+      const controller = new AbortController();
+      activeRequest = controller;
+      const timeout = setTimeout(() => controller.abort(new Error("Device list request timed out")), 15000);
       try {
-        const list = await fetchDevices();
+        const list = await fetchDevices(controller.signal);
         if (cancelled) return;
         const next = Array.isArray(list) ? list : [];
         setDevices(previous => JSON.stringify(previous) === JSON.stringify(next) ? previous : next);
@@ -69,6 +73,8 @@ export function DevicesProvider({ children }: { children: ReactNode }) {
           setError(e instanceof Error ? e.message : String(e));
         }
       } finally {
+        clearTimeout(timeout);
+        if (activeRequest === controller) activeRequest = null;
         inFlight = false;
         if (!cancelled) {
           setLoading(false);
@@ -85,6 +91,7 @@ export function DevicesProvider({ children }: { children: ReactNode }) {
     document.addEventListener("visibilitychange", load);
     return () => {
       cancelled = true;
+      activeRequest?.abort();
       clearInterval(timer);
       events?.close();
       document.removeEventListener("visibilitychange", load);

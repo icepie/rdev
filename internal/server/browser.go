@@ -29,6 +29,9 @@ var browserBridge []byte
 //go:embed browser_input.js
 var browserInput []byte
 
+//go:embed browser_resize.js
+var browserResize []byte
+
 //go:embed browser_locale.js
 var browserLocale []byte
 
@@ -387,9 +390,11 @@ func (s *Server) HandleBrowserView(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	if path == "devtools/rdev-bridge.js" || path == "devtools/rdev-input.js" || path == "devtools/rdev-locale.js" {
+	if path == "devtools/rdev-resize.js" || path == "devtools/rdev-bridge.js" || path == "devtools/rdev-input.js" || path == "devtools/rdev-locale.js" {
 		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
-		if path == "devtools/rdev-locale.js" {
+		if path == "devtools/rdev-resize.js" {
+			_, _ = w.Write(browserResize)
+		} else if path == "devtools/rdev-locale.js" {
 			_, _ = w.Write(browserLocale)
 		} else if path == "devtools/rdev-input.js" {
 			_, _ = w.Write(browserInput)

@@ -1,6 +1,7 @@
 package client
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"rdev/internal/protocol"
@@ -39,5 +40,44 @@ func TestFileMutations(t *testing.T) {
 	request.Path = string(filepath.Separator)
 	if mutateFileEntry(request).Success {
 		t.Fatal("allowed filesystem root deletion")
+	}
+}
+
+func TestFileCreateAndRenameNeverReplaceConcurrentDestination(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "winner")
+	results := make(chan *protocol.Message, 16)
+	for i := 0; i < 16; i++ {
+		go func() { results <- mutateFileEntry(&protocol.Message{Type: protocol.MsgFileCreate, Path: target}) }()
+	}
+	winners := 0
+	for i := 0; i < 16; i++ {
+		if (<-results).Success {
+			winners++
+		}
+	}
+	if winners != 1 {
+		t.Fatalf("exclusive create winners = %d", winners)
+	}
+	if err := os.WriteFile(target, []byte("keep"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 16; i++ {
+		source := filepath.Join(root, fmt.Sprint(i))
+		if err := os.WriteFile(source, []byte("replace"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		go func() {
+			results <- mutateFileEntry(&protocol.Message{Type: protocol.MsgFileRename, Data: source, FilePath: target})
+		}()
+	}
+	for i := 0; i < 16; i++ {
+		if (<-results).Success {
+			t.Fatal("replaced destination")
+		}
+	}
+	data, err := os.ReadFile(target)
+	if err != nil || string(data) != "keep" {
+		t.Fatal("destination changed", err)
 	}
 }

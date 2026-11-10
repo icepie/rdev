@@ -51,23 +51,15 @@ func (t *browserTool) Execute(ctx context.Context, raw json.RawMessage) (output 
 	if err != nil {
 		return "", err
 	}
+	bound := *t
+	bound.automationTool = t.forResource("browser:" + client.ID)
+	t = &bound
+
 	ctx, finish, err := t.begin(ctx)
 	if err != nil {
 		return "", err
 	}
 	defer finish()
-	started := time.Now()
-	var capture *browserCDP
-	var captureTarget string
-	a.Device = client.ID
-	defer func() {
-		if browserRecordable(a.Action) {
-			t.recordBrowserAction(ctx, capture, a, captureTarget, started, actionErr)
-		}
-		if capture != nil {
-			capture.close()
-		}
-	}()
 
 	if a.Action == "status" {
 		t.srv.browserMu.Lock()
@@ -105,7 +97,7 @@ func (t *browserTool) Execute(ctx context.Context, raw json.RawMessage) (output 
 		delete(t.state.pages, client.ID)
 		return "", err
 	}
-	capture, captureTarget = c, page.target
+	defer c.close()
 	switch a.Action {
 	case "open", "navigate":
 		var result struct {

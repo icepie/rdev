@@ -242,3 +242,48 @@ func TestComputerOnDemandSessionReuseAndRelease(t *testing.T) {
 		t.Fatal("release retained stale screenshot")
 	}
 }
+
+func TestAutomationResourcesRunIndependentlyAndManualInputIsScoped(t *testing.T) {
+	srv := NewServer()
+	root := testAutomation(t, srv, "@server", "parallel")
+	a := root.forResource("desktop:a")
+	b := root.forResource("desktop:b")
+	browser := root.forResource("browser:a")
+	aCtx, doneA, err := a.begin(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	bCtx, doneB, err := b.begin(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer doneB()
+	_, doneBrowser, err := browser.begin(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer doneBrowser()
+	duplicate := root.forResource("desktop:a")
+	if _, _, err := duplicate.begin(context.Background()); err == nil {
+		t.Fatal("same resource ran concurrently")
+	}
+	if err := a.claim("a"); err != nil {
+		t.Fatal(err)
+	}
+	interrupted := make(chan struct{})
+	go func() { srv.interruptDesktopAutomation("a"); close(interrupted) }()
+	select {
+	case <-aCtx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("input did not cancel target")
+	}
+	if bCtx.Err() != nil {
+		t.Fatal("manual input canceled another device")
+	}
+	doneA()
+	select {
+	case <-interrupted:
+	case <-time.After(time.Second):
+		t.Fatal("input drain stuck")
+	}
+}

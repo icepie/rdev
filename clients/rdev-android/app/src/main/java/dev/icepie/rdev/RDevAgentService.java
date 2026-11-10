@@ -297,7 +297,8 @@ public class RDevAgentService extends Service {
                 .put("clientVersion", "android/" + BuildConfig.VERSION_NAME)
                 .put("instanceId", instanceId)
                 .put("password", prefs.getString("password", ""))
-                .put("desktop", desktop);
+                .put("desktop", desktop)
+                .put("fileOperations", new JSONArray().put("create").put("mkdir").put("delete").put("rename").put("rename_directory").put("stat").put("copy"));
             client.sendText(msg.toString());
             Log.i(TAG, "register sent id=" + prefs.getString("id", "android"));
         } catch (Exception e) {
@@ -340,6 +341,8 @@ public class RDevAgentService extends Service {
                 if (fileManager != null) fileManager.handleDownloadStart(msg);
             } else if ("file_stat".equals(type)) {
                 if (fileManager != null) fileManager.handleStat(msg);
+            } else if ("file_create".equals(type)) {
+                if (fileManager != null) fileManager.handleCreate(msg);
             } else if ("file_mkdir".equals(type)) {
                 if (fileManager != null) fileManager.handleMkdir(msg);
             } else if ("file_delete".equals(type)) {

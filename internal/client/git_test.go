@@ -1,6 +1,7 @@
 package client
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -72,7 +73,7 @@ func TestDirectorySnapshotRepoSkipsDotGit(t *testing.T) {
 	mustWriteFile(t, filepath.Join(src, "sub", "tool.sh"), "#!/bin/sh\n", 0755)
 	mustWriteFile(t, filepath.Join(src, ".git", "config"), "ignored", 0644)
 
-	if err := buildDirectorySnapshotRepo(src, dst); err != nil {
+	if err := buildDirectorySnapshotRepo(context.Background(), src, dst); err != nil {
 		t.Fatalf("buildDirectorySnapshotRepo: %v", err)
 	}
 
@@ -173,7 +174,7 @@ func TestFallbackUploadAndReceiveWorkWithGoGitClient(t *testing.T) {
 		t.Fatalf("remote hash=%s, want %s", ref.Hash(), hash)
 	}
 
-	if _, _, err := newGitUploadPackSession(remotePath); err != nil {
+	if _, _, err := newGitUploadPackSession(context.Background(), remotePath); err != nil {
 		t.Fatalf("expected upload-pack session for bare repo: %v", err)
 	}
 	if _, err := newGitReceivePackSession(remotePath); err != nil {
@@ -185,7 +186,7 @@ func TestUploadPackFallbackSupportsPlainDirectorySnapshot(t *testing.T) {
 	dir := t.TempDir()
 	mustWriteFile(t, filepath.Join(dir, "plain.txt"), "snapshot", 0644)
 
-	session, cleanup, err := newGitUploadPackSession(dir)
+	session, cleanup, err := newGitUploadPackSession(context.Background(), dir)
 	if cleanup != nil {
 		defer cleanup()
 	}
@@ -208,7 +209,7 @@ func TestSnapshotLimits(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(src, "big.bin"), tooLarge, 0644); err != nil {
 		t.Fatalf("write large file: %v", err)
 	}
-	err := buildDirectorySnapshotRepo(src, dst)
+	err := buildDirectorySnapshotRepo(context.Background(), src, dst)
 	if err == nil || !strings.Contains(err.Error(), "exceeds snapshot file size limit") {
 		t.Fatalf("expected file size limit error, got %v", err)
 	}
@@ -232,5 +233,17 @@ func TestNewGitReceivePackSessionRejectsMissingPath(t *testing.T) {
 	_, err := newGitReceivePackSession(filepath.Join(t.TempDir(), "missing.git"))
 	if err == nil || !errors.Is(err, git.ErrRepositoryNotExists) && !strings.Contains(err.Error(), "bare Git repository") {
 		t.Fatalf("expected missing repo rejection, got %v", err)
+	}
+}
+
+func TestGitSnapshotStopsBeforeWritingWhenCanceled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	dst := filepath.Join(t.TempDir(), "snapshot.git")
+	if err := buildDirectorySnapshotRepo(ctx, t.TempDir(), dst); !errors.Is(err, context.Canceled) {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(dst + ".work"); !os.IsNotExist(err) {
+		t.Fatal("canceled snapshot wrote work tree")
 	}
 }

@@ -11,9 +11,13 @@ export default defineConfig({
     outDir: '../internal/server/static',
     emptyOutDir: true,
     sourcemap: false,
-    rollupOptions: {
+    rolldownOptions: {
+      output: {
+        // Keep the framework hash stable across application-only releases.
+        codeSplitting: { groups: [{ name: 'framework', test: /node_modules\/(?:react|react-dom|scheduler)\// }] },
+      },
       input: {
-        app: resolve(__dirname, 'web/app.html')
+        app: resolve(import.meta.dirname, 'web/app.html')
       }
     }
   }

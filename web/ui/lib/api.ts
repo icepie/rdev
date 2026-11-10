@@ -118,6 +118,7 @@ export function forgetDevicePassword(deviceId: string) {
 /* ── Device list (shared shape with /api/clients) ── */
 
 export interface DeviceInfo {
+  fileOperations?: string[];
   id: string;
   hostname?: string;
   os?: string;
@@ -131,6 +132,6 @@ export interface DeviceInfo {
   [k: string]: unknown;
 }
 
-export function fetchDevices(): Promise<DeviceInfo[]> {
-  return apiJSON<DeviceInfo[]>("/api/clients");
+export function fetchDevices(signal?: AbortSignal): Promise<DeviceInfo[]> {
+  return apiJSON<DeviceInfo[]>("/api/clients", { signal });
 }

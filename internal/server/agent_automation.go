@@ -24,6 +24,9 @@ type automationPage struct {
 	target  string
 }
 type agentAutomation struct {
+	parent       *agentAutomation
+	resource     string
+	resources    map[string]*agentAutomation
 	gpu          map[string]*gpuAgentDesktop
 	desktop      map[string]*agentDesktopSession
 	opMu         sync.Mutex
@@ -34,8 +37,6 @@ type agentAutomation struct {
 	pages        map[string]automationPage
 	screens      map[string]automationScreen
 	view         automationView
-
-	browserHistory []browserActionRecord
 }
 
 func (s *Server) automationTools(entry *agentSessionEntry, th *agentThread) []agent.Tool {
@@ -107,10 +108,15 @@ func (t *automationTool) publish(view automationView) {
 	view.Paused = t.state.paused
 	t.state.view = view
 	t.state.mu.Unlock()
+	if root := t.state.root(); root != t.state {
+		root.mu.Lock()
+		root.view = view
+		root.mu.Unlock()
+	}
 	msg := agentMsg{Op: "automation", Thread: t.thread.id, Automation: &view}
 	data, _ := json.Marshal(msg)
 	t.srv.agentSessionsMu.Lock()
-	current := t.entry.threads[t.thread.id] == t.thread && t.thread.automation == t.state
+	current := t.entry.threads[t.thread.id] == t.thread && t.thread.automation == t.state.root()
 	if current {
 		t.thread.live.Append(msg, data)
 	}
@@ -132,21 +138,31 @@ func (h *agentWSHandler) handleAutomation(ac *agentConn, msg agentMsg) {
 	if state == nil {
 		return
 	}
+	// Set the root first so resources created during this transition inherit
+	// the paused state; cancel existing resources before draining any input.
 	state.mu.Lock()
 	state.paused = msg.Value
-	if state.paused && state.cancel != nil {
-		state.cancel()
-	}
 	view := state.view
-	view.Paused = state.paused
+	view.Paused = msg.Value
 	state.view = view
 	state.mu.Unlock()
+	states := state.group()
+	for _, resource := range states {
+		resource.mu.Lock()
+		resource.paused = msg.Value
+		if msg.Value && resource.cancel != nil {
+			resource.cancel()
+		}
+		resource.mu.Unlock()
+	}
 	if msg.Value {
-		state.opMu.Lock()
-		state.screens = nil
-		closeDesktopAutomation(state)
-		state.opMu.Unlock()
-		h.srv.releaseAutomationDesktop(state)
+		for _, resource := range states {
+			resource.opMu.Lock()
+			resource.screens = nil
+			closeDesktopAutomation(resource)
+			resource.opMu.Unlock()
+			h.srv.releaseAutomationDesktop(resource)
+		}
 	}
 	h.srv.agentBroadcastTurn(ac.entry, th, agentMsg{Op: "automation", Automation: &view})
 }
@@ -172,6 +188,14 @@ func (s *Server) retireAutomation(state *agentAutomation) {
 	if state == nil {
 		return
 	}
+	state.mu.Lock()
+	state.paused = true
+	state.mu.Unlock()
+	for _, resource := range state.group() {
+		s.retireAutomationResource(resource)
+	}
+}
+func (s *Server) retireAutomationResource(state *agentAutomation) {
 	state.mu.Lock()
 	state.paused = true
 	if state.cancel != nil {

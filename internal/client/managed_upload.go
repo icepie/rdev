@@ -209,6 +209,7 @@ func (c *Client) handleManagedUploadEnd(msg *protocol.Message) {
 	if err == nil {
 		err = os.Rename(up.partPath, up.path)
 	}
+	c.fileListings.invalidate()
 	size := up.offset
 	c.finishManagedUpload(up)
 	up.mu.Unlock()
