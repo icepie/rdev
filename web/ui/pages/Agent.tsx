@@ -1981,13 +1981,15 @@ export function AgentPage() {
   /* bb SidebarSplitContainer panel+handle slot: keyed so moving it before
    * /after the main panel (dock left|top vs. right|bottom) reorders the
    * DOM without remounting the panel — terminal sessions survive a Move. */
-  const panelHandle = !isNarrow && panelOpen && (
+  const panelHandle = !isNarrow && (
     /* bb three-column handle: 0-wide transparent handle; the visible
      * 1px seam is a sibling span so hover/drag recolors only the
      * line, never the hit area. */
     <PanelResizeHandle
       key="handle"
-      disabled={panelFull}
+      disabled={panelFull || !panelOpen}
+      aria-hidden={!panelOpen}
+      tabIndex={panelOpen ? 0 : -1}
       className="group relative z-[25] w-0 shrink-0 overflow-visible bg-transparent transition-[width,opacity,background-color] duration-[var(--panel-collapse-duration,220ms)]"
       onDragging={(dragging) => {
         setPanelDragging(dragging);
