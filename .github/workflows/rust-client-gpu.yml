@@ -184,17 +184,16 @@ jobs:
             arch: arm64
           - name: windows-amd64
             os: ubuntu-latest
-            target: x86_64-pc-windows-gnullvm
+            target: x86_64-pc-windows-gnu
             artifact: rdev-client-gpu.exe
             asset: rdev-client-gpu-windows-amd64
             llvm_mingw: msvcrt
             desktop_features: embedded-rdev-desktop,cua-native
           - name: windows-arm64
-            os: ubuntu-latest
-            target: aarch64-pc-windows-gnullvm
+            os: windows-11-arm
+            target: aarch64-pc-windows-msvc
             artifact: rdev-client-gpu.exe
             asset: rdev-client-gpu-windows-arm64
-            llvm_mingw: ucrt
             desktop_features: embedded-rdev-desktop,cua-native
           - name: windows-win7-amd64
             os: ubuntu-latest
@@ -204,14 +203,14 @@ jobs:
             llvm_mingw: msvcrt
             win7: true
           - name: darwin-amd64
-            os: macos-15-intel
+            os: macos-26-intel
             target: x86_64-apple-darwin
             artifact: rdev-client-gpu
             asset: rdev-client-gpu-darwin-amd64
             deployment_target: '10.13'
             desktop_features: embedded-rdev-desktop,cua-native
           - name: darwin-arm64
-            os: macos-15
+            os: macos-26
             target: aarch64-apple-darwin
             artifact: rdev-client-gpu
             asset: rdev-client-gpu-darwin-arm64
@@ -299,7 +298,18 @@ jobs:
           mkdir -p /opt/llvm-mingw
           tar -xf /tmp/llvm-mingw.tar.xz -C /opt/llvm-mingw --strip-components=1
           echo /opt/llvm-mingw/bin >> "$GITHUB_PATH"
-          if [ '${{ matrix.target }}' = 'x86_64-pc-windows-gnullvm' ]; then
+          if [ '${{ matrix.target }}' = 'x86_64-pc-windows-gnu' ]; then
+            {
+              echo 'CC_x86_64_pc_windows_gnu=x86_64-w64-mingw32-clang'
+              echo 'CXX_x86_64_pc_windows_gnu=x86_64-w64-mingw32-clang++'
+              echo 'AR_x86_64_pc_windows_gnu=llvm-ar'
+              echo 'MINGW_GCC=x86_64-w64-mingw32-clang'
+              echo 'RDEV_MINGW_CC=x86_64-w64-mingw32-clang'
+              echo 'RDEV_MINGW_CXX=x86_64-w64-mingw32-clang++'
+              echo 'RDEV_MINGW_CRT=msvcrt'
+              echo 'CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-clang'
+            } >> "$GITHUB_ENV"
+          elif [ '${{ matrix.target }}' = 'x86_64-pc-windows-gnullvm' ]; then
             {
               echo 'CC_x86_64_pc_windows_gnullvm=x86_64-w64-mingw32-clang'
               echo 'CXX_x86_64_pc_windows_gnullvm=x86_64-w64-mingw32-clang++'
