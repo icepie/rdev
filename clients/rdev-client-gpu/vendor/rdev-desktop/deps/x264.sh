@@ -17,6 +17,9 @@ fi
 if [ -n "${X264_AR:-}" ]; then
 	export AR="$X264_AR"
 fi
+if [ -n "${X264_RANLIB:-}" ]; then
+	export RANLIB="$X264_RANLIB"
+fi
 
 ./configure \
 	--prefix="$DIST" \

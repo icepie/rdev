@@ -98,7 +98,8 @@ if [ "$TARGET_OS" == "windows" ]; then
         export FFMPEG_CFLAGS="-I$DIST/include"
         export FFMPEG_LIBRARY_PATH="-LIBPATH:$DIST/lib"
         export X264_CC="clang --target=aarch64-pc-windows-msvc"
-        export X264_AR="llvm-ar"
+        export X264_AR="llvm-ar --format=coff"
+        export X264_RANLIB="llvm-ar --format=coff s"
         export X264_EXTRA_ARGS="--host=aarch64-w64-mingw32 --disable-asm"
     else
         export CC="cl"
