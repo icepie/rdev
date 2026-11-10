@@ -1,3 +1,5 @@
+import { useMemo } from "react";
+import { projectInlineThinking } from "./inline-thinking";
 import { cn } from "../../lib/utils";
 import { Icon } from "../icon";
 import { Markdown } from "../markdown";
@@ -44,6 +46,8 @@ export function TurnView({
   onOpenDiff?: (path: string) => void;
   onOpenLocalFile?: (link: LocalFileLink) => void;
 }) {
+  const projected = useMemo(() => projectInlineThinking(turn.text, turn.streaming && active), [turn.text, turn.streaming, active]);
+  const reasoning = [turn.reasoning, projected.reasoning === turn.reasoning.trim() ? "" : projected.reasoning].filter(Boolean).join("\n\n");
   const groups = groupTools(turn.tools, active);
   const workedMs =
     turn.time !== undefined && turn.endedAt !== undefined
@@ -51,10 +55,10 @@ export function TurnView({
       : null;
   return (
     <div className="group/message flex max-w-full min-w-0 flex-col gap-1.5 self-start">
-      {turn.reasoning && (
+      {(reasoning || projected.thinking) && (
         <ThinkingBlock
-          text={turn.reasoning}
-          streaming={turn.streamingReasoning}
+          text={reasoning}
+          streaming={turn.streamingReasoning || projected.thinking}
           startedAt={turn.reasoningStartedAt}
           endedAt={turn.reasoningEndedAt}
           t={t}
@@ -66,7 +70,7 @@ export function TurnView({
           {t("agent.workedFor", { duration: formatDuration(workedMs) })}
         </div>
       )}
-      {turn.text && (
+      {projected.text.trim() && (
         <div
           className={cn(
             "w-full px-2 text-sm font-normal leading-relaxed",
@@ -75,7 +79,7 @@ export function TurnView({
           )}
         >
           <Markdown
-            text={turn.text}
+            text={projected.text}
             className="leading-relaxed"
             onOpenLocalFile={onOpenLocalFile}
           />
@@ -124,10 +128,10 @@ export function TurnView({
           ))}
         </div>
       )}
-      {turn.text && !active && (
+      {projected.text.trim() && !active && (
         <MessageActionBar
           align="start"
-          text={turn.text}
+          text={projected.text}
           timestamp={turn.time}
           copied={copied}
           onCopy={onCopy}

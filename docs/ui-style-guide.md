@@ -67,3 +67,7 @@ Agent 的思考、工具详情、工具分组和待办列表共用 `DisclosureBo
 ### 工作状态动效
 
 工作标签使用 BB f51e6b0 的 `animate-shine`，图标使用 `animate-shine-icon`，共享原始 128×2、30 帧 `shine-sweep.png` alpha mask（MIT，见 docs/licenses/bb.txt）。正文不施加整段闪烁。回到底部按钮的 active 表示会话正在运行，与 BB FollowUpPromptBox 一致。减少动态效果、inert 和 aria-hidden 容器会移除 mask 并释放 will-change 图层；任务结束时移除动效类。资源由生产 CSS 内联。
+
+### Inline thinking compatibility
+
+Assistant content from providers that emit literal `<think>…</think>` is projected into the existing BB-style `ThinkingBlock` (`TimelineReasoningDetail` / `TimelineReasoningExpansion` in BB f51e6b0). Streaming thoughts expand automatically, settled thoughts collapse unless the user toggled them, and details use the muted text/left seam/320px scrolling region. Projection handles incomplete streaming delimiters and interrupted thoughts, but preserves fenced/inline-code examples. The answer's copy/add-to-chat actions use the projected answer. Provider history is not rewritten.
