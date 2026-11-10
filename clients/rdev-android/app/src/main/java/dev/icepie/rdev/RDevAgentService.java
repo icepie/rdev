@@ -20,6 +20,7 @@ import android.util.Log;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
+import org.autojs.autojs6.BuildConfig;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -293,7 +294,7 @@ public class RDevAgentService extends Service {
             JSONObject msg = new JSONObject()
                 .put("type", "register")
                 .put("clientId", prefs.getString("id", "android"))
-                .put("clientVersion", "android-dev")
+                .put("clientVersion", "android/" + BuildConfig.VERSION_NAME)
                 .put("instanceId", instanceId)
                 .put("password", prefs.getString("password", ""))
                 .put("desktop", desktop);
