@@ -1,4 +1,4 @@
-import type { AutomationView } from "./automation";
+import { createAutomationRevealTracker, type AutomationView } from "./automation";
 import { useServerCapabilities } from "../../lib/server-capabilities";
 import { BrowserPanel } from "../browser-panel";
 import { FilePreview } from "./file-preview";
@@ -771,6 +771,7 @@ export function AgentRightPanel({
   onToggleFull?: () => void;
 }) {
   const { t } = useI18n();
+  const automationRevealRef = useRef(createAutomationRevealTracker());
   const [automationTargets, setAutomationTargets] = useState<{ scope: string; browser?: AutomationView; desktop?: AutomationView }>({ scope: "" });
   const remembered: { browser?: AutomationView; desktop?: AutomationView } = automationTargets.scope === threadKey ? automationTargets : {};
   const desktopAutomation = automation?.kind === "desktop" ? automation : automation ? remembered.desktop : undefined;
@@ -848,7 +849,7 @@ export function AgentRightPanel({
     if (!automation || (automation.kind === "browser" && !browserEnabled)) return;
     setAutomationTargets(current => ({ ...(current.scope === threadKey ? current : {}), scope: threadKey, [automation.kind]: automation }));
     setDynTabs(tabs => tabs.some(tab => tabId(tab) === automation.kind) ? tabs.map(tab => tabId(tab) === automation.kind ? {...tab, device:automation.device} : tab) : [...tabs, { kind: automation.kind, device:automation.device }]);
-    setActive(automation.kind);
+    if (automationRevealRef.current(threadKey, automation, true)) setActive(automation.kind);
   }, [automation, browserEnabled, threadKey]);
 
   /* Stop the refresh spinner once fresh changes land; safety timeout in

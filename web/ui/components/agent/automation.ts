@@ -16,3 +16,16 @@ export function parseAutomation(value: unknown): AutomationView | null {
   return { kind: v.kind, device: v.device, action: typeof v.action === "string" ? v.action : "", paused: v.paused === true, source: typeof v.source === "string" ? v.source : undefined,
     ...(v.kind === "browser" ? { base: v.base as string, target: v.target as string } : {}) };
 }
+
+/** Only the first live automation event in a conversation may reveal its panel.
+ * Replayed state counts as already opened; subsequent updates respect dismissal.
+ */
+export function createAutomationRevealTracker() {
+  const seen = new Set<string>();
+  return (scope: string, view: AutomationView | null, live: boolean): boolean => {
+    if (!view) return false;
+    const first = !seen.has(scope);
+    seen.add(scope);
+    return live && first;
+  };
+}

@@ -1,4 +1,4 @@
-import { parseAutomation, type AutomationView } from "../components/agent/automation";
+import { createAutomationRevealTracker, parseAutomation, type AutomationView } from "../components/agent/automation";
 import { MobileWorkspaceNavigation } from "../shell/AppShell";
 import { createFileReadRequests } from "../components/agent/file-read-requests";
 import { useThreadModels } from "../components/agent/use-thread-models";
@@ -302,6 +302,8 @@ export function AgentPage() {
   /* Disable the open/close width transition while dragging (bb rubber-band
    * lag fix, same as the right panel). */
   const [sidebarDragging, setSidebarDragging] = useState(false);
+  const dismissedAutomationPanelsRef = useRef(new Set<string>());
+  const automationRevealRef = useRef(createAutomationRevealTracker());
   const [automationViews, setAutomationViews] = useState<Record<string, AutomationView>>({});
   const [panelOpen, setPanelOpen] = useState(
     () => localStorage.getItem(PANEL_OPEN_KEY) === "1",
@@ -495,6 +497,7 @@ export function AgentPage() {
   const togglePanel = useCallback(() => {
     setPanelOpen((prev) => {
       const next = !prev;
+      if (!next) dismissedAutomationPanelsRef.current.add(JSON.stringify([device, threadRef.current]));
       localStorage.setItem(PANEL_OPEN_KEY, next ? "1" : "0");
       /* Compact: the full-width shelf would cover the drawer — opening
        * one dismisses the other. */
@@ -503,7 +506,7 @@ export function AgentPage() {
       }
       return next;
     });
-  }, []);
+  }, [device]);
 
   /* bb thread→panel linkage: clicking a file path in the transcript opens
    * (or focuses) the right panel and raises a file tab for the path. */
@@ -733,7 +736,8 @@ export function AgentPage() {
         if (view) next[key] = view; else delete next[key];
         return next;
       });
-      if (op === "automation" && view && frameThread === threadRef.current) setPanelOpen(true);
+      const reveal = automationRevealRef.current(key, view, op === "automation");
+      if (reveal && !dismissedAutomationPanelsRef.current.has(key) && frameThread === threadRef.current) setPanelOpen(true);
       if (op === "automation") return;
     }
     if (
@@ -2118,6 +2122,7 @@ export function AgentPage() {
     panelSwipeRef.current = null;
     if (Math.abs(dy) > Math.abs(dx)) return;
     if (dx > 48) {
+      dismissedAutomationPanelsRef.current.add(JSON.stringify([device, threadRef.current]));
       localStorage.setItem(PANEL_OPEN_KEY, "0");
       setPanelOpen(false);
     }
