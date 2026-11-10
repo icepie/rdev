@@ -90,8 +90,7 @@ if [ "$TARGET_OS" == "windows" ]; then
         fi
         export FFMPEG_CFLAGS="-I$DIST/include"
         export FFMPEG_LIBRARY_PATH="-L$DIST/lib"
-    elif [ "$TARGET_ARCH" == "aarch64" ]; then
-        export CC="cl"
+        export CC="clang-cl --target=aarch64-pc-windows-msvc"
         export FFMPEG_EXTRA_ARGS="--toolchain=msvc --arch=aarch64 --target-os=win64 \
             --enable-cross-compile --disable-asm --disable-nvenc --disable-ffnvcodec \
             --enable-mediafoundation --enable-d3d11va"
