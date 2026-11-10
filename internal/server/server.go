@@ -1271,7 +1271,7 @@ func (s *Server) handleClientMessage(client *ClientConn, msg *protocol.Message) 
 	case protocol.MsgFileListResult, protocol.MsgFileUploadReady, protocol.MsgFileDownloadStart, protocol.MsgFileTransferEnd, protocol.MsgFileTransferError,
 		"file_stat_result", "file_mkdir_result", "file_delete_result", "file_rename_result", "file_copy_result":
 		s.handleFileManagerMessage(msg)
-	case protocol.MsgDesktopReady, protocol.MsgDesktopClose, protocol.MsgDesktopClipboard:
+	case protocol.MsgDesktopReady, protocol.MsgDesktopClose, protocol.MsgDesktopClipboard, protocol.MsgDesktopCuaResult:
 		s.handleDesktopMessage(msg)
 	}
 }

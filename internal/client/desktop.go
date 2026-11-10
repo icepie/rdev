@@ -35,6 +35,7 @@ func desktopCapabilities() *protocol.DesktopCapabilities {
 		Clipboard:       false,
 		VideoCodecs:     videoCodecs,
 		EncoderBackends: encoderBackends,
+		NativeCua:       nativeCuaAvailable(),
 	}
 
 	switch runtime.GOOS {

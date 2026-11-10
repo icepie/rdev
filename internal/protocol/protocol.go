@@ -50,12 +50,14 @@ const (
 	MsgFileTransferCancel MessageType = "file_transfer_cancel" // bidir: cancel transfer
 
 	// Remote desktop (text frames for control, binary for frames)
-	MsgDesktopSnapshot  MessageType = "desktop_snapshot"  // S->C: capture one image in an on-demand session
-	MsgDesktopStart     MessageType = "desktop_start"     // S->C: start desktop capture
-	MsgDesktopReady     MessageType = "desktop_ready"     // C->S: desktop capture status/metadata
-	MsgDesktopInput     MessageType = "desktop_input"     // S->C: inject desktop mouse/keyboard input
-	MsgDesktopClose     MessageType = "desktop_close"     // bidir: close desktop session
-	MsgDesktopClipboard MessageType = "desktop_clipboard" // bidir: request, set, or report session clipboard text
+	MsgDesktopSnapshot  MessageType = "desktop_snapshot"   // S->C: capture one image in an on-demand session
+	MsgDesktopStart     MessageType = "desktop_start"      // S->C: start desktop capture
+	MsgDesktopReady     MessageType = "desktop_ready"      // C->S: desktop capture status/metadata
+	MsgDesktopInput     MessageType = "desktop_input"      // S->C: inject desktop mouse/keyboard input
+	MsgDesktopClose     MessageType = "desktop_close"      // bidir: close desktop session
+	MsgDesktopClipboard MessageType = "desktop_clipboard"  // bidir: request, set, or report session clipboard text
+	MsgDesktopCua       MessageType = "desktop_cua"        // S->C: execute a native Cua Driver request
+	MsgDesktopCuaResult MessageType = "desktop_cua_result" // C->S: native Cua Driver result
 
 	// GPU desktop tunnel over shared TCP/KCP transport.
 	MsgGPUDesktopTunnel MessageType = "gpu_desktop_tunnel"
@@ -203,6 +205,10 @@ type Message struct {
 	Text            string          `json:"text,omitempty"`
 	ClipboardItems  []ClipboardItem `json:"clipboardItems,omitempty"`
 
+	// Native Cua request/response; payloads are JSON objects, not base64.
+	CuaRequest json.RawMessage `json:"cuaRequest,omitempty"`
+	CuaResult  json.RawMessage `json:"cuaResult,omitempty"`
+
 	// Legacy fields (text frames)
 	Data   string `json:"data,omitempty"`
 	Stderr string `json:"stderr,omitempty"`
@@ -228,6 +234,7 @@ type DesktopCapabilities struct {
 	InputOptions    []DesktopInputBackend `json:"inputOptions,omitempty"`
 	VideoCodecs     []string              `json:"videoCodecs,omitempty"`
 	EncoderBackends []string              `json:"encoderBackends,omitempty"`
+	NativeCua       bool                  `json:"nativeCua,omitempty"`
 	Reason          string                `json:"reason,omitempty"`
 	Sources         []DesktopSource       `json:"sources,omitempty"`
 }

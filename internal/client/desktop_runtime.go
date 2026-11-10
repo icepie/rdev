@@ -30,6 +30,8 @@ type desktopSession struct {
 	snapshot  chan struct{}
 	input     desktopInput
 	clipboard desktopClipboard
+	cuaMu     sync.Mutex
+	cua       *nativeCuaSession
 
 	inputMu  sync.Mutex
 	frameMu  sync.RWMutex
@@ -102,6 +104,7 @@ func (c *Client) handleDesktopStart(msg *protocol.Message) {
 	session := &desktopSession{stop: make(chan struct{}), snapshot: make(chan struct{}, 1)}
 	c.desktopSessions[msg.SessionID] = session
 	c.mu.Unlock()
+	defer session.closeCua()
 
 	defer func() {
 		c.mu.Lock()
@@ -305,6 +308,43 @@ func scaledDimension(sourceWidth, sourceHeight, maxWidth, maxHeight int) image.P
 	return image.Pt(width, height)
 }
 
+func (c *Client) handleDesktopCua(msg *protocol.Message) {
+	if msg.SessionID == "" {
+		return
+	}
+	c.mu.Lock()
+	session := c.desktopSessions[msg.SessionID]
+	c.mu.Unlock()
+	if session == nil || len(msg.CuaRequest) == 0 {
+		return
+	}
+	session.cuaMu.Lock()
+	if session.cua == nil {
+		cua, err := newNativeCuaSession()
+		if err != nil {
+			session.cuaMu.Unlock()
+			c.send(&protocol.Message{Type: protocol.MsgDesktopCuaResult, SessionID: msg.SessionID, RequestID: msg.RequestID, Error: err.Error()})
+			return
+		}
+		session.cua = cua
+	}
+	result, err := session.cua.request(msg.CuaRequest)
+	session.cuaMu.Unlock()
+	response := &protocol.Message{Type: protocol.MsgDesktopCuaResult, SessionID: msg.SessionID, RequestID: msg.RequestID, CuaResult: result}
+	if err != nil {
+		response.Error = err.Error()
+	}
+	c.send(response)
+}
+
+func (s *desktopSession) closeCua() {
+	s.cuaMu.Lock()
+	if s.cua != nil {
+		s.cua.close()
+		s.cua = nil
+	}
+	s.cuaMu.Unlock()
+}
 func (c *Client) handleDesktopClipboard(msg *protocol.Message) {
 	if msg.SessionID == "" {
 		return
@@ -406,6 +446,7 @@ func (c *Client) handleDesktopClose(sessionID string) {
 	c.mu.Unlock()
 	if session != nil {
 		close(session.stop)
+		session.closeCua()
 	}
 }
 

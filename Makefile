@@ -1,4 +1,4 @@
-.PHONY: all build clean cross server client client-cgo web web-install test vet fmt win7-go-client win7-service-wrapper rust-client-gpu rust-client-gpu-check rust-client-gpu-fmt rust-client-gpu-clippy rust-client-gpu-test rust-client-gpu-smoke rust-client-gpu-linux-desktop-package rust-client-gpu-windows-arm64-package rust-client-gpu-win7-package rust-client-gpu-win7-rdev-desktop-package rust-client-gpu-win7-stage rust-client-gpu-win7-smoke
+.PHONY: all build clean cross server client client-cgo client-cgo-native rust-cua-bridge web web-install test vet fmt win7-go-client win7-service-wrapper rust-client-gpu rust-client-gpu-check rust-client-gpu-fmt rust-client-gpu-clippy rust-client-gpu-test rust-client-gpu-smoke rust-client-gpu-linux-desktop-package rust-client-gpu-windows-arm64-package rust-client-gpu-win7-package rust-client-gpu-win7-rdev-desktop-package rust-client-gpu-win7-stage rust-client-gpu-win7-smoke
 
 BINS = rdev-server rdev-client rdev-client-cgo
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
@@ -9,6 +9,8 @@ RUST_CLIENT_GPU_MANIFEST = clients/rdev-client-gpu/Cargo.toml
 RUST_CLIENT_GPU_WIN7_DIR = clients/rdev-client-gpu/target/x86_64-pc-windows-gnullvm/release
 RUST_CLIENT_GPU_WIN7_DIST = clients/rdev-client-gpu/target/win7-dist
 RUST_CLIENT_GPU_WIN7_RDEV_DESKTOP_DIST = clients/rdev-client-gpu/target/win7-rdev-desktop-dist
+RUST_CUA_BRIDGE_MANIFEST = clients/rdev-client-gpu/cua-driver-bridge/Cargo.toml
+RUST_CUA_BRIDGE_TARGET = internal/client/cua_native/rust-target
 
 all: build
 
@@ -30,9 +32,15 @@ client:
 client-cgo:
 	CGO_ENABLED=1 go build -tags x264cgo -ldflags "$(LDFLAGS)" -o rdev-client-cgo ./cmd/rdev-client
 
+rust-cua-bridge:
+	cargo build --release --manifest-path $(RUST_CUA_BRIDGE_MANIFEST) --features cua-native --target-dir $(RUST_CUA_BRIDGE_TARGET)
+
+client-cgo-native: rust-cua-bridge
+	CGO_ENABLED=1 go build -tags 'x264cgo cuanative' -ldflags "$(LDFLAGS)" -o rdev-client-cgo ./cmd/rdev-client
+
 clean:
 	rm -f $(BINS) $(BINS)-*
-	rm -rf clients/rdev-client-gpu/target $(WIN7_SERVICE_DIST)
+	rm -rf clients/rdev-client-gpu/target internal/client/cua_native/rust-target $(WIN7_SERVICE_DIST)
 
 win7-go-client:
 	mkdir -p $(WIN7_SERVICE_DIST)

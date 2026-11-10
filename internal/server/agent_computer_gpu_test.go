@@ -286,7 +286,7 @@ func TestComputerCuaUnsupportedDoesNotSend(t *testing.T) {
 			client.Desktop = &protocol.DesktopCapabilities{Supported: true, Input: true}
 			tool := computerTool{testAutomation(t, srv, client.ID, "thread")}
 			_, err := tool.Execute(context.Background(), json.RawMessage(`{"action":"`+action+`","tool":"list_apps"}`))
-			if err == nil || !strings.Contains(err.Error(), "Cua-capable Rust client") {
+			if err == nil || !strings.Contains(err.Error(), "native Cua tools unsupported") {
 				t.Fatalf("missing explicit unsupported error: %v", err)
 			}
 			if transport.lastMsg() != nil {

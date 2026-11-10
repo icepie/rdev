@@ -946,6 +946,8 @@ func (c *Client) handleMessage(msg *protocol.Message) {
 		c.handleDesktopSnapshot(msg)
 	case protocol.MsgDesktopInput:
 		c.handleDesktopInput(msg)
+    case protocol.MsgDesktopCua:
+        go c.handleDesktopCua(msg)
 	case protocol.MsgDesktopClipboard:
 		c.handleDesktopClipboard(msg)
 	case protocol.MsgDesktopClose:

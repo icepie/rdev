@@ -23,6 +23,7 @@ node_modules/
 /clients/rdev-client-gpu/target/
 /clients/rdev-client-gpu/cua-driver-bridge/target/
 /clients/rdev-client-gpu/dist/
+/internal/client/cua_native/rust-target/
 
 
 # Android

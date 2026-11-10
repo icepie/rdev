@@ -290,10 +290,10 @@ Web UI 是 React 19 + Tailwind CSS v4 + Radix UI 单页应用，组件/设计令
 - Win7 运行 Go 客户端请使用 XTLS `go-win7` 工具链构建，例如 `GO_WIN7=/path/to/go-win7/bin/go make win7-go-client win7-service-wrapper`。
 - Windows 服务不要直接托管客户端 EXE；使用 `rdev-service-wrapper.exe`，并在配置中设置 `interactive: true`，让服务在活动登录用户桌面启动客户端，避免桌面截图出现 Session 0 的 `Access is denied`。
 - GPU 桌面采用 RDev/Weylus 风格：`rdev-client-gpu` 可通过 `embedded-rdev-desktop` feature 内置启动 vendored RDev 桌面 HTTP/WS 服务并连接 `/gpu-desktop-tunnel`，服务端通过 `/gpu-desktop/<device>/` 代理浏览器流量；服务端只做鉴权和隧道转发。
-- Rust 原生控件操作：编译时启用 `cua-native`（会同时启用 `embedded-rdev-desktop`），Agent 可通过 `computer` 的 `native_tools` 发现工具，再用 `native`、`tool`、`arguments` 调用。无需先截图；控件标识在当前桌面会话内复用。Go 客户端保持原有截图/坐标输入路径，不安装 Cua。
-- Cua Driver 固定为 `0.45.2`，首次原生调用从官方 GitHub release 下载并校验固定 SHA-256，安装到用户缓存目录下的 `rdev/cua-driver/`。每个桌面连接持有独立 stdio 子进程，不开放 Cua 网络端口；释放、断开或取消会终止并回收进程。首次使用需要可访问 GitHub，下载/权限/驱动错误直接返回，不伪装成功。
-- 发布包中 Debian 11/12/13、普通 Windows、macOS 的 amd64/arm64 启用该 feature；运行时要求 Linux glibc ≥2.30（还需 X11/Xi/xkbcommon 动态库）、Windows 10+ 或 macOS 13+。CentOS 7/8、Win7、Android 保持关闭；旧版 macOS 仍可使用普通桌面功能。系统辅助功能授权和 Linux 桌面/合成器限制由 Cua 返回，不绕过权限。
-- 原生结果保留 MCP 文本、结构化内容及错误信息；有效 PNG/JPEG 图片作为模型附件发送，不把 base64 当文本塞入上下文。原生操作沿用桌面独占控制、人工接管和空闲释放规则。
+ Go 原生控件操作：可选 Go cgo 客户端构建（`make client-cgo-native`）启用 Cua Driver 嵌入式 SDK，Agent 通过 `computer` 的 `native_tools` 发现工具，再用 `native`、`tool`、`arguments` 调用；普通 `client-cgo` 与纯 Go 客户端仍使用截图/坐标输入路径，不链接 Cua SDK。
+ `client-cgo-native` 需要 Rust/Cargo 和 C 编译器；SDK 固定为 `0.45.2`，静态链接进客户端，无运行时下载或 MCP 子进程。运行时遵守 Cua 平台支持及辅助功能权限约束；Go 客户端的纯 Go 桌面路径不依赖 SDK。
+ Linux 原生构建还需要 `pkg-config` 及 X11、Xi、xkbcommon 开发库（Debian/Ubuntu：`libx11-dev libxi-dev libxkbcommon-dev`）。
+ Go 原生结果保留 MCP 文本、结构化内容和错误信息；操作仍使用会话级桌面独占控制、人工接管和空闲释放规则。
 
 服务 wrapper 配置示例：
 

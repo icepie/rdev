@@ -24,7 +24,7 @@ type computerTool struct{ automationTool }
 func (*computerTool) Name() string                       { return "computer" }
 func (*computerTool) Summary(raw json.RawMessage) string { return automationSummary(raw) }
 func (*computerTool) Description() string {
-	return "View and operate the selected client's REAL desktop. status lists screens and input capabilities. screenshot returns the selected screen; use its pixel coordinates for click/drag/scroll. key sends a key with optional modifiers. text pastes Unicode through the device clipboard (replaces its contents). On Cua-capable Rust clients, native_tools discovers allowed native accessibility tool schemas; native calls a discovered tool with arguments and returns its MCP result, including structured content and errors. Valid bounded native image content is forwarded to the model as image attachments. Native calls do not require a screenshot. Screen control is exclusive to this conversation until release, user takeover, or 2 minutes idle. Always inspect a fresh screenshot before coordinate input. Browser work should normally use the browser tool instead."
+	return "View and operate the selected client's REAL desktop. status lists screens and input capabilities. screenshot returns the selected screen; use its pixel coordinates for click/drag/scroll. key sends a key with optional modifiers. text pastes Unicode through the device clipboard (replaces its contents). On Cua-capable Go cgo or Rust clients, native_tools discovers allowed native accessibility tool schemas; native calls a discovered tool with arguments and returns its MCP result, including structured content and errors. Valid bounded native image content is forwarded to the model as image attachments. Native calls do not require a screenshot. On pure-Go clients, use the observe-plan-act-verify loop: inspect a fresh screenshot, ground one input in visible pixels, then take another screenshot to verify; never chain blind coordinate actions. Screen control is exclusive to this conversation until release, user takeover, or 2 minutes idle. Always inspect a fresh screenshot before coordinate input. Browser work should normally use the browser tool instead."
 }
 func (*computerTool) Schema() json.RawMessage {
 	return json.RawMessage(`{"type":"object","properties":{"device":{"type":"string"},"action":{"type":"string","enum":["status","screenshot","click","drag","scroll","key","text","release","native_tools","native"]},"tool":{"type":"string","maxLength":128,"description":"Allowed tool name returned by native_tools"},"arguments":{"type":"object","description":"Arguments matching the discovered native tool schema"},"source":{"type":"string"},"x":{"type":"integer","minimum":0},"y":{"type":"integer","minimum":0},"toX":{"type":"integer","minimum":0},"toY":{"type":"integer","minimum":0},"deltaX":{"type":"integer","minimum":-2000,"maximum":2000},"deltaY":{"type":"integer","minimum":-2000,"maximum":2000},"button":{"type":"integer","minimum":0,"maximum":2},"key":{"type":"string","maxLength":64},"code":{"type":"string","maxLength":64},"ctrl":{"type":"boolean"},"alt":{"type":"boolean"},"shift":{"type":"boolean"},"meta":{"type":"boolean"},"text":{"type":"string","maxLength":20000}},"required":["action"],"additionalProperties":false}`)
@@ -107,8 +107,11 @@ func (t *computerTool) Execute(ctx context.Context, raw json.RawMessage) (string
 		return "", err
 	}
 	if a.Action == "native_tools" || a.Action == "native" {
+		if client.Desktop != nil && client.Desktop.NativeCua {
+			return t.executeNativeCua(ctx, client, a, raw)
+		}
 		if !t.srv.clientGPUDesktopAvailable(client) {
-			return "", fmt.Errorf("native Cua tools unsupported: use a Cua-capable Rust client; Go and older clients support screenshot/input only")
+			return "", fmt.Errorf("native Cua tools unsupported: use a Cua-capable Go cgo or Rust client; pure-Go Go clients support screenshot/input only")
 		}
 		return t.executeGPU(ctx, client, a, raw)
 	}
