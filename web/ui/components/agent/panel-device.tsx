@@ -18,11 +18,18 @@ export function PanelDevice({ device, onChange, children }: {
     <div className="flex shrink-0 items-center gap-2 border-b border-border-seam px-3 py-2">
       <Select value={target} onValueChange={onChange}>
         <SelectTrigger aria-label={t("agent.selectDeviceShort")} className="h-8 min-w-0 w-full text-xs">
-          <SelectValue placeholder={t("agent.selectDeviceShort")} />
+          <SelectValue className="min-w-0 flex-1 text-left" placeholder={t("agent.selectDeviceShort")} />
         </SelectTrigger>
         <SelectContent>
           {target && !available.some(d => d.id === target) && <SelectItem value={target} disabled>{target} · {t("common.disconnected")}</SelectItem>}
-          {available.map(d => <SelectItem key={d.id} value={d.id}><DeviceIcon device={d.id} os={d.os} /><span className="truncate">{d.id}</span></SelectItem>)}
+          {available.map(d => (
+            <SelectItem key={d.id} value={d.id} textValue={d.id} className="[&>span:last-child]:min-w-0 [&>span:last-child]:flex-1">
+              <span className="flex min-w-0 items-center gap-2">
+                <DeviceIcon device={d.id} os={d.os} />
+                <span className="min-w-0 truncate">{d.id}</span>
+              </span>
+            </SelectItem>
+          ))}
         </SelectContent>
       </Select>
     </div>
