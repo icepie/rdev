@@ -34,6 +34,8 @@ type agentAutomation struct {
 	pages        map[string]automationPage
 	screens      map[string]automationScreen
 	view         automationView
+
+	browserHistory []browserActionRecord
 }
 
 func (s *Server) automationTools(entry *agentSessionEntry, th *agentThread) []agent.Tool {

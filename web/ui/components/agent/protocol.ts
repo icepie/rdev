@@ -184,6 +184,7 @@ export function parseAllThreads(v: unknown): AllThreadsDevice[] {
  * switch the view). */
 export const THREAD_SCOPED_OPS: Record<string, true> = {
   automation: true,
+  browser_action: true,
   assistant_start: true,
   thread_peeked: true,
   turn_start: true,

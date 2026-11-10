@@ -36,6 +36,17 @@ window.addEventListener("message", async event => {
     visible = event.data.visible === true;
     if (visible) activate();
   }
+  if (event.data?.type === "rdev-browser-viewport") {
+    const { width, height } = event.data;
+    if (!Number.isInteger(width) || !Number.isInteger(height) || width<240 || width>3840 || height<240 || height>2160) return;
+    try {
+      const target = app?.screenCaptureModel?.target();
+      if (!target) throw new Error('Page unavailable');
+      const result = await target.emulationAgent().invoke_setDeviceMetricsOverride({width,height,deviceScaleFactor:1,mobile:false});
+      if (result.getError?.()) throw new Error(result.getError());
+      notify({type:"rdev-browser-viewport-applied",width,height});
+    } catch { notify({type:"rdev-browser-viewport-error"}); }
+  }
   if (event.data?.type === "rdev-browser-tools") {
     showTools = event.data.visible === true;
     applyLayout();

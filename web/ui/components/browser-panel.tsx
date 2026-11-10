@@ -1,3 +1,4 @@
+import type { BrowserActionRecord } from "./agent/browser-history";
 import type { AutomationView } from "./agent/automation";
 import { BrowserPreview } from "./browser-preview";
 import { useEffect, useRef, useState } from "react";
@@ -13,8 +14,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 interface Target { id: string; title: string; url: string }
 
 /** Chrome's own inspector frontend includes its interactive Screencast app. */
-export function BrowserPanel({ device, visible = true, deviceSelection = "inline", automation }: { automation?: AutomationView; device: string; visible?: boolean; deviceSelection?: "inline" | "sidebar" }) {
+export function BrowserPanel({ device, visible = true, deviceSelection = "inline", automation, history = [], replayId = "", onReplay }: { history?: BrowserActionRecord[]; replayId?: string; onReplay?: (id: string) => void; automation?: AutomationView; device: string; visible?: boolean; deviceSelection?: "inline" | "sidebar" }) {
   const { t, lang } = useI18n();
+  const replay = history.find(row => row.id === replayId && row.thumbnail);
   const { devices } = useDevices();
   const [selectedDevice, setExitDevice] = useState(device === "@server" ? "" : device);
   const exitDevice = deviceSelection === "sidebar" ? device : selectedDevice;
@@ -113,6 +115,8 @@ export function BrowserPanel({ device, visible = true, deviceSelection = "inline
     </div>
     {error && <p role="alert" className="px-3 py-2 text-xs text-destructive-text">{error}</p>}
     {!online && base && <p role="status" className="px-3 py-2 text-xs text-muted-foreground">{t("browser.offline")}</p>}
+    <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
+    <div className="flex min-h-0 flex-1 flex-col" inert={!!replay} aria-hidden={!!replay}>
     {!base ? <form onSubmit={e => { e.preventDefault(); void start(); }} className="m-auto flex min-h-0 min-w-0 w-full max-w-sm flex-col gap-3 overflow-y-auto p-4">
       <p className="text-sm text-muted-foreground">{t("browser.intro")}</p>
       {deviceSelection === "sidebar" ? (
@@ -136,5 +140,29 @@ export function BrowserPanel({ device, visible = true, deviceSelection = "inline
       </>}
       <p className="text-xs text-muted-foreground">{t("browser.lifetime")}</p>
     </form> : inspector ? <BrowserPreview key={inspector} src={inspector} visible={visible} /> : <p role="status" className="p-4 text-xs text-muted-foreground">{t("common.loading")}</p>}
+    </div>
+    {replay && <div className="absolute inset-0 z-10 flex min-h-0 flex-col bg-background">
+      <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border-seam px-3 py-1 text-xs">
+        <span>{t("browser.replay")} · {history.indexOf(replay)+1}/{history.length} · {replay.width} × {replay.height}</span>
+        <Button size="sm" variant="ghost" onClick={() => onReplay?.("")}>{t("browser.live")}</Button>
+      </div>
+      <img src={replay.thumbnail} alt={t("browser.replay") + " · " + replay.action} className="min-h-0 w-full flex-1 object-contain" />
+    </div>}
+    </div>
+    {history.length > 0 && <section aria-label={t("browser.history")} className="flex max-h-[35%] min-h-24 shrink-0 flex-col border-t border-border-seam">
+      <div className="flex shrink-0 items-center justify-between px-3 py-2 text-xs text-muted-foreground">
+        <span>{t("browser.history")} · {history.length} · {history.filter(r=>!r.ok).length} {t("browser.failures")}</span>
+        <span>{(history.reduce((n,r)=>n+r.durationMs,0)/1000).toFixed(1)}s</span>
+      </div>
+      <ol className="min-h-0 overflow-y-auto px-2 pb-2">
+        {history.map((row,index)=><li key={row.id}><button type="button" disabled={!row.thumbnail} aria-pressed={replay?.id===row.id} onClick={()=>onReplay?.(replay?.id===row.id?"":row.id)} className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs hover:bg-state-hover aria-pressed:bg-state-hover disabled:cursor-default disabled:opacity-60">
+          <span className={row.ok?"text-muted-foreground":"text-destructive-text"}>{row.ok?"✓":"!"}</span>
+          <span className="min-w-0 flex-1 truncate">{index+1}. {row.action}</span>
+          <time className="text-muted-foreground">{new Date(row.startedAt).toLocaleTimeString()}</time>
+          <span className="text-muted-foreground">{row.durationMs}ms</span>
+          {row.thumbnail && <img src={row.thumbnail} alt="" className="h-7 w-10 rounded object-cover" />}
+        </button></li>)}
+      </ol>
+    </section>}
   </div>;
 }

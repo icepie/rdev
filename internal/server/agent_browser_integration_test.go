@@ -129,6 +129,21 @@ func TestBrowserAgentChromeIntegration(t *testing.T) {
 	if err = c.call(ctx, "Rdev.nonexistent", map[string]any{}, nil); err == nil {
 		t.Fatal("CDP errors ignored")
 	}
+	// The visible inspector activates its page on pointer focus before resizing.
+	if err := c.call(ctx, "Page.bringToFront", map[string]any{}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.call(ctx, "Emulation.setDeviceMetricsOverride", map[string]any{"width": 390, "height": 844, "deviceScaleFactor": 1, "mobile": false}, nil); err != nil {
+		t.Fatal(err)
+	}
+	resized := run(first, map[string]any{"action": "snapshot"})
+	if !strings.Contains(resized, `"width":390,"height":844`) {
+		t.Fatalf("viewport was not applied: %s", resized)
+	}
+	run(first, map[string]any{"action": "fill", "selector": "#name", "text": "resized"})
+	if frame := first.state.browserHistory[len(first.state.browserHistory)-1]; frame.Thumbnail == "" || frame.Width != 390 || frame.Height != 844 {
+		t.Fatalf("resized preview missing: %dx%d", frame.Width, frame.Height)
+	}
 	if _, err = browserEvaluate(ctx, c, `setTimeout(()=>{const e=document.createElement('button');e.id='delayed';e.textContent='Ready';document.body.append(e)},200);'scheduled'`); err != nil {
 		t.Fatal(err)
 	}
@@ -143,6 +158,30 @@ func TestBrowserAgentChromeIntegration(t *testing.T) {
 	rawSelect, _ := json.Marshal(map[string]any{"device": client.ID, "action": "select", "selector": "#choice", "text": "missing"})
 	if _, err := first.Execute(ctx, rawSelect); err == nil {
 		t.Fatal("select accepted missing option")
+	}
+	records := first.state.browserHistory
+	if len(records) < 6 {
+		t.Fatalf("missing browser history: %d", len(records))
+	}
+	for _, r := range records {
+		if r.Device != client.ID || r.Target != first.state.pages[client.ID].target {
+			t.Fatal("history escaped conversation target")
+		}
+	}
+	if records[0].Thumbnail == "" || records[0].Width <= 0 || records[0].Height <= 0 {
+		t.Fatal("missing replay frame dimensions")
+	}
+	if last := records[len(records)-1]; last.Width != 390 || last.Height != 844 {
+		t.Fatalf("replay did not preserve resized dimensions: %dx%d", last.Width, last.Height)
+	}
+	if records[len(records)-1].OK {
+		t.Fatal("failed selection missing from history")
+	}
+	if strings.Contains(fmt.Sprint(records), "quoted") {
+		t.Fatal("typed text leaked into replay metadata")
+	}
+	if len(second.state.browserHistory) != 1 {
+		t.Fatal("conversation history isolation failed")
 	}
 	c.close()
 	s.retireAutomation(first.state)

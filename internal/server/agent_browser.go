@@ -26,7 +26,7 @@ type browserAction struct {
 	X, Y, DeltaX, DeltaY                     int
 }
 
-func (t *browserTool) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
+func (t *browserTool) Execute(ctx context.Context, raw json.RawMessage) (output string, actionErr error) {
 	var a browserAction
 	if err := json.Unmarshal(raw, &a); err != nil {
 		return "", err
@@ -48,6 +48,19 @@ func (t *browserTool) Execute(ctx context.Context, raw json.RawMessage) (string,
 		return "", err
 	}
 	defer finish()
+	started := time.Now()
+	var capture *browserCDP
+	var captureTarget string
+	a.Device = client.ID
+	defer func() {
+		if browserRecordable(a.Action) {
+			t.recordBrowserAction(ctx, capture, a, captureTarget, started, actionErr)
+		}
+		if capture != nil {
+			capture.close()
+		}
+	}()
+
 	if a.Action == "status" {
 		t.srv.browserMu.Lock()
 		b := t.srv.browsers[client.ID]
@@ -84,7 +97,7 @@ func (t *browserTool) Execute(ctx context.Context, raw json.RawMessage) (string,
 		delete(t.state.pages, client.ID)
 		return "", err
 	}
-	defer c.close()
+	capture, captureTarget = c, page.target
 	switch a.Action {
 	case "open", "navigate":
 		var result struct {

@@ -1,3 +1,4 @@
+import { parseBrowserRecords, mergeBrowserRecords, type BrowserActionRecord } from "../components/agent/browser-history";
 import { createAutomationRevealTracker, parseAutomation, type AutomationView } from "../components/agent/automation";
 import { MobileWorkspaceNavigation } from "../shell/AppShell";
 import { createFileReadRequests } from "../components/agent/file-read-requests";
@@ -304,6 +305,8 @@ export function AgentPage() {
   const [sidebarDragging, setSidebarDragging] = useState(false);
   const dismissedAutomationPanelsRef = useRef(new Set<string>());
   const automationRevealRef = useRef(createAutomationRevealTracker());
+  const [browserReplayIDs, setBrowserReplayIDs] = useState<Record<string, string>>({});
+  const [browserHistories, setBrowserHistories] = useState<Record<string, BrowserActionRecord[]>>({});
   const [automationViews, setAutomationViews] = useState<Record<string, AutomationView>>({});
   const [panelOpen, setPanelOpen] = useState(
     () => localStorage.getItem(PANEL_OPEN_KEY) === "1",
@@ -728,6 +731,13 @@ export function AgentPage() {
      * they carry the NEW thread id and update threadRef themselves. */
     const op = String(msg.op);
     const frameThread = asString(msg.thread);
+    if (op === "browser_action" || op === "auth_ok" || op === "thread_switched" || op === "reset_ok") {
+      const key = JSON.stringify([sourceDevice, frameThread]);
+      const rows = parseBrowserRecords(op === "browser_action" ? [msg.browserAction] : msg.browserHistory);
+      setBrowserHistories(current => ({...current, [key]:op === "browser_action" ? mergeBrowserRecords(current[key] ?? [],rows) : mergeBrowserRecords([],rows)}));
+      if (op === "browser_action") return;
+    }
+
     if (op === "automation" || op === "auth_ok" || op === "thread_switched" || op === "reset_ok") {
       const view = parseAutomation(msg.automation);
       const key = JSON.stringify([sourceDevice, frameThread]);
@@ -1951,6 +1961,9 @@ export function AgentPage() {
   const automationView = automationViews[JSON.stringify([device, thread])] ?? null;
   const rightPanelProps = {
     automation: automationView,
+    browserReplayId: browserReplayIDs[JSON.stringify([device, thread])] ?? "",
+    onBrowserReplay: (id: string) => setBrowserReplayIDs(current => ({...current,[JSON.stringify([device, thread])]:id})),
+    browserHistory: browserHistories[JSON.stringify([device, thread])] ?? [],
     visible: panelOpen,
     changes,
     diffs,

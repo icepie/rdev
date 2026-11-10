@@ -63,9 +63,21 @@ it("attaches the conversation target without silently selecting another thread's
  try {
    const automation = {kind:"browser", device:"laptop", target:"owned-page", base:`/api/browser/view/${"a".repeat(64)}`, paused:false, action:"navigate"};
    await act(() => root.render(createElement(BrowserPanel,{device:"laptop",automation})));
+   const frame = document.querySelector('iframe');
+   const history = [{id:'step-1',device:'laptop',action:'click',startedAt:1,durationMs:20,ok:true,thumbnail:'data:image/jpeg;base64,YQ==',width:1280,height:800}];
+   const onReplay = vi.fn();
+   await act(() => root.render(createElement(BrowserPanel,{device:'laptop',automation,history,replayId:'step-1',onReplay})));
+   expect(document.querySelector('iframe')).toBe(frame);
+   expect(document.querySelector('[inert]')).not.toBeNull();
+   expect(document.querySelector('img[alt*="browser.replay"]')).not.toBeNull();
+   await act(()=>[...document.querySelectorAll('button')].find(b=>b.textContent==='browser.live').click());
+   expect(onReplay).toHaveBeenCalledWith('');
+   await act(() => root.render(createElement(BrowserPanel,{device:'laptop',automation,history,replayId:'',onReplay})));
+   expect(document.querySelector('iframe')).toBe(frame);
+   expect(document.querySelector('[inert]')).toBeNull();
    expect(apiFetch).not.toHaveBeenCalled();
    expect(new URL(document.querySelector("iframe").src).searchParams.get("wss")).toContain("/page/owned-page");
-   expect(document.querySelector('[role="combobox"]').disabled).toBe(true);
+   expect(document.querySelector('[aria-label="browser.tabs"]').disabled).toBe(true);
    expect([...document.querySelectorAll("button")].find(b=>b.textContent==="browser.stop").disabled).toBe(true);
    await act(() => root.render(createElement(BrowserPanel,{device:"laptop"})));
    expect(document.querySelector("iframe")).toBeNull();

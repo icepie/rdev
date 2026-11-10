@@ -4,11 +4,12 @@ import { expect, it, vi } from "vitest";
 
 it("defaults to preview only and restricts parent controls to the same origin", async () => {
  const original = readFileSync(new URL("../../internal/server/browser_bridge.js", import.meta.url), "utf8");
+ const metrics = vi.fn(async () => ({}));
  const bringToFront = vi.fn(async () => ({}));
  const surface = { contains: () => false };
  const app = {
   rootSplitWidget: { showBoth: vi.fn(), hideSidebar: vi.fn() }, screencastView: { contentElement: surface },
-  screenCaptureModel: { target: () => ({ pageAgent: () => ({ invoke_bringToFront: bringToFront }) }) },
+  screenCaptureModel: { target: () => ({ pageAgent: () => ({ invoke_bringToFront: bringToFront }), emulationAgent: () => ({invoke_setDeviceMetricsOverride:metrics}) }) },
   enabledSetting: { set: vi.fn() }, onScreencastEnabledChanged: vi.fn(),
  };
  const parent = { postMessage: vi.fn() };
@@ -26,6 +27,11 @@ it("defaults to preview only and restricts parent controls to the same origin", 
  expect(app.rootSplitWidget.hideSidebar).toHaveBeenCalledOnce();
  expect(app.rootSplitWidget.showBoth).not.toHaveBeenCalled();
  const send = data => receive({ origin: context.location.origin, source: parent, data });
+ await send({type:"rdev-browser-viewport",width:390,height:844});
+ expect(metrics).toHaveBeenCalledWith({width:390,height:844,deviceScaleFactor:1,mobile:false});
+ await send({type:"rdev-browser-viewport",width:999999,height:844});
+ await receive({origin:"https://other.test",source:parent,data:{type:"rdev-browser-viewport",width:800,height:600}});
+ expect(metrics).toHaveBeenCalledTimes(1);
  await send({ type: "rdev-browser-tools", visible: true });
  expect(app.rootSplitWidget.showBoth).toHaveBeenCalledOnce();
  await receive({ origin: "https://other.test", source: parent, data: { type: "rdev-browser-tools", visible: false } });
