@@ -97,7 +97,9 @@ if [ "$TARGET_OS" == "windows" ]; then
             --enable-mediafoundation --enable-d3d11va"
         export FFMPEG_CFLAGS="-I$DIST/include"
         export FFMPEG_LIBRARY_PATH="-LIBPATH:$DIST/lib"
-        export X264_EXTRA_ARGS="--disable-asm"
+        export X264_CC="clang --target=aarch64-pc-windows-msvc"
+        export X264_AR="llvm-ar"
+        export X264_EXTRA_ARGS="--host=aarch64-w64-mingw32 --disable-asm"
     else
         export CC="cl"
         export FFMPEG_EXTRA_ARGS="--toolchain=msvc --disable-nvenc --disable-ffnvcodec \
@@ -169,9 +171,12 @@ if [ "${RDEV_DISABLE_ASM:-n}" == "y" ]; then
 fi
 ./x264.sh
 if [ "$TARGET_OS" == "windows" ] && [ "$HOST_OS" == "windows" ]; then
-    if [ -f "$DIST/lib/libx264.lib" ]; then
-        cp "$DIST/lib/libx264.lib" "$DIST/lib/x264.lib"
-    fi
+	if [ -f "$DIST/lib/libx264.a" ]; then
+		cp "$DIST/lib/libx264.a" "$DIST/lib/libx264.lib"
+	fi
+	if [ -f "$DIST/lib/libx264.lib" ]; then
+		cp "$DIST/lib/libx264.lib" "$DIST/lib/x264.lib"
+	fi
 fi
 if [ "$TARGET_OS" == "linux" ]; then
     if [ "$ENABLE_NVENC" == "y" ] || [ "$ENABLE_VULKAN_VIDEO" == "y" ]; then

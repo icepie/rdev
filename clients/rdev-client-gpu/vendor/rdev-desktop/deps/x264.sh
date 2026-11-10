@@ -11,6 +11,12 @@ X264_CONFIGURE_ARGS=()
 if [ -n "${X264_EXTRA_ARGS:-}" ]; then
 	eval "X264_CONFIGURE_ARGS=($X264_EXTRA_ARGS)"
 fi
+if [ -n "${X264_CC:-}" ]; then
+	export CC="$X264_CC"
+fi
+if [ -n "${X264_AR:-}" ]; then
+	export AR="$X264_AR"
+fi
 
 ./configure \
 	--prefix="$DIST" \
