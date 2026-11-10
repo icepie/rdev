@@ -16,6 +16,11 @@ export PKG_CONFIG_PATH="$PKG_CONFIG_DIST/lib/pkgconfig:/usr/lib64/pkgconfig:/usr
 export PKG_CONFIG_ALLOW_SYSTEM_CFLAGS=1
 export PKG_CONFIG_ALLOW_SYSTEM_LIBS=1
 
+compiler_args=()
+if [ -n "${CC:-}" ]; then
+	compiler_args+=(--cc="$CC")
+fi
+
 if ! ./configure \
 	--prefix="$DIST" \
 	--disable-debug \
@@ -29,6 +34,7 @@ if ! ./configure \
 	--disable-autodetect \
 	--extra-cflags="$FFMPEG_CFLAGS" \
 	--extra-ldflags="$FFMPEG_LIBRARY_PATH" \
+	"${compiler_args[@]}" \
 	$FFMPEG_EXTRA_ARGS; then
 	if [ -f ffbuild/config.log ]; then
 		tail -200 ffbuild/config.log

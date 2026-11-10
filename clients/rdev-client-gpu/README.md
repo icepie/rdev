@@ -42,9 +42,9 @@ For a direct embedded desktop build without staging:
 cargo build --release --manifest-path clients/rdev-client-gpu/Cargo.toml --features embedded-rdev-desktop
 ```
 
-The Windows packages are cross-compiled from Linux with `llvm-mingw`. Windows amd64 and Windows 7 amd64 use `x86_64-pc-windows-gnullvm`; Windows ARM64 uses `aarch64-pc-windows-gnullvm`. The Windows 7 package then applies PE import patches and ships compatibility shim DLLs for Win8+ imports such as `GetSystemTimePreciseAsFileTime`, `WaitOnAddress`, and `ProcessPrng`.
+Windows release CI builds amd64 on Linux with LLVM MinGW and the supported `x86_64-pc-windows-gnu` Rust target; Windows 7 amd64 uses `x86_64-pc-windows-gnullvm`. Windows ARM64 builds on a native Windows runner with `aarch64-pc-windows-msvc`: FFmpeg uses `clang-cl --target=aarch64-pc-windows-msvc`, while x264 uses Clang's GNU-style driver and `llvm-ar`. The Windows 7 package applies PE import patches and ships compatibility shim DLLs for Win8+ imports such as `GetSystemTimePreciseAsFileTime`, `WaitOnAddress`, and `ProcessPrng`.
 
-For a Windows ARM64 artifact from a Linux host, install an LLVM MinGW toolchain that provides `aarch64-w64-mingw32-clang`, then run:
+The optional Linux cross-build script for Windows ARM64 requires a Rust toolchain providing `aarch64-pc-windows-gnullvm` (not the release CI target) and LLVM MinGW providing `aarch64-w64-mingw32-clang`:
 
 ```bash
 rustup target add aarch64-pc-windows-gnullvm

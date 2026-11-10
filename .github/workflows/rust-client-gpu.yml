@@ -255,6 +255,16 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      - name: Initialize Windows ARM64 MSVC environment
+        if: matrix.target == 'aarch64-pc-windows-msvc'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: arm64
+
+      - name: Install Windows pkg-config
+        if: matrix.target == 'aarch64-pc-windows-msvc'
+        run: choco install pkgconfiglite --yes --no-progress
+
       - uses: android-actions/setup-android@v4
         if: matrix.android == true
 
