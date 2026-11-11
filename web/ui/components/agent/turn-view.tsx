@@ -29,7 +29,6 @@ export function TurnView({
   onCopy,
   onAddToChat,
   onOpenFile,
-  onOpenDiff,
   onOpenLocalFile,
 }: {
   turn: TurnItem;
@@ -40,10 +39,8 @@ export function TurnView({
   dimmed?: boolean;
   onCopy: (text: string) => void;
   onAddToChat: (text: string) => void;
-  /* bb thread→panel linkage: preview tab / focused diff deck / markdown
-   * local-file links. */
+  /* Thread→panel linkage: preview tab / markdown local-file links. */
   onOpenFile?: (path: string) => void;
-  onOpenDiff?: (path: string) => void;
   onOpenLocalFile?: (link: LocalFileLink) => void;
 }) {
   const projected = useMemo(() => projectInlineThinking(turn.text, turn.streaming && active), [turn.text, turn.streaming, active]);
@@ -97,7 +94,6 @@ export function TurnView({
                 t={t}
                 dimmed={dimmed}
                 onOpenFile={onOpenFile}
-                onOpenDiff={onOpenDiff}
               />
             ) : (
               <ToolRow
@@ -106,7 +102,6 @@ export function TurnView({
                 t={t}
                 dimmed={dimmed}
                 onOpenFile={onOpenFile}
-                onOpenDiff={onOpenDiff}
               />
             ),
           )}

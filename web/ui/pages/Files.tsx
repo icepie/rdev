@@ -17,6 +17,7 @@ import {
   useRef,
   useState,
   type ChangeEvent,
+  type ComponentProps,
   type DragEvent,
   type ReactNode,
 } from "react";
@@ -30,6 +31,7 @@ import {
   rememberDevicePassword,
   forgetDevicePassword,
 } from "../lib/api";
+import { useServerCapabilities } from "../lib/server-capabilities";
 import { cn } from "../lib/utils";
 import { Button } from "../components/button";
 import { Input } from "../components/input";
@@ -61,6 +63,7 @@ import {
   TableHeader,
   TableRow,
 } from "../components/table";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../components/tooltip";
 import { Icon } from "../components/icon";
 import { OsIcon } from "../components/os-icon";
 
@@ -208,6 +211,20 @@ function statusBadgeClass(s: TaskStatus) {
   }
 }
 
+function FileIconButton({ label, children, className, ...props }: ComponentProps<typeof Button> & { label: string; children: ReactNode }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button type="button" size="icon" aria-label={label} className={cn("size-8 shrink-0", className)} {...props}>
+          {children}
+          <span className="sr-only">{label}</span>
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent side="bottom">{label}</TooltipContent>
+    </Tooltip>
+  );
+}
+
 /* ── Page ── */
 
 const EMPTY_PARAMS = new URLSearchParams();
@@ -230,6 +247,7 @@ export function FilesBrowser({
   leafId: number;
   panesRef: { current: Map<number, FilesPaneApi> };
 }) {
+  const { devicePasswordInputsHidden } = useServerCapabilities();
   const { t } = useI18n();
   const { devices } = useDevices();
   const [urlParams, setUrlParams] = useSearchParams();
@@ -1326,18 +1344,15 @@ export function FilesBrowser({
 
   return (
     <div className="page-workspace @container/files overflow-hidden">
-      {/* Toolbar */}
-      <div className="page-toolbar">
-        {/* Device is picked from the left rail; the toolbar only shows it. */}
-        <div className="flex h-9 items-center gap-1.5 rounded-md border border-border-seam px-2.5 text-sm text-muted-foreground select-none">
-          <OsIcon
-            os={devices.find((d) => d.id === device)?.os}
-            className="shrink-0"
-          />
-          <span className="max-w-48 truncate">
-            {device || t("terminal.devicePlaceholder")}
-          </span>
-        </div>
+      <TooltipProvider delayDuration={300}>
+      <div className="page-toolbar gap-1.5">
+      {/* Device is picked from the left rail; keep the toolbar focused on navigation. */}
+      <div className="flex h-8 min-w-0 max-w-48 items-center gap-1.5 rounded-md border border-border-seam bg-surface-recessed px-2 text-xs text-muted-foreground select-none">
+        <OsIcon os={devices.find((d) => d.id === device)?.os} className="size-3.5 shrink-0" />
+        <span className="truncate">{device || t("terminal.devicePlaceholder")}</span>
+      </div>
+      <div className="relative min-w-0 flex-1">
+        <Icon name="Folder" className="pointer-events-none absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
         <Input
           spellCheck={false}
           autoComplete="off"
@@ -1345,64 +1360,79 @@ export function FilesBrowser({
           aria-label={t("files.path")}
           disabled={!device}
           placeholder={t("files.path")}
-          className="h-9 min-w-40 flex-1"
+          className="h-8 min-w-0 border-border-seam bg-surface-recessed pl-7 text-xs"
           onChange={(e) => setPathInput(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === "Enter" && !isImeComposing(e.nativeEvent)) void list(pathInput.trim());
           }}
         />
-        <Button
-          variant="outline"
-          aria-label={t("files.up")}
-          disabled={!device}
-          onClick={() => void list(parentPathRef.current || currentPathRef.current)}
-        >
-          <Icon name="Folder" />
-          <span className="hidden @min-[480px]/files:inline">{t("files.up")}</span>
-        </Button>
-        <Button variant="outline" aria-label={t("files.refresh")} disabled={!device} onClick={() => void list(currentPathRef.current)}>
-          <Icon name="Refresh" />
-          <span className="hidden @min-[480px]/files:inline">{t("files.refresh")}</span>
-        </Button>
-        <Button disabled={!device} onClick={() => { reselectTaskRef.current = null; fileInputRef.current?.click(); }}>
-          <Icon name="Upload" />
-          {t("files.upload")}
-        </Button>
-        <Button variant="ghost" aria-label={t("files.tasks")} aria-expanded={tasksOpen} onClick={() => setTasksOpen((open) => !open)}>
-          <Icon name="Files" /><span className="hidden @min-[480px]/files:inline">{t("files.tasks")}</span>{sortedTasks.length > 0 && ` (${sortedTasks.length})`}
-        </Button>
       </div>
+      <FileIconButton label={t("files.up")} variant="ghost" disabled={!device} onClick={() => void list(parentPathRef.current || currentPathRef.current)}>
+        <Icon name="ArrowUp" className="size-4" />
+      </FileIconButton>
+      <FileIconButton label={t("files.refresh")} variant="ghost" disabled={!device} onClick={() => void list(currentPathRef.current)}>
+        <Icon name="Refresh" className="size-4" />
+      </FileIconButton>
+      <FileIconButton label={t("files.upload")} variant="secondary" disabled={!device} onClick={() => { reselectTaskRef.current = null; fileInputRef.current?.click(); }}>
+        <Icon name="Upload" className="size-4" />
+      </FileIconButton>
+      <FileIconButton label={t("files.tasks")} variant={tasksOpen ? "secondary" : "ghost"} aria-expanded={tasksOpen} onClick={() => setTasksOpen((open) => !open)}>
+        <span className="relative">
+          <Icon name="Files" className="size-4" />
+          {sortedTasks.length > 0 && <span className="absolute -right-2 -top-2 min-w-3.5 rounded-full bg-timeline-accent px-1 text-center text-[9px] leading-3.5 text-white">{sortedTasks.length > 99 ? "99+" : sortedTasks.length}</span>}
+        </span>
+      </FileIconButton>
+    </div>
 
-      {/* Drop zone */}
-      <div
-        className={cn(
-          "flex min-h-9 shrink-0 items-center justify-center gap-2 border-b border-dashed border-border-seam px-3 py-1 text-xs text-muted-foreground",
-          dragging && "border-timeline-accent bg-timeline-accent/5 text-timeline-accent",
-        )}
-        onDragOver={(e) => {
-          e.preventDefault();
-          setDragging(true);
-        }}
-        onDragLeave={() => setDragging(false)}
-        onDrop={onDrop}
-      >
-        <Icon name="Upload" />
-        {t("files.dropHint")}
-      </div>
-      <input ref={fileInputRef} type="file" multiple className="hidden" onChange={onFilesPicked}
-        onClick={() => {
-          uploadDestinationRef.current = reselectTaskRef.current ? null : {
-            device: activeDeviceRef.current, path: currentPathRef.current,
-          };
-        }} />
+    <input ref={fileInputRef} type="file" multiple className="hidden" onChange={onFilesPicked}
+      onClick={() => {
+        uploadDestinationRef.current = reselectTaskRef.current ? null : {
+          device: activeDeviceRef.current, path: currentPathRef.current,
+        };
+      }} />
+
 
       <div className="file-workspace-grid min-h-0 flex-1 overflow-hidden" data-tasks-open={tasksOpen}>
         <div className="file-editor-workspace" data-details={details} data-editor-open={showEditor && previews.tabs.length > 0}>
-          <div className="file-explorer-region min-h-0 min-w-0 overflow-hidden border-r border-border-seam" onDragOver={onPaneDragOver} onDrop={onDrop}>
-            <div className="flex shrink-0 items-center justify-end gap-1 border-b border-border-seam p-1">
-              <Button size="sm" variant="ghost" aria-pressed={!details} onClick={() => setDetails(false)}>{t("files.explorer")}</Button>
-              <Button size="sm" variant="ghost" aria-pressed={details} onClick={() => setDetails(true)}>{t("files.listView")}</Button>
-              {previews.tabs.length > 0 && <Button size="sm" variant="ghost" onClick={() => setShowEditor(true)}>{t("files.openFiles")}</Button>}
+          <div
+            className={cn("file-explorer-region relative min-h-0 min-w-0 overflow-hidden border-r border-border-seam", dragging && "ring-1 ring-inset ring-timeline-accent")}
+            onDragOver={(e) => {
+              onPaneDragOver(e);
+              if (e.dataTransfer.types.includes("Files") || e.dataTransfer.types.includes(FILE_DRAG_MIME)) {
+                e.preventDefault();
+                setDragging(true);
+              }
+            }}
+            onDragLeave={(e) => {
+              if (!e.relatedTarget || !e.currentTarget.contains(e.relatedTarget as Node)) setDragging(false);
+            }}
+            onDrop={(e) => {
+              setDragging(false);
+              onDrop(e);
+            }}
+          >
+            {dragging && (
+              <div className="pointer-events-none absolute inset-2 z-20 flex flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-timeline-accent bg-background/90 text-sm text-timeline-accent shadow-lg">
+                <Icon name="Upload" className="size-6" />
+                <span>{t("files.dropHint")}</span>
+              </div>
+            )}
+            <div className="flex min-h-9 shrink-0 items-center gap-2 border-b border-border-seam bg-surface-raised px-2">
+              <div className="flex min-w-0 flex-1 items-center gap-1.5 text-xs text-muted-foreground">
+                <Icon name="Folder" className="size-3.5 shrink-0 text-file-accent" />
+                <span className="truncate font-mono">{currentPathRef.current || "/"}</span>
+              </div>
+              <div className="flex shrink-0 items-center gap-0.5">
+                <FileIconButton label={t("files.explorer")} variant={!details ? "secondary" : "ghost"} aria-pressed={!details} onClick={() => setDetails(false)}>
+                  <Icon name="Folder" className="size-4" />
+                </FileIconButton>
+                <FileIconButton label={t("files.listView")} variant={details ? "secondary" : "ghost"} aria-pressed={details} onClick={() => setDetails(true)}>
+                  <Icon name="Files" className="size-4" />
+                </FileIconButton>
+                {previews.tabs.length > 0 && <FileIconButton label={t("files.openFiles")} variant={showEditor ? "secondary" : "ghost"} onClick={() => setShowEditor(true)}>
+                  <Icon name="File" className="size-4" />
+                </FileIconButton>}
+              </div>
             </div>
             {details ? (
         <Card
@@ -1414,7 +1444,7 @@ export function FilesBrowser({
                 <TableHead>{t("files.name")}</TableHead>
                 <TableHead className="w-20 whitespace-nowrap">{t("files.size")}</TableHead>
                 <TableHead className="hidden w-48 @min-[800px]/files:table-cell">{t("files.modified")}</TableHead>
-                <TableHead className="w-28 @min-[480px]/files:w-40">{t("files.actions")}</TableHead>
+                <TableHead className="w-20"><span className="sr-only">{t("files.actions")}</span></TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -1499,27 +1529,16 @@ export function FilesBrowser({
                           {entry.modTime ? new Date(entry.modTime).toLocaleString() : ""}
                         </TableCell>
                         <TableCell>
-                          <div className="flex items-center gap-1">
+                          <div className="flex items-center justify-end gap-0.5">
                             {!entry.isDir && (
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                aria-label={t("files.download")}
-                                onClick={() => startDownload(entry.path, entry.name, entry.size)}
-                              >
-                                <Icon name="Download" />
-                                <span className="hidden @min-[480px]/files:inline">{t("files.download")}</span>
-                              </Button>
+                              <FileIconButton label={t("files.download")} variant="ghost" onClick={() => startDownload(entry.path, entry.name, entry.size)}>
+                                <Icon name="Download" className="size-4" />
+                              </FileIconButton>
                             )}
                             {/* Cross-pane transfer menu (split view). */}
                             <DropdownMenu>
                               <DropdownMenuTrigger asChild>
-                                <Button
-                                  variant="ghost"
-                                  size="icon"
-                                  className="size-7"
-                                  aria-label={t("files.transfer")}
-                                >
+                                <Button type="button" variant="ghost" size="icon" className="size-8" aria-label={t("files.transfer")}>
                                   <Icon name="MoreHorizontal" className="size-4" />
                                 </Button>
                               </DropdownMenuTrigger>
@@ -1597,11 +1616,17 @@ export function FilesBrowser({
 
         {/* Tasks */}
         <div className="file-task-region min-h-0 min-w-0 overflow-hidden" inert={!tasksOpen} aria-hidden={!tasksOpen}>
-        <Card className="h-full min-h-0 min-w-0 overflow-y-auto rounded-none border-0 border-t border-border-seam bg-sidebar p-3 @min-[800px]/files:border-t-0 @min-[800px]/files:border-l">
-          <h2 className="mb-3 flex items-center gap-1.5 text-base font-semibold">
-            <Icon name="Files" className="size-4" />
-            {t("files.tasks")}
-          </h2>
+        <Card className="h-full min-h-0 min-w-0 overflow-y-auto rounded-none border-0 border-t border-border-seam bg-sidebar p-2.5 @min-[800px]/files:border-t-0 @min-[800px]/files:border-l">
+          <div className="mb-2 flex items-center gap-2">
+            <h2 className="flex min-w-0 flex-1 items-center gap-1.5 text-sm font-semibold">
+              <Icon name="Files" className="size-4 shrink-0" />
+              <span className="truncate">{t("files.tasks")}</span>
+              {sortedTasks.length > 0 && <Badge className="border-transparent bg-muted text-xs text-muted-foreground">{sortedTasks.length}</Badge>}
+            </h2>
+            <FileIconButton label={t("files.tasks")} variant="ghost" onClick={() => setTasksOpen(false)}>
+              <Icon name="X" className="size-4" />
+            </FileIconButton>
+          </div>
           <div className="flex flex-col gap-2.5">
             {sortedTasks.length === 0 && (
               <div className="text-sm text-muted-foreground">{t("files.noTasks")}</div>
@@ -1666,14 +1691,13 @@ export function FilesBrowser({
                         <Icon name={action === "pause" ? "Pause" : action === "resume" ? "Play" : "X"} />
                       </Button>
                     ))}
-                    {actions.clear && <Button
+                    {actions.clear && <FileIconButton
+                      label={t("files.clear")}
                       variant="outline"
-                      size="sm"
-                      className="h-8"
                       onClick={() => taskAction(task, "clear")}
                     >
-                      {t("files.clear")}
-                    </Button>}
+                      <Icon name="Trash2" className="size-4" />
+                    </FileIconButton>}
                   </div>
                 </div>
               );
@@ -1696,7 +1720,7 @@ export function FilesBrowser({
               submitPassword();
             }}
           >
-            <Input
+            {!devicePasswordInputsHidden && <Input
               type="password"
               aria-label={t("common.password")}
               autoComplete="current-password"
@@ -1704,12 +1728,12 @@ export function FilesBrowser({
               value={pwValue}
               placeholder={t("terminal.passwordPlaceholder")}
               onChange={(e) => setPwValue(e.target.value)}
-            />
+            />}
             <AlertDialogFooter className="mt-4">
               <AlertDialogCancel type="button" onClick={cancelPassword}>
                 {t("common.cancel")}
               </AlertDialogCancel>
-              <AlertDialogAction type="submit" disabled={!pwValue}>
+              <AlertDialogAction type="submit" disabled={!devicePasswordInputsHidden && !pwValue}>
                 {t("common.connect")}
               </AlertDialogAction>
             </AlertDialogFooter>
@@ -1729,6 +1753,7 @@ export function FilesBrowser({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+      </TooltipProvider>
     </div>
   );
 }

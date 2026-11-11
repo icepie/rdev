@@ -2069,18 +2069,18 @@ func (s *Server) latestReleaseTag(ctx context.Context) (string, bool) {
 func (s *Server) HandleConfigAPI(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{
-		"sshPort":      s.SSHPort,
-		"httpHost":     s.HTTPHost,
-		"tcpPort":      s.TCPPort,
-		"kcpPort":      s.KCPPort,
-		"vncAddr":      s.VNCAddr,
-		"proxyAddr":    s.ProxyAddr,
-		"authRequired": map[bool]string{true: "true", false: "false"}[s.AdminToken != ""],
-		// Never expose provider API keys here.
-		"browserEnabled": map[bool]string{true: "true", false: "false"}[s.BrowserEnabled],
-		"agentEnabled":   map[bool]string{true: "true", false: "false"}[s.Agent != nil && s.Agent.Enabled()],
-		"agentModel":     agentDefaultModel(s.Agent),
-		"agentProviders": agentProviderIDs(s.Agent),
+		"sshPort":            s.SSHPort,
+		"httpHost":           s.HTTPHost,
+		"tcpPort":            s.TCPPort,
+		"kcpPort":            s.KCPPort,
+		"vncAddr":            s.VNCAddr,
+		"proxyAddr":          s.ProxyAddr,
+		"authRequired":       map[bool]string{true: "true", false: "false"}[s.AdminToken != ""],
+		"deviceAuthBypassed": map[bool]string{true: "true", false: "false"}[s.deviceAuthBypassed(r)],
+		"browserEnabled":     map[bool]string{true: "true", false: "false"}[s.BrowserEnabled],
+		"agentEnabled":       map[bool]string{true: "true", false: "false"}[s.Agent != nil && s.Agent.Enabled()],
+		"agentModel":         agentDefaultModel(s.Agent),
+		"agentProviders":     agentProviderIDs(s.Agent),
 	})
 }
 

@@ -193,7 +193,6 @@ export function ChangesDeck({
   connected,
   onRequestDiff,
   onOpenFile,
-  focusPath,
   t,
 }: {
   changes: ChangesState;
@@ -201,9 +200,6 @@ export function ChangesDeck({
   connected: boolean;
   onRequestDiff: (path: string) => void;
   onOpenFile: (path: string) => void;
-  /* bb pending-git-diff-intent: one-shot request to expand + scroll to a
-   * file card (transcript file-change row title click). */
-  focusPath?: { path: string; nonce: number } | null;
   t: Translator;
 }) {
   const rootRef = useRef<HTMLDivElement>(null);
@@ -255,27 +251,6 @@ export function ChangesDeck({
     setCollapsedMap(map);
   };
 
-  /* One-shot focus intent: expand the target card, make sure its diff is
-   * on the wire, then scroll it into view (retried once after the diff
-   * reply lands and the card grows). */
-  useEffect(() => {
-    if (!focusPath) return;
-    const { path } = focusPath;
-    if (!changes.files.some((f) => f.path === path)) return;
-    setCollapsedMap((prev) => ({ ...prev, [path]: false }));
-    if (diffs[path] === undefined) onRequestDiff(path);
-    const scroll = () =>
-      rootRef.current
-        ?.querySelector(`[data-diff-path="${CSS.escape(path)}"]`)
-        ?.scrollIntoView({ block: "start" });
-    const first = window.setTimeout(scroll, 50);
-    const second = window.setTimeout(scroll, 600);
-    return () => {
-      window.clearTimeout(first);
-      window.clearTimeout(second);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [focusPath]);
 
   const chooseView = (v: DiffView) => {
     localStorage.setItem(VIEW_STORAGE_KEY, v);

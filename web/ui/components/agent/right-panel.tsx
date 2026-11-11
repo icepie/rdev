@@ -731,7 +731,6 @@ export function AgentRightPanel({
   onAddToChat,
   onHide,
   openFileSignal,
-  openDiffSignal,
   automation,
   panelFull,
   onSetDock,
@@ -763,8 +762,6 @@ export function AgentRightPanel({
     lineStart?: number;
     lineEnd?: number;
   } | null;
-  /* bb open-file-diff: raise the changes deck focused on this file. */
-  openDiffSignal?: { path: string; nonce: number } | null;
   /* bb panel layout control (Full Screen + Move); omitted in the narrow
    * drawer where docking does not apply. */
   panelFull?: boolean;
@@ -906,12 +903,6 @@ export function AgentRightPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openFileSignal]);
 
-  /* bb open-file-diff: switch to the changes deck; the deck consumes
-   * focusPath (expand + scroll) itself. */
-  useEffect(() => {
-    if (openDiffSignal) setActive("diff");
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [openDiffSignal]);
 
   const openNewTab = () => {
     if (dynTabs.some((x) => x.kind === "new")) {
@@ -1310,7 +1301,6 @@ export function AgentRightPanel({
             connected={connected}
             onRequestDiff={onRequestDiff}
             onOpenFile={openFileTab}
-            focusPath={openDiffSignal}
             t={t}
           />
         )

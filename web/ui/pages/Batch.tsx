@@ -10,6 +10,7 @@ import {
   rememberDevicePassword,
   forgetDevicePassword,
 } from "../lib/api";
+import { useServerCapabilities } from "../lib/server-capabilities";
 import { cn } from "../lib/utils";
 import { Button } from "../components/button";
 import { COARSE_POINTER_HEADER_ICON_BUTTON_CLASS } from "../components/coarse-pointer-sizing";
@@ -181,6 +182,7 @@ function ResultCard({
 /* ── Page ── */
 
 export function BatchPage() {
+  const { devicePasswordInputsHidden } = useServerCapabilities();
   const { t } = useI18n();
   const { open: openMobileNav } = useContext(MobileNavContext);
   const tRef = useRef(t);
@@ -802,14 +804,14 @@ export function BatchPage() {
               settlePw(pwValue);
             }}
           >
-            <Input
+            {!devicePasswordInputsHidden && <Input
               type="password"
               aria-label={t("common.password")}
               autoFocus
               autoComplete="off"
               value={pwValue}
               onChange={(e) => setPwValue(e.target.value)}
-            />
+            />}
             <AlertDialogFooter className="mt-4">
               <AlertDialogCancel type="button" onClick={() => settlePw(null)}>
                 {t("common.cancel")}

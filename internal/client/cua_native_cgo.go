@@ -4,7 +4,9 @@ package client
 
 /*
 #cgo CFLAGS: -I${SRCDIR}/../../clients/rdev-client-gpu/cua-driver-bridge/include
-#cgo LDFLAGS: -L${SRCDIR}/../../internal/client/cua_native/rust-target/release -lrdev_cua_bridge -ldl -lpthread -lm
+#cgo windows LDFLAGS: -L${SRCDIR}/../../internal/client/cua_native/rust-target/release -lrdev_cua_bridge -lwindowsapp -lruntimeobject -lpropsys -lole32 -loleaut32 -lwtsapi32 -ld3d11 -ldxgi -ldwmapi -lgdi32 -loleacc -lshcore -lntdll -luserenv -liphlpapi -lsetupapi -lcfgmgr32 -ladvapi32 -luser32 -lshell32 -lshlwapi -lbcrypt -lws2_32 -ldbghelp -lversion -lpowrprof
+#cgo linux LDFLAGS: -L${SRCDIR}/../../internal/client/cua_native/rust-target/release -lrdev_cua_bridge -ldl -lpthread -lm
+#cgo darwin LDFLAGS: -L${SRCDIR}/../../internal/client/cua_native/rust-target/release -lrdev_cua_bridge -lpthread -lm
 #cgo linux pkg-config: x11 xi xkbcommon
 #include <stdlib.h>
 #include "rdev_cua_bridge.h"

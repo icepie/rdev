@@ -17,6 +17,7 @@ import {
   rememberDevicePassword,
   forgetDevicePassword,
 } from "../lib/api";
+import { useServerCapabilities } from "../lib/server-capabilities";
 import { cn } from "../lib/utils";
 import { Button } from "../components/button";
 import { Input } from "../components/input";
@@ -260,6 +261,7 @@ function DesktopSession({
   /* Rail click/drop requests: {id, seq} identity change → connect. */
   deviceRequest?: { id: string; seq: number };
 }) {
+  const { devicePasswordInputsHidden } = useServerCapabilities();
   const { t } = useI18n();
   const [urlParams, setUrlParams] = useSearchParams();
   const searchParams = primary ? urlParams : EMPTY_PARAMS;
@@ -2278,7 +2280,7 @@ function DesktopSession({
             {device || t("terminal.devicePlaceholder")}
           </span>
         </div>
-        <Input
+        {!devicePasswordInputsHidden && <Input
           type="password"
           aria-label={t("common.password")}
           autoComplete="current-password"
@@ -2292,7 +2294,7 @@ function DesktopSession({
           }}
           placeholder={t("terminal.passwordPlaceholder")}
           className="h-8 min-w-24 w-36 flex-1 sm:flex-none text-xs"
-        />
+        />}
         <Button size="sm" disabled={!device} onClick={() => connect()}>
           {t("common.connect")}
         </Button>

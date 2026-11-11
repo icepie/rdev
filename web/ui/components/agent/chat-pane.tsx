@@ -120,8 +120,6 @@ export interface ChatPaneViewProps {
   /* bb thread→panel linkage: raise a file preview tab in the right panel
    * (tool-row path clicks, markdown file links). */
   onOpenFile?: (path: string, lineStart?: number, lineEnd?: number) => void;
-  /* bb open-file-diff: file-change row titles focus the changes deck. */
-  onOpenDiff?: (path: string) => void;
 }
 
 export function ChatPaneView({
@@ -152,7 +150,6 @@ export function ChatPaneView({
   branch,
   onRegisterAddToChat,
   onOpenFile,
-  onOpenDiff,
 }: ChatPaneViewProps) {
   const [offlineConfirmed, setOfflineConfirmed] = useState(false);
   useEffect(() => setOfflineConfirmed(false), [device, threadId, offline]);
@@ -765,7 +762,6 @@ export function ChatPaneView({
                 onCopy={(text) => onCopy("t" + item.key, text)}
                 onAddToChat={addToChat}
                 onOpenFile={onOpenFile}
-                onOpenDiff={onOpenDiff}
                 onOpenLocalFile={handleOpenLocalFile}
               />
               </div>

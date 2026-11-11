@@ -146,6 +146,8 @@ jobs:
             runner: ubuntu-latest
             ext: .exe
             cc: x86_64-w64-mingw32-clang
+            cua_native: true
+            rust_target: x86_64-pc-windows-gnu
           - goos: windows
             goarch: "386"
             runner: ubuntu-latest
@@ -156,6 +158,8 @@ jobs:
             runner: ubuntu-latest
             ext: .exe
             cc: aarch64-w64-mingw32-clang
+            cua_native: true
+            rust_target: aarch64-pc-windows-gnullvm
     steps:
       - uses: actions/checkout@v7
 
@@ -195,6 +199,23 @@ jobs:
           mkdir -p /opt/llvm-mingw
           tar -xf /tmp/llvm-mingw.tar.xz -C /opt/llvm-mingw --strip-components=1
 
+      - name: Install Rust for native CUA
+        if: matrix.cua_native == true
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+
+      - name: Build native CUA bridge
+        if: matrix.cua_native == true
+        run: |
+          cargo build --release --manifest-path clients/rdev-client-gpu/cua-driver-bridge/Cargo.toml \
+            --features cua-native \
+            --target "${{ matrix.rust_target }}" \
+            --target-dir internal/client/cua_native/rust-target
+          mkdir -p internal/client/cua_native/rust-target/release
+          cp "internal/client/cua_native/rust-target/${{ matrix.rust_target }}/release/librdev_cua_bridge.a" \
+            internal/client/cua_native/rust-target/release/
+
       - name: Build x264 client
         env:
           GOOS: ${{ matrix.goos }}
@@ -210,7 +231,11 @@ jobs:
             export CC='${{ matrix.cc }}'
           fi
           export CGO_CFLAGS='${{ matrix.cgo_cflags }}'
-          go build -tags x264cgo -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" \
+          tags=x264cgo
+          if [ "${{ matrix.cua_native }}" = "true" ]; then
+            tags="$tags cuanative"
+          fi
+          go build -tags "$tags" -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" \
             -o "rdev-client${{ matrix.ext }}" ./cmd/rdev-client
           file "rdev-client${{ matrix.ext }}"
 

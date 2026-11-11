@@ -158,6 +158,36 @@ func TestBrowserDisabledByDefault(t *testing.T) {
 	}
 }
 
+func TestConfigReportsDeviceAuthBypassOnlyForValidAdmin(t *testing.T) {
+	s := NewServer()
+	s.AdminToken = "admin-secret"
+	for _, test := range []struct {
+		name  string
+		token string
+		want  string
+	}{
+		{name: "missing", want: "false"},
+		{name: "wrong", token: "wrong", want: "false"},
+		{name: "valid", token: "admin-secret", want: "true"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request := httptest.NewRequest("GET", "/api/config", nil)
+			if test.token != "" {
+				request.Header.Set("X-RDev-Token", test.token)
+			}
+			response := httptest.NewRecorder()
+			s.HandleConfigAPI(response, request)
+			var config map[string]string
+			if err := json.Unmarshal(response.Body.Bytes(), &config); err != nil {
+				t.Fatal(err)
+			}
+			if config["deviceAuthBypassed"] != test.want {
+				t.Fatalf("deviceAuthBypassed = %q, want %q", config["deviceAuthBypassed"], test.want)
+			}
+		})
+	}
+}
+
 func TestBrowserPreviewInjectsBridgeOnlyForEmbeddedView(t *testing.T) {
 	const html = "<!DOCTYPE html><html><meta charset=\"utf-8\"><body>Chrome inspector</body></html>"
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, html) }))

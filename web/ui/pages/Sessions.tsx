@@ -22,6 +22,7 @@ import {
   rememberDevicePassword,
   forgetDevicePassword,
 } from "../lib/api";
+import { useServerCapabilities } from "../lib/server-capabilities";
 import { cn } from "../lib/utils";
 import { Button } from "../components/button";
 import { Input } from "../components/input";
@@ -456,8 +457,8 @@ const MOBILE_KEYS: { label: string; key: string }[] = [
 ];
 
 /* ── Page ── */
-
 export function SessionsPage() {
+  const { devicePasswordInputsHidden } = useServerCapabilities();
   const { t } = useI18n();
   const { open: openMobileNav } = useContext(MobileNavContext);
   const [searchParams, setSearchParams] = useSearchParams();
@@ -1071,7 +1072,7 @@ export function SessionsPage() {
                       submitAuth();
                     }}
                   >
-                    <Input
+                    {!devicePasswordInputsHidden && <Input
                       type="password"
                       aria-label={t("common.password")}
                       autoFocus
@@ -1080,11 +1081,11 @@ export function SessionsPage() {
                       autoComplete="current-password"
                       onChange={(e) => setPassword(e.target.value)}
                       className="mb-3"
-                    />
+                    />}
                     <Button
                       type="submit"
                       className="w-full"
-                      disabled={authBusy || !password}
+                      disabled={authBusy || (!devicePasswordInputsHidden && !password)}
                     >
                       {authBusy ? t("common.connecting") : t("common.connect")}
                     </Button>

@@ -22,6 +22,7 @@ import {
   rememberDevicePassword,
   forgetDevicePassword,
 } from "../lib/api";
+import { useServerCapabilities } from "../lib/server-capabilities";
 import {
   createKittyImageWriter,
   hasTerminalImageSequence,
@@ -1046,6 +1047,7 @@ export function TabAuthOverlay({
   onSubmit: (pw: string) => boolean | void;
   t: (k: string, v?: Record<string, string | number>) => string;
 }) {
+  const { devicePasswordInputsHidden } = useServerCapabilities();
   const { value, setValue, busy, submit } = useDevicePassword({
     device: deviceId, error, onSubmit, clearOnError: true,
   });
@@ -1068,7 +1070,7 @@ export function TabAuthOverlay({
             submit();
           }}
         >
-          <Input
+          {!devicePasswordInputsHidden && <Input
             ref={inputRef}
             type="password"
             aria-label={t("common.password")}
@@ -1078,8 +1080,8 @@ export function TabAuthOverlay({
             autoComplete="current-password"
             onChange={(e) => setValue(e.target.value)}
             className="mb-3"
-          />
-          <Button type="submit" className="w-full" disabled={busy || !value}>
+          />}
+          <Button type="submit" className="w-full" disabled={busy || (!devicePasswordInputsHidden && !value)}>
             {busy ? t("common.connecting") : t("common.connect")}
           </Button>
           <div role="alert" className="mt-2 min-h-[1.2em] text-xs text-destructive-text">

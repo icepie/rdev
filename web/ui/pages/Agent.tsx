@@ -41,6 +41,8 @@ import {
   rememberDevicePassword,
   forgetDevicePassword,
 } from "../lib/api";
+import { useServerCapabilities } from "../lib/server-capabilities";
+import { requestWebNotificationPermission, showWebNotification, webNotificationPermission, type WebNotificationPermission } from "../lib/web-notifications";
 import { cn } from "../lib/utils";
 import { Button } from "../components/button";
 import { COARSE_POINTER_HEADER_ICON_BUTTON_CLASS } from "../components/coarse-pointer-sizing";
@@ -91,6 +93,7 @@ import {
 } from "../components/agent/split-panes";
 import {
   applyScopedMessage,
+  isLiveReplay,
   setLiveReplay,
   useThreadSink,
   type ThreadSinkOps,
@@ -232,6 +235,10 @@ export function AgentPage() {
   const [model, setModel] = useState("");
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [authError, setAuthError] = useState("");
+  const [notificationPermission, setNotificationPermission] = useState<WebNotificationPermission>(webNotificationPermission);
+  const enableWebNotifications = useCallback(() => {
+    void requestWebNotificationPermission().then(setNotificationPermission).catch(() => setNotificationPermission("denied"));
+  }, []);
   const pendingPasswordRef = useRef<{ device: string; password: string } | null>(null);
   const [threads, setThreads] = useState<ThreadInfo[]>([]);
   const {modelFor, select: selectThreadModel, reset: resetThreadModels} = useThreadModels(threads, model);
@@ -531,19 +538,6 @@ export function AgentPage() {
     [],
   );
 
-  /* bb open-file-diff: file-change row titles raise the diff deck focused
-   * on the file's card instead of the plain preview. */
-  const [openDiffSignal, setOpenDiffSignal] = useState<{
-    path: string;
-    nonce: number;
-  } | null>(null);
-  const openDiffInPanel = useCallback((path: string) => {
-    setPanelOpen((prev) => {
-      if (!prev) localStorage.setItem(PANEL_OPEN_KEY, "1");
-      return true;
-    });
-    setOpenDiffSignal({ path, nonce: Date.now() });
-  }, []);
 
   /* mod+j toggles the right panel; skipped while typing. */
   useEffect(() => {
@@ -732,6 +726,14 @@ export function AgentPage() {
      * they carry the NEW thread id and update threadRef themselves. */
     const op = String(msg.op);
     const frameThread = asString(msg.thread);
+    if (!isLiveReplay() && document.visibilityState === "hidden" && (op === "done" || op === "error" || op === "stopped")) {
+      const statusKey = op === "done" ? "agent.notificationDone" : op === "error" ? "agent.notificationError" : "agent.notificationStopped";
+      showWebNotification(t("agent.notificationTitle"), {
+        body: t(statusKey),
+        tag: `rdev-agent-${sourceDevice}-${frameThread || "current"}`,
+        onClick: () => window.focus(),
+      });
+    }
     if (["participants","auth_ok","thread_switched","reset_ok"].includes(op)) {
       const key=JSON.stringify([sourceDevice,frameThread]);
       const pending=participantPasswordsRef.current.get(String(msg.id??""));
@@ -1888,7 +1890,6 @@ export function AgentPage() {
       connStatus: status,
       contextWindow: models.find(item => item.id === paneModel)?.contextWindow,
       onOpenFile: openFileInPanel,
-      onOpenDiff: openDiffInPanel,
     };
     return (
       <div
@@ -1986,7 +1987,6 @@ export function AgentPage() {
     onAddToChat: insertIntoFocusedComposer,
     onHide: togglePanel,
     openFileSignal,
-    openDiffSignal,
     panelFull,
     onSetDock: setDock,
     onToggleFull: togglePanelFull,
@@ -2822,6 +2822,12 @@ export function AgentPage() {
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="start">
+              <DropdownMenuItem
+                disabled={notificationPermission === "granted" || notificationPermission === "denied" || notificationPermission === "unsupported"}
+                onSelect={enableWebNotifications}
+              >
+                {t(notificationPermission === "granted" ? "agent.notificationsEnabled" : notificationPermission === "denied" ? "agent.notificationsBlocked" : "agent.enableNotifications")}
+              </DropdownMenuItem>
               <DropdownMenuItem disabled={!ready} onSelect={openRenameDialog}>
                 <Icon name="Edit" className="size-4 shrink-0" />
                 {t("agent.rename")}
@@ -3026,6 +3032,7 @@ function PasswordDialog({
   onSubmit: (pw: string) => boolean | void;
   t: (k: string, v?: Record<string, string | number>) => string;
 }) {
+  const { devicePasswordInputsHidden } = useServerCapabilities();
   const { value, setValue, busy, submit } = useDevicePassword({
     device, open, error, onSubmit,
   });
@@ -3045,16 +3052,16 @@ function PasswordDialog({
             submit();
           }}
         >
-          <Input
+          {!devicePasswordInputsHidden && <Input
             type="password"
             autoFocus
             value={value}
             placeholder={t("terminal.passwordPlaceholder")}
             onChange={(e) => setValue(e.target.value)}
-          />
+          />}
           {error && <div className="mt-2 text-xs text-destructive-text">{error}</div>}
           <AlertDialogFooter className="mt-4">
-            <AlertDialogAction type="submit" disabled={busy || !value}>
+            <AlertDialogAction type="submit" disabled={busy || (!devicePasswordInputsHidden && !value)}>
               {busy ? t("common.connecting") : t("common.connect")}
             </AlertDialogAction>
           </AlertDialogFooter>

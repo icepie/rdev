@@ -23,22 +23,14 @@ import {
 } from "./transcript-rows";
 import type { ToolItem, Translator } from "./types";
 
-/* Per-kind work row (bb ExpandableTimelineRow + TimelineTitleView): header
- * rhythm matches the old ToolCard — `px-2 py-0 text-sm leading-5 gap-1.5`,
- * hover-revealed chevron — with bb verb/target titles, diff stats, and
- * wall-clock durations. Command rows auto-expand while running and collapse
- * when done (bb terminalFrontierRowIds); a manual toggle sticks. The target
- * of a file-change row opens the diff (bb TimelineTitleAction), other kinds
- * open the file preview. Bodies vary by workKindOf: ANSI terminal output
- * for commands, a Pierre diff card for file changes, key:value args +
- * result card (bb ToolCallDetailBlock) for everything else. */
+/* bb per-kind work row: file paths open the shared right-panel preview;
+ * file-change bodies still render their inline diff for quick inspection. */
 
 interface RowProps {
   tool: ToolItem;
   t: Translator;
   dimmed?: boolean;
   onOpenFile?: (path: string) => void;
-  onOpenDiff?: (path: string) => void;
 }
 
 function parseArgs(args: string): Record<string, unknown> | null {
@@ -246,7 +238,7 @@ function ToolRowBody({
   );
 }
 
-export function ToolRow({ tool: originalTool, t, dimmed, onOpenFile, onOpenDiff }: RowProps) {
+export function ToolRow({ tool: originalTool, t, dimmed, onOpenFile }: RowProps) {
   // device_tool returns the inner tool's output unchanged. Use its schema for
   // presentation only; retain the original call ID, result, and device label.
   const remote = originalTool.name === "device_tool" ? parseArgs(originalTool.args) : null;
@@ -269,10 +261,9 @@ export function ToolRow({ tool: originalTool, t, dimmed, onOpenFile, onOpenDiff 
     kind === "file-read" || kind === "file-change" || kind === "search"
       ? pathArgOf(tool)
       : null;
-  /* bb TimelineTitleAction: file-change targets open the diff when a diff
-   * handler is wired, falling back to the plain file preview. */
-  const pathHandler =
-    kind === "file-change" ? (onOpenDiff ?? onOpenFile) : onOpenFile;
+  /* File paths use the same right-panel preview regardless of whether the
+   * agent read or edited the file. */
+  const pathHandler = onOpenFile;
   const pathLink =
     pathArg !== null && pathHandler
       ? { path: pathArg, open: pathHandler }
@@ -375,13 +366,11 @@ export function ToolBundleRow({
   t,
   dimmed,
   onOpenFile,
-  onOpenDiff,
 }: {
   bundle: ToolBundle;
   t: Translator;
   dimmed?: boolean;
   onOpenFile?: (path: string) => void;
-  onOpenDiff?: (path: string) => void;
 }) {
   const [open, setOpen] = useState(false);
   return (
@@ -416,7 +405,6 @@ export function ToolBundleRow({
               tool={tool}
               t={t}
               onOpenFile={onOpenFile}
-              onOpenDiff={onOpenDiff}
             />
           ))}
         </div>

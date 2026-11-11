@@ -6,6 +6,7 @@ import { DeviceIcon } from "../device-icon";
 import { Icon } from "../icon";
 import { useDevices } from "../../lib/devices";
 import { getDevicePassword } from "../../lib/api";
+import { useServerCapabilities } from "../../lib/server-capabilities";
 import type { Translator } from "./types";
 
 export interface Participant {
@@ -49,6 +50,7 @@ export function Participants({
   onRefresh: () => void;
   t: Translator;
 }) {
+  const { devicePasswordInputsHidden } = useServerCapabilities();
   const { devices } = useDevices();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -204,7 +206,7 @@ export function Participants({
             }}
           >
             <p className="truncate text-xs font-medium">{editing}</p>
-            {devices.find((d) => d.id === editing)?.hasPassword && (
+            {!devicePasswordInputsHidden && devices.find((d) => d.id === editing)?.hasPassword && (
               <Input
                 type="password"
                 autoComplete="off"

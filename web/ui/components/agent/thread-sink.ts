@@ -143,6 +143,10 @@ export function setLiveReplay(v: boolean): void {
   liveReplay = v;
 }
 
+export function isLiveReplay(): boolean {
+  return liveReplay;
+}
+
 export function useThreadSink(): ThreadSink {
   const jobActionReplies = useRef(new Map<string, (reply: Record<string, unknown> | null) => void>());
   const [jobsError, setJobsError] = useState("");

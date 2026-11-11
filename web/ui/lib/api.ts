@@ -5,6 +5,7 @@
 const TOKEN_KEY = "rdevAdminToken";
 
 let adminToken = (() => {
+  if (typeof window === "undefined") return "";
   const fromURL = new URLSearchParams(window.location.search).get("token");
   if (fromURL) {
     localStorage.setItem(TOKEN_KEY, fromURL);
@@ -25,6 +26,7 @@ export function setAdminToken(token: string) {
   adminToken = token;
   tokenGen++;
   localStorage.setItem(TOKEN_KEY, token);
+  window.dispatchEvent(new Event("rdev-admin-token"));
 }
 
 export function authURL(path: string): string {

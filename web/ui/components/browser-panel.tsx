@@ -3,6 +3,7 @@ import { BrowserPreview } from "./browser-preview";
 import { useEffect, useRef, useState } from "react";
 import { apiFetch, getDevicePassword } from "../lib/api";
 import { useDevices } from "../lib/devices";
+import { useServerCapabilities } from "../lib/server-capabilities";
 import { useI18n } from "../lib/i18n";
 import { Button } from "./button";
 import { Input } from "./input";
@@ -14,8 +15,9 @@ interface Target { id: string; title: string; url: string }
 
 /** Chrome's own inspector frontend includes its interactive Screencast app. */
 export function BrowserPanel({ device, visible = true, deviceSelection = "inline", automation }: { automation?: AutomationView; device: string; visible?: boolean; deviceSelection?: "inline" | "sidebar" }) {
-  const { t, lang } = useI18n();
+  const { devicePasswordInputsHidden } = useServerCapabilities();
   const { devices } = useDevices();
+  const { t, lang } = useI18n();
   const [selectedDevice, setExitDevice] = useState(device === "@server" ? "" : device);
   const exitDevice = deviceSelection === "sidebar" ? device : selectedDevice;
   const [password, setPassword] = useState(() => getDevicePassword(device));
@@ -133,7 +135,7 @@ export function BrowserPanel({ device, visible = true, deviceSelection = "inline
         </Select>
       </label>}
       {exitDevice && <>
-        {devices.find(d => d.id === exitDevice)?.hasPassword && <Input disabled={busy} type="password" aria-label={t("browser.password")} placeholder={t("browser.password")} value={password} onChange={e => setPassword(e.target.value)} />}
+        {!devicePasswordInputsHidden && devices.find(d => d.id === exitDevice)?.hasPassword && <Input disabled={busy} type="password" aria-label={t("browser.password")} placeholder={t("browser.password")} value={password} onChange={e => setPassword(e.target.value)} />}
         <Button type="submit" disabled={!online || busy}>{t(busy ? "common.loading" : "browser.start")}</Button>
       </>}
       <p className="text-xs text-muted-foreground">{t("browser.lifetime")}</p>
