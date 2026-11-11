@@ -8,16 +8,16 @@ pub fn no_replace(from: &Path, to: &Path) -> io::Result<()> {
     let b = CString::new(to.as_os_str().as_bytes())?;
     #[cfg(target_os = "linux")]
     let result = unsafe {
-        extern "C" {
-            fn renameat2(
-                a: i32,
-                from: *const std::ffi::c_char,
-                b: i32,
-                to: *const std::ffi::c_char,
-                flags: u32,
-            ) -> i32;
-        }
-        renameat2(-100, a.as_ptr(), -100, b.as_ptr(), 1)
+        // glibc before 2.28 has no renameat2 wrapper (notably CentOS 7).
+        // Call the kernel directly; unsupported kernels fail without overwrite.
+        libc::syscall(
+            libc::SYS_renameat2,
+            libc::AT_FDCWD,
+            a.as_ptr(),
+            libc::AT_FDCWD,
+            b.as_ptr(),
+            libc::RENAME_NOREPLACE,
+        )
     };
     #[cfg(target_os = "macos")]
     let result = unsafe {

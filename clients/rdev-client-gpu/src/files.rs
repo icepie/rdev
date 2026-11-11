@@ -587,13 +587,6 @@ async fn download_task(msg: Message, outbound: mpsc::Sender<OutboundEvent>) {
     }
 }
 
-#[cfg(test)]
-async fn list_entries(path: &Path, offset: i64, limit: usize) -> Result<(Vec<FileEntry>, usize)> {
-    let entries = read_entries(path).await?;
-    let total = entries.len();
-    let start = (offset.max(0) as usize).min(total);
-    Ok((entries.into_iter().skip(start).take(limit).collect(), total))
-}
 async fn read_entries(path: &Path) -> Result<Vec<FileEntry>> {
     let mut read_dir = fs::read_dir(path).await?;
     let mut entries = Vec::new();

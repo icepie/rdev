@@ -1,9 +1,9 @@
 pub mod config;
 pub mod desktop;
 pub mod desktop_env;
+mod file_rename;
 pub mod fileput;
 pub mod files;
-mod file_rename;
 pub mod forward;
 pub mod gpu_tunnel;
 pub mod identity;

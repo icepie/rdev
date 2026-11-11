@@ -19,4 +19,4 @@ serde_json = "1.0"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "sync"], optional = true }
 libc = { version = "0.2", optional = true }
 uuid = { version = "1", features = ["v4"], optional = true }
-cua-driver-sdk = { git = "https://github.com/trycua/cua.git", tag = "cua-driver-rs-v0.45.2", default-features = false, optional = true }
+cua-driver-sdk = { git = "https://github.com/trycua/cua.git", tag = "cua-driver-rs-v0.47.1", default-features = false, optional = true }

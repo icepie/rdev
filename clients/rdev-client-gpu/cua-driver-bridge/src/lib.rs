@@ -182,9 +182,10 @@ impl Session {
                 Request::Tools => runtime.tools().await,
                 Request::Call { name, arguments } => runtime.call(&name, arguments).await,
             };
-            if result.is_ok() {
-                *guard = Some(runtime);
-            }
+            // A failed tool call is not a desktop-session boundary. Keep the
+            // SDK session and its cursor state attached to this CGo handle;
+            // otherwise the next request silently gets a fresh session ID.
+            *guard = Some(runtime);
             result
         }
         #[cfg(not(feature = "cua-native"))]
@@ -354,6 +355,51 @@ mod tests {
         assert_eq!(
             tools[0]["inputSchema"]["required"],
             serde_json::json!(["window_id"])
+        );
+    }
+
+    #[cfg(feature = "cua-native")]
+    #[tokio::test]
+    async fn failed_tool_request_does_not_replace_the_cgo_session() {
+        if std::env::var_os("DISPLAY").is_none() {
+            return;
+        }
+        let mut session = Session::new();
+        let call = |name: &str, value: Value| Request::Call {
+            name: name.to_owned(),
+            arguments: value.as_object().cloned().unwrap_or_default(),
+        };
+        let enabled = session
+            .request(call(
+                "set_agent_cursor_enabled",
+                serde_json::json!({"enabled": true}),
+            ))
+            .await
+            .expect("enable cursor");
+        session
+            .request(call(
+                "set_agent_cursor_motion",
+                serde_json::json!({"glide_duration_ms": 321.0}),
+            ))
+            .await
+            .expect("set motion");
+        assert!(session
+            .request(call("not_a_real_tool", serde_json::json!({})))
+            .await
+            .is_err());
+
+        let state = session
+            .request(call("get_agent_cursor_state", serde_json::json!({})))
+            .await
+            .expect("read cursor state after failed request");
+        assert_eq!(state["structuredContent"]["enabled"], true, "{state}");
+        assert_eq!(
+            state["structuredContent"]["motion"]["glide_duration_ms"], 321.0,
+            "{state}"
+        );
+        assert_eq!(
+            state["structuredContent"]["session"], enabled["structuredContent"]["session"],
+            "a CGo tool error must not mint a replacement cursor session"
         );
     }
 
