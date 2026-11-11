@@ -342,6 +342,10 @@ jobs:
             } >> "$GITHUB_ENV"
           fi
 
+      - name: Test MinGW runtime packager
+        if: matrix.target == 'x86_64-pc-windows-gnu'
+        run: python3 scripts/test_copy_mingw_runtime.py
+
       - name: Install macOS build dependencies
         if: startsWith(matrix.target, 'x86_64-apple') || startsWith(matrix.target, 'aarch64-apple')
         run: brew install nasm yasm pkg-config
@@ -481,9 +485,12 @@ jobs:
               "dist/${{ matrix.asset }}/rdev-client-gpu.exe"
             python3 win7/build_shims.py "dist/${{ matrix.asset }}"
             python3 win7/copy_winpty_runtime.py "dist/${{ matrix.asset }}"
-            runtime_dir="/opt/llvm-mingw/x86_64-w64-mingw32/bin"
-            test -f "$runtime_dir/libunwind.dll"
-            cp "$runtime_dir/libunwind.dll" "dist/${{ matrix.asset }}/"
+            python3 scripts/copy_mingw_runtime.py \
+              --dist-dir "dist/${{ matrix.asset }}" \
+              --search-root /opt/llvm-mingw/x86_64-w64-mingw32 \
+              --dll libc++.dll \
+              --dll libunwind.dll \
+              --dll libwinpthread-1.dll
             echo "rdev-client-gpu ${GITHUB_REF_NAME}" > "dist/${{ matrix.asset }}/VERSION.txt"
             (cd dist && python3 -m zipfile -c "${{ matrix.asset }}.zip" "${{ matrix.asset }}")
           elif [ "${{ matrix.android }}" = "true" ]; then
@@ -493,6 +500,16 @@ jobs:
             upx --best "dist/${{ matrix.asset }}/rdev-client-gpu" || true
             echo "rdev-client-gpu ${GITHUB_REF_NAME}" > "dist/${{ matrix.asset }}/VERSION.txt"
             tar -C dist -czf "dist/${{ matrix.asset }}.tar.gz" "${{ matrix.asset }}"
+          elif [[ "${{ matrix.target }}" == x86_64-pc-windows-gnu ]]; then
+            mkdir -p "dist/${{ matrix.asset }}"
+            cp "target/${{ matrix.target }}/release/${{ matrix.artifact }}" "dist/${{ matrix.asset }}/rdev-client-gpu.exe"
+            python3 scripts/copy_mingw_runtime.py \
+              --dist-dir "dist/${{ matrix.asset }}" \
+              --search-root /usr/x86_64-w64-mingw32 \
+              --search-root /usr/lib/gcc/x86_64-w64-mingw32
+            # Keep Windows binaries unpacked: the UPX-packed release crashed at process start (0xC0000005).
+            echo "rdev-client-gpu ${GITHUB_REF_NAME}" > "dist/${{ matrix.asset }}/VERSION.txt"
+            (cd dist && python3 -m zipfile -c "${{ matrix.asset }}.zip" "${{ matrix.asset }}")
           elif [[ "${{ matrix.target }}" == *windows* ]]; then
             mkdir -p "dist/${{ matrix.asset }}"
             cp "target/${{ matrix.target }}/release/${{ matrix.artifact }}" "dist/${{ matrix.asset }}/rdev-client-gpu.exe"
