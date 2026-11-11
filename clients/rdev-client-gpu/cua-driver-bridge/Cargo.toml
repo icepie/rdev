@@ -10,7 +10,7 @@ publish = false
 crate-type = ["rlib", "staticlib"]
 [features]
 default = []
-cua-native = ["dep:tokio", "dep:libc", "dep:uuid", "dep:cua-driver-sdk"]
+cua-native = ["dep:tokio", "dep:libc", "dep:uuid", "dep:cua-driver-sdk", "dep:platform-macos"]
 
 [dependencies]
 anyhow = "1.0"
@@ -20,3 +20,6 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "sync"
 libc = { version = "0.2", optional = true }
 uuid = { version = "1", features = ["v4"], optional = true }
 cua-driver-sdk = { git = "https://github.com/trycua/cua.git", tag = "cua-driver-rs-v0.47.1", default-features = false, optional = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+platform-macos = { git = "https://github.com/trycua/cua.git", tag = "cua-driver-rs-v0.47.1", package = "platform-macos", default-features = false, optional = true }

@@ -481,15 +481,10 @@ jobs:
               "dist/${{ matrix.asset }}/rdev-client-gpu.exe"
             python3 win7/build_shims.py "dist/${{ matrix.asset }}"
             python3 win7/copy_winpty_runtime.py "dist/${{ matrix.asset }}"
-            case "${{ matrix.target }}" in
-              aarch64-*) runtime_arch="aarch64" ;;
-              *) runtime_arch="x86_64" ;;
-            esac
-            runtime_dir="/opt/llvm-mingw/${runtime_arch}-w64-mingw32/bin"
-            for dll in libunwind.dll libc++.dll libwinpthread-1.dll; do
-              [ -f "$runtime_dir/$dll" ] && cp "$runtime_dir/$dll" "dist/${{ matrix.asset }}/"
-            done
-            "dist/${{ matrix.asset }}/rdev-client-gpu.exe" --version > "dist/${{ matrix.asset }}/VERSION.txt" || true
+            runtime_dir="/opt/llvm-mingw/x86_64-w64-mingw32/bin"
+            test -f "$runtime_dir/libunwind.dll"
+            cp "$runtime_dir/libunwind.dll" "dist/${{ matrix.asset }}/"
+            echo "rdev-client-gpu ${GITHUB_REF_NAME}" > "dist/${{ matrix.asset }}/VERSION.txt"
             (cd dist && python3 -m zipfile -c "${{ matrix.asset }}.zip" "${{ matrix.asset }}")
           elif [ "${{ matrix.android }}" = "true" ]; then
             mkdir -p "dist/${{ matrix.asset }}"
@@ -501,23 +496,7 @@ jobs:
           elif [[ "${{ matrix.target }}" == *windows* ]]; then
             mkdir -p "dist/${{ matrix.asset }}"
             cp "target/${{ matrix.target }}/release/${{ matrix.artifact }}" "dist/${{ matrix.asset }}/rdev-client-gpu.exe"
-            upx --best "dist/${{ matrix.asset }}/rdev-client-gpu.exe" || true
-            case "${{ matrix.target }}" in
-              aarch64-*) runtime_arch="aarch64" ;;
-              *) runtime_arch="x86_64" ;;
-            esac
-            if [ "${{ matrix.target }}" = 'x86_64-pc-windows-gnu' ]; then
-              for dll in libgcc_s_seh-1.dll libstdc++-6.dll libwinpthread-1.dll; do
-                runtime_dll="$(/usr/bin/x86_64-w64-mingw32-g++-posix -print-file-name="$dll")"
-                test -f "$runtime_dll"
-                cp "$runtime_dll" "dist/${{ matrix.asset }}/"
-              done
-            else
-              runtime_dir="/opt/llvm-mingw/${runtime_arch}-w64-mingw32/bin"
-              for dll in libunwind.dll libc++.dll libwinpthread-1.dll; do
-                [ -f "$runtime_dir/$dll" ] && cp "$runtime_dir/$dll" "dist/${{ matrix.asset }}/"
-              done
-            fi
+            # Keep Windows binaries unpacked: the UPX-packed release crashed at process start (0xC0000005).
             echo "rdev-client-gpu ${GITHUB_REF_NAME}" > "dist/${{ matrix.asset }}/VERSION.txt"
             (cd dist && python3 -m zipfile -c "${{ matrix.asset }}.zip" "${{ matrix.asset }}")
           else

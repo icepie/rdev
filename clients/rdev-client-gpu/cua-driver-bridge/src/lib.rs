@@ -148,6 +148,24 @@ pub fn supported() -> bool {
     false
 }
 
+#[cfg(all(
+    feature = "cua-native",
+    target_os = "macos",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+pub fn initialize_cursor_host() -> Result<()> {
+    native::initialize_cursor_host()
+}
+
+#[cfg(all(
+    feature = "cua-native",
+    target_os = "macos",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+pub fn run_cursor_main_loop() {
+    platform_macos::cursor::overlay::run_on_main_thread();
+}
+
 pub struct Session {
     #[cfg(feature = "cua-native")]
     inner: Mutex<Option<native::SessionRuntime>>,

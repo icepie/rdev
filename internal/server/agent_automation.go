@@ -44,7 +44,7 @@ func (s *Server) automationTools(entry *agentSessionEntry, th *agentThread) []ag
 		th.automation = &agentAutomation{pages: make(map[string]automationPage)}
 	}
 	base := automationTool{srv: s, entry: entry, thread: th, state: th.automation}
-	result := []agent.Tool{&computerTool{automationTool: base}, &cuaTool{automationTool: base}, &autojsTool{automationTool: base}}
+	result := []agent.Tool{&computerTool{automationTool: base}, &cuaTool{automationTool: base}, &skillTool{}, &autojsTool{automationTool: base}}
 	if s.BrowserEnabled {
 		result = append(result, &browserTool{automationTool: base})
 	}

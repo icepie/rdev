@@ -42,7 +42,7 @@ For a direct embedded desktop build without staging:
 cargo build --release --manifest-path clients/rdev-client-gpu/Cargo.toml --features embedded-rdev-desktop
 ```
 
-Windows release CI builds amd64 on Linux with GCC MinGW and the `x86_64-pc-windows-gnu` Rust target, packaging the matching GCC/C++/pthread runtime DLLs. Windows 7 amd64 uses LLVM MinGW with `x86_64-pc-windows-gnullvm`. Windows ARM64 cross-builds on an amd64 Windows runner (`windows-2025`) with the `amd64_arm64` MSVC environment and `aarch64-pc-windows-msvc` Rust target: FFmpeg receives an explicit `--cc` selecting `clang-cl --target=aarch64-pc-windows-msvc`, while x264 uses Clang's GNU-style driver and `llvm-ar --format=coff` for both archiving and symbol indexing, avoiding GNU ranlib's MSVC-incompatible index. Cross-built Windows binaries are not executed during packaging. The Windows 7 package applies PE import patches and ships compatibility shim DLLs for Win8+ imports such as `GetSystemTimePreciseAsFileTime`, `WaitOnAddress`, and `ProcessPrng`.
+Windows amd64 CI builds on Linux with GCC MinGW (`x86_64-pc-windows-gnu`); the inspected PE imports no GCC/C++/pthread runtime DLLs, so none are bundled. Windows ARM64 uses MSVC and does not bundle additional runtime DLLs. Windows 7 amd64 uses LLVM MinGW (`x86_64-pc-windows-gnullvm`); the EXE imports `libunwind.dll`, so the Win7 package includes that required runtime plus compatibility shims for patched Win8+ imports.
 
 On Windows-hosted builds, FFmpeg's archive response files are written by GNU make's `$(file ...)`, not a shell `echo`, to avoid Windows command-length limits. The required patch fails the dependency setup if it no longer applies.
 
@@ -64,7 +64,7 @@ rustup target add x86_64-pc-windows-gnullvm
 make rust-client-gpu-win7-package
 ```
 
-This uses the normal `x86_64-pc-windows-gnullvm` release build, patches known Win8+ PE import names, builds compatibility shim DLLs, auto-copies WinPTY runtime files when they can be found, and places everything in `clients/rdev-client-gpu/target/win7-dist/`.
+This uses the normal `x86_64-pc-windows-gnullvm` release build, patches known Win8+ PE import names, builds the required compatibility shim DLLs, includes only the imported LLVM-MinGW runtime `libunwind.dll`, auto-copies optional WinPTY runtime files when available, and stages the result in `clients/rdev-client-gpu/target/win7-dist/`. Set `RUST_CLIENT_GPU_WIN7_RUNTIME_DIR` if the LLVM-MinGW runtime directory differs from `/opt/llvm-mingw/x86_64-w64-mingw32/bin`.
 
 ## Run
 
@@ -98,7 +98,7 @@ The smoke test starts a local Go `rdev-server`, connects this Rust client, then 
 Windows 7 notes:
 
 - Use the normal `x86_64-pc-windows-gnullvm` release build, then package with `make rust-client-gpu-win7-package`.
-- Deploy all files from `target/win7-dist` into the same directory: `rdev-client-gpu.exe`, `rdev-waitonaddress-shim.dll`, `rdev-bcprng.dll`, `rdevws.dll`, and optional `winpty.dll`/`winpty-agent.exe`.
+- Deploy all files from `target/win7-dist` into the same directory: `rdev-client-gpu.exe`, required `libunwind.dll`, `rdev-waitonaddress-shim.dll`, `rdev-bcprng.dll`, `rdevws.dll`, and optional `winpty.dll`/`winpty-agent.exe`.
 - Packaging auto-detects WinPTY from `RDEV_WINPTY_DIR`, `WINPTY_DIR`, common local Node/Git-Bash locations, and `PATH`; missing WinPTY only warns because pipe fallback remains available.
 - Runtime PTY order is Win7/Win8: WinPTY then pipe fallback; Win10/Win11: `portable-pty`/ConPTY then pipe fallback.
 - Use `make rust-client-gpu-win7-smoke` for real Win7 E2E validation; set `RDEV_GPU_WIN7_HOST`, `RDEV_GPU_WIN7_PASSWORD`, and optional `RDEV_GPU_WIN7_PORT`/`RDEV_GPU_WIN7_USER` first.

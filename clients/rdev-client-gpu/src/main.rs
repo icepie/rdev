@@ -116,8 +116,55 @@ impl ModuleRuntimes {
     }
 }
 
+#[cfg(not(all(target_os = "macos", feature = "cua-native")))]
 #[tokio::main]
 async fn main() -> Result<()> {
+    run(Args::parse()).await
+}
+
+#[cfg(all(target_os = "macos", feature = "cua-native"))]
+fn main() -> Result<()> {
+    let args = Args::parse();
+    if args.version {
+        println!("{}", version::VERSION);
+        return Ok(());
+    }
+    // `--no-gpu-desktop-tunnel` only disables browser streaming; native CUA
+    // still needs AppKit's main-thread loop, so that flag is not a fast path.
+    if args.no_desktop {
+        return tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()?
+            .block_on(run(args));
+    }
+
+    // The native cursor overlay must be initialized before AppKit starts, and
+    // AppKit's event loop must own the process main thread. Keep Tokio and the
+    // network/client lifecycle on a worker thread.
+    rdev_cua_bridge::initialize_cursor_host()?;
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+    let worker = std::thread::Builder::new()
+        .name("rdev-client-runtime".into())
+        .spawn(move || {
+            let code = match runtime.block_on(run(args)) {
+                Ok(()) => 0,
+                Err(error) => {
+                    eprintln!("rdev-client-gpu: {error:#}");
+                    1
+                }
+            };
+            // AppKit's run loop is intentionally process-lifetime. Exit after
+            // the client runtime finishes (for example, after Ctrl-C).
+            std::process::exit(code);
+        })?;
+    rdev_cua_bridge::run_cursor_main_loop();
+    let _ = worker.join();
+    Ok(())
+}
+
+async fn run(mut args: Args) -> Result<()> {
     #[cfg(windows)]
     updater::wait_for_update_parent();
     install_default_tls_provider();
@@ -127,7 +174,6 @@ async fn main() -> Result<()> {
         .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
         .init();
 
-    let mut args = Args::parse();
     if args.version {
         println!("{}", version::VERSION);
         return Ok(());

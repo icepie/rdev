@@ -12,7 +12,7 @@ type cuaTool struct{ automationTool }
 
 func (*cuaTool) Name() string { return "cua" }
 func (*cuaTool) Description() string {
-	return "Use the selected client's CUA Driver accessibility tools. First call action=tools to discover every tool and its input schema, then call action=call with the exact returned tool name and arguments. Includes all tools provided by the connected driver's tools/list, not only a built-in subset."
+	return "Use the selected client's CUA Driver accessibility tools. Read the cua-driver skill via skill (action=read, skill=cua-driver, file=SKILL.md) before GUI work; load its referenced guides as needed. Call action=tools to discover every tool and its input schema, then call action=call with the exact returned tool name and arguments. Includes all tools provided by the connected driver's tools/list, not only a built-in subset."
 }
 func (*cuaTool) Schema() json.RawMessage {
 	return json.RawMessage(`{"type":"object","properties":{"action":{"type":"string","enum":["tools","call"]},"tool":{"type":"string","maxLength":128,"description":"Exact tool name returned by action=tools"},"arguments":{"type":"object","description":"Arguments matching that tool's returned input schema"},"source":{"type":"string"},"device":{"type":"string"}},"required":["action"],"additionalProperties":false}`)

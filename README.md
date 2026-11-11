@@ -295,7 +295,7 @@ Web UI 是 React 19 + Tailwind CSS v4 + Radix UI 单页应用，组件/设计令
  `client-cgo-native` 需要 Rust/Cargo 和 C 编译器；SDK 固定为 `0.47.1`，静态链接进客户端，无运行时下载或 MCP 子进程。运行时遵守 Cua 平台支持及辅助功能权限约束；Go 客户端的纯 Go 桌面路径不依赖 SDK。
  Linux 原生构建还需要 `pkg-config` 及 X11、Xi、xkbcommon 开发库（Debian/Ubuntu：`libx11-dev libxi-dev libxkbcommon-dev`）。
  Go 原生结果保留 MCP 文本、结构化内容和错误信息；操作仍使用会话级桌面独占控制、人工接管和空闲释放规则。
-- 原生 CUA 桥接会跨单次工具调用错误保留同一桌面会话；`set_agent_cursor_enabled` / `set_agent_cursor_motion` 只有在同会话状态读回匹配后才返回成功，等待超过 5 秒会作为调用错误返回。
+- 原生 CUA 桥接会跨单次工具调用错误保留同一桌面会话；`set_agent_cursor_enabled` / `set_agent_cursor_motion` 只有在同会话状态读回匹配后才返回成功，等待超过 5 秒会作为调用错误返回。macOS GPU 客户端在进程主线程运行 AppKit cursor overlay loop，Tokio 客户端运行在后台线程。
 - Rust 客户端在 Linux 上直接调用 `renameat2` 系统调用，兼容 CentOS 7 的旧 glibc；重命名不会覆盖已存在的目标，不支持该系统调用的内核会返回错误而非降级为非原子操作。
 
 服务 wrapper 配置示例：

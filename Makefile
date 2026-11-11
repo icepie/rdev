@@ -8,6 +8,7 @@ WIN7_SERVICE_DIST = target/win7-service
 RUST_CLIENT_GPU_MANIFEST = clients/rdev-client-gpu/Cargo.toml
 RUST_CLIENT_GPU_WIN7_DIR = clients/rdev-client-gpu/target/x86_64-pc-windows-gnullvm/release
 RUST_CLIENT_GPU_WIN7_DIST = clients/rdev-client-gpu/target/win7-dist
+RUST_CLIENT_GPU_WIN7_RUNTIME_DIR ?= /opt/llvm-mingw/x86_64-w64-mingw32/bin
 RUST_CLIENT_GPU_WIN7_RDEV_DESKTOP_DIST = clients/rdev-client-gpu/target/win7-rdev-desktop-dist
 RUST_CUA_BRIDGE_MANIFEST = clients/rdev-client-gpu/cua-driver-bridge/Cargo.toml
 RUST_CUA_BRIDGE_TARGET = internal/client/cua_native/rust-target
@@ -76,6 +77,8 @@ rust-client-gpu-win7-stage:
 		$(WIN7_STAGE_DIST)/rdev-client-gpu.exe
 	python3 clients/rdev-client-gpu/win7/build_shims.py $(WIN7_STAGE_DIST)
 	python3 clients/rdev-client-gpu/win7/copy_winpty_runtime.py $(WIN7_STAGE_DIST)
+	test -f $(RUST_CLIENT_GPU_WIN7_RUNTIME_DIR)/libunwind.dll
+	cp $(RUST_CLIENT_GPU_WIN7_RUNTIME_DIR)/libunwind.dll $(WIN7_STAGE_DIST)/
 
 rust-client-gpu-check: rust-client-gpu-fmt rust-client-gpu-clippy rust-client-gpu-test
 

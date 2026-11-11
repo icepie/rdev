@@ -49,6 +49,11 @@ fn driver() -> Result<Arc<CuaDriver>> {
         .map_err(|error| anyhow::anyhow!("create embedded Cua Driver: {error}"))
 }
 
+#[cfg(target_os = "macos")]
+pub(super) fn initialize_cursor_host() -> Result<()> {
+    driver().map(|_| ())
+}
+
 pub(super) struct SessionRuntime {
     driver: Arc<CuaDriver>,
     session: Arc<cua_driver_sdk::CuaDriverSession>,

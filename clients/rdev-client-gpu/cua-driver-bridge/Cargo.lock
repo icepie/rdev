@@ -3025,6 +3025,7 @@ dependencies = [
  "anyhow",
  "cua-driver-sdk",
  "libc",
+ "platform-macos",
  "serde",
  "serde_json",
  "tokio",

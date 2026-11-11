@@ -15,7 +15,7 @@ REPLACEMENTS = [
     (b"GetSystemTimePreciseAsFileTime", b"GetSystemTimeAsFileTime"),
     (b"api-ms-win-core-synch-l1-2-0.dll", b"rdev-waitonaddress-shim.dll"),
     (b"bcryptprimitives.dll", b"rdev-bcprng.dll"),
-    (b"WS2_32.dll", b"rdevws.dll"),
+    (b"ws2_32.dll", b"rdevws.dll"),
 ]
 
 
