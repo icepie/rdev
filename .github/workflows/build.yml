@@ -191,7 +191,7 @@ jobs:
         if: matrix.goos == 'windows'
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang lld llvm xz-utils
+          sudo apt-get install -y clang libclang-dev lld llvm xz-utils
           LLVM_MINGW_VERSION=20260602
           curl -fSL --retry 5 --retry-delay 10 \
             -o /tmp/llvm-mingw.tar.xz \
@@ -219,6 +219,9 @@ jobs:
           target_key="${target//-/_}"
           export "CC_${target_key}=${{ matrix.cc }}"
           export "CARGO_TARGET_${target_key^^}_LINKER=${{ matrix.cc }}"
+          if [ "$target" = 'aarch64-pc-windows-gnullvm' ]; then
+            export BINDGEN_EXTRA_CLANG_ARGS="--target=aarch64-w64-windows-gnu --sysroot=/opt/llvm-mingw/aarch64-w64-mingw32"
+          fi
           cargo build --locked --release --manifest-path clients/rdev-client-gpu/cua-driver-bridge/Cargo.toml \
             --features cua-native \
             --target "${{ matrix.rust_target }}" \

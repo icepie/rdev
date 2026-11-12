@@ -54,6 +54,8 @@ macOS packages search `/usr/lib/swift` before the bundled `Frameworks` directory
 
 The optional Linux cross-build script for Windows ARM64 requires a Rust toolchain providing `aarch64-pc-windows-gnullvm` (not the release CI target) and LLVM MinGW providing `aarch64-w64-mingw32-clang`:
 
+The native CUA bridge enables QuickJS bindgen only for Windows ARM64 LLVM-MinGW, because upstream does not ship bindings for `aarch64-pc-windows-gnullvm`. Cross-builds require host libclang and `BINDGEN_EXTRA_CLANG_ARGS="--target=aarch64-w64-windows-gnu --sysroot=<llvm-mingw>/aarch64-w64-mingw32"` so generated types use the Windows target headers.
+
 ```bash
 rustup target add aarch64-pc-windows-gnullvm
 make rust-client-gpu-windows-arm64-package

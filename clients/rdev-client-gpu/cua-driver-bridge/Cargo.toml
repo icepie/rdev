@@ -10,7 +10,7 @@ publish = false
 crate-type = ["rlib", "staticlib"]
 [features]
 default = []
-cua-native = ["dep:tokio", "dep:libc", "dep:uuid", "dep:cua-driver-sdk", "dep:platform-macos"]
+cua-native = ["dep:tokio", "dep:libc", "dep:uuid", "dep:cua-driver-sdk", "dep:platform-macos", "dep:rquickjs-sys"]
 
 [dependencies]
 anyhow = "1.0"
@@ -23,3 +23,7 @@ cua-driver-sdk = { git = "https://github.com/trycua/cua.git", tag = "cua-driver-
 
 [target.'cfg(target_os = "macos")'.dependencies]
 platform-macos = { git = "https://github.com/trycua/cua.git", tag = "cua-driver-rs-v0.47.1", package = "platform-macos", default-features = false, optional = true }
+
+# QuickJS does not ship pre-generated bindings for the LLVM-MinGW ARM64 target.
+[target.'cfg(all(target_os = "windows", target_arch = "aarch64", target_env = "gnu"))'.dependencies]
+rquickjs-sys = { version = "0.14.0", features = ["bindgen"], optional = true }
