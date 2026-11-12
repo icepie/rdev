@@ -16,6 +16,18 @@
 
 前台取消优先于最终回答完成和最大轮次数限制：取消期间不再发送成功 `done`，已显示的回答保留，已完成工具调用与结果成对保留；未消费的指导不在取消后追加到模型上下文。
 
+## 提示词缓存
+
+所有模型会话在创建时按工具名称固定工具顺序，不修改共享工具注册表；设备提示词先放通用规则，再放设备 ID 和工作目录，避免动态身份截断通用前缀。历史继续追加，缓存优化不删除消息、不改写工具结果或签名思考内容。
+
+- OpenAI Chat Completions / Responses：保持自动前缀缓存，不强加模型专属缓存参数或保留时间；分别读取 `prompt_tokens_details.cached_tokens` / `input_tokens_details.cached_tokens`。
+- DeepSeek（使用 `openai-completions` 适配器）：自动前缀缓存，无需额外请求参数；读取 `prompt_cache_hit_tokens`。`prompt_tokens` 已包含命中和未命中输入，不再叠加 `prompt_cache_miss_tokens`。兼容网关同时返回 OpenAI 用量字段时，以显式 `cached_tokens` 为准（包括 0），不重复累计。
+- Anthropic Messages：使用默认 5 分钟 `ephemeral`，在最后一个工具、配置系统提示和最近两个 user 消息末尾放显式断点（tool result 也属于 user 消息），总计最多 4 个；保留上一 user 边界，避免大批新增内容超过 20-block 回看窗口后找不到上次断点。后加的 system 消息独立为文本块，不改写原配置提示块；不标记或修改签名思考块。无预热请求，不默认启用成本更高的一小时缓存。
+
+模型、工具集合、推理设置、设备目录变化和上下文压缩仍可能使部分缓存失效；供应商的最小缓存长度、过期及路由策略决定实际命中。界面缓存量只来自供应商 usage，不用本地估算冒充命中率。实现通过本地 HTTP 多轮协议验证，线上收益需观察真实 usage。
+
+参考：[OpenAI Prompt caching](https://developers.openai.com/api/docs/guides/prompt-caching)、[DeepSeek Context Caching](https://api-docs.deepseek.com/guides/kv_cache)、[Anthropic Prompt caching](https://platform.claude.com/docs/en/build-with-claude/prompt-caching)。
+
 ## 目标与循环执行
 
 `/goal set <objective>` 明确启用当前会话的目标模式；`/goal status`、`/goal pause`、`/goal resume`、`/goal drop` 查看、暂停、恢复或移除目标。只有显式启用后模型才获得 `goal` 工具（`op=get|complete`）；完成必须由模型调用 `complete` 确认，而不是把普通回答自动视为完成。目标状态是 `active`、`paused`、`complete`、`budget-limited`；drop 后为 null。目标与 token 预算、已消耗 token 一同持久化，冷启动将 active 恢复为 paused，不自动重新执行。预算计算新输入、缓存写入和输出，不重复计费缓存读取；达到预算停止继续执行，不能通过 resume 重置预算。

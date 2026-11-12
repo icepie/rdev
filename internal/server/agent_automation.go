@@ -22,6 +22,7 @@ type automationView struct {
 type automationPage struct {
 	browser *browserSession
 	target  string
+	cursor  *browserCursor
 }
 type agentAutomation struct {
 	parent       *agentAutomation
@@ -173,6 +174,7 @@ func (h *agentWSHandler) handleAutomation(ac *agentConn, msg agentMsg) {
 		for _, resource := range states {
 			resource.opMu.Lock()
 			resource.screens = nil
+			clearBrowserCursors(resource)
 			closeDesktopAutomation(resource)
 			h.srv.releaseAutomationDesktop(resource)
 			resource.opMu.Unlock()
@@ -226,6 +228,7 @@ func (s *Server) retireAutomationResource(state *agentAutomation) {
 		defer state.opMu.Unlock()
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
+		clearBrowserCursors(state)
 		for _, page := range state.pages {
 			if ctx.Err() != nil {
 				break
@@ -271,6 +274,7 @@ func (s *Server) finishAutomationTurn(state *agentAutomation) {
 	for _, resource := range state.group() {
 		resource.opMu.Lock()
 		s.clearAutomationDesktop(resource)
+		clearBrowserCursors(resource)
 		resource.opMu.Unlock()
 	}
 }

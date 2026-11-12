@@ -10,6 +10,7 @@
 package agent
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -245,6 +246,10 @@ func New(cfg Config) *Session {
 	if cfg.HTTPClient == nil {
 		cfg.HTTPClient = &http.Client{}
 	}
+	// Tools are part of the provider's cached prefix. Canonicalize once per
+	// session, without reordering the caller's shared registry slice.
+	cfg.Tools = slices.Clone(cfg.Tools)
+	slices.SortStableFunc(cfg.Tools, func(a, b Tool) int { return cmp.Compare(a.Name(), b.Name()) })
 	return &Session{cfg: cfg}
 }
 

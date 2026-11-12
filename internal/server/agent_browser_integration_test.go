@@ -25,6 +25,10 @@ func TestBrowserAgentChromeIntegration(t *testing.T) {
 	}
 	site := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		if r.URL.Path == "/language" {
+			fmt.Fprintf(w, "<!doctype html><p id=accepted>%s</p>", r.Header.Get("Accept-Language"))
+			return
+		}
 		fmt.Fprint(w, `<!doctype html><title>Device route fixture</title><input id="name"><button id="go" onclick="document.querySelector('#out').textContent=document.querySelector('#name').value">Apply</button><p id="out">Waiting</p><select id="choice"><option value="a">Alpha</option><option value="b">Beta</option></select><button id="hover" onmouseover="this.textContent='Hovered'">Hover me</button>`)
 	}))
 	defer site.Close()
@@ -126,6 +130,104 @@ func TestBrowserAgentChromeIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer c.close()
+	checkCursor := func(expression string) {
+		t.Helper()
+		value, err := browserEvaluate(ctx, c, expression)
+		if err != nil || value != "true" {
+			t.Fatalf("cursor invariant: %s: %s, %v", expression, value, err)
+		}
+	}
+	languageBrowser := first.state.pages[client.ID].browser
+	setLanguage := func(lang string) {
+		t.Helper()
+		request := httptest.NewRequest(http.MethodPut, "/api/browser/view/"+languageBrowser.capability+"/language", strings.NewReader(`{"lang":"`+lang+`"}`))
+		response := httptest.NewRecorder()
+		s.HandleBrowserView(response, request)
+		if response.Code != 204 {
+			t.Fatalf("language update: %d %s", response.Code, response.Body.String())
+		}
+	}
+	setLanguage("zh")
+	checkCursor(`navigator.language==='zh-CN' && navigator.languages[1]==='zh' && new Intl.DateTimeFormat().resolvedOptions().locale==='zh-CN' && document.querySelector('#name').value.includes('你好')`)
+	// A popup's very first request must carry the preference, not just pages
+	// subsequently visited through the Agent tool.
+	if _, err := browserEvaluate(ctx, c, `window.open('http://agent-route.invalid/language','language-popup');true`); err != nil {
+		t.Fatal(err)
+	}
+	var popup *browserCDP
+	popupDeadline := time.NewTimer(5 * time.Second)
+	defer popupDeadline.Stop()
+	popupPoll := time.NewTicker(20 * time.Millisecond)
+	defer popupPoll.Stop()
+	for popup == nil {
+		var languageTargets []browserTarget
+		if err := browserJSON(ctx, languageBrowser, http.MethodGet, "/json/list", &languageTargets); err != nil {
+			t.Fatal(err)
+		}
+		for _, target := range languageTargets {
+			if strings.Contains(target.URL, "/language") {
+				popup, err = dialBrowserCDP(ctx, languageBrowser, target.ID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				break
+			}
+		}
+		if popup == nil {
+			select {
+			case <-popupDeadline.C:
+				t.Fatal("language popup not found")
+			case <-popupPoll.C:
+			}
+		}
+	}
+	defer popup.close()
+	if err := waitBrowserDocument(ctx, popup); err != nil {
+		t.Fatal(err)
+	}
+	value, err := browserEvaluate(ctx, popup, `navigator.language==='zh-CN' && document.querySelector('#accepted').textContent.startsWith('zh-CN')`)
+	if err != nil || value != "true" {
+		t.Fatalf("popup language: %s %v", value, err)
+	}
+	setLanguage("en")
+	checkCursor(`navigator.language==='en-US' && new Intl.DateTimeFormat().resolvedOptions().locale==='en-US' && document.querySelector('#name').value.includes('你好')`)
+	value, err = browserEvaluate(ctx, popup, `fetch('/language').then(r=>r.text()).then(s=>s.includes('en-US'))`)
+	if err != nil || value != "true" {
+		t.Fatalf("updated request language: %s %v", value, err)
+	}
+	_ = popup.call(ctx, "Page.close", map[string]any{}, nil)
+	// Resolved selector coordinates must match the rendered pointer after motion.
+	checkCursor(`(()=>{const p=document.querySelector('rdev-agent-cursor'),r=document.querySelector('#go').getBoundingClientRect();return !!p&&parseInt(p.style.left)===Math.floor((r.left+r.right)/2)&&document.elementFromPoint(parseInt(p.style.left),parseInt(p.style.top)).id==='go'})()`)
+	run(first, map[string]any{"action": "navigate", "url": "http://agent-route.invalid/?cursor-navigation"})
+	checkCursor(`!!window.__rdevAgentCursor && !document.querySelector('rdev-agent-cursor')`)
+	run(first, map[string]any{"action": "hover", "x": 123, "y": 150})
+	checkCursor(`document.querySelector('rdev-agent-cursor').style.left==='123px' && document.querySelector('rdev-agent-cursor').style.top==='150px'`)
+	if _, err := browserEvaluate(ctx, c, `window.cursorMoves=[];document.addEventListener('mousemove',e=>cursorMoves.push([e.clientX,e.clientY]));window.cursorClicks=0;document.addEventListener('click',()=>cursorClicks++)`); err != nil {
+		t.Fatal(err)
+	}
+	run(first, map[string]any{"action": "hover", "x": 600, "y": 400})
+	checkCursor(`cursorMoves.some(([x,y])=>x>123&&x<600&&y>150&&y<400) && cursorMoves.at(-1)[0]===600 && cursorMoves.at(-1)[1]===400`)
+	cancelMove, stopMove := context.WithTimeout(ctx, time.Millisecond)
+	rawMove, _ := json.Marshal(map[string]any{"device": client.ID, "action": "click", "x": 20, "y": 20})
+	if _, err := first.Execute(cancelMove, rawMove); err == nil {
+		t.Fatal("canceled trajectory completed a click")
+	}
+	stopMove()
+	checkCursor(`cursorClicks===0 && !document.querySelector('rdev-agent-cursor')`)
+	// A cross-origin frame cannot bubble mouse events to the parent. CDP-driven
+	// placement still follows the coordinates and doesn't intercept its click.
+	if _, err := browserEvaluate(ctx, c, `(()=>{const f=document.createElement('iframe');f.src='data:text/html,<button>Frame</button>';f.style='position:fixed;left:0;top:100px;width:250px;height:150px';document.body.append(f)})()`); err != nil {
+		t.Fatal(err)
+	}
+	run(first, map[string]any{"action": "click", "x": 100, "y": 160})
+	checkCursor(`document.querySelector('rdev-agent-cursor').style.top==='160px' && document.elementFromPoint(100,160).tagName==='IFRAME'`)
+	s.finishAutomationTurn(first.state)
+	checkCursor(`!window.__rdevAgentCursor && !document.querySelector('rdev-agent-cursor')`)
+	run(first, map[string]any{"action": "navigate", "url": "http://agent-route.invalid/?after-cleanup"})
+	checkCursor(`!window.__rdevAgentCursor`)
+	run(first, map[string]any{"action": "hover", "selector": "#hover"})
+	checkCursor(`!!document.querySelector('rdev-agent-cursor')`)
 	if err = c.call(ctx, "Rdev.nonexistent", map[string]any{}, nil); err == nil {
 		t.Fatal("CDP errors ignored")
 	}

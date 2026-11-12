@@ -78,6 +78,9 @@ func (t *browserTool) Execute(ctx context.Context, raw json.RawMessage) (output 
 	}
 	page := t.state.pages[client.ID]
 	if page.browser != b {
+		if page.cursor != nil {
+			page.cursor.close()
+		}
 		page = automationPage{browser: b}
 	}
 	if page.target == "" {
@@ -94,10 +97,27 @@ func (t *browserTool) Execute(ctx context.Context, raw json.RawMessage) (output 
 	t.publish(automationView{Kind: "browser", Device: client.ID, Target: page.target, Base: "/api/browser/view/" + b.capability, Action: a.Action})
 	c, err := dialBrowserCDP(ctx, b, page.target)
 	if err != nil {
+		if page.cursor != nil {
+			page.cursor.close()
+		}
 		delete(t.state.pages, client.ID)
 		return "", err
 	}
 	defer c.close()
+	defer func() {
+		if actionErr != nil {
+			clearBrowserCursors(t.state)
+		}
+	}()
+	if a.Action == "click" || a.Action == "hover" || a.Action == "scroll" {
+		if page.cursor == nil {
+			page.cursor, err = newBrowserCursor(ctx, b, page.target)
+			if err != nil {
+				return "", err
+			}
+			t.state.pages[client.ID] = page
+		}
+	}
 	switch a.Action {
 	case "open", "navigate":
 		var result struct {
@@ -180,14 +200,39 @@ func (t *browserTool) Execute(ctx context.Context, raw json.RawMessage) (output 
 				return "", fmt.Errorf("click/hover requires a selector or x/y from a recent screenshot")
 			}
 		}
+		if err = page.cursor.move(ctx, x, y, a.Action == "click"); err != nil {
+			return "", err
+		}
 		if a.Action == "hover" {
-			err = c.call(ctx, "Input.dispatchMouseEvent", map[string]any{"type": "mouseMoved", "x": x, "y": y}, nil)
+			err = nil // move already dispatched native mouseMoved events.
 			break
+		}
+		// Hover can open menus or move the target during the trajectory. Never
+		// click the old point if a selector no longer resolves to that point.
+		if a.Selector != "" {
+			selector, _ := json.Marshal(a.Selector)
+			rect, e := browserEvaluate(ctx, c, fmt.Sprintf(browserTargetScript, selector))
+			if e != nil {
+				return "", e
+			}
+			var point struct{ X, Y int }
+			if e = json.Unmarshal([]byte(rect), &point); e != nil {
+				return "", e
+			}
+			if point.X != x || point.Y != y {
+				return "", fmt.Errorf("target moved during cursor motion; take a fresh snapshot")
+			}
+		}
+		if err = page.cursor.place(ctx, x, y, true); err != nil {
+			return "", err
 		}
 		down := map[string]any{"type": "mousePressed", "x": x, "y": y, "button": "left", "clickCount": 1}
 		up := map[string]any{"type": "mouseReleased", "x": x, "y": y, "button": "left", "clickCount": 1}
 		err = browserInputPair(ctx, c, b, page.target, "Input.dispatchMouseEvent", down, up)
 	case "scroll":
+		if err = page.cursor.move(ctx, a.X, a.Y, false); err != nil {
+			return "", err
+		}
 		err = c.call(ctx, "Input.dispatchMouseEvent", map[string]any{"type": "mouseWheel", "x": a.X, "y": a.Y, "deltaX": a.DeltaX, "deltaY": a.DeltaY}, nil)
 	case "key":
 		code := browserKeyCode(a.Key)
@@ -201,6 +246,9 @@ func (t *browserTool) Execute(ctx context.Context, raw json.RawMessage) (output 
 		}
 		err = browserInputPair(ctx, c, b, page.target, "Input.dispatchKeyEvent", down, up)
 	case "close":
+		if page.cursor != nil {
+			page.cursor.close()
+		}
 		err = c.call(ctx, "Page.close", map[string]any{}, nil)
 		delete(t.state.pages, client.ID)
 		t.publish(automationView{})

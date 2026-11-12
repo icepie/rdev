@@ -48,6 +48,7 @@ type browserSession struct {
 	cancel     context.CancelFunc
 	done       chan struct{}
 	lastUsed   time.Time // guarded by Server.browserMu
+	language   *browserLanguage
 }
 
 type browserTarget struct {
@@ -77,9 +78,14 @@ func (s *Server) HandleBrowserAPI(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Device   string `json:"device"`
 		Password string `json:"password"`
+		Lang     string `json:"lang"`
 	}
 	if json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&in) != nil || !validClientID(in.Device) {
 		http.Error(w, "invalid device", 400)
+		return
+	}
+	if in.Lang != "" && in.Lang != "zh" && in.Lang != "en" {
+		http.Error(w, "language must be zh or en", 400)
 		return
 	}
 	client, ok := s.GetClient(in.Device)
@@ -97,6 +103,12 @@ func (s *Server) HandleBrowserAPI(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		http.Error(w, err.Error(), 503)
 		return
+	}
+	if in.Lang != "" {
+		if err := b.language.set(r.Context(), in.Lang); err != nil {
+			http.Error(w, err.Error(), 502)
+			return
+		}
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{"base": "/api/browser/view/" + b.capability, "device": b.device})
@@ -261,6 +273,12 @@ func (s *Server) startBrowser(b *browserSession, client *ClientConn) {
 				continue
 			}
 			b.endpoint, _ = url.Parse("http://127.0.0.1:" + port)
+			b.language, err = newBrowserLanguage(ctx, b)
+			if err != nil {
+				fail(fmt.Errorf("initialize browser language: %w", err))
+				return
+			}
+			defer b.language.close()
 			close(b.ready)
 			ready = true
 		}
@@ -273,6 +291,8 @@ func (s *Server) startBrowser(b *browserSession, client *ClientConn) {
 			exited <- err
 			return
 		case <-ctx.Done():
+			return
+		case <-b.language.ctx.Done():
 			return
 		case <-ticker.C:
 			s.browserMu.Lock()
@@ -340,6 +360,26 @@ func (s *Server) HandleBrowserView(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Referrer-Policy", "no-referrer")
 	w.Header().Set("Cache-Control", "no-store")
+	if path == "language" {
+		if r.Method != http.MethodPut {
+			w.Header().Set("Allow", "PUT")
+			http.Error(w, "method not allowed", 405)
+			return
+		}
+		var in struct {
+			Lang string `json:"lang"`
+		}
+		if json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&in) != nil || (in.Lang != "zh" && in.Lang != "en") {
+			http.Error(w, "language must be zh or en", 400)
+			return
+		}
+		if err := b.language.set(r.Context(), in.Lang); err != nil {
+			http.Error(w, err.Error(), 502)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
 	if path == "session" && r.Method == http.MethodDelete {
 		b.cancel()
 		<-b.done

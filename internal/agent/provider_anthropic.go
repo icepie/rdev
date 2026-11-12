@@ -54,7 +54,11 @@ func marshalAnthropicRequest(cfg Config, history []Message) ([]byte, error) {
 		maxTokens = 8192
 	}
 	messages := make([]anthropicMessage, 0, len(history))
-	system := cfg.SystemPrompt
+	system := make([]any, 0, 1)
+	cacheControl := map[string]string{"type": "ephemeral"}
+	if cfg.SystemPrompt != "" {
+		system = append(system, map[string]any{"type": "text", "text": cfg.SystemPrompt, "cache_control": cacheControl})
+	}
 	scope := providerReplayScope(cfg)
 	appendBlocks := func(role string, blocks []any) {
 		if len(blocks) == 0 {
@@ -71,10 +75,9 @@ func marshalAnthropicRequest(cfg Config, history []Message) ([]byte, error) {
 	toolErrors := map[string]bool{}
 	for _, m := range history {
 		if m.Role == "system" {
-			if system != "" {
-				system += "\n\n"
+			if m.Content != "" {
+				system = append(system, map[string]any{"type": "text", "text": m.Content})
 			}
-			system += m.Content
 			continue
 		}
 		if m.Role == "tool" {
@@ -131,8 +134,33 @@ func marshalAnthropicRequest(cfg Config, history []Message) ([]byte, error) {
 		}
 		appendBlocks(m.Role, blocks)
 	}
+	// Keep the previous user boundary explicitly reachable even when the new
+	// turn adds more than the provider's 20-block cache lookback window.
+	// Only request-owned user blocks are marked; signed assistant replay is
+	// opaque and must remain byte-for-byte unchanged.
+	remaining := 2
+	for i := len(messages) - 1; i >= 0 && remaining > 0; i-- {
+		if messages[i].Role != "user" {
+			continue
+		}
+		blocks := messages[i].Content
+		for j := len(blocks) - 1; j >= 0; j-- {
+			block, ok := blocks[j].(map[string]any)
+			if !ok {
+				continue
+			}
+			switch block["type"] {
+			case "text", "image", "tool_result":
+				block["cache_control"] = cacheControl
+				remaining--
+			default:
+				continue
+			}
+			break
+		}
+	}
 	request := map[string]any{"model": cfg.Model, "messages": messages, "max_tokens": maxTokens, "stream": true}
-	if system != "" {
+	if len(system) > 0 {
 		request["system"] = system
 	}
 	if cfg.Thinking.Mode == "anthropic-adaptive" {
@@ -175,6 +203,7 @@ func marshalAnthropicRequest(cfg Config, history []Message) ([]byte, error) {
 		for _, tool := range cfg.Tools {
 			tools = append(tools, map[string]any{"name": tool.Name(), "description": tool.Description(), "input_schema": tool.Schema()})
 		}
+		tools[len(tools)-1].(map[string]any)["cache_control"] = cacheControl
 		request["tools"] = tools
 	}
 	return json.Marshal(request)

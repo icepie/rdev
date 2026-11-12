@@ -68,10 +68,11 @@ type streamChunk struct {
 		NativeFinishReason json.RawMessage `json:"native_finish_reason"`
 	} `json:"choices"`
 	Usage *struct {
-		PromptTokens     int `json:"prompt_tokens"`
-		CompletionTokens int `json:"completion_tokens"`
-		PromptDetails    struct {
-			CachedTokens int `json:"cached_tokens"`
+		PromptTokens         int `json:"prompt_tokens"`
+		CompletionTokens     int `json:"completion_tokens"`
+		PromptCacheHitTokens int `json:"prompt_cache_hit_tokens"`
+		PromptDetails        struct {
+			CachedTokens *int `json:"cached_tokens"`
 		} `json:"prompt_tokens_details"`
 	} `json:"usage"`
 	// Some gateways surface an error object inline on the stream.
@@ -293,7 +294,10 @@ func readStreamWithFinish(body io.Reader, onDelta, onReasoning func(string), pok
 			if chunk.Usage != nil {
 				usage.InputTokens = chunk.Usage.PromptTokens
 				usage.OutputTokens = chunk.Usage.CompletionTokens
-				usage.CacheReadTokens = chunk.Usage.PromptDetails.CachedTokens
+				usage.CacheReadTokens = chunk.Usage.PromptCacheHitTokens
+				if cached := chunk.Usage.PromptDetails.CachedTokens; cached != nil {
+					usage.CacheReadTokens = *cached
+				}
 			}
 			for _, choice := range chunk.Choices {
 				var nativeReason string

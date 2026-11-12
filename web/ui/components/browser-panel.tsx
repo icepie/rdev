@@ -26,6 +26,8 @@ export function BrowserPanel({ device, visible = true, deviceSelection = "inline
   const [selected, setSelected] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [targetError, setTargetError] = useState("");
+  const [languageError, setLanguageError] = useState("");
   const online = devices.some(d => d.id === exitDevice);
   const attachedAutomation = useRef(false);
   useEffect(() => {
@@ -41,6 +43,27 @@ export function BrowserPanel({ device, visible = true, deviceSelection = "inline
   }, [automation?.base, automation?.target, automation?.device]);
 
   useEffect(() => {
+    if (!base) { setLanguageError(""); return; }
+    const controller = new AbortController();
+    const updateLanguage = async () => {
+      try {
+        const response = await fetch(`${base}/language`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ lang: lang === "zh" ? "zh" : "en" }),
+          signal: controller.signal,
+        });
+        if (!response.ok) throw new Error(`Language update failed (${response.status})`);
+        if (!controller.signal.aborted) setLanguageError("");
+      } catch (e) {
+        if (!controller.signal.aborted) setLanguageError(e instanceof Error ? e.message : String(e));
+      }
+    };
+    void updateLanguage();
+    return () => controller.abort();
+  }, [base, lang]);
+
+  useEffect(() => {
     if (!base || !visible) return;
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout>;
@@ -52,9 +75,9 @@ export function BrowserPanel({ device, visible = true, deviceSelection = "inline
         if (controller.signal.aborted) return;
         setTargets(rows);
         setSelected(current => automation?.target ?? (rows.some(row => row.id === current) ? current : rows[0]?.id ?? ""));
-        setError("");
+        setTargetError("");
       } catch (e) {
-        if (!controller.signal.aborted) setError(e instanceof Error ? e.message : String(e));
+        if (!controller.signal.aborted) setTargetError(e instanceof Error ? e.message : String(e));
       } finally {
         if (!controller.signal.aborted) timer = setTimeout(refresh, 5000);
       }
@@ -67,7 +90,7 @@ export function BrowserPanel({ device, visible = true, deviceSelection = "inline
     if (busy || !online) return;
     setBusy(true); setError("");
     try {
-      const response = await apiFetch("/api/browser", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ device: exitDevice, password }) });
+      const response = await apiFetch("/api/browser", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ device: exitDevice, password, lang: lang === "zh" ? "zh" : "en" }) });
       if (!response.ok) throw new Error((await response.text()).trim());
       const session: { base: string } = await response.json();
       setBase(session.base);
@@ -114,6 +137,8 @@ export function BrowserPanel({ device, visible = true, deviceSelection = "inline
       </>}
     </div>
     {error && <p role="alert" className="px-3 py-2 text-xs text-destructive-text">{error}</p>}
+    {languageError && <p role="alert" className="px-3 py-2 text-xs text-destructive-text">{languageError}</p>}
+    {targetError && <p role="alert" className="px-3 py-2 text-xs text-destructive-text">{targetError}</p>}
     {!online && base && <p role="status" className="px-3 py-2 text-xs text-muted-foreground">{t("browser.offline")}</p>}
     <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
     <div className="flex min-h-0 flex-1 flex-col">

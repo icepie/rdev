@@ -88,7 +88,7 @@ func TestAnthropicHTTPToolContinuationAndScopedReplay(t *testing.T) {
 	if len(requests) != 2 {
 		t.Fatalf("requests=%d", len(requests))
 	}
-	if requests[0]["max_tokens"] != float64(12000) || requests[0]["system"] != "sys" {
+	if requests[0]["max_tokens"] != float64(12000) {
 		t.Fatalf("options=%+v", requests[0])
 	}
 	thinking := requests[0]["thinking"].(map[string]any)

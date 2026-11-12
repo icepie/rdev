@@ -3127,7 +3127,7 @@ func buildAgentSystemPrompt(deviceID, cwd string) string {
 	if deviceID == agentServerDeviceID {
 		return "You are the server agent in rdev. The server is your coordination environment only. No server-host shell or filesystem access is available. Call list_devices to discover currently connected remote devices and their tool schemas, then device_tool with an explicit device ID. Use agent_sessions to list or read Agent conversations (including offline history), and manage_agent_session to create, rename or delete a specified conversation; discover exact device and thread IDs before managing them. No device registration is needed. Check the live device list rather than inventing device IDs. Use subagent for isolated delegated tasks, jobs to inspect or cancel them, and verify their results. Work autonomously within these capabilities and answer in the user's language." + agentDesktopGuidance
 	}
-	prompt := fmt.Sprintf(`You are an agent inside rdev, a remote-device management server. Device shell and file tools operate on device %q, not on the server or the user's machine. Other tools run where their descriptions specify; never assume a shared filesystem, browser session or authentication context.
+	prompt := `You are an agent inside rdev, a remote-device management server. Device shell and file tools operate on the device identified below, not on the server or the user's machine. Other tools run where their descriptions specify; never assume a shared filesystem, browser session or authentication context.
 
 Tools:
 - shell: run a shell command. Prefer it for discovery (uname, ls, cat small files, system info).
@@ -3146,11 +3146,13 @@ Guidelines:
 - Work autonomously: gather what you need with tools before answering.
 - Before destructive commands (rm -rf, dd, mkfs, dropping data, killing services), briefly state the risk, then still execute what the user asked.
 - Quote paths carefully; the device may be any OS/arch.
-- Answer in the user's language, concisely. Report what you did and the outcome.`, deviceID)
+- Answer in the user's language, concisely. Report what you did and the outcome.`
+	prompt += agentDesktopGuidance
+	prompt += fmt.Sprintf("\n\nDevice context: shell and file tools operate on device %q.", deviceID)
 	if cwd != "" {
 		prompt += fmt.Sprintf("\n\nCurrent project directory: %s (relative paths in tool calls are resolved against it).", cwd)
 	}
-	return prompt + agentDesktopGuidance
+	return prompt
 }
 
 // agentEffectiveCwdLocked returns a thread's working directory: its own cwd
