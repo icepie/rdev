@@ -44,6 +44,8 @@ cargo build --release --manifest-path clients/rdev-client-gpu/Cargo.toml --featu
 
 Windows amd64 CI builds on Linux with GCC MinGW (`x86_64-pc-windows-gnu`) and bundle the required `libgcc_s_seh-1.dll`, `libstdc++-6.dll`, and `libwinpthread-1.dll` runtime files. Windows ARM64 uses MSVC and does not bundle additional runtime DLLs. Windows 7 amd64 uses LLVM MinGW (`x86_64-pc-windows-gnullvm`); the package includes `libc++.dll`, `libunwind.dll`, and `libwinpthread-1.dll`, plus compatibility shims for patched Win8+ imports.
 
+Windows GNU builds require `ld.lld` on `PATH`: the crate selects LLD through GCC's `-fuse-ld=lld` to preserve Rust raw-dylib import descriptors. GNU ld can leave unresolved import slots and crash before `main` with `0xC0000005`. CI runs both packaged amd64 variants with `--version` on Windows before publishing (this checks startup on current Windows, not Windows 7 compatibility).
+
 On Windows-hosted builds, FFmpeg's archive response files are written by GNU make's `$(file ...)`, not a shell `echo`, to avoid Windows command-length limits. The required patch fails the dependency setup if it no longer applies.
 
 The native video wrapper includes POSIX string helpers only for VAAPI and uses Windows CRT file-descriptor APIs on Windows, so MSVC builds do not require POSIX compatibility headers. Global rational constants use direct aggregate initialization rather than compound literals for compatibility with MSVC's C compiler.

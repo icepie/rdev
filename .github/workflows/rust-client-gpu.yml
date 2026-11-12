@@ -551,9 +551,47 @@ jobs:
             clients/rdev-client-gpu/dist/${{ matrix.asset }}*.zip
           if-no-files-found: error
 
+  windows-smoke:
+    name: Smoke ${{ matrix.asset }}
+    needs: build
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        asset: [rdev-client-gpu-windows-amd64, rdev-client-gpu-windows-win7-amd64]
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: ${{ matrix.asset }}
+          path: package
+
+      - name: Run packaged client on Windows
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Expand-Archive "package/${{ matrix.asset }}.zip" unpacked
+          $exe = (Resolve-Path "unpacked/${{ matrix.asset }}/rdev-client-gpu.exe").Path
+          $process = Start-Process $exe -ArgumentList '--version' -PassThru -NoNewWindow `
+            -RedirectStandardOutput version.txt -RedirectStandardError stderr.txt
+          $handle = $process.Handle
+          if (!$process.WaitForExit(30000)) {
+            $process.Kill()
+            throw 'Packaged client startup timed out'
+          }
+          $process.WaitForExit()
+          Get-Content stderr.txt
+          $version = (Get-Content version.txt -Raw).Trim()
+          if ($process.ExitCode -ne 0 -or !$version) {
+            throw "Packaged client failed to start: exit=$($process.ExitCode), output=$version"
+          }
+          if ('${{ github.ref }}'.StartsWith('refs/tags/v') -and $version -ne '${{ github.ref_name }}') {
+            throw "Unexpected packaged version: $version"
+          }
+          Write-Output $version
+
   release:
     name: Release Rust GPU client
-    needs: [test, build]
+    needs: [test, build, windows-smoke]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
     steps:
