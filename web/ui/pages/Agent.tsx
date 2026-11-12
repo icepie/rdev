@@ -888,6 +888,7 @@ export function AgentPage() {
         primaryOps.setQueueError("");
         clearQueueReturns(primaryOps.queueReturns.current);
         primaryOps.setTodos(parseTodos(msg.todos));
+        applyScopedMessage(primaryOps, { ...msg, op: "autonomy" }, t);
         primaryOps.openToolIds.current.clear();
         const working = parseWorking(msg.working, !!msg.running);
         primaryOps.setWorkingSince(working.since);
@@ -1085,6 +1086,7 @@ export function AgentPage() {
         setThread(switchThread);
         threadRef.current = switchThread;
         primaryOps.setTodos(parseTodos(msg.todos));
+        applyScopedMessage(primaryOps, { ...msg, op: "autonomy" }, t);
         primaryOps.setQueue(parseStringArray(msg.queue));
         primaryOps.setQueueIds(parseStringArray(msg.queueIds));
         primaryOps.setQueueModes(parseStringArray(msg.queueModes));

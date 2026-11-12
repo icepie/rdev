@@ -145,7 +145,7 @@ jobs:
             goarch: amd64
             runner: ubuntu-latest
             ext: .exe
-            cc: x86_64-w64-mingw32-clang
+            cc: /usr/bin/x86_64-w64-mingw32-gcc
             cua_native: true
             rust_target: x86_64-pc-windows-gnu
           - goos: windows
@@ -198,6 +198,12 @@ jobs:
             "https://github.com/mstorsjo/llvm-mingw/releases/download/${LLVM_MINGW_VERSION}/llvm-mingw-${LLVM_MINGW_VERSION}-msvcrt-ubuntu-22.04-x86_64.tar.xz"
           mkdir -p /opt/llvm-mingw
           tar -xf /tmp/llvm-mingw.tar.xz -C /opt/llvm-mingw --strip-components=1
+          # Rust's Windows import-library generation runs before the Go build.
+          echo /opt/llvm-mingw/bin >> "$GITHUB_PATH"
+
+      - name: Install GNU MinGW for native CUA amd64
+        if: matrix.goos == 'windows' && matrix.goarch == 'amd64'
+        run: sudo apt-get install -y gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64
 
       - name: Install Rust for native CUA
         if: matrix.cua_native == true
@@ -208,7 +214,12 @@ jobs:
       - name: Build native CUA bridge
         if: matrix.cua_native == true
         run: |
-          cargo build --release --manifest-path clients/rdev-client-gpu/cua-driver-bridge/Cargo.toml \
+          # Keep Rust build-script C code and the final CGO link on the same toolchain.
+          target='${{ matrix.rust_target }}'
+          target_key="${target//-/_}"
+          export "CC_${target_key}=${{ matrix.cc }}"
+          export "CARGO_TARGET_${target_key^^}_LINKER=${{ matrix.cc }}"
+          cargo build --locked --release --manifest-path clients/rdev-client-gpu/cua-driver-bridge/Cargo.toml \
             --features cua-native \
             --target "${{ matrix.rust_target }}" \
             --target-dir internal/client/cua_native/rust-target
@@ -229,6 +240,8 @@ jobs:
               export PATH="$GOROOT/bin:$PATH"
             fi
             export CC='${{ matrix.cc }}'
+            # Release assets are standalone executables, not EXE/DLL bundles.
+            export CGO_LDFLAGS=-static
           fi
           export CGO_CFLAGS='${{ matrix.cgo_cflags }}'
           tags=x264cgo

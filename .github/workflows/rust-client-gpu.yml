@@ -310,6 +310,10 @@ jobs:
           echo /opt/llvm-mingw/bin >> "$GITHUB_PATH"
           if [ '${{ matrix.target }}' = 'x86_64-pc-windows-gnu' ]; then
             sudo apt-get install -y gcc-mingw-w64-x86-64-posix g++-mingw-w64-x86-64-posix
+            # Ubuntu's cross-GCC can fall back to its configured GNU ld before
+            # searching PATH for ld.lld. Install LLD beside both cross-ld paths.
+            sudo ln -sf /usr/bin/ld.lld /usr/bin/x86_64-w64-mingw32-ld.lld
+            sudo ln -sf /usr/bin/ld.lld /usr/x86_64-w64-mingw32/bin/ld.lld
             {
               echo 'CC_x86_64_pc_windows_gnu=/usr/bin/x86_64-w64-mingw32-gcc-posix'
               echo 'CXX_x86_64_pc_windows_gnu=/usr/bin/x86_64-w64-mingw32-g++-posix'
@@ -580,9 +584,10 @@ jobs:
           }
           $process.WaitForExit()
           Get-Content stderr.txt
-          $version = (Get-Content version.txt -Raw).Trim()
+          # Get-Content returns null for an empty file; preserve the startup exit code.
+          $version = ([string](Get-Content version.txt -Raw)).Trim()
           if ($process.ExitCode -ne 0 -or !$version) {
-            throw "Packaged client failed to start: exit=$($process.ExitCode), output=$version"
+            throw ('Packaged client failed to start: exit={0} (0x{0:X8}), output={1}' -f $process.ExitCode, $version)
           }
           if ('${{ github.ref }}'.StartsWith('refs/tags/v') -and $version -ne '${{ github.ref_name }}') {
             throw "Unexpected packaged version: $version"

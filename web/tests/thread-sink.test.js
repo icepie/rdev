@@ -25,6 +25,24 @@ afterEach(async () => {
 });
 const frame = async message => act(async () => applyScopedMessage(sink.ops, message, key => key));
 
+it.each(['error', 'stopped'])('replaces pre-compaction transcript on terminal %s without duplicating the open turn', async op => {
+  await frame({ op: 'turn_start', text: 'old request' });
+  await act(async () => sink.ops.appendDelta('stale partial output'));
+  await frame({ op, compacted: true, canceled: true, message: 'provider unavailable', history: [
+    { role: 'user', text: 'Preserved task summary' },
+    { role: 'assistant', text: 'Retained answer' },
+  ] });
+  expect(sink.state.running).toBe(false);
+  expect(sink.ops.turnOpen.current).toBe(false);
+  const text = JSON.stringify(sink.state.items);
+  expect(text).toContain('Preserved task summary');
+  expect(text).toContain('Retained answer');
+  expect(text).not.toContain('stale partial output');
+  expect(text).not.toContain('old request');
+  const notices = sink.state.items.filter(item => item.kind === (op === 'error' ? 'error' : 'system'));
+  expect(notices.map(item => item.text)).toEqual([op === 'error' ? 'agent.toolError: provider unavailable' : 'agent.stopped']);
+});
+
 it('keeps streamed output in the same running turn after a busy-command rejection', async () => {
   await frame({ op: 'turn_start', text: 'hello' });
   await act(async () => sink.ops.appendDelta('before'));
@@ -59,6 +77,23 @@ it('replaces stale state and unlocks stop when a secondary snapshot arrives', as
   await act(async () => { sink.ops.setStopping(true); sink.ops.setQueue(['stale']); sink.ops.appendDelta('stale'); });
   await frame({ op: 'thread_peeked', running: false, history: [], queue: [], todos: [] });
   expect(sink.state).toMatchObject({ items: [], queue: [], todos: [], running: false, stopping: false, workingSince: null });
+});
+
+it('preserves autonomy during transport loss but replaces it on thread snapshots and reset', async () => {
+  const goal = { objective: 'verify release', status: 'active', tokensUsed: 24, tokenBudget: 1000 };
+  await frame({ op: 'turn_start', text: 'work' });
+  await frame({ op: 'autonomy', goal, loop: null, message: 'Cannot start a loop during goal mode' });
+  expect(sink.state.running).toBe(true);
+  expect(sink.state.autonomy).toEqual({ goal, loop: null, message: 'Cannot start a loop during goal mode' });
+  await act(async () => sink.ops.resetTransient());
+  expect(sink.state.autonomy.goal).toEqual(goal);
+  await frame({ op: 'thread_peeked', running: false, history: [], goal: null,
+    loop: { prompt: 'inspect changes', status: 'paused', iteration: 2, maxIterations: 3 } });
+  expect(sink.state.autonomy.goal).toBeNull();
+  expect(sink.state.autonomy.loop).toMatchObject({ status: 'paused', iteration: 2 });
+  expect(sink.state.autonomy.message).toBe('');
+  await frame({ op: 'reset_ok' });
+  expect(sink.state.autonomy).toEqual({ goal: null, loop: null, message: '' });
 });
 
 it('keeps inspected job output during list refresh and removes it on reset', async () => {

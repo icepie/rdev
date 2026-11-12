@@ -49,8 +49,9 @@ type Event struct {
 
 // Usage reports token accounting for a completed turn.
 type Usage struct {
-	InputTokens  int `json:"inputTokens"`
-	OutputTokens int `json:"outputTokens"`
+	InputTokens     int `json:"inputTokens"`
+	OutputTokens    int `json:"outputTokens"`
+	CacheReadTokens int `json:"cacheReadTokens,omitempty"`
 }
 
 // Tool is a capability the model can invoke. Execute receives the raw
@@ -114,6 +115,9 @@ type Config struct {
 	// permission mode. Evaluated per call so mode switches apply to
 	// existing sessions.
 	ApproveAll func() bool
+	// OnUsage observes each provider round, including reported usage on errors.
+	// It may cancel the run to enforce an explicitly authorized budget.
+	OnUsage func(Usage)
 	// HTTPClient is optional; nil uses a default client with no total timeout
 	// (streaming relies on ctx for cancellation).
 	HTTPClient *http.Client
@@ -248,6 +252,8 @@ func New(cfg Config) *Session {
 func (s *Session) Reset() {
 	s.mu.Lock()
 	s.history = nil
+	s.historyRevision++
+	s.turnHistoryIndex = 0
 	s.mu.Unlock()
 }
 
@@ -264,6 +270,8 @@ func (s *Session) History() []Message {
 func (s *Session) SetHistory(h []Message) {
 	s.mu.Lock()
 	s.history = cloneMessages(h)
+	s.historyRevision++
+	s.turnHistoryIndex = 0
 	s.mu.Unlock()
 }
 

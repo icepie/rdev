@@ -354,51 +354,6 @@ func TestTruncateToolOutputRuneSafe(t *testing.T) {
 	}
 }
 
-func TestCompactToolOutputsOnlyTouchesOldLargeToolMessages(t *testing.T) {
-	cfg := testConfig("http://unused", nil)
-	sess := New(cfg)
-	msgs := []Message{{Role: "user", Content: "start"}}
-	for i := range 9 {
-		msgs = append(msgs,
-			Message{Role: "assistant", ToolCalls: []ToolCall{{ID: fmt.Sprint(i), Name: "shell", Arguments: "{}"}}},
-			Message{Role: "tool", ToolCallID: fmt.Sprint(i), Content: strings.Repeat("x", 3000)},
-		)
-	}
-	sess.SetHistory(msgs)
-	sess.compactToolOutputs()
-	hist := sess.History()
-
-	cutoff := len(hist) - compactKeepRecent
-	toolIdx := 0
-	for i, m := range hist {
-		if m.Role != "tool" {
-			continue
-		}
-		toolIdx++
-		old := i < cutoff
-		truncated := strings.Contains(m.Content, compactMarker)
-		if old && !truncated {
-			t.Errorf("old tool message %d (idx %d) not compacted", toolIdx, i)
-		}
-		if !old && truncated {
-			t.Errorf("recent tool message %d (idx %d) must stay intact", toolIdx, i)
-		}
-		if truncated {
-			if len(m.Content) > compactHeadLen+len(compactMarker)+16 {
-				t.Errorf("compacted length = %d", len(m.Content))
-			}
-		}
-	}
-
-	// Idempotent: a second pass changes nothing.
-	before, _ := json.Marshal(sess.History())
-	sess.compactToolOutputs()
-	after, _ := json.Marshal(sess.History())
-	if string(before) != string(after) {
-		t.Error("compaction is not idempotent")
-	}
-}
-
 func TestHistoryToolMessagesTruncatedBeforeFeed(t *testing.T) {
 	big := strings.Repeat("y", toolOutputMax+100)
 	srv, _ := newFakeProvider(t,
@@ -829,7 +784,7 @@ func TestRunTurnLaterRoundFailureKeepsUserMessage(t *testing.T) {
 	}
 }
 
-func TestShellStreamsSurviveTruncationAndHistoryCompaction(t *testing.T) {
+func TestShellStreamsSurviveTruncation(t *testing.T) {
 	for _, prefix := range []string{"", "context canceled; partial output:\n", "error: context deadline exceeded; partial output:\n"} {
 		for _, streams := range [][2]string{
 			{strings.Repeat("界", 9000), "warning tail"},
@@ -852,30 +807,6 @@ func TestShellStreamsSurviveTruncationAndHistoryCompaction(t *testing.T) {
 			}
 			if strings.ContainsRune(reduced, '\uFFFD') {
 				t.Fatal("truncation split unicode")
-			}
-			sess := New(testConfig("http://unused", nil))
-			history := []Message{{Role: "tool", Content: reduced}}
-			for range compactKeepRecent {
-				history = append(history, Message{Role: "user", Content: "recent"})
-			}
-			sess.SetHistory(history)
-			sess.compactToolOutputs()
-			compacted := sess.History()[0].Content
-			if !strings.HasPrefix(compacted, prefix+status) {
-				t.Fatal("compaction lost interruption status")
-			}
-			if len(compacted) > compactMaxLen {
-				t.Fatalf("compacted streams exceed budget: %d", len(compacted))
-			}
-			if _, ok := mapShellStreams(compacted, func(s string) string { return s }); !ok {
-				t.Fatal("history compaction damaged stream boundaries")
-			}
-			if !strings.Contains(compacted, "earlier output truncated") {
-				t.Fatal("missing truncation marker")
-			}
-			sess.compactToolOutputs()
-			if sess.History()[0].Content != compacted {
-				t.Fatal("repeat compaction changed retained output")
 			}
 		}
 	}

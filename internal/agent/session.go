@@ -17,10 +17,12 @@ import (
 // serialize Run calls, but History, SetHistory and Reset are safe to call
 // while a Run is in progress (e.g. a browser reattaching mid-turn).
 type Session struct {
-	cfg           Config
-	mu            sync.Mutex // guards history
-	history       []Message
-	toolArguments ToolArgumentValidator
+	cfg              Config
+	mu               sync.Mutex // guards history
+	history          []Message
+	historyRevision  uint64
+	turnHistoryIndex int
+	toolArguments    ToolArgumentValidator
 }
 
 // Run appends userText to the conversation and drives the model until it
@@ -56,6 +58,9 @@ func (s *Session) RunTurnWithSteering(ctx context.Context, userText string, imag
 	if effortOverride != "" {
 		cfg.ReasoningEffort = effortOverride
 	}
+	s.mu.Lock()
+	s.turnHistoryIndex = len(s.history)
+	s.mu.Unlock()
 	s.appendHistory(Message{Role: "user", Content: userText, Images: images})
 
 	injectSteering := func() bool {
@@ -71,11 +76,12 @@ func (s *Session) RunTurnWithSteering(ctx context.Context, userText string, imag
 		return true
 	}
 	var total Usage
+	recoveries := 0
 	for round := 0; cfg.MaxTurns == 0 || round < cfg.MaxTurns; round++ {
 		if err := ctx.Err(); err != nil {
 			return "", err
 		}
-		s.compactToolOutputs()
+		// Semantic recovery below preserves history until a complete summary is ready.
 		emit(Event{Type: EventAssistantStart})
 		assistant, usage, err := streamChat(ctx, cfg, s.History(),
 			func(delta string) {
@@ -84,7 +90,22 @@ func (s *Session) RunTurnWithSteering(ctx context.Context, userText string, imag
 			func(delta string) {
 				emit(Event{Type: EventReasoning, Text: delta})
 			})
+		if cfg.OnUsage != nil {
+			cfg.OnUsage(usage)
+		}
 		if err != nil {
+			if errors.Is(err, ErrContextLengthExceeded) && !assistantProgress(assistant) && ctx.Err() == nil && recoveries < 2 {
+				recoveries++
+				compactUsage, compactErr := s.compact(ctx, "", recoveries > 1)
+				total.InputTokens += compactUsage.InputTokens
+				total.OutputTokens += compactUsage.OutputTokens
+				total.CacheReadTokens += compactUsage.CacheReadTokens
+				if compactErr != nil {
+					return "", fmt.Errorf("%w; context recovery failed: %w", err, compactErr)
+				}
+				round-- // recovery retries this model boundary, never a completed tool round
+				continue
+			}
 			switch {
 			case assistant.Content != "" || assistant.Reasoning != "":
 				// Preserve already-visible output on any stream failure, but
@@ -93,13 +114,14 @@ func (s *Session) RunTurnWithSteering(ctx context.Context, userText string, imag
 				assistant.Responses = nil
 				assistant.Anthropic = nil
 				s.appendHistory(assistant)
-			case !errors.Is(err, ErrContentFiltered) && round == 0 && assistant.Content == "" && assistant.Reasoning == "" && len(assistant.ToolCalls) == 0:
+			case recoveries == 0 && !errors.Is(err, ErrContentFiltered) && !errors.Is(err, ErrContextLengthExceeded) && round == 0 && !assistantProgress(assistant):
 				// The first round failed with no output at all (both
 				// attempts): roll back the user message so the next request
 				// does not carry two consecutive user messages.
 				s.mu.Lock()
 				if n := len(s.history); n > 0 && s.history[n-1].Role == "user" {
 					s.history = s.history[:n-1]
+					s.turnHistoryIndex = -1
 				}
 				s.mu.Unlock()
 			}
@@ -107,9 +129,13 @@ func (s *Session) RunTurnWithSteering(ctx context.Context, userText string, imag
 		}
 		total.InputTokens += usage.InputTokens
 		total.OutputTokens += usage.OutputTokens
+		total.CacheReadTokens += usage.CacheReadTokens
 
 		if len(assistant.ToolCalls) == 0 {
 			s.appendHistory(assistant)
+			if err := ctx.Err(); err != nil {
+				return "", err
+			}
 			if (cfg.MaxTurns == 0 || round+1 < cfg.MaxTurns) && injectSteering() {
 				continue
 			}
@@ -151,7 +177,30 @@ func (s *Session) RunTurnWithSteering(ctx context.Context, userText string, imag
 			injectSteering()
 		}
 	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	return "", fmt.Errorf("agent: model did not finish within MaxTurns limit (%d)", s.cfg.MaxTurns)
+}
+
+// HistoryRevision changes whenever semantic compaction replaces the history.
+// Snapshot consumers must not apply indices captured before that replacement.
+func (s *Session) HistoryRevision() uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.historyRevision
+}
+
+// TurnHistoryIndex is the retained start of the latest RunTurn, remapped after
+// semantic compaction. Call after the run when annotating its retained messages.
+func (s *Session) TurnHistoryIndex() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.turnHistoryIndex
+}
+
+func assistantProgress(assistant Message) bool {
+	return assistant.Anthropic != nil || assistant.Responses != nil || assistant.Content != "" || assistant.Reasoning != "" || len(assistant.ToolCalls) > 0
 }
 
 // appendHistory appends messages under the session lock.
@@ -295,45 +344,6 @@ func truncateOutputText(s string, limit, head, tail int) string {
 	}
 	omitted := utf8.RuneCountInString(s[head:tailStart])
 	return fmt.Sprintf("%s\n...[truncated %d chars]...\n%s", s[:head], omitted, s[tailStart:])
-}
-
-// History compaction: old tool outputs are slimmed before each model round
-// (Claude Code /compact style, automatic). Only messages older than the most
-// recent compactKeepRecent are touched; assistant text is never rewritten.
-const (
-	compactKeepRecent = 6
-	compactMaxLen     = 2000
-	compactHeadLen    = 800
-	compactMarker     = "\n...[earlier output truncated]"
-)
-
-// compactToolOutputs rewrites large tool outputs deep in the history to
-// their head plus a marker, shrinking every subsequent model round.
-func (s *Session) compactToolOutputs() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	cutoff := len(s.history) - compactKeepRecent
-	for i := range max(cutoff, 0) {
-		m := &s.history[i]
-		if m.Role != "tool" || len(m.Content) <= compactMaxLen || strings.HasSuffix(m.Content, compactMarker) {
-			continue
-		}
-		compact := func(text string) string {
-			if len(text) <= compactHeadLen {
-				return text
-			}
-			head := compactHeadLen
-			for head < len(text) && !utf8.RuneStart(text[head]) {
-				head++
-			}
-			return text[:head] + compactMarker
-		}
-		if result, ok := mapShellStreams(m.Content, compact); ok {
-			m.Content = result
-		} else {
-			m.Content = compact(m.Content)
-		}
-	}
 }
 
 // toolArgs normalizes a model-produced arguments string: empty/whitespace

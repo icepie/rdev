@@ -32,6 +32,7 @@ type gpuAgentDesktop struct {
 	cua           bool
 	capabilities  bool
 	nativeSession bool
+	cuaInventory  json.RawMessage
 	cuaTools      map[string]bool
 	done          chan struct{}
 	once          sync.Once
@@ -135,6 +136,7 @@ func gpuCuaRequest(action string, raw json.RawMessage) (json.RawMessage, error) 
 	}
 	request := struct {
 		Action    string                     `json:"action"`
+		Tool      string                     `json:"tool,omitempty"`
 		Name      string                     `json:"name,omitempty"`
 		Arguments map[string]json.RawMessage `json:"arguments,omitempty"`
 	}{Action: "tools"}
@@ -150,7 +152,18 @@ func gpuCuaRequest(action string, raw json.RawMessage) (json.RawMessage, error) 
 			return nil, fmt.Errorf("native Cua call requires a tool name from action=tools")
 		}
 		request.Action, request.Name, request.Arguments = "call", args.Tool, args.Arguments
-	} else if action != "native_tools" {
+	} else if action == "native_tools" {
+		var args struct {
+			Tool string `json:"tool"`
+		}
+		if err := json.Unmarshal(raw, &args); err != nil {
+			return nil, fmt.Errorf("invalid native Cua tools arguments: %w", err)
+		}
+		if len(args.Tool) > 128 {
+			return nil, fmt.Errorf("native Cua tool name exceeds 128 bytes")
+		}
+		request.Tool = strings.TrimSpace(args.Tool)
+	} else {
 		return nil, fmt.Errorf("unsupported native Cua action %q", action)
 	}
 	payload, err := json.Marshal(map[string]any{"Cua": request})
@@ -189,9 +202,16 @@ func gpuCuaResult(raw json.RawMessage) (string, error) {
 	return marshalJobResult(map[string]any{"result": envelope.Result})
 }
 
-func (d *gpuAgentDesktop) discoverCuaTools(ctx context.Context) (string, error) {
+func (d *gpuAgentDesktop) discoverCuaTools(ctx context.Context, requested string) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
+	}
+	if d.cuaInventory != nil {
+		formatted, _, err := cuaToolResult(d.cuaInventory, requested)
+		if err != nil {
+			return "", err
+		}
+		return marshalJobResult(map[string]any{"result": formatted})
 	}
 	if err := d.send(json.RawMessage(`{"Cua":{"action":"tools"}}`)); err != nil {
 		return "", err
@@ -205,36 +225,18 @@ func (d *gpuAgentDesktop) discoverCuaTools(ctx context.Context) (string, error) 
 		return "", err
 	}
 	var envelope struct {
-		Result map[string]json.RawMessage `json:"result"`
+		Result json.RawMessage `json:"result"`
 	}
 	if err := json.Unmarshal([]byte(framed), &envelope); err != nil {
 		return "", err
 	}
-	var tools []json.RawMessage
-	if err := json.Unmarshal(envelope.Result["tools"], &tools); err != nil || tools == nil {
-		return "", fmt.Errorf("invalid Cua tools/list result")
-	}
-	available := make([]json.RawMessage, 0, len(tools))
-	names := make(map[string]bool)
-	for _, tool := range tools {
-		var schema struct {
-			Name string `json:"name"`
-		}
-		if err := json.Unmarshal(tool, &schema); err != nil {
-			return "", fmt.Errorf("invalid Cua tool schema: %w", err)
-		}
-		if schema.Name == "" || len(schema.Name) > 128 {
-			return "", fmt.Errorf("invalid Cua tool name")
-		}
-		available = append(available, tool)
-		names[schema.Name] = true
-	}
-	envelope.Result["tools"], err = json.Marshal(available)
+	formatted, discovery, err := cuaToolResult(envelope.Result, requested)
 	if err != nil {
 		return "", err
 	}
-	d.cuaTools = names
-	return marshalJobResult(envelope)
+	d.cuaInventory = bytes.Clone(envelope.Result)
+	d.cuaTools = discovery.Names
+	return marshalJobResult(map[string]any{"result": formatted})
 }
 
 // Adapt an authenticated multiplexed tunnel stream to the websocket dialer.
@@ -377,6 +379,15 @@ func (t *computerTool) executeGPU(ctx context.Context, client *ClientConn, a com
 		return "", err
 	}
 	defer finish()
+	success := false
+	defer func() {
+		if !success {
+			t.srv.clearAutomationDesktop(t.state)
+		}
+	}()
+	if err := t.claim(client.ID); err != nil {
+		return "", err
+	}
 	if t.state.gpu == nil {
 		t.state.gpu = make(map[string]*gpuAgentDesktop)
 	}
@@ -400,19 +411,17 @@ func (t *computerTool) executeGPU(ctx context.Context, client *ClientConn, a com
 		t.state.gpu[client.ID] = d
 	}
 	d.touched.Store(time.Now().UnixNano())
-	// Failed/canceled actions must not leave a stuck input or stale capture.
-	success := false
-	defer func() {
-		if !success {
-			if d != nil {
-				d.close()
-			}
-			delete(t.state.gpu, client.ID)
-		}
-	}()
 	if a.Action == "native_tools" || a.Action == "native" {
 		if err = d.requireCua(ctx); err != nil {
 			return "", err
+		}
+		if a.Action == "native" {
+			screen := t.state.screens[client.ID]
+			if screen.client != client || time.Since(screen.at) > 2*time.Minute || (a.Source != "" && a.Source != screen.source) {
+				return "", fmt.Errorf("take a fresh computer screenshot before a native CUA call")
+			}
+			screen.at = time.Time{}
+			t.state.screens[client.ID] = screen
 		}
 		request, err := gpuCuaRequest(a.Action, raw)
 		if err != nil {
@@ -423,13 +432,19 @@ func (t *computerTool) executeGPU(ctx context.Context, client *ClientConn, a com
 		}
 		t.publish(automationView{Kind: "desktop", Device: client.ID, Action: a.Action})
 		if a.Action == "native_tools" {
-			result, err := d.discoverCuaTools(ctx)
+			var args struct {
+				Tool string `json:"tool"`
+			}
+			if err := json.Unmarshal(raw, &args); err != nil {
+				return "", err
+			}
+			result, err := d.discoverCuaTools(ctx, strings.TrimSpace(args.Tool))
 			success = err == nil && ctx.Err() == nil
 			d.nativeSession = success
 			return result, err
 		}
 		if d.cuaTools == nil {
-			if _, err := d.discoverCuaTools(ctx); err != nil {
+			if _, err := d.discoverCuaTools(ctx, ""); err != nil {
 				return "", err
 			}
 		}
@@ -440,7 +455,7 @@ func (t *computerTool) executeGPU(ctx context.Context, client *ClientConn, a com
 			return "", err
 		}
 		if !d.cuaTools[args.Tool] {
-			return "", fmt.Errorf("native Cua tool %q is unavailable on this device; discover tools with cua action=tools", args.Tool)
+			return "", fmt.Errorf("native Cua tool %q is unavailable on this device; discover tools with action=tools", args.Tool)
 		}
 		if err = ctx.Err(); err != nil {
 			return "", err
@@ -452,14 +467,22 @@ func (t *computerTool) executeGPU(ctx context.Context, client *ClientConn, a com
 		if err != nil {
 			return "", err
 		}
-		// Completed tool/permission errors do not discard native element tokens.
-		// Transport failure and cancellation still close the private driver.
 		if err = ctx.Err(); err != nil {
 			return "", err
 		}
-		success = true
-		d.nativeSession = true
-		return gpuCuaResult(result)
+		encoded, err := gpuCuaResult(result)
+		if err != nil {
+			return "", err
+		}
+		var envelope struct {
+			Result struct {
+				IsError bool `json:"isError"`
+			} `json:"result"`
+		}
+		_ = json.Unmarshal(result, &envelope)
+		success = !envelope.Result.IsError
+		d.nativeSession = success
+		return encoded, nil
 	}
 	names := d.names
 	if names == nil || a.Action == "status" {
@@ -485,6 +508,9 @@ func (t *computerTool) executeGPU(ctx context.Context, client *ClientConn, a com
 			d.close()
 			delete(t.state.gpu, client.ID)
 		}
+		if !d.configured && !d.nativeSession {
+			t.srv.releaseAutomationDesktop(t.state)
+		}
 		return marshalJobResult(map[string]any{"device": client.ID, "transport": "gpu-desktop-tunnel", "sources": sources, "desktop": client.Desktop, "cua": d.cua})
 	}
 	screen := t.state.screens[client.ID]
@@ -501,6 +527,8 @@ func (t *computerTool) executeGPU(ctx context.Context, client *ClientConn, a com
 		if a.Source != screen.source {
 			return "", fmt.Errorf("screen changed; take a new screenshot")
 		}
+		screen.at = time.Time{}
+		t.state.screens[client.ID] = screen
 	}
 	index, err := gpuSourceIndex(a.Source, len(names))
 	if err != nil {
@@ -526,7 +554,7 @@ func (t *computerTool) executeGPU(ctx context.Context, client *ClientConn, a com
 		d.source = source
 		d.sourceName = names[index]
 		d.names = names
-		config := map[string]any{"capturable_id": index, "capture_cursor": false, "max_width": 1280, "max_height": 720, "frame_rate": 0, "client_name": "rdev-agent", "encoder": "auto", "pointer_backend": "auto", "keyboard_backend": "auto"}
+		config := map[string]any{"capturable_id": index, "capture_cursor": true, "max_width": 1280, "max_height": 720, "frame_rate": 0, "client_name": "rdev-agent", "encoder": "auto", "pointer_backend": "auto", "keyboard_backend": "auto"}
 		if err = d.send(map[string]any{"Config": config}); err != nil {
 			return "", err
 		}
@@ -556,11 +584,52 @@ func (t *computerTool) executeGPU(ctx context.Context, client *ClientConn, a com
 		success = true
 		return result, nil
 	}
+	if d.cua {
+		result, handled, err := preferComputerCua(ctx, d.cuaRequest, client, a, raw, screen.width, screen.height)
+		if handled {
+			success = err == nil && !cuaResultFailed(json.RawMessage(result))
+			d.nativeSession = success
+			return result, err
+		}
+	}
 	if err = gpuDesktopInput(ctx, d, a, raw, screen.width, screen.height); err != nil {
 		return "", err
 	}
 	success = true
 	return marshalJobResult(map[string]any{"device": client.ID, "action": a.Action, "source": source, "status": "sent", "next": "Take a screenshot to verify the application result."})
+}
+
+func (d *gpuAgentDesktop) cuaRequest(ctx context.Context, request any) (json.RawMessage, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	payload, err := json.Marshal(map[string]any{"Cua": request})
+	if err != nil {
+		return nil, err
+	}
+	if len(payload) > gpuCuaRequestMax {
+		return nil, fmt.Errorf("native Cua request exceeds %d byte limit", gpuCuaRequestMax)
+	}
+	if err := d.send(json.RawMessage(payload)); err != nil {
+		return nil, err
+	}
+	raw, err := d.wait(ctx, "CuaResult")
+	if err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if _, err := gpuCuaResult(raw); err != nil {
+		return nil, err
+	}
+	var envelope struct {
+		Result json.RawMessage `json:"result"`
+	}
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		return nil, err
+	}
+	return envelope.Result, nil
 }
 func gpuDesktopInput(ctx context.Context, d *gpuAgentDesktop, a computerAction, raw json.RawMessage, width, height int) error {
 	if err := ctx.Err(); err != nil {

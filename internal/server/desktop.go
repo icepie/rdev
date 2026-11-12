@@ -158,7 +158,7 @@ func (h *desktopWSHandler) OnMessage(socket *gws.Conn, message *gws.Message) {
 			return
 		}
 		if msg.InputType != "cursor_move" {
-			bc.srv.interruptDesktopAutomation(bc.deviceID)
+			defer bc.srv.beginDesktopManualInput(bc.deviceID)()
 		}
 		bc.client.Send(input)
 	case "clipboard_get":
@@ -167,6 +167,7 @@ func (h *desktopWSHandler) OnMessage(socket *gws.Conn, message *gws.Message) {
 		}
 	case "clipboard_set":
 		if bc.authOK && bc.session != "" && bc.client.Desktop != nil && bc.client.Desktop.Clipboard {
+			defer bc.srv.beginDesktopManualInput(bc.deviceID)()
 			bc.client.Send(&protocol.Message{Type: protocol.MsgDesktopClipboard, SessionID: bc.session, ClipboardAction: "set", ClipboardItems: msg.ClipboardItems, Text: msg.Text})
 		}
 

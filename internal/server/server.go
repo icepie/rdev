@@ -561,51 +561,52 @@ func (f *ReverseForward) Result() (uint32, string) {
 
 // Server manages WebSocket clients and SSH proxy
 type Server struct {
-	automationMu       sync.Mutex
-	desktopOwners      map[string]desktopAutomationLease
-	BrowserEnabled     bool // explicit opt-in for server-hosted Chrome
-	browserMu          sync.Mutex
-	browsers           map[string]*browserSession
-	clients            map[string]*ClientConn
-	deviceWatchers     map[chan struct{}]struct{}
-	mu                 sync.RWMutex
-	sessions           map[string]*ProxySession
-	sessMu             sync.RWMutex
-	forwards           map[string]*ProxyForward
-	fwdMu              sync.RWMutex
-	revForwards        map[string]*ReverseForward
-	revMu              sync.RWMutex
-	fileResults        map[string]chan *protocol.Message
-	fileRequests       map[string]*fileRequestRoute
-	fileTasks          map[string]*fileTaskRoute
-	mediaMu            sync.Mutex
-	mediaGrants        map[string]mediaGrant
-	mediaSlots         chan struct{}
-	fileMu             sync.RWMutex
-	agentFileReqs      map[string]chan *protocol.Message
-	agentFileTasks     map[string]*agentFileTask
-	agentFileMu        sync.Mutex
-	desktops           map[string]*desktopRoute
-	desktopMu          sync.RWMutex
-	vncMu              sync.RWMutex
-	vncSettings        map[string]protocol.Message
-	vncStreams         map[string]*vncDesktopStream
-	gpuDesktopMu       sync.RWMutex
-	gpuDesktopTunnels  map[string]*gpuDesktopTunnel
-	proxyTunnelsMu     sync.Mutex
-	proxyTunnels       map[string]*proxyTunnelPending
-	releaseLatestMu    sync.Mutex
-	releaseLatestTag   string
-	releaseLatestAt    time.Time
-	upgrader           *gws.Upgrader
-	authLimiter        *authRateLimiter // per-device password brute-force throttle
-	agentStoreOnce     sync.Once
-	agentStoreInst     *agentSessionStore
-	agentFileMutations agentFileMutations
-	agentSessionsMu    sync.Mutex
-	agentSessions      map[string]*agentSessionEntry // per-device agent state, owned by the server
-	agentEvictOnce     sync.Once
-	agentWG            sync.WaitGroup // server-owned agent goroutines (turns/probes)
+	automationMu        sync.Mutex
+	desktopOwners       map[string]desktopAutomationLease
+	BrowserEnabled      bool // explicit opt-in for server-hosted Chrome
+	browserMu           sync.Mutex
+	browsers            map[string]*browserSession
+	clients             map[string]*ClientConn
+	deviceWatchers      map[chan struct{}]struct{}
+	mu                  sync.RWMutex
+	sessions            map[string]*ProxySession
+	sessMu              sync.RWMutex
+	forwards            map[string]*ProxyForward
+	fwdMu               sync.RWMutex
+	revForwards         map[string]*ReverseForward
+	revMu               sync.RWMutex
+	fileResults         map[string]chan *protocol.Message
+	fileRequests        map[string]*fileRequestRoute
+	fileTasks           map[string]*fileTaskRoute
+	mediaMu             sync.Mutex
+	mediaGrants         map[string]mediaGrant
+	mediaSlots          chan struct{}
+	fileMu              sync.RWMutex
+	agentFileReqs       map[string]chan *protocol.Message
+	agentFileTasks      map[string]*agentFileTask
+	agentFileMu         sync.Mutex
+	desktops            map[string]*desktopRoute
+	desktopMu           sync.RWMutex
+	vncMu               sync.RWMutex
+	vncSettings         map[string]protocol.Message
+	vncStreams          map[string]*vncDesktopStream
+	gpuDesktopMu        sync.RWMutex
+	gpuDesktopTunnels   map[string]*gpuDesktopTunnel
+	proxyTunnelsMu      sync.Mutex
+	proxyTunnels        map[string]*proxyTunnelPending
+	releaseLatestMu     sync.Mutex
+	releaseLatestTag    string
+	releaseLatestAt     time.Time
+	releaseLatestAssets map[string]releaseAssetTag
+	upgrader            *gws.Upgrader
+	authLimiter         *authRateLimiter // per-device password brute-force throttle
+	agentStoreOnce      sync.Once
+	agentStoreInst      *agentSessionStore
+	agentFileMutations  agentFileMutations
+	agentSessionsMu     sync.Mutex
+	agentSessions       map[string]*agentSessionEntry // per-device agent state, owned by the server
+	agentEvictOnce      sync.Once
+	agentWG             sync.WaitGroup // server-owned agent goroutines (turns/probes)
 
 	// Public config (set by main) for API/UI
 	SSHPort          string // e.g. "2222"
@@ -1725,6 +1726,14 @@ func (s *Server) HandleReleaseDownload(w http.ResponseWriter, r *http.Request) {
 	if s.serveLocalReleaseAsset(w, r, asset, tag) {
 		return
 	}
+	if tag == "latest" {
+		var err error
+		tag, err = s.latestReleaseAssetTag(r.Context(), asset)
+		if err != nil {
+			writeReleaseResolutionError(w, err)
+			return
+		}
+	}
 	key := releaseDownloadChoiceKey(asset, tag)
 	if candidate := cachedReleaseDownloadChoice(key, time.Now()); candidate != "" {
 		http.Redirect(w, r, candidate, http.StatusFound)
@@ -1746,8 +1755,12 @@ func (s *Server) serveLocalReleaseAsset(w http.ResponseWriter, r *http.Request, 
 		return false
 	}
 	if tag == "latest" {
-		resolved, _ := s.latestReleaseTag(r.Context())
-		tag = resolved
+		var err error
+		tag, err = s.latestReleaseAssetTag(r.Context(), asset)
+		if err != nil {
+			writeReleaseResolutionError(w, err)
+			return true
+		}
 	}
 	if tag == "" || tag == "latest" {
 		http.Error(w, "release not found", http.StatusNotFound)
@@ -1810,8 +1823,8 @@ func lessReleaseTag(a, b string) bool {
 	return apre && !bpre
 }
 
-// localLatestReleaseTag picks the highest versioned tag directory in dir.
-func localLatestReleaseTag(dir string) string {
+// localLatestReleaseTag picks the highest stable tag containing asset (if specified).
+func localLatestReleaseTag(dir, asset string) string {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return ""
@@ -1822,8 +1835,14 @@ func localLatestReleaseTag(dir string) string {
 			continue
 		}
 		name := e.Name()
-		if _, _, ok := parseReleaseTag(name); !ok {
+		if _, pre, ok := parseReleaseTag(name); !ok || pre {
 			continue
+		}
+		if asset != "" {
+			info, err := os.Stat(filepath.Join(dir, name, asset))
+			if err != nil || !info.Mode().IsRegular() || info.Size() == 0 {
+				continue
+			}
 		}
 		if best == "" || lessReleaseTag(best, name) {
 			best = name
@@ -1872,13 +1891,15 @@ func (s *Server) HandleReleaseDownloadProxy(w http.ResponseWriter, r *http.Reque
 	if s.serveLocalReleaseAsset(w, r, asset, tag) {
 		return
 	}
-	cacheTag := tag
-	if cacheTag == "latest" {
-		if resolved, _ := s.latestReleaseTag(r.Context()); resolved != "" {
-			cacheTag = resolved
+	if tag == "latest" {
+		var err error
+		tag, err = s.latestReleaseAssetTag(r.Context(), asset)
+		if err != nil {
+			writeReleaseResolutionError(w, err)
+			return
 		}
 	}
-	cachePath := s.releaseCachePath(cacheTag, asset)
+	cachePath := s.releaseCachePath(tag, asset)
 	if cachePath != "" {
 		if info, err := os.Stat(cachePath); err == nil && info.Mode().IsRegular() && info.Size() > 0 {
 			// A GitHub mirror can return a 200 HTML error page. Never serve
@@ -2034,7 +2055,7 @@ func (s *Server) latestReleaseTag(ctx context.Context) (string, bool) {
 	s.releaseLatestMu.Unlock()
 
 	if s.ReleaseDir != "" {
-		tag := localLatestReleaseTag(s.ReleaseDir)
+		tag := localLatestReleaseTag(s.ReleaseDir, "")
 		if tag == "" {
 			fallback := normalizeReleaseTag(s.ReleaseVersion)
 			if fallback == "" {
@@ -2084,8 +2105,23 @@ func (s *Server) HandleConfigAPI(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// HandleReleaseLatestAPI returns the resolved latest release tag for runner cache keys.
+// HandleReleaseLatestAPI resolves an optional exact asset to a published release.
 func (s *Server) HandleReleaseLatestAPI(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Query().Has("asset") {
+		asset, _, ok := releaseDownloadParams(r)
+		if !ok {
+			http.Error(w, "bad asset", http.StatusBadRequest)
+			return
+		}
+		tag, err := s.latestReleaseAssetTag(r.Context(), asset)
+		if err != nil {
+			writeReleaseResolutionError(w, err)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"tag": tag, "asset": asset, "fresh": true})
+		return
+	}
 	tag, fresh := s.latestReleaseTag(r.Context())
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{

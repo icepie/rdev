@@ -28,6 +28,7 @@ func (s *Server) resumeAgentQueue(entry *agentSessionEntry, th *agentThread) {
 	s.agentSessionsMu.Lock()
 	if entry.threads[th.id] != th || th.running || !queueHeadReady(entry, th, time.Now()) {
 		s.agentSessionsMu.Unlock()
+		s.scheduleAutonomy(entry, th)
 		return
 	}
 	next := takeQueuedChat(&th.queue, 0)

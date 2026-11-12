@@ -114,7 +114,16 @@ func TestComputerCaptureInputAndStaleCoordinates(t *testing.T) {
 	if _, err := run(`{"action":"click","x":10,"y":20}`); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := run(`{"action":"key","key":"Enter"}`); err == nil {
+		t.Fatal("input reused an already consumed observation")
+	}
+	if _, err := run(`{"action":"screenshot"}`); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := run(`{"action":"drag","x":10,"y":20,"toX":40,"toY":50}`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := run(`{"action":"screenshot"}`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := run(`{"action":"text","text":"你好🌏"}`); err != nil {
@@ -175,6 +184,16 @@ func TestAutomationRetirementReleasesDesktopAndRejectsOldTools(t *testing.T) {
 	if _, _, err := base.begin(context.Background()); err == nil {
 		t.Fatal("retired tools can run")
 	}
+	base.state.mu.Lock()
+	base.state.paused = false // a delayed resume must not revive old tools
+	base.state.mu.Unlock()
+	if err := base.claim("device"); err == nil {
+		t.Fatal("retired tool reclaimed ownership")
+	}
+	child := base.forResource("desktop:other")
+	if _, _, err := child.begin(context.Background()); err == nil {
+		t.Fatal("new child of retired root can run")
+	}
 	s.automationMu.Lock()
 	owners := len(s.desktopOwners)
 	s.automationMu.Unlock()
@@ -202,7 +221,7 @@ func TestBrowserStatusDoesNotLaunchChrome(t *testing.T) {
 
 func TestComputerOnDemandSessionReuseAndRelease(t *testing.T) {
 	s, client, transport := newProxyTestServer(t, "device", "")
-	client.Desktop = &protocol.DesktopCapabilities{AgentVersion: 1, Supported: true, Input: true, Sources: []protocol.DesktopSource{{ID: "screen:primary"}}}
+	client.Desktop = &protocol.DesktopCapabilities{AgentVersion: 1, Supported: true, Input: true, Sources: []protocol.DesktopSource{{ID: "screen:primary"}, {ID: "screen:secondary"}}}
 	base := testAutomation(t, s, "device", "native")
 	defer closeDesktopAutomation(base.state)
 	tool := computerTool{base}
@@ -216,6 +235,9 @@ func TestComputerOnDemandSessionReuseAndRelease(t *testing.T) {
 			if !m.OnDemand {
 				t.Error("continuous capture requested")
 			}
+			if m.Source != "screen:secondary" {
+				t.Errorf("capture switched away from selected monitor: %q", m.Source)
+			}
 			s.handleDesktopMessage(&protocol.Message{Type: protocol.MsgDesktopReady, SessionID: m.SessionID, Width: 1280, Height: 720})
 		case protocol.MsgDesktopSnapshot:
 			shots++
@@ -224,12 +246,12 @@ func TestComputerOnDemandSessionReuseAndRelease(t *testing.T) {
 			closes++
 		}
 	}
-	for _, args := range []string{`{"action":"screenshot","source":"screen:primary"}`, `{"action":"click","x":2,"y":3}`, `{"action":"key","key":"Enter"}`, `{"action":"screenshot"}`} {
+	for _, args := range []string{`{"action":"screenshot","source":"screen:secondary"}`, `{"action":"click","x":2,"y":3}`, `{"action":"screenshot"}`, `{"action":"key","key":"Enter"}`, `{"action":"screenshot"}`} {
 		if _, err := tool.Execute(context.Background(), json.RawMessage(args)); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if starts != 1 || shots != 2 || closes != 0 {
+	if starts != 1 || shots != 3 || closes != 0 {
 		t.Fatalf("starts=%d shots=%d closes=%d", starts, shots, closes)
 	}
 	if _, err := tool.Execute(context.Background(), json.RawMessage(`{"action":"release"}`)); err != nil {

@@ -603,7 +603,10 @@ impl<S, R, FnUInput> WeylusClientHandler<S, R, FnUInput> {
         let shutdown = self.receiver.as_ref().unwrap().cua_shutdown();
         #[cfg(feature = "cua-native")]
         let mut cua_worker: Option<CuaWorker> = None;
-        self.send_message(MessageOutbound::AgentCapabilities { version: 1, cua: cua_supported() });
+        self.send_message(MessageOutbound::AgentCapabilities {
+            version: 1,
+            cua: cua_supported(),
+        });
         self.send_message(MessageOutbound::EncoderCapabilities(encoder_capabilities(
             self.config.encoder_options,
         )));
@@ -635,13 +638,20 @@ impl<S, R, FnUInput> WeylusClientHandler<S, R, FnUInput> {
                                 }
                                 let result = (|| -> Result<(), String> {
                                     if !cua_supported() {
-                                        return Err("Cua native control is unsupported on this platform".into());
+                                        return Err(
+                                            "Cua native control is unsupported on this platform"
+                                                .into(),
+                                        );
                                     }
                                     let request = serde_json::from_value(request)
                                         .map_err(|error| format!("Invalid Cua request: {error}"))?;
                                     if cua_worker.is_none() {
-                                        cua_worker = Some(CuaWorker::new(self.sender.clone(), shutdown.clone())
-                                            .map_err(|error| format!("Cannot start Cua worker: {error}"))?);
+                                        cua_worker = Some(
+                                            CuaWorker::new(self.sender.clone(), shutdown.clone())
+                                                .map_err(|error| {
+                                                format!("Cannot start Cua worker: {error}")
+                                            })?,
+                                        );
                                     }
                                     cua_worker.as_ref().unwrap().submit(request)
                                 })();
@@ -652,7 +662,9 @@ impl<S, R, FnUInput> WeylusClientHandler<S, R, FnUInput> {
                             #[cfg(not(feature = "cua-native"))]
                             {
                                 let _ = request;
-                                self.send_message(cua_error("Cua native control is not included in this build"));
+                                self.send_message(cua_error(
+                                    "Cua native control is not included in this build",
+                                ));
                             }
                         }
                         MessageInbound::GetScreenshot => {
@@ -1695,7 +1707,11 @@ impl Iterator for WsWeylusReceiver {
             return None;
         }
         let message = self.recv.blocking_recv()?;
-        if *self.shutdown.borrow() { None } else { Some(Ok(message)) }
+        if *self.shutdown.borrow() {
+            None
+        } else {
+            Some(Ok(message))
+        }
     }
 }
 
@@ -1813,42 +1829,42 @@ pub fn weylus_websocket_channel(
     tokio::spawn(async move {
         let _shutdown_guard = WsShutdown(shutdown);
         let sending = async {
-        loop {
-            let msg = if let Some(msg) = receiver_outbound.recv().await {
-                msg
-            } else {
-                break;
-            };
+            loop {
+                let msg = if let Some(msg) = receiver_outbound.recv().await {
+                    msg
+                } else {
+                    break;
+                };
 
-            match msg {
-                WsMessage::Frame(frame) => {
-                    if let Err(err) = tx.write_frame(frame).await {
-                        if is_expected_disconnect(&err) {
-                            break;
+                match msg {
+                    WsMessage::Frame(frame) => {
+                        if let Err(err) = tx.write_frame(frame).await {
+                            if is_expected_disconnect(&err) {
+                                break;
+                            }
+                            warn!("Failed to send frame: {err}");
                         }
-                        warn!("Failed to send frame: {err}");
                     }
-                }
-                WsMessage::Video(data) => {
-                    if let Err(err) = tx.write_frame(Frame::binary(data.into())).await {
-                        if is_expected_disconnect(&err) {
-                            break;
+                    WsMessage::Video(data) => {
+                        if let Err(err) = tx.write_frame(Frame::binary(data.into())).await {
+                            if is_expected_disconnect(&err) {
+                                break;
+                            }
+                            warn!("Failed to send video frame: {err}");
                         }
-                        warn!("Failed to send video frame: {err}");
                     }
-                }
-                WsMessage::MessageOutbound(msg) => {
-                    let json_string = serde_json::to_string(&msg).unwrap();
-                    let data = json_string.as_bytes();
-                    if let Err(err) = tx.write_frame(Frame::text(data.into())).await {
-                        if is_expected_disconnect(&err) {
-                            break;
+                    WsMessage::MessageOutbound(msg) => {
+                        let json_string = serde_json::to_string(&msg).unwrap();
+                        let data = json_string.as_bytes();
+                        if let Err(err) = tx.write_frame(Frame::text(data.into())).await {
+                            if is_expected_disconnect(&err) {
+                                break;
+                            }
+                            warn!("Failed to send outbound message: {err}");
                         }
-                        warn!("Failed to send outbound message: {err}");
                     }
                 }
             }
-        }
         };
         tokio::select! {
             biased;

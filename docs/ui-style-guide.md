@@ -71,3 +71,9 @@ Agent 的思考、工具详情、工具分组和待办列表共用 `DisclosureBo
 ### Inline thinking compatibility
 
 Assistant content from providers that emit literal `<think>…</think>` is projected into the existing BB-style `ThinkingBlock` (`TimelineReasoningDetail` / `TimelineReasoningExpansion` in BB f51e6b0). Streaming thoughts expand automatically, settled thoughts collapse unless the user toggled them, and details use the muted text/left seam/320px scrolling region. Projection handles incomplete streaming delimiters and interrupted thoughts, but preserves fenced/inline-code examples. The answer's copy/add-to-chat actions use the projected answer. Provider history is not rewritten.
+
+### Goal / loop 状态条
+
+线程级目标与循环沿用 Agent 的 BB prompt-stack：位于输入框上方，与待办和任务面板共享 760px 内容列、8px 间距、圆角细边框和 `surface-raised-solid` 背景。操作复用 ghost Button，窄屏触控高度为 40px；操作组一起换行，长目标和条件只在自身区域滚动，不撑宽会话窗格。断线禁用操作，每个分屏显示自己的线程状态。
+
+浏览器检查覆盖 390/768/1440px × 亮/暗主题：组件长路径和真实 Agent 双会话均无页面横向溢出。宽屏两栏分别展示暂停的 goal 与 loop；390px 标签切换保留各线程状态，触屏操作按钮为 40px。真实页面的 loop 继续→暂停只更新所属线程；断线保留状态并禁用操作，服务端重启后恢复已保存的目标和循环轮数。

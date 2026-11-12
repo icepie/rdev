@@ -567,6 +567,13 @@ fn draw_cursor_on_dc(dc: winapi::shared::windef::HDC, rect: RECT) {
     }
 }
 
+fn frame_bytes(frame: &[captrs::Bgr8]) -> &[u8] {
+    const _: () = assert!(mem::size_of::<captrs::Bgr8>() == 4);
+    // SAFETY: Bgr8 contains four initialized u8 channels with no padding.
+    // The byte slice borrows the same storage and must cover bytes, not pixels.
+    unsafe { std::slice::from_raw_parts(frame.as_ptr().cast(), mem::size_of_val(frame)) }
+}
+
 impl Recorder for CaptrsRecorder {
     fn backend_name(&self) -> &'static str {
         if self.fallback.is_some() {
@@ -599,26 +606,25 @@ impl Recorder for CaptrsRecorder {
         }
         self.consecutive_failures = 0;
         let (w, h) = self.capturer.geometry();
-        match self.capturer.get_stored_frame() {
-            Some(frame) => Ok(crate::video::PixelProvider::BGR0(
-                w as usize,
-                h as usize,
-                unsafe { std::mem::transmute(frame) },
-            )),
-            None => {
-                self.consecutive_failures = self.consecutive_failures.saturating_add(1);
-                if self.consecutive_failures >= 3 {
-                    tracing::warn!(
-                        "DXGI screen capture returned no frame {} consecutive times, falling back to GDI.",
-                        self.consecutive_failures
-                    );
-                    return self.fallback_capture();
-                }
-                Err(Box::new(CaptrsError(
-                    "Captrs did not return a captured frame".into(),
-                )))
+        if self.capturer.get_stored_frame().is_none() {
+            self.consecutive_failures = self.consecutive_failures.saturating_add(1);
+            if self.consecutive_failures >= 3 {
+                tracing::warn!(
+                    "DXGI screen capture returned no frame {} consecutive times, falling back to GDI.",
+                    self.consecutive_failures
+                );
+                return self.fallback_capture();
             }
+            return Err(Box::new(CaptrsError(
+                "Captrs did not return a captured frame".into(),
+            )));
         }
+        let frame = self.capturer.get_stored_frame().expect("frame checked above");
+        Ok(crate::video::PixelProvider::BGR0(
+            w as usize,
+            h as usize,
+            frame_bytes(frame),
+        ))
     }
 }
 
@@ -681,4 +687,55 @@ unsafe extern "system" fn enum_window_capturable(hwnd: HWND, lparam: LPARAM) -> 
         virtual_screen: data.virtual_screen,
     });
     TRUE
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use base64::Engine;
+
+    #[test]
+    fn dxgi_frame_encodes_all_rows_and_color_channels() {
+        let frame = [
+            captrs::Bgr8 {
+                b: 0,
+                g: 0,
+                r: 255,
+                a: 255,
+            },
+            captrs::Bgr8 {
+                b: 0,
+                g: 255,
+                r: 0,
+                a: 255,
+            },
+            captrs::Bgr8 {
+                b: 255,
+                g: 0,
+                r: 0,
+                a: 255,
+            },
+            captrs::Bgr8 {
+                b: 30,
+                g: 20,
+                r: 10,
+                a: 255,
+            },
+        ];
+        let encoded = crate::snapshot::encode(
+            crate::video::PixelProvider::BGR0(2, 2, frame_bytes(&frame)),
+            1280,
+            720,
+        )
+        .unwrap();
+        let png = base64::engine::general_purpose::STANDARD
+            .decode(encoded)
+            .unwrap();
+        let image = image::load_from_memory(&png).unwrap().to_rgb8();
+        assert_eq!(image.dimensions(), (2, 2));
+        assert_eq!(
+            image.as_raw(),
+            &[255, 0, 0, 0, 255, 0, 0, 0, 255, 10, 20, 30]
+        );
+    }
 }

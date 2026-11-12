@@ -40,6 +40,11 @@ import (
 // device, not by a browser connection: events are broadcast to every
 // attached socket and a reopened tab reattaches mid-run (auth_ok.running).
 type agentMsg struct {
+	Goal         *agentGoal         `json:"goal"`
+	Loop         *agentLoop         `json:"loop"`
+	Action       string             `json:"action,omitempty"`
+	Objective    string             `json:"objective,omitempty"`
+	TokenBudget  *int64             `json:"tokenBudget,omitempty"`
 	Participants []agentParticipant `json:"participants,omitempty"`
 
 	Automation         *automationView     `json:"automation,omitempty"`
@@ -352,7 +357,14 @@ func queueTexts(q []agentQueuedChat) []string {
 // history, todo list, message queue and (at most one) in-flight turn.
 // Guarded by Server.agentSessionsMu.
 type agentThread struct {
-	deviceScope *agentDeviceScope
+	goal             *agentGoal
+	loop             *agentLoop
+	goalActivity     string
+	autonomyRevision uint64
+	autonomyPending  bool
+	autonomyCancel   context.CancelFunc
+	turnAutonomy     string
+	deviceScope      *agentDeviceScope
 
 	automation       *agentAutomation
 	pinnedAt         int64
@@ -370,9 +382,9 @@ type agentThread struct {
 	cancel        context.CancelFunc
 	turnCtx       context.Context
 	steeringWake  chan struct{} // guarded by agentSessionsMu; wakes only passive job waits
-	// turnHistIdx is the history length at the current turn's start: while
-	// running, attachers replay history[:turnHistIdx] + live so no frame is
-	// seen twice (history/live disjoint invariant).
+	// Freeze the pre-turn transcript: semantic compaction may replace session
+	// history while live frames still describe the original running turn.
+	turnHistory []agent.Message
 	turnHistIdx int
 	// epoch is bumped by reset; a turn that started before the bump skips
 	// its save and terminal broadcast (its history belongs to the pre-reset
@@ -711,7 +723,7 @@ func (s *Server) buildAgentSession(entry *agentSessionEntry, th *agentThread, cl
 		if th.deviceScope != nil && len(th.deviceScope.snapshot()) > 1 {
 			for _, tool := range availableTools {
 				switch tool.Name() {
-				case "list_devices", "device_tool", "computer", "browser", "autojs", "jobs", "subagent", "todo_write", "web_fetch", "web_search":
+				case "list_devices", "device_tool", "computer", "cua", "skill", "browser", "autojs", "jobs", "subagent", "todo_write", "web_fetch", "web_search":
 					cfg.Tools = append(cfg.Tools, tool)
 				}
 			}
@@ -720,6 +732,12 @@ func (s *Server) buildAgentSession(entry *agentSessionEntry, th *agentThread, cl
 		} else {
 			cfg.SystemPrompt += " Discuss existing context only; no tools are available."
 		}
+	}
+	if th.goal != nil && th.goal.Status == "active" {
+		goal, epoch := th.goal, th.epoch
+		cfg.Tools = append(cfg.Tools, &goalTool{srv: s, entry: entry, thread: th, goal: goal, epoch: epoch})
+		cfg.SystemPrompt += "\nGoal mode is explicitly enabled. Objective: " + goal.Objective + ". Continue making concrete progress; use goal complete only after achieving it. Do not claim completion while blocked."
+		cfg.OnUsage = func(usage agent.Usage) { s.accountGoalUsage(entry, th, goal, epoch, usage) }
 	}
 	th.pendingReasoning = false
 	return agent.New(cfg)
@@ -801,6 +819,7 @@ func (s *Server) agentSessionFor(deviceID string, client *ClientConn) (*agentSes
 			msgs, savedModel, cwd, title := store.load(deviceID, meta.ID)
 			th := s.newAgentThreadLocked(entry, meta.ID, msgs, cwd, title)
 			th.pinnedAt = prefs.Pinned[meta.ID]
+			th.goal, th.loop = store.loadAutonomy(deviceID, meta.ID)
 			if th.deviceScope != nil {
 				for _, member := range prefs.Participants[meta.ID] {
 					if member.Device != "" && member.Device != agentServerDeviceID && member.Device != deviceID {
@@ -976,7 +995,7 @@ func (s *Server) agentEvictionLoop() {
 		for id, entry := range s.agentSessions {
 			busy := false
 			for _, th := range entry.threads {
-				if th.running || th.turnCtx != nil || len(th.queue) > 0 || (th.jobs != nil && (th.jobs.Running() || th.jobs.pendingPersistence())) {
+				if th.running || th.autonomyPending || th.turnCtx != nil || len(th.queue) > 0 || (th.jobs != nil && (th.jobs.Running() || th.jobs.pendingPersistence())) {
 					busy = true
 					break
 				}
@@ -1200,7 +1219,7 @@ func (s *Server) requestQuestion(entry *agentSessionEntry, th *agentThread, ques
 // permission mode / always-allow, otherwise broadcasts approval_request and
 // waits for the browser's decision (deny on timeout or turn cancellation).
 // A disconnected browser may reattach and answer the replayed request.
-func (s *Server) requestApproval(entry *agentSessionEntry, th *agentThread, tc agent.ToolCall, args json.RawMessage) (bool, error) {
+func (s *Server) requestApproval(entry *agentSessionEntry, th *agentThread, tc agent.ToolCall, args json.RawMessage, contexts ...context.Context) (bool, error) {
 	s.agentSessionsMu.Lock()
 	if entry.permMode == agentPermFull || th.alwaysAllow[tc.Name] {
 		s.agentSessionsMu.Unlock()
@@ -1211,6 +1230,9 @@ func (s *Server) requestApproval(entry *agentSessionEntry, th *agentThread, tc a
 	ch := make(chan approvalDecision, 1)
 	th.approvals[id] = ch
 	turnCtx := th.turnCtx
+	if len(contexts) > 0 {
+		turnCtx = contexts[0]
+	}
 	s.agentSessionsMu.Unlock()
 
 	s.agentBroadcastTurn(entry, th, agentMsg{
@@ -1254,6 +1276,8 @@ func (s *Server) requestApproval(entry *agentSessionEntry, th *agentThread, tc a
 // agentThreadSnapshot is the replay state of one thread for auth_ok,
 // thread_switched, thread_peeked and delete-thread remaps.
 type agentThreadSnapshot struct {
+	goal         *agentGoal
+	loop         *agentLoop
 	participants []agentParticipant
 
 	automation *automationView
@@ -1269,13 +1293,16 @@ type agentThreadSnapshot struct {
 }
 
 // threadSnapshotLocked snapshots a thread for an attacher. History and live
-// are disjoint: while a turn runs, history holds only the pre-turn messages
-// (history[:turnHistIdx]) and live carries the turn frames; when idle,
-// history is complete and live is dropped. Caller must hold
-// agentSessionsMu.
+// are disjoint: a running turn replays its frozen pre-turn history plus live
+// frames, even if context recovery replaces the session history. Idle threads
+// use the complete current history. Caller must hold agentSessionsMu.
 func (s *Server) threadSnapshotLocked(entry *agentSessionEntry, th *agentThread) agentThreadSnapshot {
-	msgs := th.session.History()
+	msgs := th.turnHistory
+	if !th.running {
+		msgs = th.session.History()
+	}
 	snap := agentThreadSnapshot{
+		goal: cloneGoal(th.goal), loop: cloneLoop(th.loop),
 		todos:      th.todos,
 		queue:      queueTexts(th.queue),
 		queueIDs:   queueIDs(th.queue),
@@ -1299,10 +1326,10 @@ func (s *Server) threadSnapshotLocked(entry *agentSessionEntry, th *agentThread)
 		snap.queue = []string{}
 	}
 	if th.running {
-		if th.turnHistIdx < len(msgs) {
-			msgs = msgs[:th.turnHistIdx]
-		}
 		snap.working = &agentWorking{Since: th.workingSince.UTC().Format(time.RFC3339Nano), Tool: th.workingTool}
+		snap.live = th.live.Snapshot()
+	}
+	if th.autonomyPending {
 		snap.live = th.live.Snapshot()
 	}
 	snap.history = renderAgentHistory(msgs)
@@ -1373,6 +1400,7 @@ func (h *agentWSHandler) establish(ac *agentConn, client *ClientConn) {
 		}
 	}
 	ac.writeJSON(agentMsg{
+		Goal: snap.goal, Loop: snap.loop,
 		Op:             "auth_ok",
 		Offline:        ac.deviceID != agentServerDeviceID && client == nil,
 		Device:         ac.deviceID,
@@ -1485,6 +1513,8 @@ func (h *agentWSHandler) OnMessage(socket *gws.Conn, message *gws.Message) {
 		}
 	}
 	switch msg.Op {
+	case "goal", "loop":
+		h.handleAutonomy(ac, msg)
 	case "automation_control":
 		h.handleAutomation(ac, msg)
 	case "get_jobs":
@@ -1502,6 +1532,9 @@ func (h *agentWSHandler) OnMessage(socket *gws.Conn, message *gws.Message) {
 	case "steer_job", "steer_subagent":
 		h.handleJobGuidance(ac, msg)
 	case "chat":
+		if h.handleAutonomySlash(ac, msg.Text, msg.Thread, msg.Images) {
+			return
+		}
 		if ac.deviceID != agentServerDeviceID {
 			live, online := h.srv.GetClient(ac.deviceID)
 			collaboratorsOnline := h.hasOnlineParticipant(ac, msg.Thread)
@@ -1548,6 +1581,9 @@ func (h *agentWSHandler) OnMessage(socket *gws.Conn, message *gws.Message) {
 		var th *agentThread
 		h.srv.agentSessionsMu.Lock()
 		th = ac.entry.threads[threadID]
+		if th != nil {
+			pauseAutonomyLocked(th)
+		}
 		if th != nil && th.running {
 			cancel = th.cancel
 			// Stop kills the pending queue too: a stopped turn must not
@@ -1556,6 +1592,10 @@ func (h *agentWSHandler) OnMessage(socket *gws.Conn, message *gws.Message) {
 			denyApprovalsLocked(th)
 		}
 		h.srv.agentSessionsMu.Unlock()
+		if th != nil {
+			h.srv.persistAutonomy(ac.entry, th)
+			h.srv.publishAutonomy(ac.entry, th, "")
+		}
 		if cancel != nil {
 			// The turn unwind emits the single stopped{canceled:true}.
 			cancel()
@@ -1719,6 +1759,15 @@ func (h *agentWSHandler) handleChat(ac *agentConn, text, modelRef, threadRef str
 
 // Chat and idle steering share admission after decoding attachments once.
 func (h *agentWSHandler) handleChatWithImages(ac *agentConn, entry *agentSessionEntry, text, modelRef, threadRef string, images []agent.MessageImage) {
+	if request, ok := autonomySlash(text); ok {
+		request.Thread = threadRef
+		if len(images) > 0 {
+			ac.writeJSON(agentMsg{Op: "autonomy", Thread: threadRef, Message: "autonomy commands do not accept images"})
+			return
+		}
+		h.handleAutonomy(ac, request)
+		return
+	}
 	srv := h.srv
 	// One lock hold covers the queue check and the turn start: two chats
 	// arriving together can never both start a turn (one queues).
@@ -1739,6 +1788,12 @@ func (h *agentWSHandler) handleChatWithImages(ac *agentConn, entry *agentSession
 			ac.sendError("agent session not ready")
 		}
 		return
+	}
+	cancelAutonomyPendingLocked(th)
+	th.goalActivity = ""
+	if th.loop != nil && th.loop.Status == "active" && th.loop.Prompt == "" {
+		th.loop.Prompt = text
+		th.loop.Iteration++
 	}
 	if th.running || (len(th.queue) > 0 && (entry.deviceID == agentServerDeviceID || entry.client != nil)) {
 		// Queue the message; it becomes a follow-up turn when the current
@@ -1786,6 +1841,9 @@ func (h *agentWSHandler) handleChatWithImages(ac *agentConn, entry *agentSession
 // handleSteer prioritizes input at the next settled model/tool boundary.
 // When idle it behaves like a normal chat; commands stay in the turn queue.
 func (h *agentWSHandler) handleSteer(ac *agentConn, text, threadRef string, imagesRaw json.RawMessage) {
+	if h.handleAutonomySlash(ac, text, threadRef, imagesRaw) {
+		return
+	}
 	text = strings.TrimSpace(text)
 	images, err := parseAgentImages(imagesRaw)
 	if err != nil {
@@ -1894,8 +1952,12 @@ func (h *agentWSHandler) handleReset(ac *agentConn, threadRef string) {
 	cancel := th.cancel
 	oldAutomation := th.automation
 	th.automation = nil
+	cancelAutonomyPendingLocked(th)
+	th.goal, th.loop = nil, nil
+	th.goalActivity = ""
 	th.epoch++
 	th.running = false
+	th.turnHistory = nil
 	th.cancel = nil
 	th.turnCtx = nil
 	th.workingTool = ""
@@ -1931,6 +1993,7 @@ func (h *agentWSHandler) handleReset(ac *agentConn, threadRef string) {
 		store.clear(ac.deviceID, threadID)
 	}
 	srv.agentBroadcast(entry, agentMsg{Op: "reset_ok", Thread: threadID})
+	srv.publishAutonomy(entry, th, "")
 	srv.broadcastThreadList(entry)
 }
 
@@ -2007,6 +2070,7 @@ func (h *agentWSHandler) handleSwitchThread(ac *agentConn, threadID string) {
 
 	// thread_switched is per-connection: only the requester's view changes.
 	ac.writeJSON(agentMsg{
+		Goal: snap.goal, Loop: snap.loop,
 		Op:           "thread_switched",
 		Thread:       threadID,
 		Model:        model,
@@ -2050,6 +2114,7 @@ func (h *agentWSHandler) handlePeekThread(ac *agentConn, threadID string) {
 	srv.agentSessionsMu.Unlock()
 
 	ac.writeJSON(agentMsg{
+		Goal: snap.goal, Loop: snap.loop,
 		Op:           "thread_peeked",
 		Thread:       threadID,
 		History:      snap.history,
@@ -2097,6 +2162,7 @@ func (h *agentWSHandler) handleDeleteThread(ac *agentConn, threadID string) {
 	// Invalidate the old generation before canceling: its late events and
 	// final save cannot recreate the deleted conversation.
 	th.epoch++
+	cancelAutonomyPendingLocked(th)
 	cancel := th.cancel
 	oldAutomation := th.automation
 	th.automation = nil
@@ -2165,6 +2231,7 @@ func (h *agentWSHandler) handleDeleteThread(ac *agentConn, threadID string) {
 		// browsers stay on their thread.
 		for _, conn := range affected {
 			conn.writeJSON(agentMsg{
+				Goal: snap.goal, Loop: snap.loop,
 				Op:           "thread_switched",
 				Thread:       switchedTo,
 				Model:        switchModel,
@@ -2704,6 +2771,8 @@ func (h *agentWSHandler) handleDirMkdir(ac *agentConn, path, requestID string) {
 // and returns the turn_start frame to broadcast after unlocking. Caller
 // must hold agentSessionsMu.
 func (s *Server) startAgentTurnLocked(entry *agentSessionEntry, th *agentThread, text string, images []agent.MessageImage, display ...json.RawMessage) agentMsg {
+	cancelAutonomyPendingLocked(th)
+	th.turnAutonomy = ""
 	if th.pendingReasoning {
 		if provider, model, err := s.resolveAgentModel(th.model); err == nil {
 			session := s.buildAgentSession(entry, th, entry.client, provider, model)
@@ -2725,7 +2794,8 @@ func (s *Server) startAgentTurnLocked(entry *agentSessionEntry, th *agentThread,
 	}
 	th.updatedAt = th.workingSince
 	th.live.Reset()
-	th.turnHistIdx = len(th.session.History())
+	th.turnHistory = th.session.History()
+	th.turnHistIdx = len(th.turnHistory)
 	entry.lastActive = th.workingSince
 	ctx, cancel := context.WithCancel(context.Background())
 	th.turnCtx = ctx
@@ -2767,6 +2837,14 @@ func (s *Server) startAgentTurn(entry *agentSessionEntry, th *agentThread, text 
 func (s *Server) runAgentTurn(entry *agentSessionEntry, th *agentThread, turn agentTurnSnapshot, text string, images []agent.MessageImage) {
 	ctx, sess, cancel := turn.ctx, turn.session, turn.cancel
 	startEpoch, turnModel := turn.epoch, turn.model
+	cleanedAutomation := false
+	cleanupAutomation := func() {
+		if !cleanedAutomation {
+			cleanedAutomation = true
+			s.finishAutomationTurn(turn.automation)
+		}
+	}
+	defer cleanupAutomation()
 	// A reset/delete or panic must also settle the originating RPC exactly once.
 	var rpcData any
 	rpcErr := fmt.Errorf("conversation was canceled or replaced")
@@ -2783,12 +2861,15 @@ func (s *Server) runAgentTurn(entry *agentSessionEntry, th *agentThread, turn ag
 	// th.running would stay true forever, rejecting every future chat.
 	defer func() {
 		if r := recover(); r != nil {
+			cleanupAutomation()
 			rpcErr = fmt.Errorf("internal error: %v", r)
 			log.Printf("PANIC in agent turn for %s/%s: %v", entry.deviceID, th.id, r)
 			s.agentSessionsMu.Lock()
 			current := th.epoch == startEpoch && entry.threads[th.id] == th && th.turnCtx == ctx
 			if current {
+				pauseAutonomyLocked(th)
 				th.running = false
+				th.turnHistory = nil
 				th.cancel = nil
 				th.turnCtx = nil
 				th.workingTool = ""
@@ -2798,6 +2879,8 @@ func (s *Server) runAgentTurn(entry *agentSessionEntry, th *agentThread, turn ag
 			cancel()
 			if current {
 				s.agentBroadcast(entry, agentMsg{Op: "error", Thread: th.id, Message: fmt.Sprintf("internal error: %v", r)})
+				s.persistAutonomy(entry, th)
+				s.publishAutonomy(entry, th, "Agent error paused automatic continuation")
 			}
 		}
 	}()
@@ -2843,12 +2926,26 @@ func (s *Server) runAgentTurn(entry *agentSessionEntry, th *agentThread, turn ag
 			return nil
 		}
 		takeQueuedChat(&th.queue, 0)
+		th.goalActivity = ""
 		s.agentSessionsMu.Unlock()
 		s.broadcastQueue(entry, th)
 		display, _ := json.Marshal(map[string]any{"steering": true, "time": time.Now().UnixMilli()})
 		return &agent.Message{Role: "user", Content: next.text, Images: next.images, Display: display}
 	}
-	historyReplaced, runErr := runAgentConversation(ctx, sess, text, images, emit, takeSteering)
+	revision := sess.HistoryRevision()
+	explicitCompaction, runErr := runAgentConversation(ctx, sess, text, images, emit, takeSteering)
+	historyReplaced := explicitCompaction || sess.HistoryRevision() != revision
+	if command, _ := splitAgentCommand(text); !isAgentSessionCommand(command) {
+		turn.historyIndex = sess.TurnHistoryIndex()
+	}
+	cleanupAutomation()
+	activity := ""
+	if turn.autonomy == "goal" {
+		history := sess.History()
+		if turn.historyIndex >= 0 && turn.historyIndex < len(history) {
+			activity = goalTurnActivity(history[turn.historyIndex:])
+		}
+	}
 	outcomeAt := time.Now().UTC().Format(time.RFC3339Nano)
 	outcome := "done"
 	if runErr != nil {
@@ -2859,7 +2956,7 @@ func (s *Server) runAgentTurn(entry *agentSessionEntry, th *agentThread, turn ag
 		}
 	}
 	timing, _ := json.Marshal(map[string]int64{"time": turn.started, "endedAt": time.Now().UnixMilli()})
-	if !historyReplaced {
+	if !explicitCompaction && turn.historyIndex >= 0 {
 		sess.AnnotateTurn(turn.historyIndex, turn.display, timing)
 	}
 
@@ -2890,6 +2987,7 @@ func (s *Server) runAgentTurn(entry *agentSessionEntry, th *agentThread, turn ag
 		cancel()
 		return
 	}
+	finishAutonomyLocked(th, turn, outcome, activity)
 	var terminal agentMsg
 	switch outcome {
 	case "done":
@@ -2903,10 +3001,6 @@ func (s *Server) runAgentTurn(entry *agentSessionEntry, th *agentThread, turn ag
 			Cwd:       agentEffectiveCwdLocked(entry, th),
 			Branch:    th.branch,
 		}
-		if historyReplaced {
-			terminal.Compacted = true
-			terminal.History = renderAgentHistory(sess.History())
-		}
 	case "stopped":
 		terminal = agentMsg{Op: "stopped", Thread: th.id, Canceled: true}
 	default:
@@ -2915,12 +3009,16 @@ func (s *Server) runAgentTurn(entry *agentSessionEntry, th *agentThread, turn ag
 			terminal.Code = "provider_content_filter"
 		}
 	}
+	if historyReplaced {
+		terminal.Compacted = true
+		terminal.History = renderAgentHistory(sess.History())
+	}
 	if turn.rpc != nil {
 		rpcErr = runErr
-		if runErr == nil && !historyReplaced {
+		if runErr == nil && !explicitCompaction {
 			rpcData = map[string]any{"thread": th.id, "status": "completed"}
 		}
-		if historyReplaced && runErr == nil {
+		if explicitCompaction && runErr == nil {
 			history := sess.History()
 			// rdev has no persistent OMP entry IDs or pre-compaction token
 			// estimate; do not fabricate those fields.
@@ -2936,6 +3034,7 @@ func (s *Server) runAgentTurn(entry *agentSessionEntry, th *agentThread, turn ag
 		th.live.Append(terminal, data)
 	}
 	th.running = false
+	th.turnHistory = nil
 	th.cancel = nil
 	th.turnCtx = nil
 	th.workingTool = ""
@@ -2958,6 +3057,8 @@ func (s *Server) runAgentTurn(entry *agentSessionEntry, th *agentThread, turn ag
 	th.persistMu.Unlock()
 	cancel()
 
+	s.persistAutonomy(entry, th)
+	s.publishAutonomy(entry, th, "")
 	if terminalData != nil {
 		s.agentBroadcastData(entry, terminalData)
 	}
@@ -2972,6 +3073,9 @@ func (s *Server) runAgentTurn(entry *agentSessionEntry, th *agentThread, turn ag
 		s.broadcastQueue(entry, th)
 		s.agentBroadcastTurn(entry, th, nextFrame)
 		s.goAgent(func() { s.runAgentTurn(entry, th, nextTurn, next.text, next.images) })
+	}
+	if !hasNext {
+		s.scheduleAutonomy(entry, th)
 	}
 }
 
@@ -3009,11 +3113,21 @@ func (s *Server) HandleAgentWS(w http.ResponseWriter, r *http.Request) {
 	socket.ReadLoop()
 }
 
+const agentDesktopGuidance = `
+
+Desktop capability and execution:
+- Tool definitions and fresh results are authoritative for capabilities; old assistant claims and summaries may be wrong. Before declaring desktop/CUA unsupported, check computer status on the intended online device. Distinguish unsupported capability from offline transport, missing permission, and another conversation's control lease. A failed call does not prove the entire driver is unavailable.
+- When cua=true, read skill cua-driver/SKILL.md and WORKFLOW.md. Discover the compact catalog with cua action=tools, then request action=tools with tool=<exact name> for the needed schema before calling it. Prefer semantic/accessibility actions. RDev owns the embedded session: do not invent create_session, supply session IDs, or install a CLI/cloud service to use it.
+- For each native CUA call or computer input: take a fresh computer screenshot on the same device/source, perform one grounded action, then observe again. Even read-only CUA calls consume that screenshot. Follow each native tool's coordinate space; computer screenshot pixels are not automatically native screen points. Never blindly retry uncertain input or switch backends to bypass permission/takeover.
+- An agent cursor overlay is not the system pointer. Follow the skill's enable/place/verify workflow; a successful call or enabled=true is not visual proof. Turn completion and desktop cleanup end the session and its overlay; do not promise a persistent cursor.
+- The browser tool uses a separate server-hosted browser. Use computer/CUA for the device's installed browser, existing tabs or logged-in desktop session. Do not silently substitute one environment for the other.
+- Complete authorized, bounded actions without asking the user to reconfirm them. Ask only for unresolved material choices or additional consequential actions. Report observed results, uncertainty and exact blockers; never claim a fix, visibility or deployment without evidence.`
+
 func buildAgentSystemPrompt(deviceID, cwd string) string {
 	if deviceID == agentServerDeviceID {
-		return "You are the server agent in rdev. The server is your coordination environment only. No server-host shell or filesystem access is available. Call list_devices to discover currently connected remote devices and their tool schemas, then device_tool with an explicit device ID. Use agent_sessions to list or read Agent conversations (including offline history), and manage_agent_session to create, rename or delete a specified conversation; discover exact device and thread IDs before managing them. No device registration is needed. Check the live device list rather than inventing device IDs. Use subagent for isolated delegated tasks, jobs to inspect or cancel them, and verify their results. Work autonomously within these capabilities and answer in the user's language."
+		return "You are the server agent in rdev. The server is your coordination environment only. No server-host shell or filesystem access is available. Call list_devices to discover currently connected remote devices and their tool schemas, then device_tool with an explicit device ID. Use agent_sessions to list or read Agent conversations (including offline history), and manage_agent_session to create, rename or delete a specified conversation; discover exact device and thread IDs before managing them. No device registration is needed. Check the live device list rather than inventing device IDs. Use subagent for isolated delegated tasks, jobs to inspect or cancel them, and verify their results. Work autonomously within these capabilities and answer in the user's language." + agentDesktopGuidance
 	}
-	prompt := fmt.Sprintf(`You are an agent inside rdev, a remote-device management server. You operate the device %q through tools; every tool call runs ON THE DEVICE, not on the server or the user's machine.
+	prompt := fmt.Sprintf(`You are an agent inside rdev, a remote-device management server. Device shell and file tools operate on device %q, not on the server or the user's machine. Other tools run where their descriptions specify; never assume a shared filesystem, browser session or authentication context.
 
 Tools:
 - shell: run a shell command. Prefer it for discovery (uname, ls, cat small files, system info).
@@ -3036,7 +3150,7 @@ Guidelines:
 	if cwd != "" {
 		prompt += fmt.Sprintf("\n\nCurrent project directory: %s (relative paths in tool calls are resolved against it).", cwd)
 	}
-	return prompt
+	return prompt + agentDesktopGuidance
 }
 
 // agentEffectiveCwdLocked returns a thread's working directory: its own cwd

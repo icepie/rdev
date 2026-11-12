@@ -284,6 +284,7 @@ Web UI 是 React 19 + Tailwind CSS v4 + Radix UI 单页应用，组件/设计令
 - Windows 10/11 的实验 Rust 客户端优先使用 `portable-pty`/ConPTY，失败后退回 pipe shell。
 - Windows 10 build 17763（1809）之前没有 ConPTY；`run.ps1` 会自动下载 WinPTY 后再启动交互终端。
 - 原生 32 位 Windows 会自动下载 `rdev-client-windows-386.exe`；32 位 PowerShell 运行在 64 位 Windows 上仍会正确下载其原生 `amd64`/`arm64` 客户端。
+- Windows `run.ps1` 的 `RDev -Client cgo` 未指定 `-Version` 时按客户端及架构的精确资产查找最新已发布稳定版本，并将下载地址和缓存固定到同一 tag。仅发布 GPU/APK 的更新不会让 CGO 安装器误取仓库全局 `latest`；不会静默切换客户端。服务端 `/api/release/latest?asset=<文件名>` 及两个下载端点同样按资产解析，指定版本则保持原样、缺少资产时失败。回归：`pwsh -NoProfile -File scripts/test-runner-release.ps1`；加 `-Live` 可查询真实元数据并下载 Windows CGO 包检查 PE 文件头（不启动客户端）。
 - Windows 7/8/8.1 的 Go `run.ps1` 会自动下载 WinPTY 运行时，并通过同一套 GitHub 代理前缀重试。
 - Windows 7 的默认 PowerShell 2.0/.NET 2.0 无法通过 `ServicePointManager` 设置 TLS 1.2。首页 Win7 安装命令使用原生 WinHTTP，安装脚本的版本查询和文件下载也提供 WinHTTP 回退，保留证书校验和 HTTPS。系统仍需支持 TLS 1.2（Windows 7 SP1 及相关更新、有效根证书）；未更新的系统不能仅通过修改脚本获得 TLS 支持。
 - Rust `rdev-client-gpu` 的 Win7 包会自动探测并打包 `winpty.dll`/`winpty-agent.exe`；运行时也会从 `RDEV_WINPTY_DIR`、程序目录和 `PATH` 探测 WinPTY。
@@ -291,7 +292,7 @@ Web UI 是 React 19 + Tailwind CSS v4 + Radix UI 单页应用，组件/设计令
 - Win7 运行 Go 客户端请使用 XTLS `go-win7` 工具链构建，例如 `GO_WIN7=/path/to/go-win7/bin/go make win7-go-client win7-service-wrapper`。
 - Windows 服务不要直接托管客户端 EXE；使用 `rdev-service-wrapper.exe`，并在配置中设置 `interactive: true`，让服务在活动登录用户桌面启动客户端，避免桌面截图出现 Session 0 的 `Access is denied`。
 - GPU 桌面采用 RDev/Weylus 风格：`rdev-client-gpu` 可通过 `embedded-rdev-desktop` feature 内置启动 vendored RDev 桌面 HTTP/WS 服务并连接 `/gpu-desktop-tunnel`，服务端通过 `/gpu-desktop/<device>/` 代理浏览器流量；服务端只做鉴权和隧道转发。
-- 原生 CUA 工具：Go cgo-native 与 Rust GPU 客户端均通过顶层 `cua` 工具的 `action=tools` 返回客户端完整工具清单和参数 schema，再用 `action=call` 按返回的工具名调用；不再经 `computer.native_tools`。工具范围取决于客户端 Cua Driver 的 `tools/list`。普通 Go 客户端仍使用截图/坐标输入，不链接 Cua SDK。
+- 原生 CUA 工具：Go cgo-native 与 Rust GPU 客户端均通过顶层 `cua` 工具的 `action=tools` 返回精简工具目录，再用 `action=tools, tool=<工具名>` 按需读取完整输入 schema，最后以 `action=call` 调用，避免整个 SDK 工具目录挤占模型上下文；不再经 `computer.native_tools`。工具范围取决于客户端 Cua Driver 的 `tools/list`。普通 Go 客户端仍使用截图/坐标输入，不链接 Cua SDK。
  `client-cgo-native` 需要 Rust/Cargo 和 C 编译器；SDK 固定为 `0.47.1`，静态链接进客户端，无运行时下载或 MCP 子进程。运行时遵守 Cua 平台支持及辅助功能权限约束；Go 客户端的纯 Go 桌面路径不依赖 SDK。
  Linux 原生构建还需要 `pkg-config` 及 X11、Xi、xkbcommon 开发库（Debian/Ubuntu：`libx11-dev libxi-dev libxkbcommon-dev`）。
  Go 原生结果保留 MCP 文本、结构化内容和错误信息；操作仍使用会话级桌面独占控制、人工接管和空闲释放规则。

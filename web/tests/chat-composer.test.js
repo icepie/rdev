@@ -34,7 +34,7 @@ it("preserves composer intent across modified keys, image loading and thread swi
   const sent = [];
   let insertDraft;
   const props = {
-    sink: { state: { items: [], todos: [], queue: [], queueIds: [], running: false, stopping: false, turnUsage: null, currentTool: "", workingSince: null },
+    sink: { state: { autonomy: { goal: null, loop: null, message: "" }, items: [], todos: [], queue: [], queueIds: [], running: false, stopping: false, turnUsage: null, currentTool: "", workingSince: null },
       ops: { turnOpen: { current: true }, queueReturns: { current: new Map() }, registerScrollEl() {}, pushBubble: vi.fn(), setRunning() {}, setWorkingSince() {} } },
     t: key => key, threadId: "thread-a", device: "device", ready: true,
     sendRaw: payload => { sent.push(payload); return true; },
@@ -54,20 +54,24 @@ it("preserves composer intent across modified keys, image loading and thread swi
     await render();
     props.offline = true;
     await render();
-    expect(document.querySelector('textarea[role="combobox"]').disabled).toBe(true);
+    await act(async () => insertDraft("discuss history"));
+    expect(document.querySelector('textarea[role="combobox"]').value).toBe("discuss history");
+    await act(async () => sendButton().click());
+    expect(sent).toEqual([]);
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
     const unlock = () => [...document.querySelectorAll("button")].find(button => button.textContent === "agent.offlineContinue");
     await act(async () => unlock().click());
-    expect(document.querySelector('textarea[role="combobox"]').disabled).toBe(true);
+    await act(async () => sendButton().click());
+    expect(sent).toEqual([]);
     confirm.mockReturnValue(true);
     await act(async () => unlock().click());
-    expect(document.querySelector('textarea[role="combobox"]').disabled).toBe(false);
-    await act(async () => insertDraft("discuss history"));
     await act(async () => sendButton().click());
     expect(sent.at(-1)).toMatchObject({ op: "chat", offlineConfirmed: true, text: "discuss history" });
     props.threadId = "different-offline-thread";
     await render();
-    expect(document.querySelector('textarea[role="combobox"]').disabled).toBe(true);
+    await act(async () => insertDraft("new offline draft"));
+    await act(async () => sendButton().click());
+    expect(sent).toHaveLength(1);
     props.offline = false;
     props.threadId = "thread-a";
     sent.length = 0;

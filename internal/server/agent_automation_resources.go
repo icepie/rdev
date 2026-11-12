@@ -18,7 +18,7 @@ func (t automationTool) forResource(key string) automationTool {
 	}
 	state := root.resources[key]
 	if state == nil {
-		state = &agentAutomation{parent: root, resource: key, paused: root.paused, pages: make(map[string]automationPage)}
+		state = &agentAutomation{parent: root, resource: key, paused: root.paused, retired: root.retired, pages: make(map[string]automationPage)}
 		root.resources[key] = state
 	}
 	t.state = state

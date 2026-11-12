@@ -70,12 +70,12 @@ type streamChunk struct {
 	Usage *struct {
 		PromptTokens     int `json:"prompt_tokens"`
 		CompletionTokens int `json:"completion_tokens"`
+		PromptDetails    struct {
+			CachedTokens int `json:"cached_tokens"`
+		} `json:"prompt_tokens_details"`
 	} `json:"usage"`
 	// Some gateways surface an error object inline on the stream.
-	Error *struct {
-		Message string `json:"message"`
-		Type    string `json:"type"`
-	} `json:"error"`
+	Error *providerErrorDetail `json:"error"`
 }
 
 // toolCallDelta is one streamed tool-call fragment: id and name arrive once
@@ -288,18 +288,12 @@ func readStreamWithFinish(body io.Reader, onDelta, onReasoning func(string), pok
 				return assemble(), usage, fmt.Errorf("agent: parse stream chunk: %w", jerr)
 			}
 			if chunk.Error != nil {
-				msg := "agent: stream error"
-				if chunk.Error.Type != "" {
-					msg += " (" + chunk.Error.Type + ")"
-				}
-				if chunk.Error.Message != "" {
-					msg += ": " + chunk.Error.Message
-				}
-				return assemble(), usage, fmt.Errorf("%s", msg)
+				return assemble(), usage, providerStreamError("stream error", *chunk.Error)
 			}
 			if chunk.Usage != nil {
 				usage.InputTokens = chunk.Usage.PromptTokens
 				usage.OutputTokens = chunk.Usage.CompletionTokens
+				usage.CacheReadTokens = chunk.Usage.PromptDetails.CachedTokens
 			}
 			for _, choice := range chunk.Choices {
 				var nativeReason string

@@ -40,6 +40,8 @@ type agentHistoryToolCall struct {
 
 // agentHistoryLine is one JSONL record: meta (t=="meta") or message (t=="msg").
 type agentHistoryLine struct {
+	Goal          *agentGoal             `json:"goal,omitempty"`
+	Loop          *agentLoop             `json:"loop,omitempty"`
 	Anthropic     *agent.ProviderReplay  `json:"anthropic,omitempty"`
 	Responses     *agent.ResponseReplay  `json:"responses,omitempty"`
 	OutcomeAt     string                 `json:"outcomeAt,omitempty"`
@@ -112,6 +114,8 @@ type agentSessionStore struct {
 // agentThreadExtras are the meta-line fields (besides the model) carried
 // through rewrites: the thread's working directory and explicit title.
 type agentThreadExtras struct {
+	Goal      *agentGoal
+	Loop      *agentLoop
 	OutcomeAt string
 	Outcome   string
 	Cwd       string
@@ -287,7 +291,15 @@ func (st *agentSessionStore) loadLocked(deviceID, threadID string) (msgs []agent
 				title = line.Title
 				updated, _ = time.Parse(time.RFC3339, line.Updated)
 				st.extras[deviceID+"/"+threadID] = agentThreadExtras{Cwd: cwd, Title: title, Outcome: validatedAgentOutcome(line.Outcome), OutcomeAt: line.OutcomeAt}
+				x := st.extras[deviceID+"/"+threadID]
+				x.Goal, x.Loop = line.Goal, line.Loop
+				st.extras[deviceID+"/"+threadID] = x
 			}
+		case "autonomy":
+			key := deviceID + "/" + threadID
+			x := st.extras[key]
+			x.Goal, x.Loop = line.Goal, line.Loop
+			st.extras[key] = x
 		case "outcome":
 			if outcome := validatedAgentOutcome(line.Outcome); outcome != "" {
 				key := deviceID + "/" + threadID
@@ -430,6 +442,7 @@ func (st *agentSessionStore) rewriteLocked(deviceID, threadID, model string, msg
 	var buf bytes.Buffer
 	meta, err := json.Marshal(agentHistoryLine{
 		T: "meta", V: agentHistoryVersion, Device: deviceID, Thread: threadID, Model: model,
+		Goal: extras.Goal, Loop: extras.Loop,
 		Cwd: extras.Cwd, Title: extras.Title, Outcome: extras.Outcome, OutcomeAt: extras.OutcomeAt,
 		Updated: time.Now().UTC().Format(time.RFC3339),
 	})
@@ -524,6 +537,7 @@ func (st *agentSessionStore) clear(deviceID, threadID string) {
 	extras := st.extras[key]
 	extras.Outcome = ""
 	extras.OutcomeAt = ""
+	extras.Goal, extras.Loop = nil, nil
 	st.extras[key] = extras
 	// st.extras is kept: a reset thread lives on in memory and its next save
 	// must re-persist cwd/title. Deleted threads drop extras via dropExtras.

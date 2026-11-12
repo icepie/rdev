@@ -1,3 +1,4 @@
+import { parseAutonomy, type AutonomyState } from "./autonomy";
 import { acceptQueueRemoval, clearQueueReturns, type QueueReturns } from "./queue-actions";
 import { TRANSCRIPT_BOTTOM_THRESHOLD } from "./transcript-resize";
 /* Per-thread transcript state ("sink"): one instance backs the connection's
@@ -61,6 +62,7 @@ function parseJob(value: unknown): AgentJob | null {
 }
 
 export interface ThreadSinkState {
+  autonomy: AutonomyState;
   jobsRevision: number;
   jobs: AgentJob[];
   jobsError: string;
@@ -89,6 +91,7 @@ interface TurnCompletion {
 }
 
 export interface ThreadSinkOps {
+  setAutonomy: Dispatch<SetStateAction<AutonomyState>>;
   setJobsRevision: Dispatch<SetStateAction<number>>;
   jobActionReplies: RefObject<Map<string, (reply: Record<string, unknown> | null) => void>>;
   setJobsError: Dispatch<SetStateAction<string>>;
@@ -148,6 +151,7 @@ export function isLiveReplay(): boolean {
 }
 
 export function useThreadSink(): ThreadSink {
+  const [autonomy, setAutonomy] = useState<AutonomyState>(() => parseAutonomy({}));
   const jobActionReplies = useRef(new Map<string, (reply: Record<string, unknown> | null) => void>());
   const [jobsError, setJobsError] = useState("");
   const [jobsRevision, setJobsRevision] = useState(0);
@@ -337,6 +341,7 @@ export function useThreadSink(): ThreadSink {
 
   const reset = useCallback(() => {
     resetTransient();
+    setAutonomy(parseAutonomy({}));
     setJobs([]);
     setJobsError("");
     setItems([]);
@@ -352,6 +357,7 @@ export function useThreadSink(): ThreadSink {
 
   const ops = useMemo<ThreadSinkOps>(
     () => ({
+      setAutonomy,
       jobActionReplies,
       setJobsRevision,
       setJobs,
@@ -394,8 +400,8 @@ export function useThreadSink(): ThreadSink {
   );
 
   const state = useMemo<ThreadSinkState>(
-    () => ({ jobsRevision, jobs, jobsError, items, todos, queue, queueIds, queueModes, queueError, running, stopping, turnUsage, currentTool, workingSince }),
-    [jobsRevision, jobs, jobsError, items, todos, queue, queueIds, queueModes, queueError, running, stopping, turnUsage, currentTool, workingSince],
+    () => ({ autonomy, jobsRevision, jobs, jobsError, items, todos, queue, queueIds, queueModes, queueError, running, stopping, turnUsage, currentTool, workingSince }),
+    [autonomy, jobsRevision, jobs, jobsError, items, todos, queue, queueIds, queueModes, queueError, running, stopping, turnUsage, currentTool, workingSince],
   );
 
   return useMemo(() => ({ state, ops }), [state, ops]);
@@ -438,6 +444,9 @@ export function applyScopedMessage(
   t: Translator,
 ): void {
   switch (String(msg.op)) {
+    case "autonomy":
+      ops.setAutonomy(parseAutonomy(msg));
+      return;
     case "jobs_changed":
       ops.setJobsRevision(previous => previous + 1);
       return;
@@ -491,6 +500,7 @@ export function applyScopedMessage(
       /* Read-only snapshot for a secondary pane: history + live frames,
        * without switching the connection's current thread. */
       ops.resetTransient();
+      ops.setAutonomy(parseAutonomy(msg));
       ops.setQueueError("");
       ops.setTodos(parseTodos(msg.todos));
       clearQueueReturns(ops.queueReturns.current);
@@ -713,6 +723,10 @@ export function applyScopedMessage(
       return;
     }
     case "error": {
+      if (msg.compacted === true && Array.isArray(msg.history)) {
+        ops.setItems(replayHistory(msg.history));
+        ops.resetTransient();
+      }
       if (msg.code === "provider_content_filter") {
         const notice = t("agent.providerContentFilter");
         if (ops.turnOpen.current) ops.finishTurn({ display: msg.display, unfinishedToolResult: notice });
@@ -742,6 +756,11 @@ export function applyScopedMessage(
       return;
     }
     case "stopped": {
+      if (msg.compacted === true && Array.isArray(msg.history)) {
+        ops.setItems(replayHistory(msg.history));
+        ops.resetTransient();
+        ops.pushBubble("system", t("agent.stopped"));
+      }
       /* A stop of a running turn closes the transcript with a marker; the
        * idle-stop ack (canceled:false, no open turn) is a no-op — calling
        * finishTurn unconditionally would append a phantom empty turn. */

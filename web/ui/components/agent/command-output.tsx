@@ -75,9 +75,11 @@ export function commandOutputText(result: string): string {
  * args JSON block is redundant — the $ line already states what ran. */
 export function CommandOutputBody({
   tool,
+  embedded = false,
 }: {
   tool: ToolItem;
   t: Translator;
+  embedded?: boolean;
 }) {
   const outputRef = useRef<HTMLDivElement>(null);
   // BB useStickyBottomScroll initially attaches only streaming output.
@@ -115,11 +117,11 @@ export function CommandOutputBody({
     return (
       <div
         className={cn(
-          "overflow-hidden rounded-lg border bg-card",
-          tool.isError ? "border-destructive" : "border-border",
+          !embedded && "overflow-hidden rounded-lg border bg-card",
+          !embedded && (tool.isError ? "border-destructive" : "border-border"),
         )}
       >
-        <div ref={outputRef} onScroll={trackScroll} className="max-h-72 overflow-auto px-4 py-3 font-mono text-xs leading-tight break-words whitespace-pre-wrap text-foreground select-text">
+        <div ref={outputRef} onScroll={trackScroll} className={cn("max-h-72 overflow-auto font-mono text-xs leading-tight break-words whitespace-pre-wrap text-foreground select-text", !embedded && "px-4 py-3")}>
           {command && (
             <div className="text-muted-foreground">
               $ <SyntaxCode code={command} language="shell" />
@@ -140,11 +142,11 @@ export function CommandOutputBody({
   return (
     <div
       className={cn(
-        "overflow-hidden rounded-lg border bg-card",
-        failed ? "border-destructive" : "border-border",
+        !embedded && "overflow-hidden rounded-lg border bg-card",
+        !embedded && (failed ? "border-destructive" : "border-border"),
       )}
     >
-      <div ref={outputRef} onScroll={trackScroll} className="max-h-72 overflow-auto px-4 py-3 font-mono text-xs leading-tight break-words whitespace-pre-wrap text-foreground select-text">
+      <div ref={outputRef} onScroll={trackScroll} className={cn("max-h-72 overflow-auto font-mono text-xs leading-tight break-words whitespace-pre-wrap text-foreground select-text", !embedded && "px-4 py-3")}>
         {command && (
           <div className="text-muted-foreground">
             $ <SyntaxCode code={command} language="shell" />

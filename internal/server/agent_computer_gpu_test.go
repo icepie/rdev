@@ -30,6 +30,7 @@ type gpuAgentFixture struct {
 	inputs         chan string
 	cua            bool
 	nativeResult   json.RawMessage
+	nativeTools    json.RawMessage
 	nativeBlock    bool
 	nativeRequests chan json.RawMessage
 	requests       atomic.Int32
@@ -73,7 +74,12 @@ func (h *gpuAgentFixture) OnMessage(c *gws.Conn, m *gws.Message) {
 		}
 		_ = json.Unmarshal(request, &action)
 		if action.Action == "tools" {
-			_ = c.WriteMessage(gws.OpcodeText, []byte(`{"CuaResult":{"result":{"tools":[{"name":"list_apps","inputSchema":{"type":"object"}},{"name":"click","inputSchema":{"type":"object","required":["element_index"]}},{"name":"set_agent_cursor_enabled","inputSchema":{"type":"object","properties":{"enabled":{"type":"boolean"}}}},{"name":"shell","inputSchema":{"type":"object"}}]}}}`))
+			if h.nativeTools != nil {
+				payload, _ := json.Marshal(map[string]any{"CuaResult": map[string]any{"result": h.nativeTools}})
+				_ = c.WriteMessage(gws.OpcodeText, payload)
+			} else {
+				_ = c.WriteMessage(gws.OpcodeText, []byte(`{"CuaResult":{"result":{"tools":[{"name":"list_apps","inputSchema":{"type":"object"}},{"name":"click","inputSchema":{"type":"object","required":["element_index"]}},{"name":"set_agent_cursor_enabled","inputSchema":{"type":"object","properties":{"enabled":{"type":"boolean"}}}},{"name":"shell","inputSchema":{"type":"object"}}]}}}`))
+			}
 		} else if !h.nativeBlock {
 			_ = c.WriteMessage(gws.OpcodeText, h.nativeResult)
 		}
@@ -203,13 +209,15 @@ func TestComputerGPUTunnelCaptureInputAndSessionReuse(t *testing.T) {
 		t.Fatal("missing image")
 	}
 	run(`{"action":"click","x":160,"y":90}`)
+	run(`{"action":"screenshot"}`)
 	run(`{"action":"text","text":"你好 GPU"}`)
+	run(`{"action":"screenshot"}`)
 	run(`{"action":"key","key":"Enter"}`)
 	run(`{"action":"screenshot"}`)
 	if fixture.connections.Load() != 1 || fixture.configs.Load() != 1 {
 		t.Fatalf("reconnected per action: connections=%d configs=%d", fixture.connections.Load(), fixture.configs.Load())
 	}
-	if fixture.snapshots.Load() != 2 {
+	if fixture.snapshots.Load() != 4 {
 		t.Fatalf("input captured extra frames: %d", fixture.snapshots.Load())
 	}
 	if got := base.state.screens[client.ID]; got.width != 320 || got.height != 180 || got.source != "gpu:0" {
@@ -230,7 +238,7 @@ func TestComputerGPUTunnelCaptureInputAndSessionReuse(t *testing.T) {
 	}
 	run(`{"action":"screenshot","source":"gpu:1"}`)
 	run(`{"action":"screenshot"}`)
-	if fixture.connections.Load() != 1 || fixture.configs.Load() != 2 || fixture.snapshots.Load() != 4 {
+	if fixture.connections.Load() != 1 || fixture.configs.Load() != 2 || fixture.snapshots.Load() != 6 {
 		t.Fatal("source switch reconnected or did not retain selected screen")
 	}
 	run(`{"action":"release"}`)
@@ -317,10 +325,17 @@ func TestComputerCuaDiscoveryResultsAndSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(tools, `"set_agent_cursor_enabled"`) || !strings.Contains(tools, `"required":["element_index"]`) || !strings.Contains(tools, `"shell"`) {
-		t.Fatalf("complete tool inventory/schema not preserved: %s", tools)
+	if !strings.Contains(tools, `"set_agent_cursor_enabled"`) || strings.Contains(tools, `"inputSchema"`) || !strings.Contains(tools, `"shell"`) {
+		t.Fatalf("catalog omitted names or included full schemas: %s", tools)
+	}
+	selected, err := tool.Execute(ctx, json.RawMessage(`{"action":"native_tools","tool":"click"}`))
+	if err != nil || !strings.Contains(selected, `"required":["element_index"]`) || strings.Contains(selected, `"name":"shell"`) {
+		t.Fatalf("selected tool schema missing or unrelated definitions leaked: %s %v", selected, err)
 	}
 	for range 2 {
+		if _, err := tool.Execute(ctx, json.RawMessage(`{"action":"screenshot"}`)); err != nil {
+			t.Fatal(err)
+		}
 		result, err := tool.Execute(ctx, json.RawMessage(`{"action":"native","tool":"click","arguments":{"element_index":7}}`))
 		if err != nil {
 			t.Fatal(err)
@@ -334,12 +349,12 @@ func TestComputerCuaDiscoveryResultsAndSession(t *testing.T) {
 	if err != nil || !strings.Contains(status, `"cua":true`) {
 		t.Fatalf("status missing Cua capability: %s %v", status, err)
 	}
-	if fixture.connections.Load() != 1 || fixture.configs.Load() != 0 || fixture.snapshots.Load() != 0 || len(tool.state.screens) != 0 || tool.state.gpu[client.ID] == nil {
-		t.Fatal("native calls restarted session or required capture")
+	if fixture.connections.Load() != 3 || fixture.configs.Load() != 2 || fixture.snapshots.Load() != 2 || len(tool.state.screens) != 0 || tool.state.gpu[client.ID] != nil {
+		t.Fatal("native error retained resources or skipped observations")
 	}
-	for i := range 3 {
+	for i := range 4 {
 		request := <-fixture.nativeRequests
-		if i == 0 {
+		if i == 0 || i == 2 {
 			if string(request) != `{"action":"tools"}` {
 				t.Fatalf("wrong tools/list framing: %s", request)
 			}
@@ -356,16 +371,22 @@ func TestComputerCuaErrorAndUnavailableTool(t *testing.T) {
 	fixture := &gpuAgentFixture{cua: true, nativeResult: json.RawMessage(`{"CuaResult":{"error":"Accessibility permission denied"}}`), nativeRequests: make(chan json.RawMessage, 8)}
 	tool, client := newGPUCuaTool(t, fixture)
 	for range 2 {
+		if _, err := tool.Execute(context.Background(), json.RawMessage(`{"action":"screenshot"}`)); err != nil {
+			t.Fatal(err)
+		}
 		_, err := tool.Execute(context.Background(), json.RawMessage(`{"action":"native","tool":"list_apps"}`))
 		if err == nil || !strings.Contains(err.Error(), "Accessibility permission denied") {
 			t.Fatalf("lost driver error: %v", err)
 		}
 	}
-	if fixture.connections.Load() != 1 || tool.state.gpu[client.ID] == nil || len(fixture.nativeRequests) != 3 {
-		t.Fatal("driver error discarded session or rediscovered tools")
+	if fixture.connections.Load() != 2 || tool.state.gpu[client.ID] != nil || len(fixture.nativeRequests) != 4 {
+		t.Fatal("driver error retained private control resources")
+	}
+	if _, err := tool.Execute(context.Background(), json.RawMessage(`{"action":"screenshot"}`)); err != nil {
+		t.Fatal(err)
 	}
 	_, err := tool.Execute(context.Background(), json.RawMessage(`{"action":"native","tool":"scroll"}`))
-	if err == nil || !strings.Contains(err.Error(), "unavailable") || len(fixture.nativeRequests) != 3 {
+	if err == nil || !strings.Contains(err.Error(), "unavailable") || len(fixture.nativeRequests) != 5 {
 		t.Fatalf("undiscovered tool was sent: %v", err)
 	}
 }
@@ -375,6 +396,9 @@ func TestComputerCuaManualTakeoverCancels(t *testing.T) {
 	tool, client := newGPUCuaTool(t, fixture)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	if _, err := tool.Execute(ctx, json.RawMessage(`{"action":"screenshot"}`)); err != nil {
+		t.Fatal(err)
+	}
 	result := make(chan error, 1)
 	go func() {
 		_, err := tool.Execute(ctx, json.RawMessage(`{"action":"native","tool":"click","arguments":{"element_index":7}}`))

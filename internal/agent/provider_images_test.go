@@ -241,3 +241,23 @@ func TestLargeToolScreenshotSurvivesTruncationAndReachesVision(t *testing.T) {
 		t.Fatal("oversized image accepted")
 	}
 }
+
+func TestNativeComputerDetectionExcludesPublicCuaTool(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		args string
+		want bool
+	}{
+		{name: "legacy native call", args: `{"action":"native"}`, want: true},
+		{name: "legacy native discovery", args: `{"action":"native_tools"}`, want: true},
+		{name: "ordinary computer action", args: `{"action":"screenshot"}`},
+		{name: "public CUA discovery", args: `{"action":"tools"}`},
+	} {
+		if got := isNativeComputerCall("computer", json.RawMessage(test.args)); got != test.want {
+			t.Errorf("%s detected as native=%v, want %v", test.name, got, test.want)
+		}
+	}
+	if isNativeComputerCall("cua", json.RawMessage(`{"action":"tools"}`)) {
+		t.Fatal("public cua tool was treated as legacy native computer call")
+	}
+}

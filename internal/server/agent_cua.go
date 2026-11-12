@@ -12,10 +12,10 @@ type cuaTool struct{ automationTool }
 
 func (*cuaTool) Name() string { return "cua" }
 func (*cuaTool) Description() string {
-	return "Use the selected client's CUA Driver accessibility tools. Read the cua-driver skill via skill (action=read, skill=cua-driver, file=SKILL.md) before GUI work; load its referenced guides as needed. Call action=tools to discover every tool and its input schema, then call action=call with the exact returned tool name and arguments. Includes all tools provided by the connected driver's tools/list, not only a built-in subset."
+	return "Use the selected client's embedded CUA Driver for native desktop actions. When computer status reports cua=true, read skill cua-driver/SKILL.md and WORKFLOW.md. action=tools returns a compact catalog; action=tools with tool=<exact name> returns that tool's complete input schema. Fetch the needed schema before action=call; never guess parameters or repeatedly load the full inventory. RDev creates and owns the session: no create_session, session ID, standalone CLI or cloud login is needed. For virtual cursors follow the skill's enable/place/verify workflow; the overlay is distinct from the system pointer and ends with session cleanup. Before EVERY action=call (even a read-only call), take a fresh computer screenshot on the same device/source; one call consumes it. action=tools needs no screenshot. Native coordinates follow each discovered schema, not necessarily computer screenshot pixels. Verify outcomes with fresh observations; success, enabled=true and unverifiable are not proof of visible effect. Fall back to computer input only for unsupported capability or an absent action, never permission denial, takeover or an uncertain result."
 }
 func (*cuaTool) Schema() json.RawMessage {
-	return json.RawMessage(`{"type":"object","properties":{"action":{"type":"string","enum":["tools","call"]},"tool":{"type":"string","maxLength":128,"description":"Exact tool name returned by action=tools"},"arguments":{"type":"object","description":"Arguments matching that tool's returned input schema"},"source":{"type":"string"},"device":{"type":"string"}},"required":["action"],"additionalProperties":false}`)
+	return json.RawMessage(`{"type":"object","properties":{"action":{"type":"string","enum":["tools","call"]},"tool":{"type":"string","maxLength":128,"description":"Exact catalog name: optional for tools to fetch one complete input schema; required for call"},"arguments":{"type":"object","description":"Call arguments matching the selected tool's input schema"},"source":{"type":"string"},"device":{"type":"string"}},"required":["action"],"additionalProperties":false}`)
 }
 func (t *cuaTool) Summary(raw json.RawMessage) string { return automationSummary(raw) }
 func (t *cuaTool) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
@@ -47,7 +47,7 @@ func (t *cuaTool) Execute(ctx context.Context, raw json.RawMessage) (string, err
 	var encoded []byte
 	var err error
 	if args.Action == "tools" {
-		encoded, err = json.Marshal(map[string]any{"action": internalAction, "device": args.Device, "source": args.Source})
+		encoded, err = json.Marshal(map[string]any{"action": internalAction, "device": args.Device, "source": args.Source, "tool": args.Tool})
 	} else {
 		encoded, err = json.Marshal(map[string]any{"action": internalAction, "device": args.Device, "source": args.Source, "tool": args.Tool, "arguments": args.Arguments})
 	}

@@ -33,6 +33,7 @@ type agentAutomation struct {
 	mu           sync.Mutex
 	manualInputs int // transient manual-input interruption, not a control mode
 	paused       bool
+	retired      bool // terminal: resume must never revive tools from an old conversation
 	cancel       context.CancelFunc
 	pages        map[string]automationPage
 	screens      map[string]automationScreen
@@ -91,6 +92,10 @@ func (t *automationTool) begin(ctx context.Context) (context.Context, func(), er
 	}
 	t.state.mu.Lock()
 	defer t.state.mu.Unlock()
+	if t.state.retired {
+		t.state.opMu.Unlock()
+		return nil, nil, fmt.Errorf("automation resource was retired; use the current conversation")
+	}
 	if t.state.manualInputs > 0 {
 		t.state.opMu.Unlock()
 		return nil, nil, fmt.Errorf("manual desktop input is in progress; take a fresh screenshot before continuing")
@@ -101,7 +106,16 @@ func (t *automationTool) begin(ctx context.Context) (context.Context, func(), er
 	}
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	t.state.cancel = cancel
-	return ctx, func() { cancel(); t.state.mu.Lock(); t.state.cancel = nil; t.state.mu.Unlock(); t.state.opMu.Unlock() }, nil
+	return ctx, func() {
+		if ctx.Err() != nil {
+			t.srv.clearAutomationDesktop(t.state)
+		}
+		cancel()
+		t.state.mu.Lock()
+		t.state.cancel = nil
+		t.state.mu.Unlock()
+		t.state.opMu.Unlock()
+	}, nil
 }
 func (t *automationTool) publish(view automationView) {
 	t.state.mu.Lock()
@@ -160,8 +174,8 @@ func (h *agentWSHandler) handleAutomation(ac *agentConn, msg agentMsg) {
 			resource.opMu.Lock()
 			resource.screens = nil
 			closeDesktopAutomation(resource)
-			resource.opMu.Unlock()
 			h.srv.releaseAutomationDesktop(resource)
+			resource.opMu.Unlock()
 		}
 	}
 	h.srv.agentBroadcastTurn(ac.entry, th, agentMsg{Op: "automation", Automation: &view})
@@ -176,7 +190,10 @@ func (s *Server) releaseAutomationDesktop(state *agentAutomation) {
 	s.automationMu.Lock()
 	defer s.automationMu.Unlock()
 	for device, lease := range s.desktopOwners {
-		if lease.owner == state {
+		if lease.owner == state && !lease.cleaning && lease.manual == 0 {
+			if lease.timer != nil {
+				lease.timer.Stop()
+			}
 			delete(s.desktopOwners, device)
 		}
 	}
@@ -190,6 +207,7 @@ func (s *Server) retireAutomation(state *agentAutomation) {
 	}
 	state.mu.Lock()
 	state.paused = true
+	state.retired = true
 	state.mu.Unlock()
 	for _, resource := range state.group() {
 		s.retireAutomationResource(resource)
@@ -198,6 +216,7 @@ func (s *Server) retireAutomation(state *agentAutomation) {
 func (s *Server) retireAutomationResource(state *agentAutomation) {
 	state.mu.Lock()
 	state.paused = true
+	state.retired = true
 	if state.cancel != nil {
 		state.cancel()
 	}
@@ -205,7 +224,6 @@ func (s *Server) retireAutomationResource(state *agentAutomation) {
 	s.goAgent(func() {
 		state.opMu.Lock()
 		defer state.opMu.Unlock()
-		s.releaseAutomationDesktop(state)
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		for _, page := range state.pages {
@@ -221,6 +239,7 @@ func (s *Server) retireAutomationResource(state *agentAutomation) {
 		state.pages = nil
 		state.screens = nil
 		closeDesktopAutomation(state)
+		s.releaseAutomationDesktop(state)
 	})
 }
 
@@ -234,4 +253,24 @@ func closeDesktopAutomation(state *agentAutomation) {
 		d.close()
 	}
 	state.gpu = nil
+}
+
+// Caller holds opMu. Close input transports before making ownership available.
+func (s *Server) clearAutomationDesktop(state *agentAutomation) {
+	state.screens = nil
+	closeDesktopAutomation(state)
+	s.releaseAutomationDesktop(state)
+}
+
+// Called after a turn ends (including error/cancel), outside agentSessionsMu.
+// Unlike retirement, the same conversation may observe and acquire again.
+func (s *Server) finishAutomationTurn(state *agentAutomation) {
+	if state == nil {
+		return
+	}
+	for _, resource := range state.group() {
+		resource.opMu.Lock()
+		s.clearAutomationDesktop(resource)
+		resource.opMu.Unlock()
+	}
 }

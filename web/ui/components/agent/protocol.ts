@@ -183,6 +183,7 @@ export function parseAllThreads(v: unknown): AllThreadsDevice[] {
  * no pane shows it. auth_ok / thread_switched are deliberately absent (they
  * switch the view). */
 export const THREAD_SCOPED_OPS: Record<string, true> = {
+  autonomy: true,
   participants: true,
   automation: true,
   assistant_start: true,
@@ -223,6 +224,7 @@ export const THREAD_SCOPED_OPS: Record<string, true> = {
 /* Subset of THREAD_SCOPED_OPS that mutates a pane's transcript state (the
  * rest feeds the page-level right panel / dialogs, current thread only). */
 export const TRANSCRIPT_OPS: Record<string, true> = {
+  autonomy: true,
   assistant_start: true,
   thread_peeked: true,
   turn_start: true,

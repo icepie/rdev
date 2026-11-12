@@ -50,28 +50,27 @@ function pathArgOf(tool: ToolItem): string | null {
   return typeof path === "string" && path ? path : null;
 }
 
-/* bb ToolCallDetailBlock formatArgValue, compact variant: strings raw,
- * everything else JSON.stringify without indent. */
+/* bb ToolCallDetailBlock: strings raw, structured arguments indented. */
 function formatArgValue(value: unknown): string {
   if (typeof value === "string") return value;
   if (value === null) return "null";
   if (typeof value === "number" || typeof value === "boolean")
     return String(value);
-  return JSON.stringify(value) ?? "undefined";
+  return JSON.stringify(value, null, 2) ?? "undefined";
 }
 
 /* Standard result card shared by non-command bodies. The server already
  * bounds stored output; keep its retained tail and truncation marker intact. */
-function ResultCard({ tool }: { tool: ToolItem; t: Translator }) {
+function ResultCard({ tool, embedded = false }: { tool: ToolItem; t: Translator; embedded?: boolean }) {
   const result = tool.result;
   return (
     <div
       className={cn(
-        "overflow-hidden rounded-lg border bg-card",
-        tool.isError ? "border-destructive" : "border-border",
+        !embedded && "overflow-hidden rounded-lg border bg-card",
+        !embedded && (tool.isError ? "border-destructive" : "border-border"),
       )}
     >
-      <div className="max-h-72 overflow-auto px-4 py-3 font-mono text-xs leading-tight break-words whitespace-pre-wrap text-foreground select-text">
+      <div className={cn("max-h-72 overflow-auto font-mono text-xs leading-tight whitespace-pre text-foreground select-text", !embedded && "px-4 py-3")}>
         <SyntaxCode code={result || "…"} language={tool.name === "read_file" ? pathArgOf(tool)?.split(".").pop() ?? "text" : /^[\s]*[\[{]/.test(result) ? "json" : "text"} />
       </div>
     </div>
@@ -95,11 +94,10 @@ function ArgsBlock({
       ? [["args", tool.args]]
       : [];
   if (entries.length === 0) return null;
-  const joined = entries.map(([k, v]) => `${k}: ${v}`).join("\n");
+  const joined = [tool.name, ...entries.map(([k, v]) => `${k}: ${v}`)].join("\n");
   const collapsible = joined.split("\n").length > 3 || joined.length > 240;
   return (
-    <div className="overflow-hidden rounded-lg border border-border bg-card">
-      <div className="px-4 py-3 font-mono text-xs leading-tight text-foreground select-text">
+    <div className="font-mono text-xs leading-tight text-foreground select-text">
         <div className="relative">
           <div
             className={cn(
@@ -107,11 +105,12 @@ function ArgsBlock({
               collapsible && !expanded && "line-clamp-3",
             )}
           >
+            <span className="font-semibold">{tool.name}</span>
             {entries.map(([key, value]) => (
               <Fragment key={key}>
                 {"\n"}
                 <span className="text-muted-foreground">{key}: </span>
-                <SyntaxCode code={value} language="json" className="[&_.sh__line]:min-w-0" />
+                <span>{value}</span>
               </Fragment>
             ))}
           </div>
@@ -140,7 +139,6 @@ function ArgsBlock({
             </button>
           </div>
         )}
-      </div>
     </div>
   );
 }
@@ -231,10 +229,18 @@ function ToolRowBody({
   const skipResult =
     kind === "todo" && (result === "" || result === "{}");
   return (
-    <>
+    <div className={cn("overflow-hidden rounded-lg border bg-card px-4 py-3", tool.isError ? "border-destructive" : "border-border")}>
       <ArgsBlock tool={tool} t={t} />
-      {!skipResult && <ResultCard tool={tool} t={t} />}
-    </>
+      {!skipResult && (
+        <div className={cn(tool.args.trim() && tool.args.trim() !== "{}" && "mt-2 border-t border-border pt-2")}>
+          {tool.name === "grep" || tool.name === "glob" ? (
+            <CommandOutputBody tool={tool} t={t} embedded />
+          ) : (
+            <ResultCard tool={tool} t={t} embedded />
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 

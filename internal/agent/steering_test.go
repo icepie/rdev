@@ -82,3 +82,47 @@ func TestSteeringRemainsQueuedWhenCanceledOrOutOfRounds(t *testing.T) {
 		})
 	}
 }
+
+func TestCancellationDuringFinalResponseIsNotReportedAsSuccess(t *testing.T) {
+	provider, hits := newFakeProvider(t, sseChunk("partial", "")+sseDone)
+	defer provider.Close()
+	ctx, cancel := context.WithCancel(t.Context())
+	session := New(testConfig(provider.URL, nil))
+	var events []Event
+	result, err := session.Run(ctx, "start", func(event Event) {
+		events = append(events, event)
+		if event.Type == EventTextDelta {
+			cancel()
+		}
+	})
+	if err != context.Canceled || result != "" || hits.Load() != 1 {
+		t.Fatalf("result=%q err=%v requests=%d", result, err, hits.Load())
+	}
+	if len(eventsOfType(events, EventDone)) != 0 {
+		t.Fatalf("canceled response emitted done: %+v", events)
+	}
+	history := session.History()
+	if len(history) != 2 || history[1].Role != "assistant" || history[1].Content != "partial" {
+		t.Fatalf("partial visible response was not retained: %+v", history)
+	}
+}
+
+func TestCancellationAtTurnLimitWinsOverLimitError(t *testing.T) {
+	call := sseToolCall("c1", "cancel", `{}`)
+	provider, hits := newFakeProvider(t, sseChunk("", "", call)+sseDone)
+	defer provider.Close()
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	tool := &cancelingTool{fakeTool: fakeTool{name: "cancel"}, cancel: cancel}
+	cfg := testConfig(provider.URL, []Tool{tool})
+	cfg.MaxTurns = 1
+	session := New(cfg)
+	_, err := session.Run(ctx, "start", func(Event) {})
+	if err != context.Canceled || !tool.ran || hits.Load() != 1 {
+		t.Fatalf("err=%v ran=%v requests=%d", err, tool.ran, hits.Load())
+	}
+	history := session.History()
+	if len(history) != 3 || len(history[1].ToolCalls) != 1 || history[2].Role != "tool" || history[2].ToolCallID != "c1" {
+		t.Fatalf("canceled tool call lost its result pair: %+v", history)
+	}
+}

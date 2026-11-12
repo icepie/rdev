@@ -122,20 +122,37 @@ function Convert-RDevSafeName([string]$Value) {
     return ($Value -replace '[^A-Za-z0-9_.-]', '-')
 }
 
-function Get-RDevLatestTag([string]$Server) {
+function ConvertFrom-RDevJson([string]$Json) {
+    if (Get-Command ConvertFrom-Json -EA SilentlyContinue) { return ($Json | ConvertFrom-Json) }
+    # PowerShell 2.0 has no ConvertFrom-Json; use the Windows .NET serializer.
+    Add-Type -AssemblyName System.Web.Extensions
+    $Serializer = New-Object System.Web.Script.Serialization.JavaScriptSerializer
+    $Serializer.MaxJsonLength = 16777216
+    return $Serializer.DeserializeObject($Json)
+}
+
+function Get-RDevLatestTag([string]$Server, [string]$Asset) {
     $Base = Get-RDevServerHttpBase $Server
     if ($Base) {
         try {
-            $json = Get-RDevText "$Base/api/release/latest"
-            if ($json -match '"tag"\s*:\s*"([^"]+)"') { return $Matches[1] }
+            $Release = ConvertFrom-RDevJson (Get-RDevText "$Base/api/release/latest?asset=$([Uri]::EscapeDataString($Asset))")
+            # Older servers ignore asset and return the repository-wide tag.
+            if ($Release.asset -eq $Asset -and $Release.fresh -eq $true -and $Release.tag -match '^v[0-9]+\.[0-9]+\.[0-9]+$') {
+                return $Release.tag
+            }
         } catch {}
     }
-    try {
-        $json = Get-RDevText "https://api.github.com/repos/$script:Repo/releases/latest"
-        if ($json -match '"tag_name"\s*:\s*"([^"]+)"') { return $Matches[1] }
-    } catch {}
-    Write-Host "  Latest tag could not be resolved; using cache key 'latest'." -ForegroundColor DarkGray
-    return 'latest'
+    for ($Page = 1; ; $Page++) {
+        $Releases = @(ConvertFrom-RDevJson (Get-RDevText "https://api.github.com/repos/$script:Repo/releases?per_page=100&page=$Page"))
+        foreach ($Release in $Releases) {
+            if ($Release.draft -or $Release.prerelease -or $Release.tag_name -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+$') { continue }
+            foreach ($Candidate in $Release.assets) {
+                if ($Candidate.name -eq $Asset) { return $Release.tag_name }
+            }
+        }
+        if ($Releases.Count -lt 100) { break }
+    }
+    throw "No published stable release contains $Asset. Specify -Version only if that release provides this exact client."
 }
 
 function Enter-RDevCacheLock([string]$CacheDir) {
@@ -417,10 +434,6 @@ function global:RDev {
     if ($Version) { if ($Version -like 'v*') { $Tag = $Version } else { $Tag = "v$Version" } } else {
         $Tag = 'latest'
     }
-    if ($Tag -eq 'latest') { $ResolvedTag = Get-RDevLatestTag $Server } else { $ResolvedTag = $Tag }
-    $SafeTag = Convert-RDevSafeName $ResolvedTag
-    $CacheBase = Join-Path $env:TEMP 'rdev-cache'
-    New-Item -ItemType Directory -Force -Path $CacheBase | Out-Null
 
     $Base = "https://github.com/$script:Repo/releases"
     if ($Client -eq 'rs') {
@@ -443,7 +456,15 @@ function global:RDev {
         $Asset = "rdev-client-windows-$Arch.exe"
         $PackageKind = 'exe'
     }
-    $GH_URL = if ($Tag -eq 'latest') { "$Base/latest/download/$Asset" } else { "$Base/download/$Tag/$Asset" }
+    if ($Tag -eq 'latest') {
+        try { $Tag = Get-RDevLatestTag $Server $Asset } catch { Write-Error "Release resolution failed: $($_.Exception.Message)"; return }
+    }
+    # Downloads and cache must use the same immutable, asset-specific release.
+    $ResolvedTag = $Tag
+    $SafeTag = Convert-RDevSafeName $Tag
+    $CacheBase = Join-Path $env:TEMP 'rdev-cache'
+    New-Item -ItemType Directory -Force -Path $CacheBase | Out-Null
+    $GH_URL = "$Base/download/$Tag/$Asset"
 
     # ── Download helper ──────────────────────────────────────
     function Dl([string]$Url, [string]$Out) {

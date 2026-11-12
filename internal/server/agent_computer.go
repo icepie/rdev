@@ -24,7 +24,7 @@ type computerTool struct{ automationTool }
 func (*computerTool) Name() string                       { return "computer" }
 func (*computerTool) Summary(raw json.RawMessage) string { return automationSummary(raw) }
 func (*computerTool) Description() string {
-	return "View and operate the selected client's REAL desktop. status lists screens and input capabilities. screenshot returns the selected screen; use its pixel coordinates for click/drag/scroll. key sends a key with optional modifiers. text pastes Unicode through the device clipboard (replaces its contents). On pure-Go clients, use the observe-plan-act-verify loop: inspect a fresh screenshot, ground one input in visible pixels, then take another screenshot to verify; never chain blind coordinate actions. Screen control is exclusive to this conversation until release, user takeover, or 2 minutes idle. Always inspect a fresh screenshot before coordinate input. Browser work should normally use the browser tool instead."
+	return "Observe and operate the selected client's REAL desktop. Start with status for live screens, input capability and cua support; do not infer capability from old conversation claims. When cua=true, read the cua-driver skill and discover cua action=tools; prefer its semantic/accessibility actions. Use computer input only when CUA is unsupported or the discovered tools cannot perform the action, never to bypass permission denial, takeover or uncertain outcomes. Use computer screenshot before each computer input or native CUA call and again afterward; even read-only CUA calls consume the observation. For computer click/drag/scroll use this screenshot's pixels and source; native CUA tools have their own schema-defined coordinate spaces. key sends one press/release with optional modifiers; text enters Unicode (replacing the clipboard on Go clients). Screen control is exclusive until release, turn completion, error/cancel, human takeover or 2 minutes idle. These events close the native session and its cursor overlay. Use computer/CUA for the device's installed browser and existing logged-in tabs; browser operates a separate server-hosted browser, not that desktop session."
 }
 func (*computerTool) Schema() json.RawMessage {
 	return json.RawMessage(`{"type":"object","properties":{"device":{"type":"string"},"action":{"type":"string","enum":["status","screenshot","click","drag","scroll","key","text","release"]},"source":{"type":"string"},"x":{"type":"integer","minimum":0},"y":{"type":"integer","minimum":0},"toX":{"type":"integer","minimum":0},"toY":{"type":"integer","minimum":0},"deltaX":{"type":"integer","minimum":-2000,"maximum":2000},"deltaY":{"type":"integer","minimum":-2000,"maximum":2000},"button":{"type":"integer","minimum":0,"maximum":2},"key":{"type":"string","maxLength":64},"code":{"type":"string","maxLength":64},"ctrl":{"type":"boolean"},"alt":{"type":"boolean"},"shift":{"type":"boolean"},"meta":{"type":"boolean"},"text":{"type":"string","maxLength":20000}},"required":["action"],"additionalProperties":false}`)
@@ -36,45 +36,132 @@ type computerAction struct {
 	Ctrl, Alt, Shift, Meta                  bool
 }
 type desktopAutomationLease struct {
-	owner *agentAutomation
-	tool  automationTool
-	until time.Time
+	owner    *agentAutomation
+	tool     automationTool
+	until    time.Time
+	cleaning bool
+	manual   int
+	timer    *time.Timer
 }
 
+// The caller holds its resource opMu. Never wait on another resource while
+// holding automationMu: old input must drain before its lease can be replaced.
 func (t *automationTool) claim(device string) error {
-	t.srv.automationMu.Lock()
-	defer t.srv.automationMu.Unlock()
-	if t.srv.desktopOwners == nil {
-		t.srv.desktopOwners = make(map[string]desktopAutomationLease)
+	t.state.mu.Lock()
+	defer t.state.mu.Unlock()
+	if t.state.retired || t.state.paused || t.state.manualInputs > 0 {
+		return fmt.Errorf("desktop automation is interrupted or retired; take a fresh screenshot after resuming")
 	}
-	lease := t.srv.desktopOwners[device]
-	if lease.owner != nil && lease.owner != t.state && time.Now().Before(lease.until) {
-		return fmt.Errorf("desktop is controlled by another conversation; release it or wait until its lease expires")
+	s := t.srv
+	s.automationMu.Lock()
+	if s.desktopOwners == nil {
+		s.desktopOwners = make(map[string]desktopAutomationLease)
 	}
-	t.srv.desktopOwners[device] = desktopAutomationLease{owner: t.state, tool: *t, until: time.Now().Add(2 * time.Minute)}
+	lease := s.desktopOwners[device]
+	if lease.cleaning || lease.manual > 0 {
+		s.automationMu.Unlock()
+		return fmt.Errorf("desktop control is being released; retry a fresh screenshot once cleanup completes")
+	}
+	if lease.owner != nil && lease.owner != t.state {
+		if time.Now().Before(lease.until) {
+			s.automationMu.Unlock()
+			return fmt.Errorf("desktop is controlled by conversation %q for up to %s more; stop/release that conversation or use Take control, then resume and take a fresh screenshot", lease.tool.thread.id, time.Until(lease.until).Round(time.Second))
+		}
+		if !lease.owner.opMu.TryLock() {
+			s.automationMu.Unlock()
+			return fmt.Errorf("previous desktop input is still draining; retry a fresh screenshot after it finishes")
+		}
+		lease.cleaning = true
+		s.desktopOwners[device] = lease
+		s.automationMu.Unlock()
+		lease.owner.screens = nil
+		closeDesktopAutomation(lease.owner)
+		lease.owner.opMu.Unlock()
+		s.automationMu.Lock()
+		current := s.desktopOwners[device]
+		if current.owner != lease.owner || current.until != lease.until || current.manual > 0 {
+			s.automationMu.Unlock()
+			return fmt.Errorf("manual desktop input is in progress; take a fresh screenshot afterward")
+		}
+	}
+	if lease.timer != nil {
+		lease.timer.Stop()
+	}
+	until := time.Now().Add(2 * time.Minute)
+	lease = desktopAutomationLease{owner: t.state, tool: *t, until: until}
+	lease.timer = time.AfterFunc(time.Until(until), func() { s.expireAutomationDesktop(device, t.state, until) })
+	s.desktopOwners[device] = lease
+	s.automationMu.Unlock()
 	return nil
 }
-func (s *Server) interruptDesktopAutomation(device string) {
+
+func (s *Server) expireAutomationDesktop(device string, state *agentAutomation, until time.Time) {
+	state.opMu.Lock()
+	defer state.opMu.Unlock()
 	s.automationMu.Lock()
 	lease := s.desktopOwners[device]
-	s.automationMu.Unlock()
-	if lease.owner == nil {
+	if lease.owner != state || lease.until != until || lease.cleaning || lease.manual > 0 || time.Now().Before(until) {
+		s.automationMu.Unlock()
 		return
 	}
-	lease.owner.mu.Lock()
-	lease.owner.manualInputs++
-	defer func() { lease.owner.mu.Lock(); lease.owner.manualInputs--; lease.owner.mu.Unlock() }()
-	if lease.owner.cancel != nil {
-		lease.owner.cancel()
+	lease.cleaning = true
+	s.desktopOwners[device] = lease
+	s.automationMu.Unlock()
+	state.screens = nil
+	closeDesktopAutomation(state)
+	s.automationMu.Lock()
+	if current := s.desktopOwners[device]; current.owner == state && current.until == until && current.manual == 0 {
+		delete(s.desktopOwners, device)
 	}
-	view := lease.owner.view
-	lease.owner.mu.Unlock()
-	lease.owner.opMu.Lock()
-	lease.owner.screens = nil
-	closeDesktopAutomation(lease.owner)
-	lease.owner.opMu.Unlock()
-	s.releaseAutomationDesktop(lease.owner)
-	lease.tool.publish(view)
+	s.automationMu.Unlock()
+}
+func (s *Server) interruptDesktopAutomation(device string) {
+	s.beginDesktopManualInput(device)()
+}
+
+// The caller holds this device-wide reservation until human input is sent.
+func (s *Server) beginDesktopManualInput(device string) func() {
+	s.automationMu.Lock()
+	if s.desktopOwners == nil {
+		s.desktopOwners = make(map[string]desktopAutomationLease)
+	}
+	lease := s.desktopOwners[device]
+	lease.manual++
+	if lease.timer != nil {
+		lease.timer.Stop()
+	}
+	s.desktopOwners[device] = lease
+	s.automationMu.Unlock()
+	if lease.owner != nil {
+		lease.owner.mu.Lock()
+		lease.owner.manualInputs++
+		if lease.owner.cancel != nil {
+			lease.owner.cancel()
+		}
+		view := lease.owner.view
+		lease.owner.mu.Unlock()
+		lease.owner.opMu.Lock()
+		lease.owner.screens = nil
+		closeDesktopAutomation(lease.owner)
+		lease.owner.opMu.Unlock()
+		lease.tool.publish(view)
+	}
+	return func() {
+		if lease.owner != nil {
+			lease.owner.mu.Lock()
+			lease.owner.manualInputs--
+			lease.owner.mu.Unlock()
+		}
+		s.automationMu.Lock()
+		current := s.desktopOwners[device]
+		current.manual--
+		if current.manual <= 0 {
+			delete(s.desktopOwners, device)
+		} else {
+			s.desktopOwners[device] = current
+		}
+		s.automationMu.Unlock()
+	}
 }
 
 // An agent capture is a regular client desktop session with a bounded mailbox,
@@ -131,7 +218,7 @@ func (t *computerTool) Execute(ctx context.Context, raw json.RawMessage) (string
 		return t.executeGPU(ctx, client, a, raw)
 	}
 	if a.Action == "status" {
-		return marshalJobResult(map[string]any{"device": client.ID, "desktop": client.Desktop, "cua": false})
+		return marshalJobResult(map[string]any{"device": client.ID, "desktop": client.Desktop, "cua": client.Desktop != nil && client.Desktop.NativeCua})
 	}
 	if a.Action == "release" {
 		if !t.state.opMu.TryLock() {
@@ -147,11 +234,7 @@ func (t *computerTool) Execute(ctx context.Context, raw json.RawMessage) (string
 			d.close()
 			delete(t.state.gpu, client.ID)
 		}
-		t.srv.automationMu.Lock()
-		if t.srv.desktopOwners[client.ID].owner == t.state {
-			delete(t.srv.desktopOwners, client.ID)
-		}
-		t.srv.automationMu.Unlock()
+		t.srv.releaseAutomationDesktop(t.state)
 		return "Desktop released.", nil
 	}
 	if client.Desktop == nil || !client.Desktop.Supported {
@@ -179,6 +262,12 @@ func (t *computerTool) Execute(ctx context.Context, raw json.RawMessage) (string
 		return "", err
 	}
 	defer finish()
+	success := false
+	defer func() {
+		if !success {
+			t.srv.clearAutomationDesktop(t.state)
+		}
+	}()
 	screen := t.state.screens[client.ID]
 	if a.Source == "" && screen.client == client {
 		a.Source = screen.source
@@ -193,6 +282,9 @@ func (t *computerTool) Execute(ctx context.Context, raw json.RawMessage) (string
 		if a.Source != screen.source {
 			return "", fmt.Errorf("screen changed; take a new screenshot")
 		}
+		// Consume freshness without losing the user's selected monitor.
+		screen.at = time.Time{}
+		t.state.screens[client.ID] = screen
 	}
 	if err = t.claim(client.ID); err != nil {
 		return "", err
@@ -203,7 +295,6 @@ func (t *computerTool) Execute(ctx context.Context, raw json.RawMessage) (string
 		return "", err
 	}
 	id, capture, request, ready := session.id, session.capture, session.request, session.ready
-	success := false
 	defer func() {
 		if !request.OnDemand || !success {
 			session.close()
@@ -215,6 +306,13 @@ func (t *computerTool) Execute(ctx context.Context, raw json.RawMessage) (string
 	}
 	if a.Action != "screenshot" && (ready.Width != screen.width || ready.Height != screen.height) {
 		return "", fmt.Errorf("screen dimensions changed; take a new screenshot")
+	}
+	if a.Action != "screenshot" && client.Desktop.NativeCua {
+		result, handled, err := preferComputerCua(ctx, session.cuaRequest, client, a, raw, ready.Width, ready.Height)
+		if handled {
+			success = err == nil && !cuaResultFailed(json.RawMessage(result))
+			return result, err
+		}
 	}
 	// prepareInput shares the exact validation/coordinate rules with manual UI.
 	bc := &desktopBrowserConn{client: client, authOK: true, session: id, request: request, frameWidth: ready.Width, frameHeight: ready.Height}

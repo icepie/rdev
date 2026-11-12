@@ -87,16 +87,18 @@ type responseEvent struct {
 	Arguments   string          `json:"arguments"`
 	Item        json.RawMessage `json:"item"`
 	Message     string          `json:"message"`
+	Code        string          `json:"code"`
 	Response    struct {
 		Status string            `json:"status"`
 		Output []json.RawMessage `json:"output"`
 		Usage  struct {
-			Input  int `json:"input_tokens"`
-			Output int `json:"output_tokens"`
+			Input        int `json:"input_tokens"`
+			Output       int `json:"output_tokens"`
+			InputDetails struct {
+				CachedTokens int `json:"cached_tokens"`
+			} `json:"input_tokens_details"`
 		} `json:"usage"`
-		Error struct {
-			Message string `json:"message"`
-		} `json:"error"`
+		Error      providerErrorDetail `json:"error"`
 		Incomplete struct {
 			Reason string `json:"reason"`
 		} `json:"incomplete_details"`
@@ -167,6 +169,9 @@ func readResponsesStream(body io.Reader, scope string, onText, onReasoning func(
 				call.Arguments = event.Arguments
 			}
 		case "response.failed", "response.incomplete":
+			if event.Response.Error.contextOverflow() {
+				return false, providerStreamError(event.Type, event.Response.Error)
+			}
 			detail := event.Response.Error.Message
 			if detail == "" {
 				detail = event.Response.Incomplete.Reason
@@ -176,7 +181,7 @@ func readResponsesStream(body io.Reader, scope string, onText, onReasoning func(
 			}
 			return false, fmt.Errorf("agent: %s: %s", event.Type, detail)
 		case "error":
-			return false, fmt.Errorf("agent: Responses error: %s", event.Message)
+			return false, providerStreamError("Responses error", providerErrorDetail{Code: event.Code, Message: event.Message})
 		case "response.completed":
 			if event.Response.Status != "completed" {
 				return false, fmt.Errorf("agent: unexpected Responses status %q", event.Response.Status)
@@ -222,6 +227,7 @@ func readResponsesStream(body io.Reader, scope string, onText, onReasoning func(
 			final.Responses = &ResponseReplay{Scope: scope, Items: event.Response.Output}
 			assistant = final
 			usage = Usage{InputTokens: event.Response.Usage.Input, OutputTokens: event.Response.Usage.Output}
+			usage.CacheReadTokens = event.Response.Usage.InputDetails.CachedTokens
 			return true, nil
 		}
 		return false, nil

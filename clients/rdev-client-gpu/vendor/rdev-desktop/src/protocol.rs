@@ -44,7 +44,11 @@ pub enum MessageInbound {
 #[derive(Serialize, Deserialize, Debug)]
 pub enum MessageOutbound {
     CapturableList(Vec<String>),
-    AgentCapabilities { version: u32, #[serde(default)] cua: bool },
+    AgentCapabilities {
+        version: u32,
+        #[serde(default)]
+        cua: bool,
+    },
     CuaResult {
         #[serde(skip_serializing_if = "Option::is_none")]
         result: Option<serde_json::Value>,

@@ -6,6 +6,29 @@
 
 在输入框使用 `/compact` 压缩旧上下文，也可用 `/compact 保留错误和文件路径` 指定重点。压缩期间不向摘要模型提供工具；保留最新会话及完整工具调用/结果链。失败或取消不会替换原历史。上下文过短时返回无需压缩的错误。新建、重置、停止、模型切换等操作由输入区命令菜单和会话控件提供。
 
+提供方明确返回上下文超限时，当前模型请求尚无文本、思考、工具调用或原始回放进展才会自动摘要并重试，单轮最多恢复两次，不重跑已执行的工具。摘要输入按最多 24KiB 分块，超限时继续细分，合并必须缩小，最多请求 128 次；不再靠截掉旧工具输出静默腾空间。最新用户请求原样保留；单轮过大时，较早的完整工具组可进入摘要，保留部分仍保证调用与结果配对。失败、取消或历史并发变化不会提交该次摘要。
+
+自动摘要期间重连仍使用冻结的轮前记录加实时事件；完成、失败或停止时，若历史已被替换，终态同时刷新界面和持久历史，避免重复回放或旧索引覆盖消息元数据。摘要无法解决系统提示词、工具 schema 或最新请求本身超过窗口的情况，此时明确报错，不删除最新请求。
+
+原生 CUA 能力发现先返回工具名和简短描述目录，再通过 `cua action=tools, tool=<完整工具名>` 按需读取单个完整 schema；调用参数必须以该 schema 为准。GPU 会话内部保留完整后端目录用于校验，不把全部 schema 重复注入模型上下文。
+
+输入框在断线、设备离线和停止等待期间仍可编辑草稿；断线或停止回执到达前禁止发送。运行中 Enter 排队，Ctrl/⌘+Enter 追加指导；输入框内 Esc 优先关闭 slash 菜单，否则请求停止，中文输入法组合期间不触发停止。停止不会清空当前草稿，按钮和状态行显示“停止中”，收到终态后恢复发送。已消费的追加指导消息单独标记，区别于普通新轮次。
+
+前台取消优先于最终回答完成和最大轮次数限制：取消期间不再发送成功 `done`，已显示的回答保留，已完成工具调用与结果成对保留；未消费的指导不在取消后追加到模型上下文。
+
+## 目标与循环执行
+
+`/goal set <objective>` 明确启用当前会话的目标模式；`/goal status`、`/goal pause`、`/goal resume`、`/goal drop` 查看、暂停、恢复或移除目标。只有显式启用后模型才获得 `goal` 工具（`op=get|complete`）；完成必须由模型调用 `complete` 确认，而不是把普通回答自动视为完成。目标状态是 `active`、`paused`、`complete`、`budget-limited`；drop 后为 null。目标与 token 预算、已消耗 token 一同持久化，冷启动将 active 恢复为 paused，不自动重新执行。预算计算新输入、缓存写入和输出，不重复计费缓存读取；达到预算停止继续执行，不能通过 resume 重置预算。
+
+`/loop [count|duration] [--while|--until '<command>'] <prompt>` 重复提示词，例如 `/loop 3 检查并修复测试`、`/loop 10m --until 'go test ./...' 修复失败项`。支持秒、分钟、小时以及 `1h30m`；省略限制则持续执行，省略提示词则等待下一条用户输入。`/loop status|pause|resume|off` 查看、暂停、恢复或关闭；状态为 `active`、`paused`、`complete`，off 后为 null。计数包括首次执行；条件在每次执行前检查：while 遇退出码 0 继续、1 完成，until 相反；其他退出码、超时或拒绝审批暂停循环。条件通过当前会话原设备的授权 shell 与工作目录执行，遵循 shell 审批策略，绝不在服务端宿主机执行。条件命令上限 30 秒，审批沿用五分钟上限。服务端协调线程不接受 shell 条件。暂停保留本次时长剩余预算，冷启动不自动重启，时长循环冷启动后的剩余预算视为耗尽。
+
+自动继续只在当前轮次历史保存和终态结束后入场，用户排队输入（包括正在编辑的队列项）优先。停止和错误暂停自动执行；重置、删除使已安排的执行失效。目标连续输出没有新活动或重复同样活动时自动暂停，需用户恢复。pause/drop/off 等控制即使当前轮次忙碌也立即改变自动执行状态，不作为普通提示排队；它们不取消已经执行中的模型轮次，取消请使用停止。
+
+浏览器协议：`{op:"goal",action:"create|get|pause|resume|drop",thread?,objective?,tokenBudget?}`；`{op:"loop",action:"start|get|pause|resume|off",thread?,text?}`（text 为上述 OMP 风格参数）。服务端广播 `{op:"autonomy",thread,goal,loop,message?}`，错误只带 message，不冒充前台轮次终止；auth_ok/thread_switched/thread_peeked 同时携带 nullable goal/loop 快照。goal 形状为 `{objective,status,tokenBudget?,tokensUsed}`，loop 为 `{prompt,status,iteration,maxIterations?,durationMs?,condition?,until?}`。
+
+原生 RPC 使用 `{type:"goal",op:"create|get|pause|resume|drop",objective?,token_budget?,thread?,id?}`；rdev 的 loop 扩展使用 `{type:"loop",op:"start|get|pause|resume|off",text?,thread?,id?}`。`get_state` 返回同一份 goal/loop 状态，`get_available_commands` 同时列出 slash 命令和 RPC 参数；`prompt`、`steer`、`follow_up` 也能立即执行目标/循环控制命令。
+
+
 ## 后台任务与子 Agent
 
 模型可以调用以下工具，用户也可用自然语言要求创建任务：
@@ -13,7 +36,7 @@
 - `bg`：在远程设备上运行后台 shell，立即返回任务 ID。任务默认运行至实际完成；可设置 0–86400 秒超时，0 表示不设期限。非零退出码记为失败。
 - `jobs`：列出、读取、等待或取消本会话任务，也可用 `action="steer", id, message` 向运行中的 subagent 追加指导。单次等待最多 30 秒，等待超时不取消任务。
 - Subagent 指导在模型响应或工具批次结束后按 FIFO 接入；最后一次边界之后收到的指导继续在同一子会话执行，不会复用主会话历史或扩大已授予的工具权限。每条最多 4096 字节，最多待处理 8 条。完成、取消或关闭后拒绝新指导；取消/失败时未消费的指导可通过 `jobs read` 的 `pendingGuidance` 查看。入口包括 Agent 的 `jobs` 工具及任务面板的“追加指导”。面板使用线程隔离的 `steer_job` / `job_steered` 请求回执，仅确认接收后清空未修改的草稿；拒绝、15 秒未确认或断线时保留内容。切换任务保留本面板内的草稿，任务结束后可复制，刷新页面不保证恢复这些任务草稿。兼容 OMP RPC 的 `get_subagents`、`get_subagent_messages`、`steer_subagent` 和 `cancel_subagent` 接口，接受 OMP 的 `type` 命令帧及 `subagentId`/`message`/`fromByte` 字段，返回标准 `response`/`success`/`data`/`error` 回执；消息读取返回 `rdev://subagent/<id>` 有界输出窗口，游标超出窗口时将 `reset` 置为 true，不伪装成 OMP 持久化 session 文件。
-- OMP RPC 还提供 `negotiate_protocol`（当前版本 2）与 `get_available_commands`，其中 `commands` 按 OMP 语义返回可通过 `prompt.message` 执行的 slash 命令（compact/bg/subagent/jobs），包含 description、source 与 input.hint；rdev 扩展字段 `rpcCommands` 单独列出 RPC 方法及参数。旧客户端若依赖原先的 RPC 方法列表，应改读 `rpcCommands`。浏览器专用的 new/reset/stop/steer 控件不冒充 prompt slash 命令。
+- OMP RPC 还提供 `negotiate_protocol`（当前版本 2）与 `get_available_commands`，其中 `commands` 按 OMP 语义返回可通过 `prompt.message` 执行的 slash 命令（compact/bg/subagent/jobs/goal/loop），包含 description、source 与 input.hint；rdev 扩展字段 `rpcCommands` 单独列出 RPC 方法及参数。旧客户端若依赖原先的 RPC 方法列表，应改读 `rpcCommands`。浏览器专用的 new/reset/stop/steer 控件不冒充 prompt slash 命令。
 - `get_state` 返回指定线程的模型、流式/压缩状态、分开的 steering/follow-up 队列、后台任务 pending 状态、settled 状态、待办和 rdev 线程 URI；它读取服务端线程快照，不创建第二份会话状态。
 - `get_available_models` 返回 RPC 模型描述列表：`id` 是供应商内的原始模型 ID，`provider` 是供应商 ID，`canonicalId` 是 rdev 的 `provider/model` 扩展字段。`get_state.model` 使用同一描述，旧字符串引用改由 `modelRef` 提供；`set_model` 接受 OMP 的 `provider` + `modelId` 或旧版 rdev 的 `model`（两种格式不可混用），在目标线程空闲时切换模型并保留历史，运行中或未知线程/模型返回标准错误，避免把切换伪装成排队消息。
 - `set_thinking_level` 接受 `off`/`low`/`medium`/`high`，复用浏览器的设备级设置路径（影响该设备的所有线程；拒绝非空 `thread`，不伪装成线程独立设置）：空闲线程立即重建会话，运行线程在下一轮生效，并返回标准 response。
@@ -84,6 +107,7 @@ Agent 的 write_file/edit 使用按设备与路径隔离、可取消的写入锁
 - 桌面普通流与 GPU 流均按退避策略重连；设备暂时离线允许重试，密码错误停止自动重试，手动断开和设备切换取消旧连接重试。GPU 全局粘贴/IME 仅发送到当前获得焦点的桌面，鼠标悬停不抢焦点。
 
 - shell 输出在长度截断和旧历史自动压缩时分别缩短 stdout/stderr，保留退出状态与结构边界；旧版已压缩的 stdout 片段保留截断提示并隐藏原始包裹标签。
+- 工具详情参照 BB：工具名和 `key: value` 参数与结果共用一张卡片，长参数可展开；`grep`/`glob`（含 `device_tool` 包装）拆分 shell 的 stdout/stderr，隐藏传输标签，以独立页脚显示退出码。错误输出保留醒目提示；文件正文中的同名标签仍作为原始内容显示。
 
 - 浏览器断线不会自动拒绝待审批工具或问题；原有五分钟超时、停止/重置/删除仍会结束等待。重连重放待审批卡，未明确批准不会执行。恢复历史后的滚动在 React 提交消息后调度，保留手动向上阅读的位置。
 

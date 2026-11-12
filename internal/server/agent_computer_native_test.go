@@ -8,46 +8,33 @@ import (
 	"rdev/internal/protocol"
 )
 
-func TestComputerNativeCuaCorrelatesClientResult(t *testing.T) {
-	srv, client, transport := newProxyTestServer(t, "cua-go-device", "")
-	client.Desktop = &protocol.DesktopCapabilities{
-		Supported: true,
-		NativeCua:  true,
-		Sources:   []protocol.DesktopSource{{ID: "screen:primary"}},
-	}
-	tool := &computerTool{automationTool: testAutomation(t, srv, client.ID, "thread")}
-	t.Cleanup(func() {
-		tool.state.opMu.Lock()
-		closeDesktopAutomation(tool.state)
-		tool.state.opMu.Unlock()
-	})
-	transport.onSend = func(msg *protocol.Message) {
-		switch msg.Type {
-		case protocol.MsgDesktopStart:
-			srv.handleDesktopMessage(&protocol.Message{
-				Type: protocol.MsgDesktopReady, SessionID: msg.SessionID,
-				Width: 1280, Height: 720, Format: "mjpeg",
-			})
-		case protocol.MsgDesktopCua:
-			var request map[string]any
-			if err := json.Unmarshal(msg.CuaRequest, &request); err != nil {
-				t.Errorf("decode Cua request: %v", err)
-				return
+func TestComputerStatusCUACapability(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		desktop *protocol.DesktopCapabilities
+		want    bool
+	}{
+		{"native", &protocol.DesktopCapabilities{Supported: true, NativeCua: true}, true},
+		{"plain", &protocol.DesktopCapabilities{Supported: true}, false},
+		{"no-desktop", nil, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, client, _ := newProxyTestServer(t, "device", "")
+			client.Desktop = tc.desktop
+			tool := &computerTool{testAutomation(t, srv, client.ID, "thread")}
+			out, err := tool.Execute(context.Background(), json.RawMessage(`{"action":"status"}`))
+			if err != nil {
+				t.Fatal(err)
 			}
-			if request["action"] != "tools" {
-				t.Errorf("request action = %v, want tools", request["action"])
+			var status struct {
+				Cua bool `json:"cua"`
 			}
-			srv.handleDesktopMessage(&protocol.Message{
-				Type: protocol.MsgDesktopCuaResult, SessionID: msg.SessionID,
-				RequestID: msg.RequestID, CuaResult: json.RawMessage(`{"tools":[{"name":"list_apps"}]}`),
-			})
-		}
-	}
-	result, err := tool.Execute(context.Background(), json.RawMessage(`{"action":"native_tools"}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result != `{"tools":[{"name":"list_apps"}]}` {
-		t.Fatalf("native tools result = %s", result)
+			if err := json.Unmarshal([]byte(out), &status); err != nil {
+				t.Fatal(err)
+			}
+			if status.Cua != tc.want {
+				t.Fatalf("status = %s, want cua=%v", out, tc.want)
+			}
+		})
 	}
 }

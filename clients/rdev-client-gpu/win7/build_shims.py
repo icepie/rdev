@@ -48,7 +48,16 @@ def main() -> None:
 
     build(args.gcc, root / "waitonaddress_shim.c", out_dir / "rdev-waitonaddress-shim.dll", [], use_mcrtdll)
     build(args.gcc, root / "bcprng_shim.c", out_dir / "rdev-bcprng.dll", [], use_mcrtdll)
-    build(args.gcc, root / "ws2_32_shim.c", out_dir / "rdevws.dll", ["-lws2_32"], use_mcrtdll)
+    # LLVM MinGW does not auto-export these Winsock declarations. Explicit
+    # forwarders also cover every socket import redirected by patch_imports.py;
+    # only GetHostNameW needs a local Windows 7 compatibility implementation.
+    build(
+        args.gcc,
+        root / "ws2_32_shim.c",
+        out_dir / "rdevws.dll",
+        [str(root / "ws2_32_shim.def"), "-lws2_32"],
+        use_mcrtdll,
+    )
 
 
 if __name__ == "__main__":

@@ -108,14 +108,14 @@ func (h *agentWSHandler) handleAgentRPCFrame(ac *agentConn, raw []byte) bool {
 		return true
 	}
 	// Reject mixed envelopes, rather than silently choosing between operations.
-	if _, ok := fields["op"]; ok {
+	if _, ok := fields["op"]; ok && request.Command != "goal" && request.Command != "loop" {
 		fail("invalid_request", "RPC frames must not contain op")
 		return true
 	}
 	if ac.deviceID != "" && ac.deviceID != agentServerDeviceID {
 		if _, online := h.srv.GetClient(ac.deviceID); !online {
 			switch request.Command {
-			case "get_state", "get_messages", "get_models", "get_available_models", "get_commands", "get_session_stats":
+			case "goal", "loop", "abort", "abort_and_restore_queue", "get_state", "get_messages", "get_models", "get_available_models", "get_commands", "get_session_stats":
 			default:
 				fail("device_offline", "Offline execution requires confirmation in the conversation UI")
 				return true
@@ -123,6 +123,29 @@ func (h *agentWSHandler) handleAgentRPCFrame(ac *agentConn, raw []byte) bool {
 		}
 	}
 	switch request.Command {
+	case "goal", "loop":
+		request.Op = request.Command
+		if err := rpcStringField(fields, "op", &request.Action, true); err != nil {
+			fail("invalid_request", err.Error())
+			return true
+		}
+		if err := rpcStringField(fields, "objective", &request.Objective, false); err != nil {
+			fail("invalid_request", err.Error())
+			return true
+		}
+		if err := rpcStringField(fields, "text", &request.Text, false); err != nil {
+			fail("invalid_request", err.Error())
+			return true
+		}
+		if raw, ok := fields["token_budget"]; ok {
+			var budget int64
+			if string(raw) == "null" || json.Unmarshal(raw, &budget) != nil || budget <= 0 {
+				fail("invalid_request", "token_budget must be a positive integer")
+				return true
+			}
+			request.TokenBudget = &budget
+		}
+		h.handleAutonomy(ac, request)
 	case "negotiate_protocol":
 		h.handleRPCProtocol(ac, request)
 	case "get_available_commands":
@@ -338,6 +361,15 @@ func (h *agentWSHandler) handleRPCPrompt(ac *agentConn, request agentMsg) {
 		h.writeRPCError(ac, request, "invalid_request", err.Error())
 		return
 	}
+	if control, ok := autonomySlash(request.Message); ok {
+		if len(images) > 0 {
+			h.writeRPCError(ac, request, "invalid_request", "autonomy commands do not accept images")
+			return
+		}
+		control.Thread, control.RPC, control.ID, control.Command = request.Thread, true, request.ID, request.Command
+		h.handleAutonomy(ac, control)
+		return
+	}
 	if strings.TrimSpace(request.Message) == "" && len(images) == 0 {
 		h.writeRPCError(ac, request, "invalid_request", "message must not be blank")
 		return
@@ -378,6 +410,15 @@ func (h *agentWSHandler) handleRPCQueuedInput(ac *agentConn, request agentMsg) {
 	images, err := parseRPCImages(request.Images)
 	if err != nil {
 		h.writeRPCError(ac, request, "invalid_request", err.Error())
+		return
+	}
+	if control, ok := autonomySlash(request.Message); ok {
+		if len(images) > 0 {
+			h.writeRPCError(ac, request, "invalid_request", "autonomy commands do not accept images")
+			return
+		}
+		control.Thread, control.RPC, control.ID, control.Command = request.Thread, true, request.ID, request.Command
+		h.handleAutonomy(ac, control)
 		return
 	}
 	text := strings.TrimSpace(request.Message)
@@ -441,11 +482,14 @@ func (h *agentWSHandler) handleRPCAbort(ac *agentConn, request agentMsg) {
 		return
 	}
 	cancel := th.cancel
+	pauseAutonomyLocked(th)
 	if cancel != nil {
 		th.queue = nil
 		denyApprovalsLocked(th)
 	}
 	s.agentSessionsMu.Unlock()
+	s.persistAutonomy(ac.entry, th)
+	s.publishAutonomy(ac.entry, th, "")
 	if cancel == nil {
 		// OMP treats abort as idempotent when no turn is active.
 		success := true
@@ -512,12 +556,15 @@ func (h *agentWSHandler) handleRPCAbortAndRestoreQueue(ac *agentConn, request ag
 		return
 	}
 	th.queue = nil
+	pauseAutonomyLocked(th)
 	denyApprovalsLocked(th)
 	cancel := th.cancel
 	if cancel != nil {
 		cancel()
 	}
 	s.agentSessionsMu.Unlock()
+	s.persistAutonomy(ac.entry, th)
+	s.publishAutonomy(ac.entry, th, "")
 	s.broadcastQueue(ac.entry, th)
 	success := true
 	ac.writeJSON(agentMsg{Type: "response", Command: request.Command, ID: request.ID, Success: &success, Data: raw})
@@ -542,13 +589,14 @@ func (h *agentWSHandler) handleRPCState(ac *agentConn, request agentMsg) {
 	}
 	snap := s.threadSnapshotLocked(ac.entry, th)
 	steering, followUp := splitRPCQueue(snap.queue, snap.queueModes)
-	pendingWork := th.jobs != nil && th.jobs.HasPendingWork()
+	pendingWork := th.autonomyPending || th.jobs != nil && th.jobs.HasPendingWork()
 	var modelInfo *rpcModel
 	if provider, model, _, err := s.Agent.Resolve(th.model); err == nil {
 		descriptor := describeRPCModel(provider, model)
 		modelInfo = &descriptor
 	}
 	state := map[string]any{
+		"goal": snap.goal, "loop": snap.loop,
 		"thread": threadID, "model": modelInfo, "modelRef": th.model, "isStreaming": snap.running,
 		"thinkingLevel": ac.entry.reasoningLevel,
 		"isCompacting":  snap.running && th.workingTool == "/compact",
@@ -735,6 +783,8 @@ func (h *agentWSHandler) handleRPCAvailableCommands(ac *agentConn, request agent
 	// discovery in a separate rdev extension, so palettes never advertise
 	// method names or browser-only controls as runnable prompt commands.
 	commands := []map[string]any{
+		{"name": "goal", "params": map[string]any{"op": "create|get|pause|resume|drop", "objective": "string?", "token_budget": "positive integer?", "thread": "string?"}},
+		{"name": "loop", "source": "rdev", "params": map[string]any{"op": "start|get|pause|resume|off", "text": "string?", "thread": "string?"}},
 		{"name": "get_jobs", "source": "rdev", "params": map[string]any{"thread": "string?"}},
 		{"name": "get_job", "source": "rdev", "params": map[string]any{"thread": "string?", "jobId": "string"}},
 		{"name": "cancel_job", "source": "rdev", "params": map[string]any{"thread": "string?", "jobId": "string|all"}},
@@ -765,6 +815,8 @@ func (h *agentWSHandler) handleRPCAvailableCommands(ac *agentConn, request agent
 	}{
 		RPCCommands: commands,
 		Commands: []map[string]any{
+			{"name": "goal", "description": "Set, inspect, pause, resume or drop a durable objective.", "input": map[string]any{"hint": "set <objective> | status | pause | resume | drop"}, "source": "builtin"},
+			{"name": "loop", "description": "Repeat a prompt with an optional count, duration or device-shell condition.", "input": map[string]any{"hint": "[count|duration] [--while|--until '<command>'] <prompt> | pause | resume | off | status"}, "source": "builtin"},
 			{"name": "jobs", "description": "Inspect or cancel this thread's background jobs.", "input": map[string]any{"hint": "[full|kill <id>|kill all]"}, "source": "builtin"},
 			{"name": "compact", "description": "Compact the current conversation context.", "input": map[string]any{"hint": "custom instructions?"}, "source": "builtin"},
 			{"name": "bg", "description": "Run a command in the background.", "input": map[string]any{"hint": "[--device <id>] command"}, "source": "builtin"},

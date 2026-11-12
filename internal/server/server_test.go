@@ -229,7 +229,7 @@ func TestLocalLatestReleaseTagPicksHighestSemver(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "v9.9.9"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if got := localLatestReleaseTag(dir); got != "v0.10.0" {
+	if got := localLatestReleaseTag(dir, ""); got != "v0.10.0" {
 		t.Fatalf("localLatestReleaseTag = %q, want v0.10.0", got)
 	}
 

@@ -454,7 +454,7 @@ func (s *Server) HandleGPUDesktopProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
-		proxyGPUDesktopWebSocket(w, r, tunnel, deviceID)
+		s.proxyGPUDesktopWebSocket(w, r, tunnel, deviceID)
 		return
 	}
 	proxyGPUDesktopHTTP(w, r, tunnel, deviceID)
@@ -520,7 +520,7 @@ func proxyGPUDesktopHTTP(w http.ResponseWriter, r *http.Request, tunnel *gpuDesk
 	}
 }
 
-func proxyGPUDesktopWebSocket(w http.ResponseWriter, r *http.Request, tunnel *gpuDesktopTunnel, deviceID string) {
+func (s *Server) proxyGPUDesktopWebSocket(w http.ResponseWriter, r *http.Request, tunnel *gpuDesktopTunnel, deviceID string) {
 	stream, err := tunnel.openStream()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
@@ -547,7 +547,7 @@ func proxyGPUDesktopWebSocket(w http.ResponseWriter, r *http.Request, tunnel *gp
 	if !tunnel.sendData(stream.id, rawReq) {
 		return
 	}
-	go pipeGPUDesktopClientToTunnel(clientConn, clientBuf, tunnel, stream.id)
+	go s.pipeGPUDesktopClientToTunnel(clientBuf.Reader, tunnel, stream.id, deviceID)
 	for data := range stream.data {
 		if _, err = clientConn.Write(data); err != nil {
 			return
@@ -555,24 +555,85 @@ func proxyGPUDesktopWebSocket(w http.ResponseWriter, r *http.Request, tunnel *gp
 	}
 }
 
-func pipeGPUDesktopClientToTunnel(conn io.Reader, reader *bufio.ReadWriter, tunnel *gpuDesktopTunnel, streamID uint64) {
+// Preserve native websocket bytes, including masking. Inspect only browser-to-
+// device messages so human input drains Agent input before entering the tunnel.
+func (s *Server) pipeGPUDesktopClientToTunnel(reader io.Reader, tunnel *gpuDesktopTunnel, streamID uint64, deviceID string) {
 	defer tunnel.sendClose(streamID)
-	if reader != nil && reader.Reader.Buffered() > 0 {
-		buffered, _ := io.ReadAll(reader.Reader)
-		if len(buffered) > 0 && !tunnel.sendData(streamID, buffered) {
-			return
-		}
-	}
-	buf := make([]byte, gpuDesktopTunnelChunkSize)
 	for {
-		n, err := conn.Read(buf)
-		if n > 0 && !tunnel.sendData(streamID, buf[:n]) {
-			return
-		}
+		frame, manual, err := readGPUDesktopClientFrame(reader)
 		if err != nil {
 			return
 		}
+		var release func()
+		if manual {
+			release = s.beginDesktopManualInput(deviceID)
+		}
+		sent := tunnel.sendData(streamID, frame)
+		if release != nil {
+			release()
+		}
+		if !sent {
+			return
+		}
 	}
+}
+
+func readGPUDesktopClientFrame(reader io.Reader) ([]byte, bool, error) {
+	var header [14]byte
+	if _, err := io.ReadFull(reader, header[:2]); err != nil {
+		return nil, false, err
+	}
+	n := 2
+	size := uint64(header[1] & 127)
+	if size == 126 {
+		if _, err := io.ReadFull(reader, header[2:4]); err != nil {
+			return nil, false, err
+		}
+		size, n = uint64(binary.BigEndian.Uint16(header[2:4])), 4
+	} else if size == 127 {
+		if _, err := io.ReadFull(reader, header[2:10]); err != nil {
+			return nil, false, err
+		}
+		size, n = binary.BigEndian.Uint64(header[2:10]), 10
+	}
+	if size > 16<<20 || header[1]&128 == 0 {
+		return nil, false, fmt.Errorf("invalid GPU browser websocket frame")
+	}
+	if _, err := io.ReadFull(reader, header[n:n+4]); err != nil {
+		return nil, false, err
+	}
+	n += 4
+	frame := make([]byte, n+int(size))
+	copy(frame, header[:n])
+	if _, err := io.ReadFull(reader, frame[n:]); err != nil {
+		return nil, false, err
+	}
+	opcode := header[0] & 15
+	if opcode >= 8 {
+		return frame, false, nil
+	}
+	// Fragmented/compressed data may contain input not visible in this frame.
+	if opcode != 1 || header[0]&0xf0 != 0x80 {
+		return frame, true, nil
+	}
+	payload := make([]byte, int(size))
+	for i := range payload {
+		payload[i] = frame[n+i] ^ header[n-4+i%4]
+	}
+	var command string
+	if json.Unmarshal(payload, &command) == nil {
+		return frame, command == "ReleaseKeyboard", nil
+	}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(payload, &fields) != nil {
+		return frame, true, nil
+	}
+	for _, key := range []string{"PointerEvent", "KeyboardEvent", "WheelEvent", "TextInputEvent", "Cua", "AutoJs"} {
+		if fields[key] != nil {
+			return frame, true, nil
+		}
+	}
+	return frame, false, nil
 }
 
 func buildGPUDesktopRawRequest(r *http.Request, deviceID string, websocketUpgrade bool) ([]byte, string, error) {

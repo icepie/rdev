@@ -212,10 +212,7 @@ type anthropicEvent struct {
 		PartialJSON string `json:"partial_json"`
 		StopReason  string `json:"stop_reason"`
 	} `json:"delta"`
-	Error struct {
-		Type    string `json:"type"`
-		Message string `json:"message"`
-	} `json:"error"`
+	Error providerErrorDetail `json:"error"`
 }
 
 type anthropicPendingBlock struct {
@@ -254,6 +251,7 @@ func readAnthropicStream(body io.Reader, scope string, onText, onReasoning func(
 			usage.OutputTokens = *u.Output
 		}
 		usage.InputTokens = input + cacheRead + cacheCreation
+		usage.CacheReadTokens = cacheRead
 	}
 	appendVisible := func(kind, delta string) {
 		if kind == "text" {
@@ -326,7 +324,7 @@ func readAnthropicStream(body io.Reader, scope string, onText, onReasoning func(
 			return false, nil
 		}
 		if event.Type == "error" {
-			return false, fmt.Errorf("agent: Anthropic %s: %s", event.Error.Type, event.Error.Message)
+			return false, providerStreamError("Anthropic error", event.Error)
 		}
 		if event.Type == "message_start" {
 			if started {

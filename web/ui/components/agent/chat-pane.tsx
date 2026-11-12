@@ -1,3 +1,4 @@
+import { AutonomyControls } from "./autonomy";
 import { ThreadTimelineLoadingSkeleton } from "../loading-skeletons";
 import { useComposerAutosize } from "./use-composer-autosize";
 import { needsAttachmentRaster, rasterizeAttachment } from "./attachment-raster";
@@ -153,7 +154,7 @@ export function ChatPaneView({
 }: ChatPaneViewProps) {
   const [offlineConfirmed, setOfflineConfirmed] = useState(false);
   useEffect(() => setOfflineConfirmed(false), [device, threadId, offline]);
-  const ready = connectionReady && (!offline || (offlineConfirmed && !sink.state.running));
+  const ready = connectionReady && !sink.state.stopping && (!offline || (offlineConfirmed && !sink.state.running));
   const modelReasoningLevels = models.find((item) => item.id === model)?.reasoningLevels;
   const supportedReasoning = REASONING_LEVELS.filter((item) => !modelReasoningLevels || modelReasoningLevels.includes(item.level));
   const reasoningOptions = supportedReasoning.length ? supportedReasoning : REASONING_LEVELS;
@@ -215,7 +216,9 @@ export function ChatPaneView({
       ? Math.max(0, Math.floor(((nowTick || Date.now()) - workingSince) / 1000))
       : 0;
 
-  const workingLabel = currentTool === "/compact"
+  const workingLabel = stopping
+    ? t("agent.stopping")
+    : currentTool === "/compact"
     ? t("agent.compacting")
     : currentTool
     ? t("agent.workingWithTool", { seconds: elapsedSeconds, tool: currentTool })
@@ -442,6 +445,18 @@ export function ChatPaneView({
           return sendRaw({ ...request.payload, thread: threadId });
         },
       },
+      ...(["goal", "loop"] as const).map(name => ({
+        name,
+        allowArgs: true,
+        needsArg: true,
+        label: t(`agent.autonomy.${name}`),
+        desc: t(`agent.autonomy.${name}Hint`),
+        icon: name === "goal" ? "ListTodo" : "RotateCcw",
+        run: (argument: string) => ready && sendRaw({
+          op: "chat", thread: threadId, model,
+          text: `/${name}${argument ? ` ${argument}` : " status"}`,
+        }),
+      })),
       {
         name: "compact",
         allowArgs: true,
@@ -664,7 +679,7 @@ export function ChatPaneView({
                   data-thread-message={item.key}
                   className="group/message ml-auto flex w-fit max-w-[70%] flex-col items-end"
                 >
-                  {item.steering && <span className="mb-1 flex items-center gap-1 text-xs text-muted-foreground"><Icon name="CornerDownRight" className="size-3" />Steer</span>}
+                  {item.steering && <span className="mb-1 flex items-center gap-1 text-xs text-muted-foreground"><Icon name="CornerDownRight" className="size-3" />{t("agent.steer")}</span>}
                   {item.images && item.images.length > 0 && (
                     <div className="mb-1 flex max-w-full flex-wrap justify-end gap-2">
                       {item.images.map((name, i) => item.imagePreviews?.[i] ? (
@@ -872,6 +887,7 @@ export function ChatPaneView({
       <div className="mx-auto w-full max-w-[760px] shrink-0 px-4 pb-2">
         <div className="grid grid-cols-[minmax(0,1fr)] gap-2">
         <JobsPanel open={jobsOpen} onOpenChange={setJobsOpen} full={jobsFull} sink={sink} threadId={threadId} ready={ready} sendRaw={sendRaw} t={t} />
+        <AutonomyControls state={state.autonomy} ready={ready} thread={threadId} send={sendRaw} t={t} />
         {/* bb prompt-stack banner: the todo checklist card sits directly
          * above the composer. */}
         {todos.length > 0 && <TodoCard todos={todos} t={t} />}
@@ -944,18 +960,20 @@ export function ChatPaneView({
               ))}
             </div>
           )}
+          {(!connectionReady || stopping || running) && <div role="status" className="px-4 pt-2 text-xs text-muted-foreground">
+            {!connectionReady ? t("agent.draftDisconnected") : stopping ? t("agent.stoppingDraft") : t("agent.runningInputHint")}
+          </div>}
           <Textarea
             ref={composerRef}
             rows={1}
             value={input}
-            disabled={!ready}
             role="combobox"
             aria-label={t("agent.composerPlaceholder")}
             aria-autocomplete="list"
             aria-expanded={slashOpen}
             aria-controls={slashOpen ? slashListId : undefined}
             aria-activedescendant={slashOpen ? `${slashListId}-${slashFiltered[Math.min(slashIndex, slashFiltered.length - 1)].name}` : undefined}
-            placeholder={t("agent.composerPlaceholder")}
+            placeholder={t(running ? "agent.composerRunningPlaceholder" : "agent.composerPlaceholder")}
             className="max-h-[max(68px,calc(50dvh-3rem))] min-h-[68px] w-full resize-none border-0 bg-transparent px-4 pt-3 pb-1 pr-14 text-sm leading-relaxed shadow-none placeholder:font-light placeholder:text-subtle-foreground/70 focus-visible:ring-0"
             onChange={(e) => setInput(e.target.value)}
             onPaste={(e) => {
@@ -993,6 +1011,12 @@ export function ChatPaneView({
                   setSlashDismissed(true);
                   return;
                 }
+              }
+              if (e.key === "Escape" && !composing && !e.repeat && running && !stopping) {
+                e.preventDefault();
+                e.stopPropagation();
+                sendStop();
+                return;
               }
               if (e.key === "Enter" && !e.shiftKey && !composing) {
                 e.preventDefault();
@@ -1103,16 +1127,16 @@ export function ChatPaneView({
                     <Button
                       variant="secondary"
                       size="icon"
-                      aria-label={t("agent.stop")}
+                      aria-label={t(stopping ? "agent.stopping" : "agent.stop")}
                       disabled={!connectionReady || !running || stopping}
                       aria-busy={stopping}
                       className={cn(COARSE_POINTER_PROMPT_ICON_ACTION_BUTTON_CLASS, "[&_[data-icon-root]]:size-3.5")}
                       onClick={sendStop}
                     >
-                      <Icon name="Square" className="fill-current [&_*]:stroke-0" />
+                      <Icon name={stopping ? "Spinner" : "Square"} className={stopping ? "animate-spin motion-reduce:animate-none" : "fill-current [&_*]:stroke-0"} />
                     </Button>
                   </TooltipTrigger>
-                  <TooltipContent>{t("agent.stop")}</TooltipContent>
+                  <TooltipContent>{stopping ? t("agent.stopping") : `${t("agent.stop")} · Esc`}</TooltipContent>
                 </Tooltip>
               )}
               {running ? (

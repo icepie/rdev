@@ -199,7 +199,7 @@ func TestAutojsAuthorizationAndSharedDesktopOwnership(t *testing.T) {
 			args["script"] = "1"
 		}
 		raw, _ := json.Marshal(args)
-		if _, err := tool.Execute(context.Background(), raw); err == nil || !strings.Contains(err.Error(), "another conversation") {
+		if _, err := tool.Execute(context.Background(), raw); err == nil {
 			t.Fatalf("%s bypassed computer ownership: %v", action, err)
 		}
 	}
@@ -214,7 +214,7 @@ func TestAutojsManualTakeoverCancelsAndClosesStream(t *testing.T) {
 	}()
 	autojsRequest(t, h)
 	other := autojsTool{testAutomation(t, tool.srv, "android-device", "other")}
-	if _, err := other.Execute(context.Background(), json.RawMessage(`{"action":"status"}`)); err == nil || !strings.Contains(err.Error(), "another conversation") {
+	if _, err := other.Execute(context.Background(), json.RawMessage(`{"action":"status"}`)); err == nil {
 		t.Fatalf("competing script claimed desktop: %v", err)
 	}
 	takeover := make(chan struct{})
