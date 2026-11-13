@@ -2,7 +2,7 @@
 
 Open **Browser** in the navigation, select an online device, and choose **Open browser**. The Agent secondary panel's new-tab page has the same Browser entry. Both attach to the browser belonging to the selected device. For a server Agent session, choose an exit device in the panel.
 
-Chrome runs on the rdev server. Its matching, built-in DevTools frontend is served by rdev and embedded with its native Screencast enabled. The frontend provides its own address bar, history navigation, reload, mouse/touch input and developer tools. The rdev toolbar selects page targets, opens new tabs, opens a full DevTools window and closes the browser. This is Chrome's remote rendered view, not reconstructed DOM or a local browser engine.
+Chrome runs on the rdev server. Its matching, built-in DevTools frontend is served by rdev and embedded with its native Screencast enabled. New sessions start at `about:blank`; enter an HTTP(S) URL in the RDev browser toolbar and press Enter or **Go** to navigate the selected tab. A bare hostname defaults to HTTPS; embedded credentials and non-HTTP(S) schemes are rejected. The toolbar also selects page targets, opens tabs, opens a full DevTools window and closes the browser. This is Chrome's remote rendered view, not reconstructed DOM or a local browser engine.
 
 ## Installation
 

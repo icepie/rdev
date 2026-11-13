@@ -561,6 +561,8 @@ func (f *ReverseForward) Result() (uint32, string) {
 
 // Server manages WebSocket clients and SSH proxy
 type Server struct {
+	schedulerMu         sync.Mutex
+	scheduler           *Scheduler
 	automationMu        sync.Mutex
 	desktopOwners       map[string]desktopAutomationLease
 	BrowserEnabled      bool // explicit opt-in for server-hosted Chrome
@@ -1278,6 +1280,8 @@ func (s *Server) handleClientMessage(client *ClientConn, msg *protocol.Message) 
 		s.handleFileManagerMessage(msg, client.ID)
 	case protocol.MsgDesktopReady, protocol.MsgDesktopClose, protocol.MsgDesktopClipboard, protocol.MsgDesktopCuaResult:
 		s.handleDesktopMessage(msg)
+	case protocol.MsgDesktopRTCSignal:
+		s.handleDesktopRTCSignal(client, msg)
 	}
 }
 

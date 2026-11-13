@@ -1,3 +1,4 @@
+import { connectDesktopRTC, type DesktopRTCConnection } from "../lib/desktop-webrtc";
 import { desktopOwnsKeyboard } from "../lib/desktop-input-focus";
 import { isImeComposing } from "../lib/keyboard";
 import { writeOwnedClipboard } from "../lib/clipboard-write";
@@ -324,6 +325,9 @@ function DesktopSession({
   const overlayRef = useRef<HTMLDivElement>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
+  const rtcRef = useRef<DesktopRTCConnection | null>(null);
+  const rtcSessionRef = useRef("");
+  const rtcDispatchRef = useRef(false);
   const connSeqRef = useRef(0);
   const connModeRef = useRef<ConnMode>("");
   const manualDisconnectRef = useRef(false);
@@ -978,8 +982,10 @@ function DesktopSession({
   /* ── GPU protocol ── */
 
   const gpuSend = (message: unknown) => {
+    const data = JSON.stringify(message);
+    if (rtcRef.current?.send(data)) return;
     const ws = wsRef.current;
-    if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(message));
+    if (ws && ws.readyState === WebSocket.OPEN) ws.send(data);
   };
 
   const gpuSendConfig = () => {
@@ -1174,14 +1180,21 @@ function DesktopSession({
 
   };
 
+  const sendDesktopRTC = (message: Record<string, unknown>) => {
+    const rtc = rtcRef.current;
+    if (connModeRef.current !== "desktop" || !rtcSessionRef.current || !rtc) return false;
+    return rtc.send(JSON.stringify({ sessionId: rtcSessionRef.current, ...message }));
+  };
   const requestRemoteClipboard = () => {
     if (!clipCapsRef.current || !clipboardSyncsRemoteToLocal() || clipReadPendingRef.current)
       return;
     clipReadPendingRef.current = true;
     const ws = wsRef.current;
     if (connModeRef.current === "gpu") gpuSend("GetClipboard");
-    else if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ op: "clipboard_get" }));
-    else clipReadPendingRef.current = false;
+    else if (!sendDesktopRTC({ type: "desktop_clipboard", clipboardAction: "get" })) {
+      if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ op: "clipboard_get" }));
+      else clipReadPendingRef.current = false;
+    }
   };
 
   const syncLocalClipboard = async () => {
@@ -1205,7 +1218,7 @@ function DesktopSession({
       clipPendingRemoteFpRef.current = fingerprint;
       const ws = wsRef.current;
       if (connModeRef.current === "gpu") gpuSend({ SetClipboard: { items } });
-      else if (ws?.readyState === WebSocket.OPEN)
+      else if (!sendDesktopRTC({ type: "desktop_clipboard", clipboardAction: "set", clipboardItems: items }) && ws?.readyState === WebSocket.OPEN)
         ws.send(JSON.stringify({ op: "clipboard_set", clipboardItems: items }));
       setClipStatus(
         `${tRef.current("desktop.clipboardSyncedRemote")}（${items.map((item) => item.mime).join(", ")}）`,
@@ -1295,6 +1308,9 @@ function DesktopSession({
     manualDisconnectRef.current = true;
     connSeqRef.current++;
     clearTimeout(reconnectTimerRef.current);
+    rtcSessionRef.current = "";
+    rtcRef.current?.close();
+    rtcRef.current = null;
     if (wsRef.current) {
       wsRef.current.close();
       wsRef.current = null;
@@ -1349,6 +1365,40 @@ function DesktopSession({
       setStatus(tRef.current("desktop.starting"));
       gpuSend("GetCapturableList");
       gpuSendConfig();
+      const rtcSession = `gpu-${connID}-${crypto.randomUUID()}`;
+      rtcSessionRef.current = rtcSession;
+      let rtcWasOpen = false;
+      const rtc = connectDesktopRTC({
+        device: dev,
+        session: rtcSession,
+        password: passwordRef.current,
+        onMessage: (event) => {
+          if (rtcRef.current === rtc && connID === connSeqRef.current) {
+            rtcDispatchRef.current = true;
+            try {
+              ws.onmessage?.(event);
+            } finally {
+              rtcDispatchRef.current = false;
+            }
+          }
+        },
+        onState: (state) => {
+          if (state === "open") {
+            rtcWasOpen = true;
+            if (wsRef.current === ws && ws.readyState === WebSocket.OPEN) ws.close();
+          } else if (state === "failed" || state === "closed") {
+            if (rtcRef.current !== rtc) return;
+            rtcRef.current = null;
+            rtcSessionRef.current = "";
+            if (state === "failed") rtc.close();
+            if (rtcWasOpen && !manualDisconnectRef.current && connID === connSeqRef.current) {
+              if (wsRef.current === ws) wsRef.current = null;
+              connectGPUDesktop(dev, true);
+            }
+          }
+        },
+      });
+      rtcRef.current = rtc;
     };
     ws.onerror = () => {
       if (connID !== connSeqRef.current || wsRef.current !== ws) return;
@@ -1356,6 +1406,7 @@ function DesktopSession({
     };
     ws.onclose = () => {
       if (connID !== connSeqRef.current || wsRef.current !== ws) return;
+      if (rtcRef.current?.dataChannel.readyState === "open") return;
       wsRef.current = null;
       stopClipboardSync();
       setClipboardCapabilities(null);
@@ -1367,6 +1418,7 @@ function DesktopSession({
     };
     ws.onmessage = (evt) => {
       if (connID !== connSeqRef.current || wsRef.current !== ws) return;
+      if (rtcRef.current?.dataChannel.readyState === "open" && !rtcDispatchRef.current) return;
       if (evt.data instanceof ArrayBuffer) {
         if (gpuHandleAndroidVideoPacket(evt.data)) return;
         frameCountRef.current++;
@@ -1451,6 +1503,7 @@ function DesktopSession({
     let retryAfterClose = true;
     ws.onmessage = (evt) => {
       if (connID !== connSeqRef.current || wsRef.current !== ws) return;
+      if (rtcRef.current?.dataChannel.readyState === "open") return;
       if (evt.data instanceof ArrayBuffer) {
         drawFrame(evt.data);
         return;
@@ -1469,6 +1522,28 @@ function DesktopSession({
       } else if (msg.op === "auth_ok") {
         if (passwordRef.current) rememberDevicePassword(dev, passwordRef.current);
         setStatus(tt("desktop.starting"));
+        if (typeof msg.session === "string" && msg.session) {
+          rtcRef.current?.close();
+          rtcSessionRef.current = msg.session;
+          const session = msg.session;
+          const rtc = connectDesktopRTC({
+            device: dev,
+            session,
+            password: passwordRef.current,
+            onMessage: (event) => {
+              if (rtcRef.current !== rtc || rtcSessionRef.current !== session) return;
+              if (event.data instanceof ArrayBuffer) drawFrame(event.data);
+            },
+			onState: (state) => {
+			  if ((state === "failed" || state === "closed") && rtcRef.current === rtc) {
+			    rtcRef.current = null;
+			    rtcSessionRef.current = "";
+			    if (state === "failed") rtc.close();
+			  }
+			},
+          });
+          rtcRef.current = rtc;
+        }
       } else if (msg.op === "auth_fail") {
         retryAfterClose = false;
         forgetDevicePassword(dev);
@@ -1531,6 +1606,9 @@ function DesktopSession({
     };
     ws.onclose = () => {
       if (connID !== connSeqRef.current || wsRef.current !== ws) return;
+      rtcRef.current?.close();
+      rtcRef.current = null;
+      rtcSessionRef.current = "";
       wsRef.current = null;
       stopClipboardSync();
       setClipboardCapabilities(null);
@@ -1676,10 +1754,10 @@ function DesktopSession({
   };
 
   const sendInput = (input: Record<string, unknown>) => {
+    if (!settingsRef.current.control || !remoteInputRef.current) return;
+    if (sendDesktopRTC({ type: "desktop_input", ...input })) return;
     const ws = wsRef.current;
-    if (!ws || ws.readyState !== WebSocket.OPEN || !settingsRef.current.control || !remoteInputRef.current)
-      return;
-    if (ws.bufferedAmount > 512 * 1024) return;
+    if (!ws || ws.readyState !== WebSocket.OPEN || ws.bufferedAmount > 512 * 1024) return;
     try {
       ws.send(JSON.stringify({ op: "input", ...input }));
     } catch (e) {
@@ -1688,9 +1766,10 @@ function DesktopSession({
   };
 
   const sendCursor = (input: Record<string, unknown>) => {
+    if (!settingsRef.current.showCursor) return;
+    if (sendDesktopRTC({ type: "desktop_input", inputType: "cursor_move", ...input })) return;
     const ws = wsRef.current;
-    if (!ws || ws.readyState !== WebSocket.OPEN || !settingsRef.current.showCursor) return;
-    if (ws.bufferedAmount > 128 * 1024) return;
+    if (!ws || ws.readyState !== WebSocket.OPEN || ws.bufferedAmount > 128 * 1024) return;
     try {
       ws.send(JSON.stringify({ op: "input", inputType: "cursor_move", ...input }));
     } catch (e) {

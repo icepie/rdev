@@ -27,6 +27,7 @@ func (s *Server) lockAgentThreadPersistence(entry *agentSessionEntry, id string)
 
 // Captured while starting a turn, before reset can replace its session.
 type agentTurnSnapshot struct {
+	scheduled    *scheduledAgentTurn
 	automation   *agentAutomation
 	autonomy     string
 	goal         *agentGoal
@@ -42,5 +43,5 @@ type agentTurnSnapshot struct {
 }
 
 func snapshotAgentTurnLocked(th *agentThread) agentTurnSnapshot {
-	return agentTurnSnapshot{automation: th.automation, autonomy: th.turnAutonomy, goal: th.goal, display: th.turnDisplay, historyIndex: th.turnHistIdx, started: th.workingSince.UnixMilli(), ctx: th.turnCtx, cancel: th.cancel, session: th.session, epoch: th.epoch, model: th.model}
+	return agentTurnSnapshot{scheduled: th.scheduled, automation: th.automation, autonomy: th.turnAutonomy, goal: th.goal, display: th.turnDisplay, historyIndex: th.turnHistIdx, started: th.workingSince.UnixMilli(), ctx: th.turnCtx, cancel: th.cancel, session: th.session, epoch: th.epoch, model: th.model}
 }

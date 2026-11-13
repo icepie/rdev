@@ -416,12 +416,9 @@ func (t *computerTool) executeGPU(ctx context.Context, client *ClientConn, a com
 			return "", err
 		}
 		if a.Action == "native" {
-			screen := t.state.screens[client.ID]
-			if screen.client != client || time.Since(screen.at) > 2*time.Minute || (a.Source != "" && a.Source != screen.source) {
-				return "", fmt.Errorf("take a fresh computer screenshot before a native CUA call")
+			if screen := t.state.screens[client.ID]; a.Source == "" && screen.client == client {
+				a.Source = screen.source
 			}
-			screen.at = time.Time{}
-			t.state.screens[client.ID] = screen
 		}
 		request, err := gpuCuaRequest(a.Action, raw)
 		if err != nil {
@@ -517,18 +514,17 @@ func (t *computerTool) executeGPU(ctx context.Context, client *ClientConn, a com
 	if a.Source == "" && screen.client == client {
 		a.Source = screen.source
 	}
-	if a.Action != "screenshot" {
-		if screen.client != client || time.Since(screen.at) > 2*time.Minute {
-			return "", fmt.Errorf("take a fresh screenshot before desktop input")
-		}
+	refreshedForSource := false
+	if a.Action != "screenshot" && screen.client == client {
 		if a.Source == "" {
 			a.Source = screen.source
 		}
 		if a.Source != screen.source {
-			return "", fmt.Errorf("screen changed; take a new screenshot")
+			// A source switch invalidates old coordinates; return a fresh frame
+			// rather than applying input grounded in a different screen.
+			refreshedForSource = true
+			a.Action = "screenshot"
 		}
-		screen.at = time.Time{}
-		t.state.screens[client.ID] = screen
 	}
 	index, err := gpuSourceIndex(a.Source, len(names))
 	if err != nil {
@@ -536,18 +532,12 @@ func (t *computerTool) executeGPU(ctx context.Context, client *ClientConn, a com
 	}
 	source := fmt.Sprintf("gpu:%d", index)
 	if d.configured && (d.source != source || d.sourceName != names[index]) {
-		if a.Action != "screenshot" {
-			return "", fmt.Errorf("GPU screen changed; take a fresh screenshot")
-		}
 		d.configured = false
 	}
 	if err = t.claim(client.ID); err != nil {
 		return "", err
 	}
 	if !d.configured {
-		if a.Action != "screenshot" {
-			return "", fmt.Errorf("GPU desktop reconnected; take a new screenshot")
-		}
 		if d.agentVersion < 1 {
 			return "", fmt.Errorf("update this device's client to enable native Agent screenshots")
 		}
@@ -577,6 +567,9 @@ func (t *computerTool) executeGPU(ctx context.Context, client *ClientConn, a com
 		if err != nil {
 			return "", err
 		}
+		if refreshedForSource {
+			result = "The display source changed. This is a fresh screenshot; discard previous coordinates and inspect it before input.\n" + result
+		}
 		if t.state.screens == nil {
 			t.state.screens = make(map[string]automationScreen)
 		}
@@ -584,15 +577,29 @@ func (t *computerTool) executeGPU(ctx context.Context, client *ClientConn, a com
 		success = true
 		return result, nil
 	}
+	width, height := screen.width, screen.height
+	if width <= 0 || height <= 0 {
+		if a.Action == "click" || a.Action == "drag" || a.Action == "scroll" {
+			frame, frameErr := d.freshFrame(ctx)
+			if frameErr != nil {
+				return "", frameErr
+			}
+			cfg, decodeErr := jpeg.DecodeConfig(bytes.NewReader(frame))
+			if decodeErr != nil || cfg.Width <= 0 || cfg.Height <= 0 {
+				return "", fmt.Errorf("invalid fresh desktop frame")
+			}
+			width, height = cfg.Width, cfg.Height
+		}
+	}
 	if d.cua {
-		result, handled, err := preferComputerCua(ctx, d.cuaRequest, client, a, raw, screen.width, screen.height)
+		result, handled, err := preferComputerCua(ctx, d.cuaRequest, client, a, raw, width, height)
 		if handled {
 			success = err == nil && !cuaResultFailed(json.RawMessage(result))
 			d.nativeSession = success
 			return result, err
 		}
 	}
-	if err = gpuDesktopInput(ctx, d, a, raw, screen.width, screen.height); err != nil {
+	if err = gpuDesktopInput(ctx, d, a, raw, width, height); err != nil {
 		return "", err
 	}
 	success = true

@@ -16,6 +16,11 @@ const SessionsPage = lazy(() => import("./pages/Sessions").then((m) => ({ defaul
 const FilesPage = lazy(() => import("./pages/Files").then((m) => ({ default: m.FilesPage })));
 const BatchPage = lazy(() => import("./pages/Batch").then((m) => ({ default: m.BatchPage })));
 const DesktopPage = lazy(() => import("./pages/Desktop").then((m) => ({ default: m.DesktopPage })));
+const TasksPage = lazy(() => import("./pages/Tasks").then((m) => ({ default: m.TasksPage })));
+const NewTaskPage = lazy(() => import("./pages/Tasks").then((m) => ({ default: m.NewTaskPage })));
+const EditTaskPage = lazy(() => import("./pages/Tasks").then((m) => ({ default: m.EditTaskPage })));
+const TaskDetailPage = lazy(() => import("./pages/Tasks").then((m) => ({ default: m.TaskDetailPage })));
+const TaskRunPage = lazy(() => import("./pages/Tasks").then((m) => ({ default: m.TaskRunPage })));
 
 const BrowserPage = lazy(() => import("./pages/Browser").then(m => ({ default: m.BrowserPage })));
 
@@ -25,9 +30,10 @@ function TitleSync() {
   useEffect(() => {
     const titles: Record<string, string> = {
       "/browser": "nav.browser", "/terminal": "title.terminal", "/remote-desktop": "title.desktop",
-      "/batch": "title.batch", "/sessions": "title.sessions", "/files": "title.files",
+      "/batch": "title.batch", "/sessions": "title.sessions", "/files": "title.files", "/tasks": "tasks.title",
     };
-    document.title = pathname === "/agent" ? `RDev - ${t("nav.agent")}` : t(titles[pathname] ?? "title.index");
+    document.title = pathname === "/agent" ? `RDev - ${t("nav.agent")}` : t(titles[pathname] ?? (pathname.startsWith("/tasks/") ? "tasks.title" : "title.index"));
+
   }, [pathname, t]);
   return null;
 }
@@ -50,6 +56,11 @@ createRoot(document.getElementById("root")!).render(
                     <Route path="/terminal" element={<TerminalPage />} />
                     <Route path="/sessions" element={<SessionsPage />} />
                     <Route path="/files" element={<FilesPage />} />
+                    <Route path="/tasks" element={<TasksPage />} />
+                    <Route path="/tasks/new" element={<NewTaskPage />} />
+                    <Route path="/tasks/runs/:id" element={<TaskRunPage />} />
+                    <Route path="/tasks/:id/edit" element={<EditTaskPage />} />
+                    <Route path="/tasks/:id" element={<TaskDetailPage />} />
                     <Route path="/batch" element={<BatchPage />} />
                     <Route path="/remote-desktop" element={<DesktopPage />} />
                     <Route path="*" element={<Navigate to="/" replace />} />

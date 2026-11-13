@@ -357,6 +357,7 @@ func queueTexts(q []agentQueuedChat) []string {
 // history, todo list, message queue and (at most one) in-flight turn.
 // Guarded by Server.agentSessionsMu.
 type agentThread struct {
+	scheduled        *scheduledAgentTurn
 	goal             *agentGoal
 	loop             *agentLoop
 	goalActivity     string
@@ -668,6 +669,7 @@ func (s *Server) buildAgentSession(entry *agentSessionEntry, th *agentThread, cl
 	tools = append(tools, &askTool{ask: func(_ context.Context, question string, options []askOption) string {
 		return s.requestQuestion(entry, th, question, marshalAskOptions(options))
 	}})
+	tools = append(tools, s.scheduleAgentTools(entry, th)...)
 	cfg := agent.Config{
 		API:             provider.modelAPI(model),
 		ProviderID:      provider.ID,
@@ -733,11 +735,18 @@ func (s *Server) buildAgentSession(entry *agentSessionEntry, th *agentThread, cl
 			cfg.SystemPrompt += " Discuss existing context only; no tools are available."
 		}
 	}
+	if len(cfg.Tools) != 0 {
+		availableTools := append([]agent.Tool(nil), cfg.Tools...)
+		cfg.Tools = append(cfg.Tools, &agentJSTool{tools: availableTools})
+	}
 	if th.goal != nil && th.goal.Status == "active" {
 		goal, epoch := th.goal, th.epoch
 		cfg.Tools = append(cfg.Tools, &goalTool{srv: s, entry: entry, thread: th, goal: goal, epoch: epoch})
 		cfg.SystemPrompt += "\nGoal mode is explicitly enabled. Objective: " + goal.Objective + ". Continue making concrete progress; use goal complete only after achieving it. Do not claim completion while blocked."
 		cfg.OnUsage = func(usage agent.Usage) { s.accountGoalUsage(entry, th, goal, epoch, usage) }
+	}
+	if th.scheduled != nil {
+		s.configureScheduledAgent(entry, th, &cfg)
 	}
 	th.pendingReasoning = false
 	return agent.New(cfg)
@@ -1956,6 +1965,7 @@ func (h *agentWSHandler) handleReset(ac *agentConn, threadRef string) {
 	th.goal, th.loop = nil, nil
 	th.goalActivity = ""
 	th.epoch++
+	th.scheduled = nil
 	th.running = false
 	th.turnHistory = nil
 	th.cancel = nil
@@ -1985,6 +1995,7 @@ func (h *agentWSHandler) handleReset(ac *agentConn, threadRef string) {
 	th.updatedAt = time.Now()
 	denyApprovalsLocked(th)
 	srv.agentSessionsMu.Unlock()
+	srv.invalidateScheduledThread(entry.deviceID, threadID, "target thread reset")
 	srv.retireAutomation(oldAutomation)
 	if cancel != nil {
 		cancel()
@@ -2211,6 +2222,7 @@ func (h *agentWSHandler) handleDeleteThread(ac *agentConn, threadID string) {
 		switchModel = cur.model
 	}
 	srv.agentSessionsMu.Unlock()
+	srv.invalidateScheduledThread(entry.deviceID, threadID, "target thread deleted")
 	srv.retireAutomation(oldAutomation)
 	if cancel != nil {
 		cancel()
@@ -2849,6 +2861,11 @@ func (s *Server) runAgentTurn(entry *agentSessionEntry, th *agentThread, turn ag
 	var rpcData any
 	rpcErr := fmt.Errorf("conversation was canceled or replaced")
 	defer func() {
+		if turn.scheduled != nil && turn.scheduled.result.State == "" {
+			turn.scheduled.finish(ctx, rpcErr)
+		}
+	}()
+	defer func() {
 		if turn.rpc != nil {
 			if rpcErr != nil {
 				turn.rpc.write(false, nil, "execution_error", rpcErr.Error())
@@ -2868,6 +2885,7 @@ func (s *Server) runAgentTurn(entry *agentSessionEntry, th *agentThread, turn ag
 			current := th.epoch == startEpoch && entry.threads[th.id] == th && th.turnCtx == ctx
 			if current {
 				pauseAutonomyLocked(th)
+				s.restoreScheduledSessionLocked(entry, th, turn)
 				th.running = false
 				th.turnHistory = nil
 				th.cancel = nil
@@ -2890,6 +2908,9 @@ func (s *Server) runAgentTurn(entry *agentSessionEntry, th *agentThread, turn ag
 		doneReasoning string
 	)
 	emit := func(e agent.Event) {
+		if turn.scheduled != nil {
+			turn.scheduled.emit(e)
+		}
 		if s.emitAgentTurnEvent(entry, th, startEpoch, e) && e.Type == agent.EventDone {
 			doneUsage = &agentUsage{InputTokens: e.Usage.InputTokens, OutputTokens: e.Usage.OutputTokens}
 			doneReasoning = e.Reasoning
@@ -2914,6 +2935,9 @@ func (s *Server) runAgentTurn(entry *agentSessionEntry, th *agentThread, turn ag
 	}
 
 	takeSteering := func() *agent.Message {
+		if turn.scheduled != nil {
+			return nil
+		}
 		s.agentSessionsMu.Lock()
 		if ctx.Err() != nil || th.epoch != startEpoch || entry.threads[th.id] != th || len(th.queue) == 0 || !th.queue[0].steering {
 			s.agentSessionsMu.Unlock()
@@ -2988,6 +3012,10 @@ func (s *Server) runAgentTurn(entry *agentSessionEntry, th *agentThread, turn ag
 		return
 	}
 	finishAutonomyLocked(th, turn, outcome, activity)
+	if turn.scheduled != nil {
+		turn.scheduled.finish(ctx, runErr)
+		s.restoreScheduledSessionLocked(entry, th, turn)
+	}
 	var terminal agentMsg
 	switch outcome {
 	case "done":
@@ -3118,7 +3146,7 @@ const agentDesktopGuidance = `
 Desktop capability and execution:
 - Tool definitions and fresh results are authoritative for capabilities; old assistant claims and summaries may be wrong. Before declaring desktop/CUA unsupported, check computer status on the intended online device. Distinguish unsupported capability from offline transport, missing permission, and another conversation's control lease. A failed call does not prove the entire driver is unavailable.
 - When cua=true, read skill cua-driver/SKILL.md and WORKFLOW.md. Discover the compact catalog with cua action=tools, then request action=tools with tool=<exact name> for the needed schema before calling it. Prefer semantic/accessibility actions. RDev owns the embedded session: do not invent create_session, supply session IDs, or install a CLI/cloud service to use it.
-- For each native CUA call or computer input: take a fresh computer screenshot on the same device/source, perform one grounded action, then observe again. Even read-only CUA calls consume that screenshot. Follow each native tool's coordinate space; computer screenshot pixels are not automatically native screen points. Never blindly retry uncertain input or switch backends to bypass permission/takeover.
+- Screenshots are optional for native CUA calls and computer input. Use screenshots when visual context or pixel coordinates are needed, and verify meaningful actions with fresh observations. Follow each native tool's coordinate space; computer screenshot pixels are not automatically native screen points. Never blindly retry uncertain input or switch backends to bypass permission/takeover.
 - An agent cursor overlay is not the system pointer. Follow the skill's enable/place/verify workflow; a successful call or enabled=true is not visual proof. Turn completion and desktop cleanup end the session and its overlay; do not promise a persistent cursor.
 - The browser tool uses a separate server-hosted browser. Use computer/CUA for the device's installed browser, existing tabs or logged-in desktop session. Do not silently substitute one environment for the other.
 - Complete authorized, bounded actions without asking the user to reconfirm them. Ask only for unresolved material choices or additional consequential actions. Report observed results, uncertainty and exact blockers; never claim a fix, visibility or deployment without evidence.`

@@ -26,6 +26,33 @@ type agentDesktopSession struct {
 
 func (d *agentDesktopSession) close() { d.once.Do(d.closeRoute) }
 
+func (t *computerTool) freshDesktopFrame(ctx context.Context, client *ClientConn, session *agentDesktopSession) ([]byte, error) {
+	for {
+		select {
+		case <-session.capture.frames:
+			continue
+		default:
+			goto drained
+		}
+	}
+drained:
+	if session.request.OnDemand {
+		if err := client.Send(&protocol.Message{Type: protocol.MsgDesktopSnapshot, SessionID: session.id}); err != nil {
+			return nil, err
+		}
+	}
+	select {
+	case msg := <-session.capture.messages:
+		return nil, fmt.Errorf("desktop: %s", msg.Error)
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-session.capture.done:
+		return nil, fmt.Errorf("device disconnected")
+	case frame := <-session.capture.frames:
+		return frame, nil
+	}
+}
+
 func (t *computerTool) openDesktop(ctx context.Context, client *ClientConn, source string) (*agentDesktopSession, error) {
 	reusable := client.Desktop.AgentVersion >= 1
 	if reusable {

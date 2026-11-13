@@ -4,8 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"time"
-
 	"rdev/internal/protocol"
 )
 
@@ -22,13 +20,9 @@ func (t *computerTool) executeNativeCua(ctx context.Context, client *ClientConn,
 		}
 	}()
 	if action.Action == "native" {
-		screen := t.state.screens[client.ID]
-		if screen.client != client || time.Since(screen.at) > 2*time.Minute || (action.Source != "" && action.Source != screen.source) {
-			return "", fmt.Errorf("take a fresh computer screenshot before a native CUA call")
+		if screen := t.state.screens[client.ID]; action.Source == "" && screen.client == client {
+			action.Source = screen.source
 		}
-		action.Source = screen.source
-		screen.at = time.Time{}
-		t.state.screens[client.ID] = screen
 	}
 	if client.Desktop == nil || !client.Desktop.NativeCua {
 		return "", fmt.Errorf("native Cua requires a Cua-enabled Go cgo client")

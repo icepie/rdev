@@ -34,7 +34,7 @@ const NAV_ITEMS = [
   { to: "/terminal", key: "nav.terminal", icon: "Terminal" },
   { to: "/remote-desktop", key: "nav.desktop", icon: "Monitor" },
   { to: "/batch", key: "nav.batch", icon: "Workflow" },
-  { to: "/sessions", key: "nav.sessions", icon: "Radio" },
+  { to: "/tasks", key: "nav.tasks", icon: "TimeSchedule" },
   { to: "/files", key: "nav.files", icon: "Files" },
   { to: "/browser", key: "nav.browser", icon: "Globe" },
   { to: "/agent", key: "nav.agent", icon: "Bot" },

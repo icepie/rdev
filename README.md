@@ -40,7 +40,7 @@
 | Android / Termux | 支持 Termux 一键运行 Go 兼容版与 Rust no-desktop 版，Android/Bionic 包使用 Android libc DNS；详见 `docs/android-termux.md` |
 | Android APK | Android 7.0+ 独立被控端，`MediaProjection + MediaCodec` 屏幕流和 Accessibility 输入；单 APK 内嵌真实 AutoJs6 6.8.0 / OpenCV，Agent 可通过 `autojs` 执行设备端脚本；详见 `docs/android-apk.md` |
 | VNC/RFB Bridge | 服务端可选 `--vnc` 暴露现代 VNC 入口，使用 VeNCrypt Plain 用户名/密码认证，`username=deviceId` 选择设备 |
-| Web Agent | 浏览器内 LLM Agent（`/agent?device=<id>`），通过 OpenAI 兼容接口驱动，shell/list_dir/read_file/write_file 工具在选定设备上执行 |
+| Web Agent | 浏览器内 LLM Agent（`/agent?device=<id>`），通过 OpenAI 兼容接口驱动；除设备侧文件、Shell 与桌面工具外，支持受限 JavaScript 编排多个 Agent 工具及服务端网页搜索/抓取 |
 
 ## 快速开始
 
@@ -364,5 +364,5 @@ make client-cgo
 
 ### Agent 与界面规范
 
-- [Agent 工作区、上下文压缩、后台任务与服务端设备路由](docs/agent-workspace.md)
+- [Agent 工作区、上下文压缩、定时任务、后台任务与服务端设备路由](docs/agent-workspace.md)
 - [统一 UI 风格与响应式规则](docs/ui-style-guide.md)

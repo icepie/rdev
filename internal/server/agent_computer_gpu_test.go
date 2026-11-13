@@ -204,6 +204,9 @@ func TestComputerGPUTunnelCaptureInputAndSessionReuse(t *testing.T) {
 		}
 		return out
 	}
+	// Keyboard input is allowed before any screenshot; the first input
+	// configures the GPU session without requiring a separate observation.
+	run(`{"action":"text","text":"before screenshot"}`)
 	shot := run(`{"action":"screenshot"}`)
 	if !strings.HasPrefix(shot, "[image preview]") {
 		t.Fatal("missing image")
@@ -237,9 +240,18 @@ func TestComputerGPUTunnelCaptureInputAndSessionReuse(t *testing.T) {
 		t.Fatal("native Unicode input missing")
 	}
 	run(`{"action":"screenshot","source":"gpu:1"}`)
+	beforeInputs := len(fixture.inputs)
+	refreshed, err := tool.Execute(ctx, json.RawMessage(`{"action":"click","source":"gpu:0","x":10,"y":10}`))
+	if err != nil || !strings.HasPrefix(refreshed, "The display source changed.") {
+		t.Fatalf("GPU screen switch did not refresh: %s %v", refreshed, err)
+	}
+	if len(fixture.inputs) != beforeInputs || base.state.screens[client.ID].source != "gpu:0" {
+		t.Fatal("source switch applied stale input or failed to refresh the selected screen")
+	}
+	run(`{"action":"click","source":"gpu:0","x":10,"y":10}`)
 	run(`{"action":"screenshot"}`)
-	if fixture.connections.Load() != 1 || fixture.configs.Load() != 2 || fixture.snapshots.Load() != 6 {
-		t.Fatal("source switch reconnected or did not retain selected screen")
+	if fixture.connections.Load() != 1 || fixture.configs.Load() != 3 || fixture.snapshots.Load() != 7 {
+		t.Fatal("source switch reconnected, applied stale input, or failed to capture")
 	}
 	run(`{"action":"release"}`)
 	if len(base.state.gpu) != 0 {

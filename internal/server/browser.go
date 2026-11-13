@@ -426,6 +426,56 @@ func (s *Server) HandleBrowserView(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(pages)
 		return
 	}
+	if path == "navigate" && r.Method == http.MethodPost {
+		var in struct {
+			Target string `json:"target"`
+			URL    string `json:"url"`
+		}
+		if json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&in) != nil || !validBrowserTargetID(in.Target) {
+			http.Error(w, "invalid browser target", http.StatusBadRequest)
+			return
+		}
+		if err := browserNavigationURL(in.URL); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		var targets []browserTarget
+		if err := browserJSON(r.Context(), b, http.MethodGet, "/json/list", &targets); err != nil {
+			http.Error(w, "Chrome unavailable", http.StatusBadGateway)
+			return
+		}
+		found := false
+		for _, target := range targets {
+			if target.ID == in.Target && target.Type == "page" {
+				found = true
+				break
+			}
+		}
+		if !found {
+			http.Error(w, "browser tab not found", http.StatusNotFound)
+			return
+		}
+		connection, err := dialBrowserCDP(r.Context(), b, in.Target)
+		if err != nil {
+			http.Error(w, "Chrome unavailable", http.StatusBadGateway)
+			return
+		}
+		defer connection.close()
+		var result struct {
+			ErrorText string `json:"errorText"`
+		}
+		if err := connection.call(r.Context(), "Page.navigate", map[string]any{"url": in.URL}, &result); err != nil {
+			http.Error(w, "Chrome navigation failed", http.StatusBadGateway)
+			return
+		}
+		if result.ErrorText != "" {
+			http.Error(w, "navigation failed: "+result.ErrorText, http.StatusBadGateway)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
 	if r.Method != http.MethodGet || !strings.HasPrefix(path, "devtools/") || strings.Contains(path, "..") || strings.HasPrefix(path, "devtools/browser/") {
 		http.NotFound(w, r)
 		return

@@ -12,6 +12,7 @@ import { useComposerTextDraft } from "./use-composer-text-draft";
 import { useComposerDraft } from "./use-composer-draft";
 import { dispatchSlashCommand, matchSlashCommand, type ExecutableSlashCommand } from "./slash-command";
 import { parseJobsCommand } from "./jobs-command";
+import { useSearchParams } from "react-router-dom";
 /* ChatPaneView: one pane of the agent chat — transcript + queue + composer
  * + status strip, extracted from the Agent page so the split-screen layout
  * renders several of them side by side. Presentational over a ThreadSink:
@@ -642,6 +643,28 @@ export function ChatPaneView({
     if (viewport && content) return observeTranscriptResize(viewport, content, setAtBottom);
   }, [device, threadId]);
 
+  const [navigationParams, setNavigationParams] = useSearchParams();
+  const linkedRun = navigationParams.get("turn");
+  const navigatedRun = useRef("");
+  useEffect(() => {
+    if (!ready || !linkedRun || navigatedRun.current === linkedRun) return;
+    const item = items.find(item => item.kind === "user" && item.scheduleRunId === linkedRun);
+    if (!item) return;
+    const frame = requestAnimationFrame(() => {
+      const node = transcriptRef.current?.querySelector<HTMLElement>(`[data-thread-message="${item.key}"]`);
+      if (!node) return;
+      node.scrollIntoView({ block: "start" });
+      node.focus({ preventScroll: true });
+      navigatedRun.current = linkedRun;
+      setNavigationParams(prev => {
+        const next = new URLSearchParams(prev);
+        next.delete("turn");
+        return next;
+      }, { replace: true });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [ready, linkedRun, items, setNavigationParams]);
+
   return (
     <>
       {/* Transcript */}
@@ -677,6 +700,8 @@ export function ChatPaneView({
                 <div
                   key={item.key}
                   data-thread-message={item.key}
+                  data-schedule-run={item.scheduleRunId}
+                  tabIndex={item.scheduleRunId ? -1 : undefined}
                   className="group/message ml-auto flex w-fit max-w-[70%] flex-col items-end"
                 >
                   {item.steering && <span className="mb-1 flex items-center gap-1 text-xs text-muted-foreground"><Icon name="CornerDownRight" className="size-3" />{t("agent.steer")}</span>}

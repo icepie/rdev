@@ -1,11 +1,14 @@
+import { CommandOutputBody } from "./command-output";
+import { Icon } from "../icon";
 import { CanvasPreview } from "./canvas-preview";
 import { ImagePreview } from "./image-preview";
 import { DisclosureBody } from "../disclosure-body";
 import { SyntaxCode } from "../syntax-code";
 import { Fragment, useState } from "react";
+import { Link } from "react-router-dom";
 import { cn } from "../../lib/utils";
-import { Icon } from "../icon";
-import { CommandOutputBody } from "./command-output";
+import { apiJSON } from "../../lib/api";
+import { Button } from "../button";
 import { PierreFileDiff } from "./diff-view";
 import { ToolIcon } from "./tool-icon";
 import {
@@ -182,6 +185,39 @@ function QuestionRowBody({
   );
 }
 
+type ScheduleCardData = { id: string; name?: string; state?: string; kind?: string; link?: string };
+
+function scheduleCardData(result: string): ScheduleCardData | null {
+  let value: unknown;
+  try { value = JSON.parse(result); } catch { return null; }
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const candidate = "data" in value && value.data && typeof value.data === "object" ? value.data : value;
+  if (!candidate || typeof candidate !== "object" || !("id" in candidate) || typeof candidate.id !== "string") return null;
+  const id = candidate.id;
+  const state = "state" in candidate && typeof candidate.state === "string" ? candidate.state : undefined;
+  const kind = "kind" in candidate && typeof candidate.kind === "string" ? candidate.kind : undefined;
+  const name = "name" in candidate && typeof candidate.name === "string" ? candidate.name : undefined;
+  const link = "link" in candidate && typeof candidate.link === "string" ? candidate.link : `/tasks/${encodeURIComponent(id)}`;
+  if (!state && !kind && !name && !link.includes("/tasks/")) return null;
+  return { id, state, kind, name, link };
+}
+
+function ScheduleResultCard({ data, t }: { data: ScheduleCardData; t: Translator }) {
+  const [state, setState] = useState(data.state || "");
+  const [busy, setBusy] = useState(false);
+  const togglePause = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const action = state === "paused" ? "enable" : "pause";
+      const response = await apiJSON<{ data?: { state?: string }; error?: string }>("/api/schedules", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action, id: data.id }) });
+      if (response.error) throw new Error(response.error);
+      setState(response.data?.state || (action === "pause" ? "paused" : "enabled"));
+    } finally { setBusy(false); }
+  };
+  return <div className="mt-2 flex flex-wrap items-center gap-2 rounded-lg border border-border bg-card px-3 py-2 text-xs"><span className="font-medium">{data.name || data.id}</span>{data.kind && <span className="text-muted-foreground">{data.kind}</span>}{state && <span className="rounded bg-secondary px-1.5 py-0.5">{state}</span>}<Link className="text-timeline-accent hover:underline" to={data.link || `/tasks/${encodeURIComponent(data.id)}`}>{t("tasks.openSchedule")}</Link>{state && state !== "completed" && <Button size="sm" variant="ghost" disabled={busy} onClick={() => void togglePause()}>{state === "paused" ? t("tasks.enable") : t("tasks.pause")}</Button>}</div>;
+}
+
 function ToolRowBody({
   tool,
   t,
@@ -193,6 +229,8 @@ function ToolRowBody({
 }) {
   const kind = workKindOf(tool.name);
   const result = tool.result.trim();
+  const schedule = scheduleCardData(result);
+  if (schedule) return <ScheduleResultCard data={schedule} t={t} />;
   if (tool.name === "canvas") return <CanvasPreview tool={tool} t={t} />;
   if (kind === "command") return <CommandOutputBody tool={tool} t={t} />;
   if (kind === "question") return <QuestionRowBody tool={tool} t={t} />;

@@ -440,6 +440,7 @@ func (h *wsEventHandler) OnClose(socket *gws.Conn, err error) {
 	}
 	for sid, session := range h.client.desktopSessions {
 		close(session.stop)
+		session.closeRTC()
 		delete(h.client.desktopSessions, sid)
 	}
 	h.client.conn = nil
@@ -881,6 +882,7 @@ func (c *Client) closeCurrentTransport(transport clientTransport, conn net.Conn)
 	}
 	for sid, session := range c.desktopSessions {
 		close(session.stop)
+		session.closeRTC()
 		delete(c.desktopSessions, sid)
 	}
 	c.transport = nil
@@ -947,6 +949,8 @@ func (c *Client) handleMessage(msg *protocol.Message) {
 		c.handleManagedTransferCancel(msg.TaskID)
 	case protocol.MsgDesktopStart:
 		go c.handleDesktopStart(msg)
+	case protocol.MsgDesktopRTCSignal:
+		c.handleDesktopRTCSignal(msg)
 	case protocol.MsgDesktopSnapshot:
 		c.handleDesktopSnapshot(msg)
 	case protocol.MsgDesktopInput:

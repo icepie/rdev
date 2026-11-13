@@ -360,7 +360,7 @@ export function threadCreatedMs(id: string): number {
 }
 
 // Additive UI metadata is not model text; older servers/history omit it.
-export function parseDisplay(value: unknown): { time?: number; endedAt?: number; steering?: boolean; job?: unknown } {
+export function parseDisplay(value: unknown): { time?: number; endedAt?: number; steering?: boolean; job?: unknown; scheduleRunId?: string } {
   if (!value || typeof value !== "object") return {};
   const data = value as Record<string, unknown>;
   return {
@@ -368,5 +368,6 @@ export function parseDisplay(value: unknown): { time?: number; endedAt?: number;
     ...(typeof data.endedAt === "number" && Number.isFinite(data.endedAt) && data.endedAt > 0 ? { endedAt: data.endedAt } : {}),
     ...(data.steering === true ? { steering: true } : {}),
     ...(data.job && typeof data.job === "object" ? { job: data.job } : {}),
+    ...(typeof data.scheduleRunId === "string" ? { scheduleRunId: data.scheduleRunId } : {}),
   };
 }

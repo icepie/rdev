@@ -7,21 +7,22 @@ import (
 	"time"
 )
 
-func TestAgentCuaRejectsUnobservedCall(t *testing.T) {
+func TestAgentCuaAllowsCallWithoutScreenshot(t *testing.T) {
 	fixture := &gpuAgentFixture{
 		cua:            true,
+		nativeResult:   json.RawMessage(`{"CuaResult":{"result":{"content":[],"isError":false}}}`),
 		nativeRequests: make(chan json.RawMessage, 4),
 	}
 	base, _ := newGPUCuaTool(t, fixture)
 	cua := &cuaTool{automationTool: base.automationTool}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if _, err := cua.Execute(ctx, json.RawMessage(`{"action":"call","tool":"set_agent_cursor_enabled","arguments":{"enabled":true}}`)); err == nil {
-		t.Fatal("native CUA call bypassed the screenshot requirement")
+	for range 2 {
+		if _, err := cua.Execute(ctx, json.RawMessage(`{"action":"call","tool":"set_agent_cursor_enabled","arguments":{"enabled":true}}`)); err != nil {
+			t.Fatalf("native CUA call required a screenshot: %v", err)
+		}
 	}
-	select {
-	case request := <-fixture.nativeRequests:
-		t.Fatalf("unobserved call reached device: %s", request)
-	default:
+	if len(fixture.nativeRequests) != 3 {
+		t.Fatalf("native requests=%d, want one discovery and two calls", len(fixture.nativeRequests))
 	}
 }

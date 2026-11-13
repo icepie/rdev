@@ -119,3 +119,15 @@ func browserNavigationURL(raw string) error {
 	}
 	return nil
 }
+
+func validBrowserTargetID(id string) bool {
+	if id == "" {
+		return false
+	}
+	for _, r := range id {
+		if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '-') {
+			return false
+		}
+	}
+	return true
+}

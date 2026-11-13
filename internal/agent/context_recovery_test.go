@@ -31,6 +31,7 @@ func TestContextOverflowClassificationAcrossProtocols(t *testing.T) {
 		{"anthropic-stream", "anthropic-messages", `data: {"type":"error","error":{"type":"invalid_request_error","message":"prompt is too long: 500 > 100"}}` + "\n\n", 200, true},
 		{"generic-invalid", "", `{"error":{"type":"invalid_request_error","message":"invalid tool schema"}}`, 400, false},
 		{"generic-413", "", `request too large`, 413, false},
+		{"provider-body-limit-413", "", `{"error":{"message":"Failed to buffer the request body: length limit exceeded (request_id: fixture)","type":"payload_too_large_error","code":"invalid_request_error"}}`, 413, true},
 		{"generic-message", "", `{"error":{"message":"context_length_exceeded appears in a tool name"}}`, 400, false},
 		{"output-limit", "openai-responses", `data: {"type":"response.incomplete","response":{"incomplete_details":{"reason":"max_output_tokens"}}}` + "\n\n", 200, false},
 	} {
@@ -53,6 +54,29 @@ func TestContextOverflowClassificationAcrossProtocols(t *testing.T) {
 				t.Fatalf("overflow retried unchanged input %d times", hits.Load())
 			}
 		})
+	}
+}
+
+func TestRequestBodyLimitTriggersContextRecovery(t *testing.T) {
+	var hits atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch hits.Add(1) {
+		case 1:
+			w.WriteHeader(http.StatusRequestEntityTooLarge)
+			fmt.Fprint(w, `{"error":{"message":"Failed to buffer the request body: length limit exceeded","type":"payload_too_large_error"}}`)
+		case 2, 3:
+			w.Header().Set("Content-Type", "text/event-stream")
+			fmt.Fprint(w, sseChunk("recovered", "")+sseDone)
+		default:
+			t.Errorf("unexpected provider request %d", hits.Load())
+		}
+	}))
+	defer server.Close()
+	session := New(testConfig(server.URL, nil))
+	session.SetHistory([]Message{{Role: "user", Content: "old request"}, {Role: "assistant", Content: "old answer"}})
+	text, err := session.Run(t.Context(), "current request", nil)
+	if err != nil || text != "recovered" || hits.Load() != 3 {
+		t.Fatalf("text=%q err=%v requests=%d, want compaction and retry", text, err, hits.Load())
 	}
 }
 

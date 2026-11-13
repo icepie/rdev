@@ -32,6 +32,8 @@ type desktopMsg struct {
 	InputBackend    string                        `json:"inputBackend,omitempty"`
 	ShowCursor      *bool                         `json:"showCursor,omitempty"`
 	Desktop         *protocol.DesktopCapabilities `json:"desktop,omitempty"`
+	RTCType         string                        `json:"rtcType,omitempty"`
+	RTCData         json.RawMessage               `json:"rtcData,omitempty"`
 	Pass            string                        `json:"password,omitempty"`
 	InputType       string                        `json:"inputType,omitempty"`
 	X               int                           `json:"x,omitempty"`
@@ -62,6 +64,7 @@ type desktopRoute struct {
 	conn       *desktopBrowserConn
 	vnc        *vncConn
 	stream     *vncDesktopStream
+	rtc        *desktopRTCConn
 }
 
 type desktopBrowserConn struct {
@@ -524,8 +527,20 @@ func (bc *desktopBrowserConn) close() {
 		close(bc.done)
 		if bc.session != "" {
 			bc.srv.desktopMu.Lock()
-			delete(bc.srv.desktops, bc.session)
+			route := bc.srv.desktops[bc.session]
+			var rtc *desktopRTCConn
+			if route != nil && route.conn == bc {
+				rtc = route.rtc
+				if rtc == nil {
+					delete(bc.srv.desktops, bc.session)
+				} else {
+					route.conn = nil
+				}
+			}
 			bc.srv.desktopMu.Unlock()
+			if rtc != nil {
+				rtc.close(true)
+			}
 			bc.client.Send(&protocol.Message{Type: protocol.MsgDesktopClose, SessionID: bc.session})
 		}
 		bc.writeMu.Lock()
@@ -640,6 +655,9 @@ func (s *Server) closeDesktopForClient(clientID string) {
 	}
 	s.desktopMu.Unlock()
 	for _, route := range routes {
+		if route.rtc != nil {
+			route.rtc.close(false)
+		}
 		if route.automation != nil {
 			close(route.automation.done)
 			continue

@@ -152,7 +152,7 @@ func (s *Session) RunTurnWithSteering(ctx context.Context, userText string, imag
 				tc.Summary = sm.Summary(args)
 			}
 			emit(Event{Type: EventToolStart, ToolID: tc.ID, ToolName: tc.Name, ToolArgs: args, Summary: tc.Summary})
-			result, isErr := s.executeTool(ctx, tool, *tc, args)
+			result, isErr := s.executeTool(ctx, tool, *tc, args, emit)
 			tc.IsError = isErr
 			result, resultImages := sanitizeNativeToolResult(result)
 			nativeResult := isNativeComputerCall(tc.Name, args) || len(resultImages) > 0 || strings.Contains(result, nativeImagePlaceholder)
@@ -223,7 +223,7 @@ func (s *Session) findTool(name string) Tool {
 // executeTool runs one model-requested tool call, mapping every failure —
 // unknown tool, malformed arguments, denied approval, Execute error — to an
 // error text result so the model can see what went wrong and recover.
-func (s *Session) executeTool(ctx context.Context, tool Tool, tc ToolCall, args json.RawMessage) (result string, isErr bool) {
+func (s *Session) executeTool(ctx context.Context, tool Tool, tc ToolCall, args json.RawMessage, events ...func(Event)) (result string, isErr bool) {
 	// Keep the tool/result pair valid even if an implementation panics.
 	defer func() {
 		if failure := recover(); failure != nil {
@@ -262,6 +262,51 @@ func (s *Session) executeTool(ctx context.Context, tool Tool, tc ToolCall, args 
 	// handing control to a tool, including tools that do not inspect ctx.
 	if err := ctx.Err(); err != nil {
 		return "error: " + err.Error(), true
+	}
+	if executor, ok := tool.(ToolCallExecutor); ok {
+		emit := func(Event) {}
+		if len(events) != 0 && events[0] != nil {
+			emit = events[0]
+		}
+		var callID uint64
+		out, err := executor.ExecuteWithTools(ctx, args, func(name string, childArgs json.RawMessage) (string, error) {
+			if name == "" || name == tc.Name {
+				return "", fmt.Errorf("tool %q cannot call itself", name)
+			}
+			child := s.findTool(name)
+			if child == nil {
+				return "", fmt.Errorf("unknown tool %q", name)
+			}
+			if _, nested := child.(ToolCallExecutor); nested {
+				return "", fmt.Errorf("nested orchestration tool %q is not supported", name)
+			}
+			callID++
+			childCall := ToolCall{ID: fmt.Sprintf("%s_%d", tc.ID, callID), Name: name, Arguments: string(childArgs)}
+			if summary, ok := child.(Summarizer); ok && json.Valid(childArgs) {
+				childCall.Summary = summary.Summary(childArgs)
+			}
+			emit(Event{Type: EventToolStart, ToolID: childCall.ID, ToolName: name, ToolArgs: childArgs, Summary: childCall.Summary})
+			childResult, failed := s.executeTool(ctx, child, childCall, childArgs, events...)
+			childResult = truncateToolOutput(childResult)
+			var diff string
+			if d, ok := child.(Differ); ok && !failed {
+				diff = d.LastDiff()
+			}
+			emit(Event{Type: EventToolEnd, ToolID: childCall.ID, ToolName: name, ToolResult: childResult, IsError: failed, Diff: diff})
+			if name == "todo_write" && !failed {
+				if items := todoItemsArg(childArgs); items != "" {
+					emit(Event{Type: EventTodo, ToolResult: items})
+				}
+			}
+			if failed {
+				return "", errors.New(childResult)
+			}
+			return childResult, nil
+		})
+		if err != nil {
+			return "error: " + err.Error(), true
+		}
+		return out, false
 	}
 	out, err := tool.Execute(ctx, args)
 	if err != nil {

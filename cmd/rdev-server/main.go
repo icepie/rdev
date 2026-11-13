@@ -344,6 +344,10 @@ Examples:
 	if proxyAddr != "" {
 		srv.ProxyAddr = proxyAddr
 	}
+	if err := srv.StartScheduler(); err != nil {
+		log.Fatalf("scheduled tasks initialization error: %v", err)
+	}
+	defer srv.StopScheduler()
 
 	sshServer, err := server.NewSSHServer(srv, sshAddr, hostKeyPath, authorizedKeysPath)
 	if err != nil {
@@ -372,10 +376,14 @@ Examples:
 	mux.HandleFunc("/browser", srv.StaticPageHandler("app.html"))
 	mux.HandleFunc("/api/browser", srv.HandleBrowserAPI)
 	mux.HandleFunc("/api/browser/view/", srv.HandleBrowserView)
+	mux.HandleFunc("/tasks", srv.StaticPageHandler("app.html"))
+	mux.HandleFunc("/tasks/", srv.StaticPageHandler("app.html"))
+	mux.HandleFunc("/api/schedules", srv.HandleSchedules)
 	mux.HandleFunc("/ws", srv.HandleWS)
 	mux.HandleFunc("/tcp-tunnel", srv.HandleTCPTunnel)
 	mux.HandleFunc("/terminal", splitPageAndWebSocket(srv.StaticPageHandler("app.html"), srv.HandleTerminalWS))
 	mux.HandleFunc("/desktop", srv.HandleDesktopWS)
+	mux.HandleFunc("/desktop/rtc", srv.HandleDesktopRTCWS)
 	mux.HandleFunc("/gpu-desktop-tunnel", srv.HandleGPUDesktopTunnel)
 	mux.HandleFunc("/gpu-desktop/", srv.HandleGPUDesktopProxy)
 	mux.HandleFunc("/session", srv.HandleSessionAttachWS)

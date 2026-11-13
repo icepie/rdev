@@ -99,7 +99,7 @@ func (t *automationTool) begin(ctx context.Context) (context.Context, func(), er
 	}
 	if t.state.manualInputs > 0 {
 		t.state.opMu.Unlock()
-		return nil, nil, fmt.Errorf("manual desktop input is in progress; take a fresh screenshot before continuing")
+		return nil, nil, fmt.Errorf("manual desktop input is in progress; wait until it finishes before continuing")
 	}
 	if t.state.paused {
 		t.state.opMu.Unlock()

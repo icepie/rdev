@@ -56,14 +56,15 @@ const (
 	MsgFileTransferCancel MessageType = "file_transfer_cancel" // bidir: cancel transfer
 
 	// Remote desktop (text frames for control, binary for frames)
-	MsgDesktopSnapshot  MessageType = "desktop_snapshot"   // S->C: capture one image in an on-demand session
-	MsgDesktopStart     MessageType = "desktop_start"      // S->C: start desktop capture
-	MsgDesktopReady     MessageType = "desktop_ready"      // C->S: desktop capture status/metadata
-	MsgDesktopInput     MessageType = "desktop_input"      // S->C: inject desktop mouse/keyboard input
-	MsgDesktopClose     MessageType = "desktop_close"      // bidir: close desktop session
-	MsgDesktopClipboard MessageType = "desktop_clipboard"  // bidir: request, set, or report session clipboard text
-	MsgDesktopCua       MessageType = "desktop_cua"        // S->C: execute a native Cua Driver request
-	MsgDesktopCuaResult MessageType = "desktop_cua_result" // C->S: native Cua Driver result
+	MsgDesktopSnapshot   MessageType = "desktop_snapshot"    // S->C: capture one image in an on-demand session
+	MsgDesktopStart      MessageType = "desktop_start"       // S->C: start desktop capture
+	MsgDesktopReady      MessageType = "desktop_ready"       // C->S: desktop capture status/metadata
+	MsgDesktopInput      MessageType = "desktop_input"       // S->C: inject desktop mouse/keyboard input
+	MsgDesktopClose      MessageType = "desktop_close"       // bidir: close desktop session
+	MsgDesktopClipboard  MessageType = "desktop_clipboard"   // bidir: request, set, or report session clipboard text
+	MsgDesktopCua        MessageType = "desktop_cua"         // S->C: execute a native Cua Driver request
+	MsgDesktopCuaResult  MessageType = "desktop_cua_result"  // C->S: native Cua Driver result
+	MsgDesktopRTCSignal  MessageType = "desktop_rtc_signal"  // bidir: SDP/ICE for browser-device desktop peer
 
 	// GPU desktop tunnel over shared TCP/KCP transport.
 	MsgGPUDesktopTunnel MessageType = "gpu_desktop_tunnel"
@@ -181,6 +182,8 @@ type Message struct {
 
 	// Remote desktop
 	DesktopCapabilities *DesktopCapabilities `json:"desktop,omitempty"`
+	RTCType             string               `json:"rtcType,omitempty"` // offer, answer, candidate, or close
+	RTCData             json.RawMessage      `json:"rtcData,omitempty"`
 	Width               int                  `json:"width,omitempty"`
 	Height              int                  `json:"height,omitempty"`
 	Format              string               `json:"format,omitempty"`

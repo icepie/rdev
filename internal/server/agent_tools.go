@@ -240,6 +240,7 @@ type shellTool struct {
 	// Cwd is the thread working directory sent with the exec session ("" =
 	// device process default).
 	Cwd string
+	Env []string
 }
 
 func (t *shellTool) Name() string { return "shell" }
@@ -343,6 +344,7 @@ func (t *shellTool) runShellReporting(ctx context.Context, command string, outpu
 		SessionID: sessionID,
 		Command:   command,
 		Cwd:       t.Cwd,
+		Env:       t.Env,
 		Pty:       false,
 	}); err != nil {
 		return agentCommandResult{}, fmt.Errorf("failed to reach device: %v", err)

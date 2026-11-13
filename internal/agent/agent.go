@@ -69,6 +69,16 @@ type Tool interface {
 	Execute(ctx context.Context, args json.RawMessage) (string, error)
 }
 
+// ToolInvoker lets a composite tool delegate calls through the session's
+// normal validation, approval, and event pipeline.
+type ToolInvoker func(name string, args json.RawMessage) (string, error)
+
+// ToolCallExecutor executes a tool that orchestrates other registered tools.
+// Delegated calls must go through the supplied invoker.
+type ToolCallExecutor interface {
+	ExecuteWithTools(ctx context.Context, args json.RawMessage, invoke ToolInvoker) (string, error)
+}
+
 // DangerousTool is an optional Tool interface: when it reports true, the
 // session asks Config.Approve for confirmation before executing the call.
 type DangerousTool interface {

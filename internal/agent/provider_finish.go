@@ -90,6 +90,12 @@ func (e *providerHTTPError) Is(target error) bool {
 	if target != ErrContextLengthExceeded {
 		return false
 	}
+	if e.status == 413 {
+		message := strings.ToLower(e.detail)
+		if strings.Contains(message, "failed to buffer the request body") && strings.Contains(message, "length limit exceeded") {
+			return true
+		}
+	}
 	var envelope struct {
 		Error providerErrorDetail `json:"error"`
 		providerErrorDetail

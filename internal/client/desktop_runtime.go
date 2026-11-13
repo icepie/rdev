@@ -32,14 +32,15 @@ type desktopSession struct {
 	clipboard desktopClipboard
 	cuaMu     sync.Mutex
 	cua       *nativeCuaSession
-
-	inputMu  sync.Mutex
-	frameMu  sync.RWMutex
-	bounds   image.Rectangle
-	frameW   int
-	frameH   int
-	cursor   image.Point
-	cursorOK bool
+	rtcMu     sync.Mutex
+	rtc       *desktopRTCSession
+	inputMu   sync.Mutex
+	frameMu   sync.RWMutex
+	bounds    image.Rectangle
+	frameW    int
+	frameH    int
+	cursor    image.Point
+	cursorOK  bool
 }
 
 func (s *desktopSession) setFrame(bounds image.Rectangle, width, height int) {
@@ -104,7 +105,7 @@ func (c *Client) handleDesktopStart(msg *protocol.Message) {
 	session := &desktopSession{stop: make(chan struct{}), snapshot: make(chan struct{}, 1)}
 	c.desktopSessions[msg.SessionID] = session
 	c.mu.Unlock()
-	defer session.closeCua()
+	defer session.closeRTC()
 
 	defer func() {
 		c.mu.Lock()
@@ -273,9 +274,11 @@ func (c *Client) handleDesktopStart(msg *protocol.Message) {
 				continue
 			}
 			started := time.Now()
-			if err := c.sendBinary(protocol.BinDesktopFrame, msg.SessionID, payload); err != nil {
-				log.Printf("desktop frame send error for source %s: %s", sourceName, err)
-				return
+			if !session.sendFrame(payload) {
+				if err := c.sendBinary(protocol.BinDesktopFrame, msg.SessionID, payload); err != nil {
+					log.Printf("desktop frame send error for source %s: %s", sourceName, err)
+					return
+				}
 			}
 			if elapsed := time.Since(started); elapsed > time.Second {
 				log.Printf("desktop frame send slow for source %s: %s", sourceName, elapsed)
@@ -446,6 +449,7 @@ func (c *Client) handleDesktopClose(sessionID string) {
 	c.mu.Unlock()
 	if session != nil {
 		close(session.stop)
+		session.closeRTC()
 		session.closeCua()
 	}
 }

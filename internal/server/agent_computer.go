@@ -24,7 +24,7 @@ type computerTool struct{ automationTool }
 func (*computerTool) Name() string                       { return "computer" }
 func (*computerTool) Summary(raw json.RawMessage) string { return automationSummary(raw) }
 func (*computerTool) Description() string {
-	return "Observe and operate the selected client's REAL desktop. Start with status for live screens, input capability and cua support; do not infer capability from old conversation claims. When cua=true, read the cua-driver skill and discover cua action=tools; prefer its semantic/accessibility actions. Use computer input only when CUA is unsupported or the discovered tools cannot perform the action, never to bypass permission denial, takeover or uncertain outcomes. Use computer screenshot before each computer input or native CUA call and again afterward; even read-only CUA calls consume the observation. For computer click/drag/scroll use this screenshot's pixels and source; native CUA tools have their own schema-defined coordinate spaces. key sends one press/release with optional modifiers; text enters Unicode (replacing the clipboard on Go clients). Screen control is exclusive until release, turn completion, error/cancel, human takeover or 2 minutes idle. These events close the native session and its cursor overlay. Use computer/CUA for the device's installed browser and existing logged-in tabs; browser operates a separate server-hosted browser, not that desktop session."
+	return "Observe and operate the selected client's REAL desktop. Start with status for live screens, input capability and cua support; do not infer capability from old conversation claims. When cua=true, read the cua-driver skill and discover cua action=tools; prefer its semantic/accessibility actions. Use computer input only when CUA is unsupported or the discovered tools cannot perform the action, never to bypass permission denial, takeover or uncertain outcomes. Screenshots are optional for input; use one when coordinates or visual state need grounding, and observe afterward to verify. For computer click/drag/scroll use the selected source's pixel coordinates; native CUA tools have their own schema-defined coordinate spaces. key sends one press/release with optional modifiers; text enters Unicode (replacing the clipboard on Go clients). Screen control is exclusive until release, turn completion, error/cancel, human takeover or 2 minutes idle. These events close the native session and its cursor overlay. Use computer/CUA for the device's installed browser and existing logged-in tabs; browser operates a separate server-hosted browser, not that desktop session."
 }
 func (*computerTool) Schema() json.RawMessage {
 	return json.RawMessage(`{"type":"object","properties":{"device":{"type":"string"},"action":{"type":"string","enum":["status","screenshot","click","drag","scroll","key","text","release"]},"source":{"type":"string"},"x":{"type":"integer","minimum":0},"y":{"type":"integer","minimum":0},"toX":{"type":"integer","minimum":0},"toY":{"type":"integer","minimum":0},"deltaX":{"type":"integer","minimum":-2000,"maximum":2000},"deltaY":{"type":"integer","minimum":-2000,"maximum":2000},"button":{"type":"integer","minimum":0,"maximum":2},"key":{"type":"string","maxLength":64},"code":{"type":"string","maxLength":64},"ctrl":{"type":"boolean"},"alt":{"type":"boolean"},"shift":{"type":"boolean"},"meta":{"type":"boolean"},"text":{"type":"string","maxLength":20000}},"required":["action"],"additionalProperties":false}`)
@@ -50,7 +50,7 @@ func (t *automationTool) claim(device string) error {
 	t.state.mu.Lock()
 	defer t.state.mu.Unlock()
 	if t.state.retired || t.state.paused || t.state.manualInputs > 0 {
-		return fmt.Errorf("desktop automation is interrupted or retired; take a fresh screenshot after resuming")
+		return fmt.Errorf("desktop automation is interrupted or retired; resume it before continuing")
 	}
 	s := t.srv
 	s.automationMu.Lock()
@@ -60,16 +60,16 @@ func (t *automationTool) claim(device string) error {
 	lease := s.desktopOwners[device]
 	if lease.cleaning || lease.manual > 0 {
 		s.automationMu.Unlock()
-		return fmt.Errorf("desktop control is being released; retry a fresh screenshot once cleanup completes")
+		return fmt.Errorf("desktop control is being released; retry after cleanup completes")
 	}
 	if lease.owner != nil && lease.owner != t.state {
 		if time.Now().Before(lease.until) {
 			s.automationMu.Unlock()
-			return fmt.Errorf("desktop is controlled by conversation %q for up to %s more; stop/release that conversation or use Take control, then resume and take a fresh screenshot", lease.tool.thread.id, time.Until(lease.until).Round(time.Second))
+			return fmt.Errorf("desktop is controlled by conversation %q for up to %s more; stop/release that conversation or use Take control, then retry after resuming", lease.tool.thread.id, time.Until(lease.until).Round(time.Second))
 		}
 		if !lease.owner.opMu.TryLock() {
 			s.automationMu.Unlock()
-			return fmt.Errorf("previous desktop input is still draining; retry a fresh screenshot after it finishes")
+			return fmt.Errorf("previous desktop input is still draining; retry after it finishes")
 		}
 		lease.cleaning = true
 		s.desktopOwners[device] = lease
@@ -81,7 +81,7 @@ func (t *automationTool) claim(device string) error {
 		current := s.desktopOwners[device]
 		if current.owner != lease.owner || current.until != lease.until || current.manual > 0 {
 			s.automationMu.Unlock()
-			return fmt.Errorf("manual desktop input is in progress; take a fresh screenshot afterward")
+			return fmt.Errorf("manual desktop input is in progress; retry after it finishes")
 		}
 	}
 	if lease.timer != nil {
@@ -272,19 +272,17 @@ func (t *computerTool) Execute(ctx context.Context, raw json.RawMessage) (string
 	if a.Source == "" && screen.client == client {
 		a.Source = screen.source
 	}
-	if a.Action != "screenshot" {
-		if screen.client != client || time.Since(screen.at) > 2*time.Minute {
-			return "", fmt.Errorf("take a fresh screenshot before desktop input")
-		}
+	refreshedForSource := false
+	if a.Action != "screenshot" && screen.client == client {
 		if a.Source == "" {
 			a.Source = screen.source
 		}
 		if a.Source != screen.source {
-			return "", fmt.Errorf("screen changed; take a new screenshot")
+			// A source switch invalidates old coordinates. Return a fresh frame
+			// rather than applying input grounded in a different screen.
+			refreshedForSource = true
+			a.Action = "screenshot"
 		}
-		// Consume freshness without losing the user's selected monitor.
-		screen.at = time.Time{}
-		t.state.screens[client.ID] = screen
 	}
 	if err = t.claim(client.ID); err != nil {
 		return "", err
@@ -304,8 +302,27 @@ func (t *computerTool) Execute(ctx context.Context, raw json.RawMessage) (string
 	if ready.Width <= 0 || ready.Height <= 0 {
 		return "", fmt.Errorf("invalid desktop dimensions")
 	}
-	if a.Action != "screenshot" && (ready.Width != screen.width || ready.Height != screen.height) {
-		return "", fmt.Errorf("screen dimensions changed; take a new screenshot")
+	if a.Action != "screenshot" && screen.client == client && screen.width > 0 && screen.height > 0 && (ready.Width != screen.width || ready.Height != screen.height) {
+		refreshedForSource = true
+		a.Action = "screenshot"
+	}
+	var refreshedFrame []byte
+	if request.OnDemand && (a.Action == "click" || a.Action == "drag" || a.Action == "scroll") {
+		refreshedFrame, err = t.freshDesktopFrame(ctx, client, session)
+		if err != nil {
+			return "", err
+		}
+		cfg, decodeErr := jpeg.DecodeConfig(bytes.NewReader(refreshedFrame))
+		if decodeErr != nil || cfg.Width <= 0 || cfg.Height <= 0 {
+			return "", fmt.Errorf("invalid fresh desktop frame")
+		}
+		if screen.client == client && screen.width > 0 && screen.height > 0 && (cfg.Width != screen.width || cfg.Height != screen.height) {
+			// A resolution change invalidates grounded coordinates. Return this
+			// exact fresh frame rather than rejecting or applying stale input.
+			refreshedForSource = true
+			a.Action = "screenshot"
+		}
+		ready.Width, ready.Height = cfg.Width, cfg.Height
 	}
 	if a.Action != "screenshot" && client.Desktop.NativeCua {
 		result, handled, err := preferComputerCua(ctx, session.cuaRequest, client, a, raw, ready.Width, ready.Height)
@@ -334,33 +351,39 @@ func (t *computerTool) Execute(ctx context.Context, raw json.RawMessage) (string
 	}
 	switch a.Action {
 	case "screenshot":
-		if request.OnDemand {
-			if err := client.Send(&protocol.Message{Type: protocol.MsgDesktopSnapshot, SessionID: id}); err != nil {
-				return "", err
+		frame := refreshedFrame
+		if frame == nil {
+			if request.OnDemand {
+				if err := client.Send(&protocol.Message{Type: protocol.MsgDesktopSnapshot, SessionID: id}); err != nil {
+					return "", err
+				}
+			}
+			select {
+			case msg := <-capture.messages:
+				return "", fmt.Errorf("desktop: %s", msg.Error)
+			case <-ctx.Done():
+				return "", ctx.Err()
+			case <-capture.done:
+				return "", fmt.Errorf("device disconnected")
+			case frame = <-capture.frames:
 			}
 		}
-		select {
-		case msg := <-capture.messages:
-			return "", fmt.Errorf("desktop: %s", msg.Error)
-		case <-ctx.Done():
-			return "", ctx.Err()
-		case <-capture.done:
-			return "", fmt.Errorf("device disconnected")
-		case frame := <-capture.frames:
-			result, err := automationImage(frame)
-			if err == nil {
-				cfg, _ := jpeg.DecodeConfig(bytes.NewReader(frame))
-				if cfg.Width != ready.Width || cfg.Height != ready.Height {
-					return "", fmt.Errorf("capture dimensions do not match device coordinates")
-				}
-				if t.state.screens == nil {
-					t.state.screens = make(map[string]automationScreen)
-				}
-				t.state.screens[client.ID] = automationScreen{client: client, source: a.Source, width: ready.Width, height: ready.Height, at: time.Now()}
+		result, err := automationImage(frame)
+		if err == nil {
+			cfg, decodeErr := jpeg.DecodeConfig(bytes.NewReader(frame))
+			if decodeErr != nil || cfg.Width <= 0 || cfg.Height <= 0 {
+				return "", fmt.Errorf("invalid desktop frame dimensions")
 			}
-			success = err == nil
-			return result, err
+			if t.state.screens == nil {
+				t.state.screens = make(map[string]automationScreen)
+			}
+			t.state.screens[client.ID] = automationScreen{client: client, source: a.Source, width: cfg.Width, height: cfg.Height, at: time.Now()}
 		}
+		success = err == nil
+		if err == nil && refreshedForSource {
+			result = "The display source or dimensions changed. This is a fresh screenshot; discard previous coordinates and inspect it before input.\n" + result
+		}
+		return result, err
 	case "click", "drag", "scroll":
 		var fields map[string]json.RawMessage
 		_ = json.Unmarshal(raw, &fields)

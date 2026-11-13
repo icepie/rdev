@@ -57,6 +57,7 @@ export interface BubbleItem {
   imagePreviews?: string[];
   steering?: boolean;
   job?: unknown;
+  scheduleRunId?: string;
   /* Client-side wall clock for the ⋯ menu timestamp; absent for history. */
   time?: number;
 }

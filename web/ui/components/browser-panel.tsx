@@ -1,6 +1,6 @@
 import type { AutomationView } from "./agent/automation";
 import { BrowserPreview } from "./browser-preview";
-import { useEffect, useRef, useState } from "react";
+import { type FormEvent, useEffect, useRef, useState } from "react";
 import { apiFetch, getDevicePassword } from "../lib/api";
 import { useDevices } from "../lib/devices";
 import { useServerCapabilities } from "../lib/server-capabilities";
@@ -25,11 +25,14 @@ export function BrowserPanel({ device, visible = true, deviceSelection = "inline
   const [targets, setTargets] = useState<Target[]>([]);
   const [selected, setSelected] = useState("");
   const [busy, setBusy] = useState(false);
+  const [address, setAddress] = useState("");
+  const addressRef = useRef<HTMLInputElement>(null);
   const [error, setError] = useState("");
   const [targetError, setTargetError] = useState("");
   const [languageError, setLanguageError] = useState("");
   const online = devices.some(d => d.id === exitDevice);
   const attachedAutomation = useRef(false);
+  const recoveryAttempted = useRef(new Set<string>());
   useEffect(() => {
     if (!automation?.base || !automation.target) {
       if (attachedAutomation.current) { setBase(""); setSelected(""); setTargets([]); }
@@ -70,6 +73,27 @@ export function BrowserPanel({ device, visible = true, deviceSelection = "inline
     const refresh = async () => {
       try {
         const response = await fetch(`${base}/targets`, { signal: controller.signal });
+        if (response.status === 404 && !recoveryAttempted.current.has(base)) {
+          recoveryAttempted.current.add(base);
+          const targetDevice = automation?.device ?? exitDevice;
+          const stopped = await fetch(`${base}/session`, { method: "DELETE", signal: controller.signal });
+          if (!stopped.ok && stopped.status !== 404) throw new Error(t("browser.expired"));
+          const restart = await apiFetch("/api/browser", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ device: targetDevice, password: targetDevice === exitDevice ? password : getDevicePassword(targetDevice), lang: lang === "zh" ? "zh" : "en" }),
+          });
+          if (restart.ok) {
+            const session: { base: string } = await restart.json();
+            if (session.base !== base && !controller.signal.aborted) {
+              setBase(session.base);
+              setTargets([]);
+              setSelected("");
+              setTargetError("");
+              return;
+            }
+          }
+        }
         if (!response.ok) throw new Error(t("browser.expired"));
         const rows: Target[] = await response.json();
         if (controller.signal.aborted) return;
@@ -84,7 +108,12 @@ export function BrowserPanel({ device, visible = true, deviceSelection = "inline
     };
     void refresh();
     return () => { controller.abort(); clearTimeout(timer); };
-  }, [base, visible, t, automation?.target]);
+  }, [base, visible, t, automation?.target, automation?.device, exitDevice, password, lang]);
+
+  const selectedTarget = targets.find(target => target.id === selected);
+  useEffect(() => {
+    if (selectedTarget && document.activeElement !== addressRef.current) setAddress(selectedTarget.url);
+  }, [selectedTarget?.url, selected]);
 
   const start = async () => {
     if (busy || !online) return;
@@ -116,15 +145,33 @@ export function BrowserPanel({ device, visible = true, deviceSelection = "inline
     } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
     finally { setBusy(false); }
   };
+
+  const navigate = async (event: FormEvent) => {
+    event.preventDefault();
+    const raw = address.trim();
+    if (busy || automation || !selected || !raw) return;
+    const url = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+    setBusy(true); setError("");
+    try {
+      const response = await fetch(`${base}/navigate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ target: selected, url }),
+      });
+      if (!response.ok) throw new Error((await response.text()).trim() || t("browser.navigateFailed"));
+      setAddress(url);
+    } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
+    finally { setBusy(false); }
+  };
   const inspector = base && selected ? `${base}/devtools/inspector.html?${new URLSearchParams({ [location.protocol === "https:" ? "wss" : "ws"]: `${location.host}${base}/devtools/page/${selected}`, dockSide: "undocked", rdevLang: lang === "zh" ? "zh" : "en-US" })}` : "";
 
   return <div className="flex min-h-0 min-w-0 w-full flex-1 flex-col overflow-hidden bg-background">
     <div className="flex min-h-11 shrink-0 flex-wrap items-center gap-2 border-b border-border-seam px-3 py-2 text-xs">
       <Icon name="Globe" className="size-4 text-muted-foreground" />
-      <span className="min-w-0 flex-1 truncate">{t("nav.browser")}{exitDevice && ` · ${exitDevice}`}</span>
+      <span className="min-w-0 max-w-48 truncate">{t("nav.browser")}{exitDevice && ` · ${exitDevice}`}</span>
       {base && <>
         <Button variant="ghost" size="sm" disabled={busy || !!automation} onClick={() => void newTab()} aria-label={t("agent.newTabLabel")}><Icon name="Plus" className="size-4" /></Button>
-        <Select value={selected} onValueChange={setSelected} disabled={targets.length === 0 || !!automation}>
+        <Select value={selected} onValueChange={value => { setSelected(value); setAddress(targets.find(target => target.id === value)?.url ?? ""); }} disabled={targets.length === 0 || !!automation}>
           <SelectTrigger aria-label={t("browser.tabs")} className="h-8 w-auto min-w-0 max-w-48 text-xs">
             <SelectValue placeholder={t("browser.tabs")} />
           </SelectTrigger>
@@ -132,6 +179,10 @@ export function BrowserPanel({ device, visible = true, deviceSelection = "inline
             {targets.map(target => <SelectItem key={target.id} value={target.id}>{target.title || target.url}</SelectItem>)}
           </SelectContent>
         </Select>
+        <form onSubmit={navigate} className="flex min-w-0 flex-1 items-center gap-1">
+          <Input ref={addressRef} aria-label={t("browser.address")} placeholder={t("browser.addressPlaceholder")} value={address} onChange={event => setAddress(event.target.value)} disabled={busy || !selected || !!automation} className="h-8 min-w-0 flex-1 text-xs" />
+          <Button type="submit" size="sm" disabled={busy || !selected || !!automation}>{t("browser.go")}</Button>
+        </form>
         {inspector && <a href={inspector} target="_blank" rel="noreferrer" className="rounded px-2 py-1 hover:bg-state-hover">{t("browser.expand")}</a>}
         <Button variant="ghost" size="sm" disabled={busy || !!automation} onClick={() => void stop()}>{t("browser.stop")}</Button>
       </>}

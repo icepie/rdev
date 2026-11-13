@@ -136,17 +136,19 @@ func TestComputerCuaUnsupportedAndUncertain(t *testing.T) {
 }
 
 func TestComputerNativePreferenceDoesNotBypassGatesOrRetry(t *testing.T) {
-	for _, mode := range []string{"preferred", "unsupported", "denied", "uncertain", "stale", "view-only"} {
+	for _, mode := range []string{"preferred", "unsupported", "denied", "uncertain", "stale", "no-screenshot", "legacy-no-screenshot", "view-only"} {
 		t.Run(mode, func(t *testing.T) {
 			srv, client, transport := newProxyTestServer(t, "cua-device", "")
-			client.Desktop = &protocol.DesktopCapabilities{Supported: true, Input: true, NativeCua: true, AgentVersion: 1, Sources: []protocol.DesktopSource{{ID: "auto"}}, ViewOnly: mode == "view-only"}
+			client.Desktop = &protocol.DesktopCapabilities{Supported: true, Input: true, NativeCua: mode != "legacy-no-screenshot", AgentVersion: 1, Sources: []protocol.DesktopSource{{ID: "auto"}}, ViewOnly: mode == "view-only"}
 			tool := &computerTool{automationTool: testAutomation(t, srv, client.ID, "thread")}
 			t.Cleanup(func() { tool.state.opMu.Lock(); closeDesktopAutomation(tool.state); tool.state.opMu.Unlock() })
 			at := time.Now()
 			if mode == "stale" {
 				at = at.Add(-3 * time.Minute)
 			}
-			tool.state.screens = map[string]automationScreen{client.ID: {client: client, source: "auto", width: 1280, height: 720, at: at}}
+			if mode != "no-screenshot" && mode != "legacy-no-screenshot" {
+				tool.state.screens = map[string]automationScreen{client.ID: {client: client, source: "auto", width: 1280, height: 720, at: at}}
+			}
 			native, legacy := 0, 0
 			transport.onSend = func(msg *protocol.Message) {
 				switch msg.Type {
@@ -177,25 +179,25 @@ func TestComputerNativePreferenceDoesNotBypassGatesOrRetry(t *testing.T) {
 				}
 			}
 			_, err := tool.Execute(context.Background(), json.RawMessage(`{"action":"key","key":"Enter"}`))
-			wantErr := mode == "uncertain" || mode == "stale" || mode == "view-only"
+			wantErr := mode == "uncertain" || mode == "view-only"
 			if (err != nil) != wantErr {
 				t.Fatalf("err=%v", err)
 			}
-			if mode == "unsupported" {
-				if legacy != 2 || native != 0 {
+			if mode == "unsupported" || mode == "legacy-no-screenshot" {
+				if legacy != 2 || (mode == "unsupported" && native != 0) {
 					t.Fatalf("legacy=%d native=%d", legacy, native)
 				}
 			} else if legacy != 0 {
 				t.Fatalf("fallback after native/gate: %d", legacy)
 			}
-			if mode == "preferred" || mode == "denied" || mode == "uncertain" {
+			if mode == "preferred" || mode == "denied" || mode == "uncertain" || mode == "stale" || mode == "no-screenshot" {
 				if native != 1 {
 					t.Fatalf("native calls=%d", native)
 				}
 			}
-			if mode == "preferred" {
-				if _, err := tool.Execute(context.Background(), json.RawMessage(`{"action":"key","key":"Enter"}`)); err == nil {
-					t.Fatal("native input did not consume screenshot freshness")
+			if mode == "preferred" || mode == "stale" || mode == "no-screenshot" || mode == "legacy-no-screenshot" {
+				if _, err := tool.Execute(context.Background(), json.RawMessage(`{"action":"key","key":"Enter"}`)); err != nil {
+					t.Fatalf("repeated input required another screenshot: %v", err)
 				}
 			}
 		})

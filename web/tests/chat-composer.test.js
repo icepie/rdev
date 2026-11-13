@@ -5,6 +5,7 @@ import { JSDOM } from "jsdom";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vitest";
+import { MemoryRouter } from "react-router-dom";
 
 vi.mock("../ui/components/icon", () => ({ Icon: () => null }));
 vi.mock("../ui/components/os-icon", () => ({ OsIcon: () => null }));
@@ -43,7 +44,7 @@ it("preserves composer intent across modified keys, image loading and thread swi
     onRegisterAddToChat: insert => { insertDraft = insert; },
   };
   const root = createRoot(document.getElementById("root"));
-  const render = () => act(async () => root.render(createElement(ChatPaneView, props)));
+  const render = () => act(async () => root.render(createElement(MemoryRouter, null, createElement(ChatPaneView, props))));
   const attach = async name => {
     const picker = document.querySelector('input[type="file"]');
     Object.defineProperty(picker, "files", { configurable: true, value: (Array.isArray(name) ? name : [name]).map(value => new dom.window.File(["image"], value, { type: "image/png" })) });

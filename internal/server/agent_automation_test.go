@@ -87,7 +87,7 @@ func TestManualInputCancelsActionWithoutPausingAutomation(t *testing.T) {
 		t.Fatal("lease not released", err)
 	}
 }
-func TestComputerCaptureInputAndStaleCoordinates(t *testing.T) {
+func TestComputerInputWithoutScreenshotAndCoordinateValidation(t *testing.T) {
 	s, client, transport := newProxyTestServer(t, "device", "")
 	client.Desktop = &protocol.DesktopCapabilities{Supported: true, Input: true, Clipboard: true, Sources: []protocol.DesktopSource{{ID: "screen:primary"}}}
 	base := testAutomation(t, s, "device", "a")
@@ -104,8 +104,8 @@ func TestComputerCaptureInputAndStaleCoordinates(t *testing.T) {
 		}
 	}
 	run := func(raw string) (string, error) { return tool.Execute(context.Background(), json.RawMessage(raw)) }
-	if _, err := run(`{"action":"click","x":10,"y":20}`); err == nil {
-		t.Fatal("input without screenshot")
+	if _, err := run(`{"action":"click","x":10,"y":20}`); err != nil {
+		t.Fatalf("input without a prior screenshot: %v", err)
 	}
 	result, err := run(`{"action":"screenshot","source":"screen:primary"}`)
 	if err != nil || !strings.HasPrefix(result, "[image preview]") {
@@ -114,8 +114,8 @@ func TestComputerCaptureInputAndStaleCoordinates(t *testing.T) {
 	if _, err := run(`{"action":"click","x":10,"y":20}`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := run(`{"action":"key","key":"Enter"}`); err == nil {
-		t.Fatal("input reused an already consumed observation")
+	if _, err := run(`{"action":"key","key":"Enter"}`); err != nil {
+		t.Fatalf("repeated input required a new screenshot: %v", err)
 	}
 	if _, err := run(`{"action":"screenshot"}`); err != nil {
 		t.Fatal(err)
@@ -143,7 +143,7 @@ func TestComputerCaptureInputAndStaleCoordinates(t *testing.T) {
 		}
 	}
 	transport.mu.Unlock()
-	if strings.Join(inputs, ",") != "mouse_down,mouse_up,mouse_down,mouse_move,mouse_up,key_down,key_up" {
+	if strings.Join(inputs, ",") != "mouse_down,mouse_up,mouse_down,mouse_up,key_down,key_up,mouse_down,mouse_move,mouse_up,key_down,key_up" {
 		t.Fatalf("input order: %v", inputs)
 	}
 	s.desktopMu.RLock()
@@ -155,8 +155,55 @@ func TestComputerCaptureInputAndStaleCoordinates(t *testing.T) {
 	s.mu.Lock()
 	s.clients[client.ID] = &ClientConn{ID: client.ID, Desktop: client.Desktop, Transport: transport}
 	s.mu.Unlock()
-	if _, err := run(`{"action":"click","x":10,"y":20}`); err == nil {
-		t.Fatal("old capture survived reconnect")
+	if _, err := run(`{"action":"click","x":10,"y":20}`); err != nil {
+		t.Fatalf("input after reconnect required a screenshot: %v", err)
+	}
+}
+
+func TestComputerSourceChangeRefreshesBeforeInput(t *testing.T) {
+	s, client, transport := newProxyTestServer(t, "device", "")
+	client.Desktop = &protocol.DesktopCapabilities{AgentVersion: 1, Supported: true, Input: true, Sources: []protocol.DesktopSource{{ID: "screen:primary"}, {ID: "screen:secondary"}}}
+	base := testAutomation(t, s, "device", "source-switch")
+	defer closeDesktopAutomation(base.state)
+	tool := computerTool{base}
+	var inputs, snapshots int
+	width, height := 1280, 720
+	transport.onSend = func(m *protocol.Message) {
+		switch m.Type {
+		case protocol.MsgDesktopStart:
+			s.handleDesktopMessage(&protocol.Message{Type: protocol.MsgDesktopReady, SessionID: m.SessionID, Width: width, Height: height})
+		case protocol.MsgDesktopSnapshot:
+			snapshots++
+			var frame bytes.Buffer
+			_ = jpeg.Encode(&frame, image.NewRGBA(image.Rect(0, 0, width, height)), nil)
+			s.handleDesktopFrame(m.SessionID, frame.Bytes())
+		case protocol.MsgDesktopInput:
+			inputs++
+		}
+	}
+	run := func(raw string) (string, error) { return tool.Execute(context.Background(), json.RawMessage(raw)) }
+	if _, err := run(`{"action":"screenshot","source":"screen:primary"}`); err != nil {
+		t.Fatal(err)
+	}
+	width = 800
+	result, err := run(`{"action":"click","source":"screen:primary","x":10,"y":20}`)
+	if err != nil || !strings.HasPrefix(result, "The display source or dimensions changed.") {
+		t.Fatalf("resolution change did not return a fresh observation: %s %v", result, err)
+	}
+	if inputs != 0 || snapshots != 2 || base.state.screens[client.ID].width != width {
+		t.Fatalf("stale input was sent or resolution was not refreshed: inputs=%d snapshots=%d screen=%+v", inputs, snapshots, base.state.screens[client.ID])
+	}
+	result, err = run(`{"action":"click","source":"screen:secondary","x":10,"y":20}`)
+	if err != nil || !strings.HasPrefix(result, "The display source or dimensions changed.") {
+	}
+	if inputs != 0 || snapshots != 3 || base.state.screens[client.ID].source != "screen:secondary" {
+		t.Fatalf("stale input was sent or screen was not refreshed: inputs=%d snapshots=%d screen=%+v", inputs, snapshots, base.state.screens[client.ID])
+	}
+	if _, err := run(`{"action":"click","source":"screen:secondary","x":10,"y":20}`); err != nil {
+		t.Fatal("input after fresh screen observation:", err)
+	}
+	if inputs != 2 { // mouse down + mouse up
+		t.Fatalf("freshly grounded click sent %d inputs", inputs)
 	}
 }
 func TestBrowserNavigationURL(t *testing.T) {
@@ -251,7 +298,7 @@ func TestComputerOnDemandSessionReuseAndRelease(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if starts != 1 || shots != 3 || closes != 0 {
+	if starts != 1 || shots != 4 || closes != 0 {
 		t.Fatalf("starts=%d shots=%d closes=%d", starts, shots, closes)
 	}
 	if _, err := tool.Execute(context.Background(), json.RawMessage(`{"action":"release"}`)); err != nil {
@@ -260,8 +307,17 @@ func TestComputerOnDemandSessionReuseAndRelease(t *testing.T) {
 	if closes != 1 || len(s.desktops) != 0 || len(base.state.desktop) != 0 {
 		t.Fatal("release leaked capture")
 	}
-	if _, err := tool.Execute(context.Background(), json.RawMessage(`{"action":"click","x":2,"y":3}`)); err == nil {
-		t.Fatal("release retained stale screenshot")
+	if _, err := tool.Execute(context.Background(), json.RawMessage(`{"action":"click","source":"screen:secondary","x":2,"y":3}`)); err != nil {
+		t.Fatalf("input after release required a screenshot: %v", err)
+	}
+	if starts != 2 || shots != 5 || closes != 1 {
+		t.Fatalf("post-release input did not start a new session: starts=%d shots=%d closes=%d", starts, shots, closes)
+	}
+	if _, err := tool.Execute(context.Background(), json.RawMessage(`{"action":"release"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if closes != 2 || len(s.desktops) != 0 || len(base.state.desktop) != 0 {
+		t.Fatal("second release leaked capture")
 	}
 }
 
