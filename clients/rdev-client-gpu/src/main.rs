@@ -50,7 +50,9 @@ struct ClientRuntime<'a> {
 struct DesktopRtcCleanup(rdev_client_gpu::desktop_rtc::DesktopRtcManager);
 
 impl Drop for DesktopRtcCleanup {
-    fn drop(&mut self) { self.0.close_all(); }
+    fn drop(&mut self) {
+        self.0.close_all();
+    }
 }
 
 /// TunnelBase tracks how tcp tunnel dial-backs reach the server: the ws(s)
@@ -712,7 +714,9 @@ async fn handle_text(
         }
         Some(MessageType::DesktopRTCSignal) => {
             if runtime.desktop_enabled && !args.no_desktop {
-                runtime.rtc.signal(msg, args.gpu_desktop_local.clone(), out_tx.clone());
+                runtime
+                    .rtc
+                    .signal(msg, args.gpu_desktop_local.clone(), out_tx.clone());
             }
         }
         other => debug!("ignored message type: {:?}", other),

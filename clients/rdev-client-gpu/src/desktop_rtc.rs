@@ -58,6 +58,12 @@ struct RemoteCandidates {
     pending: Vec<RTCIceCandidateInit>,
 }
 
+impl Default for DesktopRtcManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DesktopRtcManager {
     pub fn new() -> Self {
         Self {
