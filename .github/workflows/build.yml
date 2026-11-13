@@ -229,6 +229,11 @@ jobs:
           mkdir -p internal/client/cua_native/rust-target/release
           cp "internal/client/cua_native/rust-target/${{ matrix.rust_target }}/release/librdev_cua_bridge.a" \
             internal/client/cua_native/rust-target/release/
+          if [ "$target" = 'aarch64-pc-windows-gnullvm' ]; then
+            # CGO links native objects, not embedded LLVM IR. Go rejects these LTO sections.
+            /opt/llvm-mingw/bin/llvm-objcopy --remove-section=.llvmbc --remove-section=.llvmcmd \
+              internal/client/cua_native/rust-target/release/librdev_cua_bridge.a
+          fi
 
       - name: Build x264 client
         env:

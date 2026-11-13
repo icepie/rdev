@@ -295,6 +295,7 @@ Web UI 是 React 19 + Tailwind CSS v4 + Radix UI 单页应用，组件/设计令
 - 原生 CUA 工具：Go cgo-native 与 Rust GPU 客户端均通过顶层 `cua` 工具的 `action=tools` 返回精简工具目录，再用 `action=tools, tool=<工具名>` 按需读取完整输入 schema，最后以 `action=call` 调用，避免整个 SDK 工具目录挤占模型上下文；不再经 `computer.native_tools`。工具范围取决于客户端 Cua Driver 的 `tools/list`。普通 Go 客户端仍使用截图/坐标输入，不链接 Cua SDK。
  `client-cgo-native` 需要 Rust/Cargo 和 C 编译器；SDK 固定为 `0.47.1`，静态链接进客户端，无运行时下载或 MCP 子进程。运行时遵守 Cua 平台支持及辅助功能权限约束；Go 客户端的纯 Go 桌面路径不依赖 SDK。
  Linux 原生构建还需要 `pkg-config` 及 X11、Xi、xkbcommon 开发库（Debian/Ubuntu：`libx11-dev libxi-dev libxkbcommon-dev`）。
+ Windows ARM64 的 Go 原生 CUA 构建在链接前用 LLVM `objcopy --remove-section=.llvmbc --remove-section=.llvmcmd` 清理 Rust 静态库的嵌入 bitcode；CGO 使用原生目标代码，不启用跨语言 LTO，也不关闭 Go 的链接安全检查。
  Go 原生结果保留 MCP 文本、结构化内容和错误信息；操作仍使用会话级桌面独占控制、人工接管和空闲释放规则。
 - 原生 CUA 桥接会跨单次工具调用错误保留同一桌面会话；`set_agent_cursor_enabled` / `set_agent_cursor_motion` 只有在同会话状态读回匹配后才返回成功，等待超过 5 秒会作为调用错误返回。macOS GPU 客户端在进程主线程运行 AppKit cursor overlay loop，Tokio 客户端运行在后台线程。
 - Rust 客户端在 Linux 上直接调用 `renameat2` 系统调用，兼容 CentOS 7 的旧 glibc；重命名不会覆盖已存在的目标，不支持该系统调用的内核会返回错误而非降级为非原子操作。
