@@ -316,7 +316,8 @@ jobs:
           export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/27.1.12297006"
           export PATH="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH"
           if [ -n "${{ matrix.goarm }}" ]; then export GOARM="${{ matrix.goarm }}"; fi
-          go build -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" -o rdev-client ./cmd/rdev-client
+          # Pion's anet dependency accesses net.zoneCache on Android; Go 1.23+ requires this opt-in.
+          go build -ldflags "-checklinkname=0 -s -w -X main.version=${GITHUB_REF_NAME}" -o rdev-client ./cmd/rdev-client
           upx --best rdev-client || true
           file rdev-client
 
