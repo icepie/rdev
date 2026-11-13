@@ -36,6 +36,7 @@ func main() {
 		vncAddr          = ""
 		proxyAddr        = ""
 		browserEnabled   = parseBoolDefault(os.Getenv("RDEV_BROWSER_ENABLED"), false)
+		webRTCEnabled    = parseBoolDefault(os.Getenv("RDEV_WEBRTC"), false)
 		tunnelBase       = ""
 		autoUpdate       = true
 		updateInterval   = time.Minute
@@ -106,6 +107,8 @@ func main() {
 			}
 		case "--browser":
 			browserEnabled = true
+		case "--webrtc":
+			webRTCEnabled = true
 		case "--proxy":
 			if i+1 < len(os.Args) {
 				proxyAddr = os.Args[i+1]
@@ -182,6 +185,7 @@ Options:
   --batch-concurrency Max concurrent batch operations (default GOMAXPROCS*8)
   --vnc             VNC/RFB listen address with username=deviceId auth (optional)
   --browser         Enable server Chrome browser UI and CDP endpoints (default off; env RDEV_BROWSER_ENABLED)
+  --webrtc          Enable browser-device desktop WebRTC (default off; env RDEV_WEBRTC)
   --proxy           HTTP/SOCKS5 proxy listen address; username=deviceId[@password] selects the exit device (optional; env RDEV_PROXY_ADDR)
   --tunnel-base     Public ws(s):// base URL advertised to devices for tcp-tunnel dial-backs when the HTTP endpoint is behind a reverse proxy, e.g. wss://r.example.com (optional; env RDEV_TUNNEL_BASE)
   --no-auto-update Disable built-in GitHub release auto-update
@@ -289,6 +293,7 @@ Examples:
 
 	srv := server.NewServer()
 	srv.BrowserEnabled = browserEnabled
+	srv.WebRTCEnabled = webRTCEnabled
 	srv.ReleaseVersion = version
 	srv.SSHPort = sshPort
 	srv.HTTPHost = outboundIP + ":" + httpPort
@@ -384,6 +389,7 @@ Examples:
 	mux.HandleFunc("/terminal", splitPageAndWebSocket(srv.StaticPageHandler("app.html"), srv.HandleTerminalWS))
 	mux.HandleFunc("/desktop", srv.HandleDesktopWS)
 	mux.HandleFunc("/desktop/rtc", srv.HandleDesktopRTCWS)
+	mux.HandleFunc("/api/desktop/rtc", srv.HandleDesktopRTCAPI)
 	mux.HandleFunc("/gpu-desktop-tunnel", srv.HandleGPUDesktopTunnel)
 	mux.HandleFunc("/gpu-desktop/", srv.HandleGPUDesktopProxy)
 	mux.HandleFunc("/session", srv.HandleSessionAttachWS)

@@ -19,6 +19,8 @@ func TestDeviceToolSchemasRejectInvalidCallsBeforeApproval(t *testing.T) {
 		tool agent.Tool
 		args string
 	}{
+		{&shellTool{}, `{}`},
+		{&listDirTool{}, `{}`},
 		{&writeFileTool{}, `{"path":"/important-file"}`},
 		{&writeFileTool{}, `{"path":"/important-file","content":null}`},
 		{&backgroundTool{}, `{"command":true}`},
@@ -44,7 +46,8 @@ func TestDeviceToolSchemasRejectInvalidCallsBeforeApproval(t *testing.T) {
 					t.Error(err)
 				}
 				last := req.Messages[len(req.Messages)-1]
-				if last.Role != "tool" || last.ToolCallID != "invalid" || !strings.Contains(last.Content, "invalid arguments") {
+				if last.Role != "tool" || last.ToolCallID != "invalid" || !strings.Contains(last.Content, "invalid arguments") ||
+					!strings.Contains(last.Content, string(tc.tool.Schema())) {
 					t.Errorf("model did not receive schema error: %+v", last)
 				}
 				fmt.Fprint(w, sseTextLine("correct arguments needed")+sseDoneLine)

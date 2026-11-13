@@ -45,6 +45,12 @@ struct ClientRuntime<'a> {
     gpu_tunnel_device_tx: &'a watch::Sender<Option<String>>,
     connect_printed: Arc<AtomicBool>,
     tunnel_base: &'a TunnelBase,
+    rtc: &'a rdev_client_gpu::desktop_rtc::DesktopRtcManager,
+}
+struct DesktopRtcCleanup(rdev_client_gpu::desktop_rtc::DesktopRtcManager);
+
+impl Drop for DesktopRtcCleanup {
+    fn drop(&mut self) { self.0.close_all(); }
 }
 
 /// TunnelBase tracks how tcp tunnel dial-backs reach the server: the ws(s)
@@ -314,6 +320,8 @@ async fn run_once(
     let forwards = ForwardManager::new();
     let files = FileManager::new();
     let fileputs = FilePutManager::new();
+    let rtc = rdev_client_gpu::desktop_rtc::DesktopRtcManager::new();
+    let _rtc_cleanup = DesktopRtcCleanup(rtc.clone());
     let mut registered = false;
 
     let register = Message {
@@ -355,6 +363,7 @@ async fn run_once(
                             args,
                             server_host,
                             desktop_enabled,
+                            rtc: &rtc,
                             gpu_tunnel_device_tx,
                             connect_printed: connect_printed.clone(),
                             tunnel_base: &tunnel_base,
@@ -378,6 +387,7 @@ async fn run_once(
         }
     }
     sessions.close_all().await;
+    rtc.close_all();
     forwards.close_all().await;
     files.close_all().await;
     fileputs.close_all().await;
@@ -499,6 +509,8 @@ async fn run_once_stream(
     let forwards = ForwardManager::new();
     let files = FileManager::new();
     let fileputs = FilePutManager::new();
+    let rtc = rdev_client_gpu::desktop_rtc::DesktopRtcManager::new();
+    let _rtc_cleanup = DesktopRtcCleanup(rtc.clone());
     let mut registered = false;
     let register = Message {
         ty: Some(MessageType::Register),
@@ -545,7 +557,7 @@ async fn run_once_stream(
                 match frame.kind {
                     stream_frame::KIND_JSON => {
                         let text = String::from_utf8(frame.payload)?;
-                        let runtime = ClientRuntime { args, server_host, desktop_enabled, gpu_tunnel_device_tx, connect_printed: connect_printed.clone(), tunnel_base: &tunnel_base };
+                        let runtime = ClientRuntime { args, server_host, desktop_enabled, gpu_tunnel_device_tx, connect_printed: connect_printed.clone(), tunnel_base: &tunnel_base, rtc: &rtc };
                         if handle_text(&text, runtime, modules, &sessions, &forwards, &files, &out_tx).await? {
                             registered = true;
                         }
@@ -559,6 +571,7 @@ async fn run_once_stream(
         }
     }
     let _ = write_half.shutdown().await;
+    rtc.close_all();
     sessions.close_all().await;
     forwards.close_all().await;
     files.close_all().await;
@@ -696,6 +709,11 @@ async fn handle_text(
                     ..Default::default()
                 }))
                 .await;
+        }
+        Some(MessageType::DesktopRTCSignal) => {
+            if runtime.desktop_enabled && !args.no_desktop {
+                runtime.rtc.signal(msg, args.gpu_desktop_local.clone(), out_tx.clone());
+            }
         }
         other => debug!("ignored message type: {:?}", other),
     }

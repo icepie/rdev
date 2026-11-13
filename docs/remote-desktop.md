@@ -15,7 +15,7 @@ This document describes a cross-platform remote desktop feature for RDev. It is 
 - Capability discovery is intentionally non-invasive: clients enumerate metadata and sources with lightweight OS APIs/ioctls, but they do not start capture, export PRIME buffers, mmap framebuffer memory, or inject input during registration. Expensive or stateful operations happen only after an authenticated `desktop_start` selects a source.
 - Linux Wayland reports the native `wayland-portal` backend as planned and never shells out to `grim`/`slurp`; root/no-display sessions can fall back to `drm-kms` when active linear scanout metadata is visible, otherwise to `fbdev` when a readable, unblanked framebuffer is present.
 - macOS uses no-cgo Quartz/CoreGraphics capture and Quartz `CGEvent` mouse/keyboard input through dynamically loaded ApplicationServices symbols. Screen Recording and Accessibility permissions are still required by macOS.
-- Clipboard sync, tile diffing, and hardware/WebRTC acceleration remain future phases.
+- Optional browser-device WebRTC video transport is implemented for capable Go and Rust GPU clients, behind a default-off server opt-in. Clipboard and human input retain the server relay for authorization and Agent arbitration. Tile diffing remains a future phase.
 
 ## Goals
 
@@ -62,6 +62,21 @@ Add a new logical channel family alongside terminal, file, and TCP forwarding:
 
 Use binary frames for high-volume data. Keep JSON text frames for metadata and control.
 
+## Optional WebRTC transport
+
+Enable with `rdev-server --webrtc` or `RDEV_WEBRTC=true`; the default is **off**. The authenticated `GET /api/desktop/rtc` returns `{"enabled":false}` or `{"enabled":true}`. Browsers query it before constructing a peer or signaling socket, and also require the device to advertise `desktop.rtc: true`. Missing support, failed capability requests, and old servers keep the normal WebSocket transport without ICE/STUN activity.
+
+`/desktop/rtc` preserves admin-token, same-origin and device-password checks and rejects requests when disabled or when the device lacks RTC capability. Device signals are also discarded when disabled. Signaling uses `desktop_rtc_signal` with `sessionId`, `rtcType` and `rtcData`; video uses the ordered `rdev-desktop` DataChannel. The current ICE configuration uses Google's public STUN server and no TURN relay; networks that block direct connectivity fall back to the server relay.
+
+The Rust GPU RTC bridge opens a separate local GPU `/ws` session. On handoff the viewer requests `GetCapturableList` and then sends `Config`/video state to initialize that session and its decoder. The existing server WebSocket stays open with video paused, configured for the same source, so human input and clipboard retain server-side authorization and Agent takeover arbitration. Go desktop metadata, input and clipboard similarly stay on the server WebSocket while frame bytes can use RTC. The Agent desktop panel remains WebSocket-only.
+The viewer maps the selected relay source name into the fresh RTC source list rather than assuming session-local indices match. Missing or ambiguous names close RTC and retain the relay. RTC's read-only input/clipboard capability messages never replace the relay's interactive capabilities.
+
+Rust-to-browser GPU DataChannel messages use bounded `RDG1` envelopes: four magic bytes, one type byte (`0` binary / `1` UTF-8 text), big-endian u32 total length and u32 offset, followed by payload; the entire chunk is at most 16 KiB. Logical messages are at most 16 MiB and arrive sequentially without interleaving. The viewer rejects malformed, out-of-order or invalid UTF-8 messages and falls back if reassembly takes longer than 15 seconds. Browser-to-Rust messages remain small plain-text video/config commands; Go frame messages retain their existing unwrapped binary format.
+
+If negotiation fails, streaming continues over the original relay. If an established GPU RTC channel fails, the viewer reconfigures and resumes video over that relay without immediately renegotiating; an explicit reconnect can try RTC again. Disconnect and device replacement close the peer and signaling session. No client or server desktop capture is started just by querying the capability API.
+
+The Rust bridge applies bounded backpressure to its local video stream and cancels its sender with the session. The paused GPU relay retains its normal read timeout: write deadlines must not shorten it, otherwise direct video would lose its control/fallback connection after ten seconds.
+
 ## Encoding strategy
 
 Recommended phases:
@@ -70,7 +85,7 @@ Recommended phases:
 2. **Optional x264 H.264 stream**: WebCodecs clients request `h264`; the separately built Linux/amd64 `rdev-client-cgo` embeds x264, produces AVCC Baseline H.264, and falls back to MJPEG if either side cannot support the path. VNC always requests MJPEG because its bridge decodes JPEG frames.
 3. **Tile diffing / dirty regions**: keep JPEG/PNG compatibility while avoiding full-frame uploads when only small regions change.
 4. **WASM codec in browser**: decode optimized delta/tile stream in browser without server CPU cost.
-5. **WebRTC optional path**: use browser hardware decode where available and fall back to the MJPEG path.
+5. **WebRTC optional path**: implemented as a default-off direct DataChannel for existing encoded streams; decode support is unchanged and the server WebSocket remains the fallback and human-control path.
 
 For a non-cgo default build, avoid mandatory Go bindings to FFmpeg, GStreamer, VAAPI, MediaFoundation, VideoToolbox, or NVENC. Also avoid making external encoder processes mandatory. If hardware encoding is desired later, expose it as an optional backend behind capability detection.
 

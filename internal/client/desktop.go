@@ -133,5 +133,6 @@ func desktopCapabilities() *protocol.DesktopCapabilities {
 		caps.Reason = "unsupported platform"
 	}
 
+	caps.RTC = caps.Supported
 	return caps
 }

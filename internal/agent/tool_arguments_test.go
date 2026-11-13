@@ -103,6 +103,19 @@ func TestInvalidOrExternalToolSchemaCannotExecute(t *testing.T) {
 	}
 }
 
+func TestArgumentFeedbackPreservesNestedSchemaAndLocation(t *testing.T) {
+	const schema = `{"type":"object","properties":{"jobs":{"type":"array","items":{"$ref":"#/$defs/job"}}},"required":["jobs"],"$defs":{"job":{"type":"object","properties":{"command":{"type":"string"}},"required":["command"]}}}`
+	tool := &schemaTool{fakeTool: fakeTool{name: "batch"}, schema: schema}
+	var validator ToolArgumentValidator
+	err := validator.Validate(tool, json.RawMessage(`{"jobs":[{}]}`))
+	if err == nil || !strings.Contains(err.Error(), "/jobs/0") || !strings.Contains(err.Error(), "command") || !strings.Contains(err.Error(), schema) {
+		t.Fatalf("missing nested correction context: %v", err)
+	}
+	if err := validator.Validate(tool, json.RawMessage(`{"jobs":[{"command":"pwd"}]}`)); err != nil {
+		t.Fatalf("corrected arguments rejected: %v", err)
+	}
+}
+
 type panickingExecutionTool struct{ fakeTool }
 
 func (*panickingExecutionTool) Execute(context.Context, json.RawMessage) (string, error) {

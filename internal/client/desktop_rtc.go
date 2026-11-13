@@ -130,11 +130,7 @@ func (r *desktopRTCSession) acceptOffer(raw json.RawMessage) {
 		}
 		r.channel = channel
 		r.mu.Unlock()
-		channel.OnMessage(func(message webrtc.DataChannelMessage) {
-			if message.IsString {
-				r.handleControl([]byte(message.Data))
-			}
-		})
+		// Human input and clipboard stay on the server-arbitrated desktop socket.
 	})
 	peer.OnConnectionStateChange(func(state webrtc.PeerConnectionState) {
 		if state == webrtc.PeerConnectionStateFailed || state == webrtc.PeerConnectionStateClosed {
@@ -207,48 +203,6 @@ func (r *desktopRTCSession) send(payload []byte) bool {
 		return false
 	}
 	if err := channel.Send(payload); err != nil {
-		return false
-	}
-	return true
-}
-
-func (r *desktopRTCSession) handleControl(raw []byte) {
-	if len(raw) == 0 || len(raw) > 512*1024 {
-		return
-	}
-	msg, err := protocol.Decode(raw)
-	if err != nil || msg.SessionID != r.sessionID {
-		return
-	}
-	switch msg.Type {
-	case protocol.MsgDesktopInput:
-		if validRTCDesktopInput(msg) {
-			r.client.handleDesktopInput(msg)
-		}
-	case protocol.MsgDesktopClipboard:
-		if msg.ClipboardAction == "get" || msg.ClipboardAction == "set" {
-			r.client.handleDesktopClipboard(msg)
-		}
-	}
-}
-
-func validRTCDesktopInput(msg *protocol.Message) bool {
-	if msg == nil {
-		return false
-	}
-	switch msg.InputType {
-	case "cursor_move", "mouse_move", "mouse_down", "mouse_up", "wheel":
-		if msg.X < 0 || msg.Y < 0 || msg.Button < 0 || msg.Button > 4 {
-			return false
-		}
-		if msg.DeltaX < -2000 || msg.DeltaX > 2000 || msg.DeltaY < -2000 || msg.DeltaY > 2000 {
-			return false
-		}
-	case "key_down", "key_up":
-		if len(msg.Key) > 64 || len(msg.Code) > 64 {
-			return false
-		}
-	default:
 		return false
 	}
 	return true

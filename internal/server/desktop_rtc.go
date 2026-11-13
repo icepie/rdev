@@ -22,15 +22,35 @@ type desktopRTCConn struct {
 
 type desktopRTCWSHandler struct {
 	gws.BuiltinEventHandler
-	srv         *Server
-	adminBypass bool
+	srv *Server
 }
 
-// HandleDesktopRTCWS relays only signaling. Media and desktop control use the
-// browser-device DataChannel once ICE connects; normal desktop sockets remain
-// available as the fallback path.
+// HandleDesktopRTCAPI exposes the server opt-in without starting a peer.
+func (s *Server) HandleDesktopRTCAPI(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAuth(w, r) {
+		return
+	}
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	_ = json.NewEncoder(w).Encode(struct {
+		Enabled bool `json:"enabled"`
+	}{Enabled: s.WebRTCEnabled})
+}
+
+// HandleDesktopRTCWS relays only signaling. Video may use the browser-device
+// DataChannel once ICE connects; human controls retain the server WebSocket
+// for authorization and Agent arbitration, with relayed video as fallback.
 func (s *Server) HandleDesktopRTCWS(w http.ResponseWriter, r *http.Request) {
 	if !s.requireAuth(w, r) || !requireOrigin(w, r) {
+		return
+	}
+	if !s.WebRTCEnabled {
+		http.Error(w, "desktop WebRTC is disabled", http.StatusForbidden)
 		return
 	}
 	deviceID := strings.TrimSpace(r.URL.Query().Get("device"))
@@ -45,15 +65,20 @@ func (s *Server) HandleDesktopRTCWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	adminBypass := s.deviceAuthBypassed(r)
-	if client.Password != "" && !adminBypass && passwordFingerprint(r.URL.Query().Get("password")) != passwordFingerprint(client.Password) {
+	if client.Password != "" && !adminBypass && !constantTimeEqual(passwordFingerprint(r.URL.Query().Get("password")), passwordFingerprint(client.Password)) {
 		http.Error(w, "wrong device password", http.StatusUnauthorized)
 		return
 	}
-	upgrader := gws.NewUpgrader(&desktopRTCWSHandler{srv: s, adminBypass: adminBypass}, &gws.ServerOption{
+	if client.Desktop == nil || !client.Desktop.RTC {
+		http.Error(w, "device does not support desktop WebRTC", http.StatusConflict)
+		return
+	}
+	upgrader := gws.NewUpgrader(&desktopRTCWSHandler{srv: s}, &gws.ServerOption{
 		ReadMaxPayloadSize: 1024 * 1024,
 		Authorize: func(_ *http.Request, storage gws.SessionStorage) bool {
 			storage.Store("deviceID", deviceID)
 			storage.Store("session", session)
+			storage.Store("client", client)
 			return true
 		},
 	})
@@ -74,8 +99,9 @@ func (h *desktopRTCWSHandler) OnOpen(socket *gws.Conn) {
 		return
 	}
 	client := h.srv.clientByID(deviceID)
-	if client == nil {
-		_ = socket.WriteClose(1008, []byte("device is not connected"))
+	expectedClient, _ := socket.Session().Load("client")
+	if !h.srv.WebRTCEnabled || client == nil || client != expectedClient || client.Desktop == nil || !client.Desktop.RTC {
+		_ = socket.WriteClose(1008, []byte("desktop WebRTC is unavailable"))
 		return
 	}
 	conn := &desktopRTCConn{srv: h.srv, socket: socket, deviceID: deviceID, session: session, client: client}
@@ -110,7 +136,7 @@ func (h *desktopRTCWSHandler) OnMessage(socket *gws.Conn, message *gws.Message) 
 		return
 	}
 	conn := h.srv.desktopRTCConnFromSocket(socket)
-	if conn == nil || !validDesktopRTCSignal(msg.RTCType, msg.RTCData) {
+	if !h.srv.WebRTCEnabled || conn == nil || conn.client.Desktop == nil || !conn.client.Desktop.RTC || !validDesktopRTCSignal(msg.RTCType, msg.RTCData) {
 		return
 	}
 	_ = conn.client.Send(&protocol.Message{
@@ -182,7 +208,7 @@ func (c *desktopRTCConn) close(notifyDevice bool) {
 }
 
 func (s *Server) handleDesktopRTCSignal(client *ClientConn, msg *protocol.Message) {
-	if client == nil || msg.SessionID == "" || !validDesktopRTCSignal(msg.RTCType, msg.RTCData) {
+	if !s.WebRTCEnabled || client == nil || client.Desktop == nil || !client.Desktop.RTC || msg.SessionID == "" || !validDesktopRTCSignal(msg.RTCType, msg.RTCData) {
 		return
 	}
 	s.desktopMu.RLock()
@@ -192,7 +218,7 @@ func (s *Server) handleDesktopRTCSignal(client *ClientConn, msg *protocol.Messag
 		rtc = route.rtc
 	}
 	s.desktopMu.RUnlock()
-	if rtc == nil {
+	if rtc == nil || rtc.client != client {
 		return
 	}
 	if msg.RTCType == "close" {

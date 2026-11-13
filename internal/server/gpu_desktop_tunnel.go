@@ -225,7 +225,7 @@ func (t *gpuDesktopTunnel) writeLoop() {
 
 func (t *gpuDesktopTunnel) writePayload(payload []byte) error {
 	if t.conn != nil {
-		_ = t.conn.SetDeadline(time.Now().Add(gpuDesktopTunnelWriteWait))
+		_ = t.conn.SetWriteDeadline(time.Now().Add(gpuDesktopTunnelWriteWait))
 		return t.conn.WriteMessage(gws.OpcodeBinary, payload)
 	}
 	t.streamMu.Lock()
@@ -236,7 +236,7 @@ func (t *gpuDesktopTunnel) writePayload(payload []byte) error {
 
 func (t *gpuDesktopTunnel) writePing() error {
 	if t.conn != nil {
-		_ = t.conn.SetDeadline(time.Now().Add(gpuDesktopTunnelWriteWait))
+		_ = t.conn.SetWriteDeadline(time.Now().Add(gpuDesktopTunnelWriteWait))
 		return t.conn.WritePing(nil)
 	}
 	t.streamMu.Lock()

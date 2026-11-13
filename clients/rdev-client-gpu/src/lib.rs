@@ -6,6 +6,7 @@ pub mod fileput;
 pub mod files;
 pub mod forward;
 pub mod gpu_tunnel;
+pub mod desktop_rtc;
 pub mod identity;
 pub mod module_runtime;
 pub mod protocol;

@@ -566,6 +566,7 @@ type Server struct {
 	automationMu        sync.Mutex
 	desktopOwners       map[string]desktopAutomationLease
 	BrowserEnabled      bool // explicit opt-in for server-hosted Chrome
+	WebRTCEnabled       bool // explicit opt-in for browser-device desktop WebRTC
 	browserMu           sync.Mutex
 	browsers            map[string]*browserSession
 	clients             map[string]*ClientConn

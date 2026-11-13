@@ -1,5 +1,6 @@
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 pub const BIN_DATA: u8 = 0x01;
 pub const BIN_STDERR: u8 = 0x02;
@@ -88,6 +89,8 @@ pub enum MessageType {
     DesktopReady,
     #[serde(rename = "desktop_close")]
     DesktopClose,
+    #[serde(rename = "desktop_rtc_signal")]
+    DesktopRTCSignal,
     #[serde(rename = "gpu_desktop_tunnel")]
     GpuDesktopTunnel,
     #[serde(other)]
@@ -177,6 +180,10 @@ pub struct Message {
     pub file_operations: Vec<String>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub error: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub rtc_type: String,
+    #[serde(default, skip_serializing_if = "Value::is_null")]
+    pub rtc_data: serde_json::Value,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -191,6 +198,8 @@ pub struct DesktopCapabilities {
     pub view_only: bool,
     pub input: bool,
     pub clipboard: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub rtc: bool,
     #[serde(default)]
     pub cua: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

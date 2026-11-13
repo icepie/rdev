@@ -4,9 +4,12 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
+	"golang.org/x/text/language"
+	"golang.org/x/text/message"
 )
 
 type compiledToolSchema struct {
@@ -37,9 +40,36 @@ func (v *ToolArgumentValidator) Validate(tool Tool, args json.RawMessage) error 
 	}
 	value, err := jsonschema.UnmarshalJSON(bytes.NewReader(args))
 	if err != nil {
-		return err
+		return fmt.Errorf("invalid JSON: %v; tool was not executed. Submit a JSON object matching this parameter schema: %s", err, raw)
 	}
-	return compiled.schema.Validate(value)
+	if err := compiled.schema.Validate(value); err != nil {
+		validation, ok := err.(*jsonschema.ValidationError)
+		if !ok {
+			return err
+		}
+		var details []string
+		printer := message.NewPrinter(language.English)
+		var collect func(*jsonschema.ValidationError)
+		collect = func(e *jsonschema.ValidationError) {
+			if len(e.Causes) != 0 {
+				for _, cause := range e.Causes {
+					collect(cause)
+				}
+				return
+			}
+			path := ""
+			for _, part := range e.InstanceLocation {
+				path += "/" + strings.ReplaceAll(strings.ReplaceAll(part, "~", "~0"), "/", "~1")
+			}
+			if path == "" {
+				path = "(root)"
+			}
+			details = append(details, path+": "+e.ErrorKind.LocalizedString(printer))
+		}
+		collect(validation)
+		return fmt.Errorf("%s. Tool was not executed. Correct the arguments before calling again; do not repeat the same invalid call. Parameter schema (alternatives must not be combined): %s", strings.Join(details, "; "), raw)
+	}
+	return nil
 }
 
 func compileToolSchema(raw string) compiledToolSchema {

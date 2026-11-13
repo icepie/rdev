@@ -18,6 +18,7 @@ cua-native = ["embedded-rdev-desktop", "rdev-desktop/cua-native", "dep:rdev-cua-
 # Keep regular builds on current crates; the Win7 package applies PE import
 # patches and shim DLLs after the normal Windows GNU build.
 anyhow = "1.0.102"
+bytes = "1"
 base64 = "0.22.1"
 ed25519-dalek = { version = "2.2.0", default-features = false, features = ["alloc"] }
 rdev-desktop = { path = "vendor/rdev-desktop", optional = true, default-features = false }

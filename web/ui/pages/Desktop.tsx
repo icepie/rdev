@@ -1,4 +1,4 @@
-import { connectDesktopRTC, type DesktopRTCConnection } from "../lib/desktop-webrtc";
+import { connectDesktopRTC, sendGPUDesktopMessage, type DesktopRTCConnection } from "../lib/desktop-webrtc";
 import { desktopOwnsKeyboard } from "../lib/desktop-input-focus";
 import { isImeComposing } from "../lib/keyboard";
 import { writeOwnedClipboard } from "../lib/clipboard-write";
@@ -64,6 +64,7 @@ interface InputOption {
 
 interface DesktopCaps {
   supported?: boolean;
+  rtc?: boolean;
   reason?: string;
   platform?: string;
   displayServer?: string;
@@ -314,6 +315,7 @@ function DesktopSession({
   const devicesRef = useRef(devices);
   const clipCapsRef = useRef<ClipCaps | null>(null);
   const gpuSourceNamesRef = useRef<string[] | null>(null);
+  const gpuRTCSourceNamesRef = useRef<string[] | null>(null);
   const tRef = useRef(t);
   tRef.current = t;
 
@@ -982,10 +984,18 @@ function DesktopSession({
   /* ── GPU protocol ── */
 
   const gpuSend = (message: unknown) => {
-    const data = JSON.stringify(message);
-    if (rtcRef.current?.send(data)) return;
-    const ws = wsRef.current;
-    if (ws && ws.readyState === WebSocket.OPEN) ws.send(data);
+    let rtcSource: number | undefined;
+    if (rtcRef.current?.dataChannel.readyState === "open" && message && typeof message === "object" && "Config" in message) {
+      const names = gpuRTCSourceNamesRef.current;
+      // Wait for the fresh RTC list rather than applying a relay-local index.
+      if (!names) return;
+      const name = gpuSourceNamesRef.current?.[Number(settingsRef.current.gpuSource)];
+      const index = name ? names.indexOf(name) : -1;
+      if (!name || index < 0 || names.lastIndexOf(name) !== index || gpuSourceNamesRef.current?.filter(value => value === name).length !== 1) {
+        rtcRef.current.close(); // Missing/ambiguous identity safely retains the relay.
+      } else rtcSource = index;
+    }
+    sendGPUDesktopMessage(wsRef.current, rtcRef.current, message, rtcSource);
   };
 
   const gpuSendConfig = () => {
@@ -1180,18 +1190,13 @@ function DesktopSession({
 
   };
 
-  const sendDesktopRTC = (message: Record<string, unknown>) => {
-    const rtc = rtcRef.current;
-    if (connModeRef.current !== "desktop" || !rtcSessionRef.current || !rtc) return false;
-    return rtc.send(JSON.stringify({ sessionId: rtcSessionRef.current, ...message }));
-  };
   const requestRemoteClipboard = () => {
     if (!clipCapsRef.current || !clipboardSyncsRemoteToLocal() || clipReadPendingRef.current)
       return;
     clipReadPendingRef.current = true;
     const ws = wsRef.current;
     if (connModeRef.current === "gpu") gpuSend("GetClipboard");
-    else if (!sendDesktopRTC({ type: "desktop_clipboard", clipboardAction: "get" })) {
+    else {
       if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ op: "clipboard_get" }));
       else clipReadPendingRef.current = false;
     }
@@ -1218,7 +1223,7 @@ function DesktopSession({
       clipPendingRemoteFpRef.current = fingerprint;
       const ws = wsRef.current;
       if (connModeRef.current === "gpu") gpuSend({ SetClipboard: { items } });
-      else if (!sendDesktopRTC({ type: "desktop_clipboard", clipboardAction: "set", clipboardItems: items }) && ws?.readyState === WebSocket.OPEN)
+      else if (ws?.readyState === WebSocket.OPEN)
         ws.send(JSON.stringify({ op: "clipboard_set", clipboardItems: items }));
       setClipStatus(
         `${tRef.current("desktop.clipboardSyncedRemote")}（${items.map((item) => item.mime).join(", ")}）`,
@@ -1309,6 +1314,7 @@ function DesktopSession({
     connSeqRef.current++;
     clearTimeout(reconnectTimerRef.current);
     rtcSessionRef.current = "";
+    gpuRTCSourceNamesRef.current = null;
     rtcRef.current?.close();
     rtcRef.current = null;
     if (wsRef.current) {
@@ -1359,21 +1365,25 @@ function DesktopSession({
     lastCloseMsgRef.current = "";
     ws.binaryType = "arraybuffer";
     setStatus(tt("common.connecting"));
-    ws.onopen = () => {
+    ws.onopen = async () => {
       if (connID !== connSeqRef.current || wsRef.current !== ws) return;
       desktopReconnectDelayRef.current = 1000;
       setStatus(tRef.current("desktop.starting"));
       gpuSend("GetCapturableList");
-      gpuSendConfig();
+      // CapturableList initializes this local session before Config selects a source.
+      if (reconnecting) return; // Failed RTC stays on the relay until an explicit reconnect.
       const rtcSession = `gpu-${connID}-${crypto.randomUUID()}`;
       rtcSessionRef.current = rtcSession;
       let rtcWasOpen = false;
-      const rtc = connectDesktopRTC({
+      const rtc: DesktopRTCConnection | null = await connectDesktopRTC({
         device: dev,
         session: rtcSession,
         password: passwordRef.current,
+        supported: selectedDevice()?.desktop?.rtc === true,
+        gpuFraming: true,
+        isCurrent: () => connID === connSeqRef.current && wsRef.current === ws && ws.readyState === WebSocket.OPEN,
         onMessage: (event) => {
-          if (rtcRef.current === rtc && connID === connSeqRef.current) {
+          if (rtc && rtcRef.current === rtc && connID === connSeqRef.current) {
             rtcDispatchRef.current = true;
             try {
               ws.onmessage?.(event);
@@ -1383,22 +1393,30 @@ function DesktopSession({
           }
         },
         onState: (state) => {
+          if (!rtc || rtcRef.current !== rtc || connID !== connSeqRef.current || wsRef.current !== ws) return;
           if (state === "open") {
             rtcWasOpen = true;
-            if (wsRef.current === ws && ws.readyState === WebSocket.OPEN) ws.close();
+            gpuRTCSourceNamesRef.current = null;
+            // The RTC bridge has its own fresh local /ws session, not the relay's encoder.
+            gpuReleaseKeyboard();
+            closeGPUVideo();
+            ws.send(JSON.stringify("PauseVideo"));
+            rtc.send(JSON.stringify("GetCapturableList"));
           } else if (state === "failed" || state === "closed") {
             if (rtcRef.current !== rtc) return;
             rtcRef.current = null;
             rtcSessionRef.current = "";
-            if (state === "failed") rtc.close();
+            gpuRTCSourceNamesRef.current = null;
+            rtc.close();
             if (rtcWasOpen && !manualDisconnectRef.current && connID === connSeqRef.current) {
-              if (wsRef.current === ws) wsRef.current = null;
-              connectGPUDesktop(dev, true);
+              closeGPUVideo();
+              gpuSendConfig();
             }
           }
         },
       });
-      rtcRef.current = rtc;
+      if (connID === connSeqRef.current && wsRef.current === ws) rtcRef.current = rtc;
+      else rtc?.close();
     };
     ws.onerror = () => {
       if (connID !== connSeqRef.current || wsRef.current !== ws) return;
@@ -1406,7 +1424,10 @@ function DesktopSession({
     };
     ws.onclose = () => {
       if (connID !== connSeqRef.current || wsRef.current !== ws) return;
-      if (rtcRef.current?.dataChannel.readyState === "open") return;
+      const rtc = rtcRef.current;
+      rtcRef.current = null;
+      rtcSessionRef.current = "";
+      rtc?.close();
       wsRef.current = null;
       stopClipboardSync();
       setClipboardCapabilities(null);
@@ -1418,7 +1439,8 @@ function DesktopSession({
     };
     ws.onmessage = (evt) => {
       if (connID !== connSeqRef.current || wsRef.current !== ws) return;
-      if (rtcRef.current?.dataChannel.readyState === "open" && !rtcDispatchRef.current) return;
+      const relayDuringRTC = rtcRef.current?.dataChannel.readyState === "open" && !rtcDispatchRef.current;
+      if (evt.data instanceof ArrayBuffer && relayDuringRTC) return;
       if (evt.data instanceof ArrayBuffer) {
         if (gpuHandleAndroidVideoPacket(evt.data)) return;
         frameCountRef.current++;
@@ -1443,6 +1465,8 @@ function DesktopSession({
         return;
       }
       const msg = JSON.parse(evt.data);
+      if (relayDuringRTC && (msg === "NewVideo" || msg?.AndroidVideoConfig)) return;
+      if (rtcDispatchRef.current && (msg?.InputCapabilities || msg?.ClipboardCapabilities || msg?.ClipboardContent)) return;
       if (msg === "NewVideo") {
         gpuStartMedia();
         setGpuEmpty(null);
@@ -1452,13 +1476,26 @@ function DesktopSession({
       } else if (msg === "ConfigOk") {
         setGpuEmpty(null);
         setStatus(tRef.current("index.desktopReady"), "ok");
-      } else if (msg && msg.CapturableList) gpuSetSources(msg.CapturableList);
+      } else if (msg && msg.CapturableList) {
+        if (rtcDispatchRef.current) {
+          if (!Array.isArray(msg.CapturableList) || !msg.CapturableList.every((name: unknown) => typeof name === "string")) {
+            rtcRef.current?.close();
+            return;
+          }
+          gpuRTCSourceNamesRef.current = msg.CapturableList;
+          gpuSendConfig();
+        } else gpuSetSources(msg.CapturableList);
+      }
       else if (msg && msg.EncoderCapabilities) gpuSetEncoders(msg.EncoderCapabilities.options || []);
       else if (msg && msg.InputCapabilities) gpuSetInputCapabilities(msg.InputCapabilities);
       else if (msg && msg.ClipboardCapabilities) setClipboardCapabilities(msg.ClipboardCapabilities);
       else if (msg && msg.ClipboardContent) handleRemoteClipboard(msg.ClipboardContent);
       else if (msg && msg.RuntimeStatus) gpuUpdateFrameInfo();
       else if (msg && msg.ConfigError) {
+        if (rtcDispatchRef.current) {
+          rtcRef.current?.close();
+          return;
+        }
         lastCloseMsgRef.current = msg.ConfigError;
         setStatus(msg.ConfigError, "err");
       } else if (msg && msg.Error) {
@@ -1467,6 +1504,10 @@ function DesktopSession({
           clipPendingRemoteFpRef.current = null;
           setClipStatus(msg.Error);
         } else {
+          if (rtcDispatchRef.current) {
+            rtcRef.current?.close();
+            return;
+          }
           lastCloseMsgRef.current = msg.Error;
           setStatus(msg.Error, "err");
         }
@@ -1501,10 +1542,10 @@ function DesktopSession({
     ws.binaryType = "arraybuffer";
     setStatus(tRef.current("common.connecting"));
     let retryAfterClose = true;
-    ws.onmessage = (evt) => {
+    ws.onmessage = async (evt) => {
       if (connID !== connSeqRef.current || wsRef.current !== ws) return;
-      if (rtcRef.current?.dataChannel.readyState === "open") return;
       if (evt.data instanceof ArrayBuffer) {
+        if (rtcRef.current?.dataChannel.readyState === "open") return;
         drawFrame(evt.data);
         return;
       }
@@ -1526,23 +1567,26 @@ function DesktopSession({
           rtcRef.current?.close();
           rtcSessionRef.current = msg.session;
           const session = msg.session;
-          const rtc = connectDesktopRTC({
+          const rtc: DesktopRTCConnection | null = await connectDesktopRTC({
             device: dev,
             session,
             password: passwordRef.current,
+            supported: sel?.desktop?.rtc === true,
+            isCurrent: () => connID === connSeqRef.current && wsRef.current === ws && rtcSessionRef.current === session,
             onMessage: (event) => {
-              if (rtcRef.current !== rtc || rtcSessionRef.current !== session) return;
+              if (!rtc || rtcRef.current !== rtc || rtcSessionRef.current !== session) return;
               if (event.data instanceof ArrayBuffer) drawFrame(event.data);
             },
-			onState: (state) => {
-			  if ((state === "failed" || state === "closed") && rtcRef.current === rtc) {
-			    rtcRef.current = null;
-			    rtcSessionRef.current = "";
-			    if (state === "failed") rtc.close();
-			  }
-			},
+            onState: (state) => {
+              if (rtc && (state === "failed" || state === "closed") && rtcRef.current === rtc) {
+                rtcRef.current = null;
+                rtcSessionRef.current = "";
+                rtc.close();
+              }
+            },
           });
-          rtcRef.current = rtc;
+          if (connID === connSeqRef.current && wsRef.current === ws && rtcSessionRef.current === session) rtcRef.current = rtc;
+          else rtc?.close();
         }
       } else if (msg.op === "auth_fail") {
         retryAfterClose = false;
@@ -1755,7 +1799,6 @@ function DesktopSession({
 
   const sendInput = (input: Record<string, unknown>) => {
     if (!settingsRef.current.control || !remoteInputRef.current) return;
-    if (sendDesktopRTC({ type: "desktop_input", ...input })) return;
     const ws = wsRef.current;
     if (!ws || ws.readyState !== WebSocket.OPEN || ws.bufferedAmount > 512 * 1024) return;
     try {
@@ -1767,7 +1810,6 @@ function DesktopSession({
 
   const sendCursor = (input: Record<string, unknown>) => {
     if (!settingsRef.current.showCursor) return;
-    if (sendDesktopRTC({ type: "desktop_input", inputType: "cursor_move", ...input })) return;
     const ws = wsRef.current;
     if (!ws || ws.readyState !== WebSocket.OPEN || ws.bufferedAmount > 128 * 1024) return;
     try {

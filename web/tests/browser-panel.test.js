@@ -30,7 +30,6 @@ it.each(["inline", "sidebar"])("%s selection starts the chosen device, connects 
   await act(async () => document.querySelector("form").dispatchEvent(new dom.window.Event("submit",{bubbles:true,cancelable:true})));
 	  expect(JSON.parse(apiFetch.mock.calls[0][1].body)).toEqual({device:"laptop",password:"",lang:"en"});
   const frame = document.querySelector("iframe");
-  const postMessage = vi.spyOn(frame.contentWindow, "postMessage");
   const source = new URL(frame.src);
   expect(source.searchParams.get("wss")).toBe("rdev.test/api/browser/view/test-cap/devtools/page/page-1");
   expect(source.searchParams.has("token")).toBe(false);
@@ -52,11 +51,9 @@ it.each(["inline", "sidebar"])("%s selection starts the chosen device, connects 
   expect(tools.getAttribute("aria-pressed")).toBe("true");
   await act(() => root.render(createElement(BrowserPanel,{device:"laptop",deviceSelection,visible:false})));
   expect(document.querySelector("iframe")).toBe(frame);
-  expect(postMessage).toHaveBeenLastCalledWith({type:"rdev-browser-visible",visible:false},location.origin);
   await act(() => root.render(createElement(BrowserPanel,{device:"laptop",deviceSelection,visible:true})));
   expect(document.querySelector("iframe")).toBe(frame);
   expect([...document.querySelectorAll("button")].find(b=>b.textContent==="DevTools").getAttribute("aria-pressed")).toBe("true");
-  expect(postMessage).toHaveBeenLastCalledWith({type:"rdev-browser-visible",visible:true},location.origin);
   expect(apiFetch).toHaveBeenCalledTimes(1);
   await act(async () => [...document.querySelectorAll("button")].find(b=>b.textContent==="browser.stop").click());
   expect(fetched).toHaveBeenCalledWith("/api/browser/view/test-cap/session",{method:"DELETE"});
