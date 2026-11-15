@@ -41,6 +41,8 @@ import { OsIcon } from "../components/os-icon";
 import { CodeBlock } from "../components/markdown";
 import { useCopy } from "../lib/clipboard";
 import { COARSE_POINTER_HEADER_ICON_BUTTON_CLASS } from "../components/coarse-pointer-sizing";
+import { HealthPanel } from "../components/health-panel";
+import { IdentityManagement } from "../components/identity-management";
 
 /* ── Server endpoint helpers (ported from web/index.html) ── */
 
@@ -438,6 +440,9 @@ export function DashboardPage() {
           {t("index.subtitle")}
         </p>
       </div>
+
+      <HealthPanel />
+      <IdentityManagement />
 
       {/* Stats */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">

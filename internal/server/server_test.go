@@ -273,13 +273,14 @@ func TestDesktopH264QueueRetainsDependentFrames(t *testing.T) {
 	}
 }
 
-func TestRegisterClientReplacesSameInstanceReconnect(t *testing.T) {
+func TestRegisterClientReplacesAuthenticatedReconnect(t *testing.T) {
 	s := NewServer()
 	oldConn := &gws.Conn{}
 
 	newConn := &gws.Conn{}
 	oldClient := &ClientConn{ID: "device", RequestedID: "device", InstanceID: "inst-1", Conn: oldConn, Sessions: make(map[string]*ProxySession), Forwards: make(map[string]*ProxyForward)}
-	newClient := &ClientConn{ID: "device", RequestedID: "device", InstanceID: "inst-1", Conn: newConn, Sessions: make(map[string]*ProxySession), Forwards: make(map[string]*ProxyForward)}
+	enrollIdentityTestClient(t, s, oldClient)
+	newClient := &ClientConn{ID: "device", RequestedID: "device", InstanceID: "inst-2", DeviceIdentity: oldClient.DeviceIdentity, ReconnectProof: oldClient.ReconnectProof, Conn: newConn, Sessions: make(map[string]*ProxySession), Forwards: make(map[string]*ProxyForward)}
 
 	if old, assigned, duplicate := s.registerClient(oldClient); old != nil || assigned != "device" || duplicate {
 		t.Fatalf("first registration = (%#v, %q, %v), want nil device false", old, assigned, duplicate)
@@ -300,13 +301,15 @@ func TestRegisterClientDuplicateIDGetsSuffix(t *testing.T) {
 	s := NewServer()
 	first := &ClientConn{ID: "device", RequestedID: "device", InstanceID: "inst-1", Conn: &gws.Conn{}, Sessions: make(map[string]*ProxySession), Forwards: make(map[string]*ProxyForward)}
 	second := &ClientConn{ID: "device", RequestedID: "device", InstanceID: "inst-2", Conn: &gws.Conn{}, Sessions: make(map[string]*ProxySession), Forwards: make(map[string]*ProxyForward)}
+	enrollIdentityTestClient(t, s, first)
+	enrollIdentityTestClient(t, s, second)
 
 	if old, assigned, duplicate := s.registerClient(first); old != nil || assigned != "device" || duplicate {
 		t.Fatalf("first registration = (%#v, %q, %v), want nil device false", old, assigned, duplicate)
 	}
 	old, assigned, duplicate := s.registerClient(second)
-	if old != nil || assigned != "device-2" || !duplicate {
-		t.Fatalf("duplicate registration = (%#v, %q, %v), want nil device-2 true", old, assigned, duplicate)
+	if old != nil || assigned != "device-2" || duplicate {
+		t.Fatalf("duplicate enrollment registration = (%#v, %q, %v), want nil device-2 false", old, assigned, duplicate)
 	}
 	if got := s.clients["device"]; got != first {
 		t.Fatalf("original client = %#v, want first", got)

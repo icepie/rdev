@@ -3,13 +3,10 @@ package server
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
 	"log"
 	"os"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"sort"
 	"strings"
@@ -123,20 +120,22 @@ const scheduleMaxConcurrent = 8
 // Scheduler is a single-owner durable dispatcher. No external side effect is
 // started before its dispatch reservation has been fsynced successfully.
 type Scheduler struct {
-	mu      sync.Mutex
-	srv     *Server
-	path    string
-	lock    *flock.Flock
-	state   schedulerState
-	active  map[string]context.CancelFunc
-	closed  bool
-	dirty   bool
-	fault   error
-	cancel  context.CancelFunc
-	wg      sync.WaitGroup
-	now     func() time.Time
-	ready   func(ScheduleSpec) (bool, string)
-	execute func(context.Context, ScheduleRun, func(ScheduledUpdate)) ScheduledResult
+	mu        sync.Mutex
+	srv       *Server
+	path      string
+	lock      *flock.Flock
+	state     schedulerState
+	active    map[string]context.CancelFunc
+	closed    bool
+	dirty     bool
+	fault     error
+	lastPrune time.Time
+	store     schedulerStore
+	cancel    context.CancelFunc
+	wg        sync.WaitGroup
+	now       func() time.Time
+	ready     func(ScheduleSpec) (bool, string)
+	execute   func(context.Context, ScheduleRun, func(ScheduledUpdate)) ScheduledResult
 }
 
 func (s *Server) Scheduler() (*Scheduler, error) {
@@ -191,23 +190,10 @@ func openScheduler(s *Server) (*Scheduler, error) {
 			_ = lock.Unlock()
 		}
 	}()
-	f, err := os.Open(m.path)
-	if err == nil {
-		data, e := io.ReadAll(io.LimitReader(f, scheduleStateLimit+1))
-		_ = f.Close()
-		if e != nil {
-			return nil, e
-		}
-		if len(data) > scheduleStateLimit {
-			return nil, fmt.Errorf("schedule state exceeds size limit")
-		}
-		if e = json.Unmarshal(data, &m.state); e != nil {
-			return nil, fmt.Errorf("invalid schedule state: %w", e)
-		}
-		if m.state.Version != 1 || m.state.Schedules == nil || m.state.Runs == nil {
-			return nil, fmt.Errorf("unsupported schedule state")
-		}
-	} else if !errors.Is(err, os.ErrNotExist) {
+	if err = m.loadLocked(); err != nil {
+		return nil, err
+	}
+	if err = m.collectRecordsLocked(m.store.manifest); err != nil {
 		return nil, err
 	}
 	now := m.now().UTC()
@@ -285,50 +271,6 @@ func (m *Scheduler) close() {
 	_ = m.lock.Unlock()
 }
 
-// saveLocked uses an atomic replacement and syncs before returning. A failed
-// commit latches a fault: no dispatch is allowed until an operator restarts with
-// healthy storage. This also covers uncertain directory-sync outcomes.
-func (m *Scheduler) saveLocked() error {
-	if m.fault != nil {
-		return m.fault
-	}
-	data, err := json.Marshal(m.state)
-	if err == nil && len(data) > scheduleStateLimit {
-		err = fmt.Errorf("schedule storage limit reached")
-	}
-	if err == nil {
-		var f *os.File
-		f, err = os.OpenFile(m.path+".tmp", os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0600)
-		if err == nil {
-			_, err = f.Write(data)
-			if err == nil {
-				err = f.Sync()
-			}
-			closeErr := f.Close()
-			if err == nil {
-				err = closeErr
-			}
-		}
-		if err == nil {
-			err = os.Rename(m.path+".tmp", m.path)
-		}
-		// Windows cannot fsync an opened directory; the file itself is synced above.
-		if err == nil && runtime.GOOS != "windows" {
-			var d *os.File
-			d, err = os.Open(filepath.Dir(m.path))
-			if err == nil {
-				err = d.Sync()
-				_ = d.Close()
-			}
-		}
-	}
-	if err != nil {
-		m.fault = fmt.Errorf("schedule persistence failed; dispatch stopped: %w", err)
-		return m.fault
-	}
-	m.dirty = false
-	return nil
-}
 func (m *Scheduler) usableLocked() error {
 	if m.closed {
 		return fmt.Errorf("scheduler is stopped")
@@ -873,6 +815,7 @@ func (m *Scheduler) pruneLocked(now time.Time) {
 		counts[r.ScheduleID]++
 		if i >= 1000 || counts[r.ScheduleID] > 100 || r.ScheduledAt.Before(now.AddDate(0, 0, -30)) {
 			delete(m.state.Runs, id)
+			m.dirty = true
 		}
 	}
 }
@@ -884,6 +827,10 @@ func (m *Scheduler) tick() {
 		return
 	}
 	now := m.now().UTC()
+	if m.lastPrune.IsZero() || now.Sub(m.lastPrune) >= time.Minute {
+		m.pruneLocked(now)
+		m.lastPrune = now
+	}
 	changed := m.dirty
 	for id, sc := range m.state.Schedules {
 		if sc.State != "enabled" {

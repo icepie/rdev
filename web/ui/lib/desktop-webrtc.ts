@@ -52,20 +52,18 @@ interface DesktopRTCOptions {
 export async function connectDesktopRTC(options: DesktopRTCOptions): Promise<DesktopRTCConnection | null> {
   if (!options.supported || typeof RTCPeerConnection !== "function" || !options.isCurrent()) return null;
   try {
-    const config = await apiJSON<{ enabled: boolean }>("/api/desktop/rtc", { cache: "no-store" });
+    const config = await apiJSON<{ enabled: boolean; iceServers?: RTCIceServer[] }>("/api/desktop/rtc", { cache: "no-store" });
     if (config?.enabled !== true || !options.isCurrent()) return null;
-    return createDesktopRTC(options);
+    return createDesktopRTC(options, config.iceServers ?? [{ urls: ["stun:stun.l.google.com:19302"] }]);
   } catch {
     return null; // Old servers, auth failures and unavailable WebRTC keep the relay.
   }
 }
 
-function createDesktopRTC(options: DesktopRTCOptions): DesktopRTCConnection {
+function createDesktopRTC(options: DesktopRTCOptions, iceServers: RTCIceServer[]): DesktopRTCConnection {
   const params = new URLSearchParams({ device: options.device, session: options.session });
   if (options.password) params.set("password", options.password);
-  const peer = new RTCPeerConnection({
-    iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
-  });
+  const peer = new RTCPeerConnection({ iceServers });
   let dataChannel: RTCDataChannel;
   let signaling: WebSocket;
   try {

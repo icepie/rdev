@@ -618,16 +618,14 @@ jobs:
           echo "=== Rust GPU release files ==="
           ls -lh release
 
-      # Sign assets so auto-updaters can verify the ed25519 signature;
-      # unsigned releases are rejected by clients, so warn loudly instead of
-      # failing the whole release when the secret is not configured.
+      # Never publish assets that auto-updaters cannot authenticate.
       - name: Sign release assets
         env:
           RDEV_UPDATE_SIGNING_KEY: ${{ secrets.RDEV_UPDATE_SIGNING_KEY }}
         run: |
           if [ -z "$RDEV_UPDATE_SIGNING_KEY" ]; then
-            echo "::warning::RDEV_UPDATE_SIGNING_KEY secret is not configured; release assets will NOT be signed and auto-update clients will reject them"
-            exit 0
+            echo "::error::RDEV_UPDATE_SIGNING_KEY is required for release publication"
+            exit 1
           fi
           go run ./scripts/sign -key "$RDEV_UPDATE_SIGNING_KEY" release/*
           ls -lh release/*.sig

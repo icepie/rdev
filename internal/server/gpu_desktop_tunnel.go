@@ -3,6 +3,7 @@ package server
 import (
 	"bufio"
 	"bytes"
+	"crypto/subtle"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -63,6 +64,8 @@ type gpuDesktopTunnelHandler struct {
 	srv      *Server
 	deviceID string
 	tunnel   *gpuDesktopTunnel
+	client   *ClientConn
+	proof    string
 }
 
 func (s *Server) HandleGPUDesktopTunnel(w http.ResponseWriter, r *http.Request) {
@@ -79,16 +82,14 @@ func (s *Server) HandleGPUDesktopTunnel(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "device is not connected", http.StatusNotFound)
 		return
 	}
-	if client.Password != "" && !s.deviceAuthBypassed(r) && passwordFingerprint(r.URL.Query().Get("password")) != passwordFingerprint(client.Password) {
-		http.Error(w, "wrong device password", http.StatusUnauthorized)
-		return
-	}
-	if instanceID := strings.TrimSpace(r.URL.Query().Get("instanceId")); instanceID != "" && instanceID != client.InstanceID {
-		http.Error(w, "wrong device instance", http.StatusUnauthorized)
+	identity := strings.TrimSpace(r.URL.Query().Get("deviceIdentity"))
+	proof := strings.TrimSpace(r.URL.Query().Get("reconnectProof"))
+	if identity != client.DeviceIdentity || !s.validateReconnectProof(identity, proof) {
+		http.Error(w, "invalid device reconnect proof", http.StatusUnauthorized)
 		return
 	}
 
-	handler := &gpuDesktopTunnelHandler{srv: s, deviceID: deviceID}
+	handler := &gpuDesktopTunnelHandler{srv: s, deviceID: deviceID, client: client, proof: proof}
 	upgrader := gws.NewUpgrader(handler, &gws.ServerOption{
 		ReadMaxPayloadSize: 16 * 1024 * 1024,
 		CheckUtf8Enabled:   false,
@@ -103,14 +104,18 @@ func (s *Server) HandleGPUDesktopTunnel(w http.ResponseWriter, r *http.Request) 
 func (h *gpuDesktopTunnelHandler) OnOpen(socket *gws.Conn) {
 	_ = socket.SetDeadline(time.Now().Add(gpuDesktopTunnelReadWait))
 	tunnel := newGPUDesktopTunnel(h.deviceID, socket)
+	if !h.srv.registerGPUDesktopTunnel(tunnel, h.client, h.proof) {
+		tunnel.close()
+		return
+	}
+	h.proof = ""
 	h.tunnel = tunnel
-	h.srv.registerGPUDesktopTunnel(tunnel)
 	go tunnel.writeLoop()
 }
 
 func (h *gpuDesktopTunnelHandler) OnMessage(socket *gws.Conn, message *gws.Message) {
 	defer message.Close()
-	if message.Opcode != gws.OpcodeBinary {
+	if h.tunnel == nil || message.Opcode != gws.OpcodeBinary {
 		return
 	}
 	payload := message.Bytes()
@@ -164,14 +169,33 @@ func newGPUDesktopStreamTunnel(deviceID string, conn net.Conn) *gpuDesktopTunnel
 	}
 }
 
-func (s *Server) registerGPUDesktopTunnel(tunnel *gpuDesktopTunnel) {
-	s.gpuDesktopMu.Lock()
-	if old := s.gpuDesktopTunnels[tunnel.deviceID]; old != nil {
-		old.close()
+// Admission is serialized with revocation and control-connection replacement.
+// Authentication before a WebSocket upgrade alone cannot prevent late publish.
+func (s *Server) registerGPUDesktopTunnel(tunnel *gpuDesktopTunnel, client *ClientConn, proof string) bool {
+	reg := s.identityRegistry()
+	reg.mu.Lock()
+	defer reg.mu.Unlock()
+	if client == nil || tunnel.deviceID != client.ID || s.loadIdentityLocked(reg) != nil {
+		return false
 	}
+	record, ok := reg.records[client.DeviceIdentity]
+	if !ok || record.Revoked || record.ClientID != client.ID || subtle.ConstantTimeCompare([]byte(record.ProofHash), []byte(hashIdentityProof(proof))) != 1 {
+		return false
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.clients[client.ID] != client {
+		return false
+	}
+	s.gpuDesktopMu.Lock()
+	old := s.gpuDesktopTunnels[tunnel.deviceID]
 	s.gpuDesktopTunnels[tunnel.deviceID] = tunnel
 	s.gpuDesktopMu.Unlock()
+	if old != nil {
+		old.close()
+	}
 	log.Printf("gpu desktop tunnel registered: device=%s", tunnel.deviceID)
+	return true
 }
 
 func (s *Server) unregisterGPUDesktopTunnel(tunnel *gpuDesktopTunnel) {
@@ -380,16 +404,15 @@ func (s *Server) handleGPUDesktopStreamTunnel(conn net.Conn, msg *protocol.Messa
 		_ = conn.Close()
 		return
 	}
-	if client.Password != "" && passwordFingerprint(msg.Password) != passwordFingerprint(client.Password) {
-		_ = conn.Close()
-		return
-	}
-	if instanceID := strings.TrimSpace(msg.InstanceID); instanceID != "" && instanceID != client.InstanceID {
+	if msg.DeviceIdentity != client.DeviceIdentity || !s.validateReconnectProof(msg.DeviceIdentity, msg.ReconnectProof) {
 		_ = conn.Close()
 		return
 	}
 	tunnel := newGPUDesktopStreamTunnel(deviceID, conn)
-	s.registerGPUDesktopTunnel(tunnel)
+	if !s.registerGPUDesktopTunnel(tunnel, client, msg.ReconnectProof) {
+		tunnel.close()
+		return
+	}
 	defer func() {
 		s.unregisterGPUDesktopTunnel(tunnel)
 		tunnel.close()

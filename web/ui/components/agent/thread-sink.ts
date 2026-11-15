@@ -72,10 +72,11 @@ export interface ThreadSinkState {
   queueIds: string[];
   queueModes: string[];
   queueError: string;
-  running: boolean;
-  /* Stop requested, server not yet acked (the turn unwind's stopped frame
-   * clears it); keeps the stop button disabled in the meantime. */
-  stopping: boolean;
+	historyError: string;
+	running: boolean;
+	/* Stop requested, server not yet acked (the turn unwind's stopped frame
+	 * clears it); keeps the stop button disabled in the meantime. */
+	stopping: boolean;
   turnUsage: TurnUsage | null;
   currentTool: string;
   workingSince: number | null;
@@ -96,6 +97,7 @@ export interface ThreadSinkOps {
   jobActionReplies: RefObject<Map<string, (reply: Record<string, unknown> | null) => void>>;
   setJobsError: Dispatch<SetStateAction<string>>;
   setJobs: Dispatch<SetStateAction<AgentJob[]>>;
+	setHistoryError: Dispatch<SetStateAction<string>>;
   setItems: Dispatch<SetStateAction<TranscriptItem[]>>;
   setTodos: Dispatch<SetStateAction<TodoItem[]>>;
   setQueue: Dispatch<SetStateAction<string[]>>;
@@ -161,6 +163,7 @@ export function useThreadSink(): ThreadSink {
   const [queue, setQueue] = useState<string[]>([]);
   const [queueIds, setQueueIds] = useState<string[]>([]);
   const [queueModes, setQueueModes] = useState<string[]>([]);
+	const [historyError, setHistoryError] = useState("");
   const [queueError, setQueueError] = useState("");
   const queueReturns = useRef<QueueReturns>(new Map());
   const [running, setRunning] = useState(false);
@@ -350,6 +353,7 @@ export function useThreadSink(): ThreadSink {
     setQueueIds([]);
     setQueueModes([]);
     setQueueError("");
+	setHistoryError("");
     clearQueueReturns(queueReturns.current);
     setRunning(false);
     setTurnUsage(null);
@@ -367,6 +371,7 @@ export function useThreadSink(): ThreadSink {
       setQueue,
       setQueueIds,
       setQueueModes,
+		setHistoryError,
       setQueueError,
       queueReturns,
       setRunning,
@@ -399,11 +404,10 @@ export function useThreadSink(): ThreadSink {
     ],
   );
 
-  const state = useMemo<ThreadSinkState>(
-    () => ({ autonomy, jobsRevision, jobs, jobsError, items, todos, queue, queueIds, queueModes, queueError, running, stopping, turnUsage, currentTool, workingSince }),
-    [autonomy, jobsRevision, jobs, jobsError, items, todos, queue, queueIds, queueModes, queueError, running, stopping, turnUsage, currentTool, workingSince],
-  );
-
+	const state = useMemo<ThreadSinkState>(
+		() => ({ autonomy, jobsRevision, jobs, jobsError, items, todos, queue, queueIds, queueModes, queueError, historyError, running, stopping, turnUsage, currentTool, workingSince }),
+		[autonomy, jobsRevision, jobs, jobsError, items, todos, queue, queueIds, queueModes, queueError, historyError, running, stopping, turnUsage, currentTool, workingSince],
+	);
   return useMemo(() => ({ state, ops }), [state, ops]);
 }
 
@@ -497,6 +501,7 @@ export function applyScopedMessage(
       return;
     }
     case "thread_peeked": {
+	  ops.setHistoryError(asString(msg.historyError));
       /* Read-only snapshot for a secondary pane: history + live frames,
        * without switching the connection's current thread. */
       ops.resetTransient();

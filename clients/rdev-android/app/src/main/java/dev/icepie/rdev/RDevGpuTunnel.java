@@ -34,6 +34,8 @@ final class RDevGpuTunnel {
     private final String deviceId;
     private final String instanceId;
     private final String password;
+    private final String deviceIdentity;
+    private final String reconnectProof;
     private RDevControlConnection ws;
     private volatile boolean closed;
     private int reconnectDelayMs = 1000;
@@ -44,12 +46,14 @@ final class RDevGpuTunnel {
     private final List<PointerTrace> completedPointers = new ArrayList<>();
     private boolean inputPermissionWarned;
 
-    RDevGpuTunnel(Context context, String serverUrl, String deviceId, String instanceId, String password) {
-        this.context = context.getApplicationContext();
-        this.serverUrl = serverUrl;
-        this.deviceId = deviceId;
-        this.instanceId = instanceId;
-        this.password = password == null ? "" : password;
+    RDevGpuTunnel(Context context, String serverUrl, String deviceId, String instanceId, String deviceIdentity, String reconnectProof, String password) {
+		this.context = context.getApplicationContext();
+		this.serverUrl = serverUrl;
+		this.deviceId = deviceId;
+		this.instanceId = instanceId;
+		this.deviceIdentity = deviceIdentity;
+		this.reconnectProof = reconnectProof;
+		this.password = password == null ? "" : password;
     }
 
     void connect() {
@@ -64,7 +68,7 @@ final class RDevGpuTunnel {
         ws = newTunnelConnection(endpoint, new RDevControlConnection.Listener() {
             @Override public void onOpen() {
                 reconnectDelayMs = 1000;
-                Log.i(TAG, "gpu tunnel connected " + endpoint);
+                Log.i(TAG, "gpu tunnel connected");
                 if (isStreamEndpoint(endpoint)) sendStreamTunnelHello();
             }
             @Override public void onText(String text) {}
@@ -92,11 +96,13 @@ final class RDevGpuTunnel {
 
     private void sendStreamTunnelHello() {
         try {
-            JSONObject hello = new JSONObject()
-                .put("type", "gpu_desktop_tunnel")
-                .put("clientId", deviceId)
-                .put("instanceId", instanceId)
-                .put("password", password);
+			JSONObject hello = new JSONObject()
+				.put("type", "gpu_desktop_tunnel")
+				.put("clientId", deviceId)
+				.put("instanceId", instanceId)
+				.put("deviceIdentity", deviceIdentity)
+				.put("reconnectProof", reconnectProof)
+				.put("password", password);
             ws.sendText(hello.toString());
         } catch (Exception e) {
             Log.w(TAG, "send stream tunnel hello failed", e);
@@ -141,9 +147,10 @@ final class RDevGpuTunnel {
         String scheme = "wss".equalsIgnoreCase(uri.getScheme()) ? "wss" : "ws";
         String authority = uri.getRawAuthority();
         StringBuilder url = new StringBuilder();
-        url.append(scheme).append("://").append(authority).append("/gpu-desktop-tunnel?device=").append(urlEncode(deviceId));
-        url.append("&instanceId=").append(urlEncode(instanceId));
-        if (password.length() > 0) url.append("&password=").append(urlEncode(password));
+		url.append(scheme).append("://").append(authority).append("/gpu-desktop-tunnel?device=").append(urlEncode(deviceId));
+		url.append("&deviceIdentity=").append(urlEncode(deviceIdentity));
+		url.append("&reconnectProof=").append(urlEncode(reconnectProof));
+		if (password.length() > 0) url.append("&password=").append(urlEncode(password));
         return url.toString();
     }
 

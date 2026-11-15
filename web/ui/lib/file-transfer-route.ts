@@ -40,7 +40,7 @@ export async function walkTransferFiles(
   operations: {
     mkdir(path: string, device: string): Promise<void>;
     list(path: string, device: string): Promise<TransferItem[]>;
-    download(item: TransferItem, device: string, destination: TransferDestination): void;
+    download(item: TransferItem, device: string, destination: TransferDestination): void | Promise<void>;
   },
 ): Promise<void> {
   const target = { ...destination };
@@ -57,7 +57,7 @@ export async function walkTransferFiles(
   }
   const walk = async (item: TransferItem, parentDir: string): Promise<void> => {
     if (!item.isDir) {
-      operations.download(item, sourceDevice, { ...target, parentDir });
+      await operations.download(item, sourceDevice, { ...target, parentDir });
       return;
     }
     const children = await operations.list(item.path, sourceDevice);

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"rdev/internal/agent"
+	"rdev/internal/protocol"
 	"rdev/internal/server"
 	"rdev/internal/updater"
 )
@@ -23,29 +24,31 @@ var version = "dev"
 
 func main() {
 	var (
-		httpAddr         = ":8080"
-		tcpAddr          = ":8081"
-		kcpAddr          = ":8082"
-		sshAddr          = ":2222"
-		dataDir          = ""
-		releaseDir       = ""
-		adminToken       = ""
-		maxSessions      = 0
-		maxForwards      = 0
-		batchConcurrency = 0
-		vncAddr          = ""
-		proxyAddr        = ""
-		browserEnabled   = parseBoolDefault(os.Getenv("RDEV_BROWSER_ENABLED"), false)
-		webRTCEnabled    = parseBoolDefault(os.Getenv("RDEV_WEBRTC"), false)
-		tunnelBase       = ""
-		autoUpdate       = true
-		updateInterval   = time.Minute
-		agentBaseURL     = "https://api.openai.com/v1"
-		agentAPIKey      = ""
-		agentModel       = "gpt-4o-mini"
-		agentMaxTurns    = agent.DefaultMaxTurns
-		agentConfigPath  = ""
-		agentSessionTTL  = 720 * time.Hour
+		httpAddr             = ":8080"
+		tcpAddr              = ":8081"
+		kcpAddr              = ":8082"
+		sshAddr              = ":2222"
+		dataDir              = ""
+		releaseDir           = ""
+		adminToken           = ""
+		maxSessions          = 0
+		maxForwards          = 0
+		batchConcurrency     = 0
+		vncAddr              = ""
+		proxyAddr            = ""
+		browserEnabled       = parseBoolDefault(os.Getenv("RDEV_BROWSER_ENABLED"), false)
+		webRTCEnabled        = parseBoolDefault(os.Getenv("RDEV_WEBRTC"), false)
+		webRTCICEServersJSON = ""
+		webRTCICEServersSet  = false
+		tunnelBase           = ""
+		autoUpdate           = true
+		updateInterval       = time.Minute
+		agentBaseURL         = "https://api.openai.com/v1"
+		agentAPIKey          = ""
+		agentModel           = "gpt-4o-mini"
+		agentMaxTurns        = agent.DefaultMaxTurns
+		agentConfigPath      = ""
+		agentSessionTTL      = 720 * time.Hour
 	)
 
 	for i := 1; i < len(os.Args); i++ {
@@ -109,6 +112,12 @@ func main() {
 			browserEnabled = true
 		case "--webrtc":
 			webRTCEnabled = true
+		case "--webrtc-ice-servers":
+			if i+1 >= len(os.Args) {
+				log.Fatal("--webrtc-ice-servers requires a JSON array")
+			}
+			webRTCICEServersJSON, webRTCICEServersSet = os.Args[i+1], true
+			i++
 		case "--proxy":
 			if i+1 < len(os.Args) {
 				proxyAddr = os.Args[i+1]
@@ -185,7 +194,8 @@ Options:
   --batch-concurrency Max concurrent batch operations (default GOMAXPROCS*8)
   --vnc             VNC/RFB listen address with username=deviceId auth (optional)
   --browser         Enable server Chrome browser UI and CDP endpoints (default off; env RDEV_BROWSER_ENABLED)
-  --webrtc          Enable browser-device desktop WebRTC (default off; env RDEV_WEBRTC)
+  --webrtc          Enable browser-device desktop and file WebRTC (default off; env RDEV_WEBRTC)
+  --webrtc-ice-servers JSON ICE servers array (default public STUN; [] for host-only; env RDEV_WEBRTC_ICE_SERVERS)
   --proxy           HTTP/SOCKS5 proxy listen address; username=deviceId[@password] selects the exit device (optional; env RDEV_PROXY_ADDR)
   --tunnel-base     Public ws(s):// base URL advertised to devices for tcp-tunnel dial-backs when the HTTP endpoint is behind a reverse proxy, e.g. wss://r.example.com (optional; env RDEV_TUNNEL_BASE)
   --no-auto-update Disable built-in GitHub release auto-update
@@ -267,6 +277,17 @@ Examples:
 		}
 	}
 
+	if env, ok := os.LookupEnv("RDEV_WEBRTC_ICE_SERVERS"); ok {
+		webRTCICEServersJSON, webRTCICEServersSet = env, true
+	}
+	var webRTCICEServers []protocol.IceServer
+	if webRTCICEServersSet {
+		var err error
+		webRTCICEServers, err = server.ParseWebRTCICEServers(webRTCICEServersJSON)
+		if err != nil {
+			log.Fatalf("WebRTC ICE servers configuration error: %v", err)
+		}
+	}
 	if dataDir == "" {
 		home, _ := os.UserHomeDir()
 		dataDir = filepath.Join(home, ".rdev")
@@ -294,6 +315,9 @@ Examples:
 	srv := server.NewServer()
 	srv.BrowserEnabled = browserEnabled
 	srv.WebRTCEnabled = webRTCEnabled
+	if webRTCICEServersSet {
+		srv.WebRTCICEServers = webRTCICEServers
+	}
 	srv.ReleaseVersion = version
 	srv.SSHPort = sshPort
 	srv.HTTPHost = outboundIP + ":" + httpPort
@@ -377,6 +401,12 @@ Examples:
 	}
 
 	mux := http.NewServeMux()
+	mux.HandleFunc("/healthz", srv.HandleLiveness)
+	mux.HandleFunc("/readyz", srv.HandleReadiness)
+	mux.HandleFunc("/api/health", srv.HandleHealth)
+	mux.HandleFunc("/metrics", srv.HandleMetrics)
+	mux.HandleFunc("/api/identity", srv.HandleIdentityAPI)
+	mux.HandleFunc("/api/identity/revoke", srv.HandleIdentityAPI)
 	defer srv.CloseBrowsers()
 	mux.HandleFunc("/browser", srv.StaticPageHandler("app.html"))
 	mux.HandleFunc("/api/browser", srv.HandleBrowserAPI)

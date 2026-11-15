@@ -155,13 +155,14 @@ export function ChatPaneView({
 }: ChatPaneViewProps) {
   const [offlineConfirmed, setOfflineConfirmed] = useState(false);
   useEffect(() => setOfflineConfirmed(false), [device, threadId, offline]);
-  const ready = connectionReady && !sink.state.stopping && (!offline || (offlineConfirmed && !sink.state.running));
   const modelReasoningLevels = models.find((item) => item.id === model)?.reasoningLevels;
   const supportedReasoning = REASONING_LEVELS.filter((item) => !modelReasoningLevels || modelReasoningLevels.includes(item.level));
   const reasoningOptions = supportedReasoning.length ? supportedReasoning : REASONING_LEVELS;
   const selectedReasoning = reasoningOptions.find((item) => item.level === reasoning) ?? reasoningOptions[0];
   const { state, ops } = sink;
-  const { items, todos, queue, queueIds, queueModes = [], queueError = "", running, stopping, turnUsage, currentTool, workingSince } = state;
+	const { items, todos, queue, queueIds, queueModes = [], queueError = "", historyError = "", running, stopping, turnUsage, currentTool, workingSince } = state;
+	const historyBlocked = !!historyError;
+	const ready = connectionReady && !historyBlocked && !sink.state.stopping && (!offline || (offlineConfirmed && !sink.state.running));
 
   const [queueEdit, setQueueEdit] = useState<{ id: string; original: string; text: string; token: string } | null>(null);
   const [queueSaving, setQueueSaving] = useState(false);
@@ -902,6 +903,12 @@ export function ChatPaneView({
         </div>
       )}
 
+		{historyError && <div role="alert" className="mx-auto flex w-full max-w-[760px] items-center gap-3 border-t border-destructive/30 bg-destructive/5 px-4 py-3 text-sm">
+			<div className="min-w-0 flex-1"><p className="font-medium">{t("agent.historyIncomplete")}</p><p className="mt-1 break-words text-xs text-muted-foreground">{historyError}</p></div>
+			<Button size="sm" variant="outline" disabled={!connectionReady || running} onClick={() => {
+				if (window.confirm(t("agent.historyRecoverConfirm")) && !sendRaw({ op: "recover_history", thread: threadId })) setComposerError(t("agent.historyRecoverFailed"));
+			}}>{t("agent.historyRecover")}</Button>
+		</div>}
       {offline && <div className="mx-auto flex w-full max-w-[760px] items-center gap-2 px-4 py-2 text-xs text-muted-foreground">
         <span className="flex-1">{t(offlineConfirmed ? "agent.offlineChatEnabled" : "agent.offlineHistory")}</span>
         {!offlineConfirmed && <Button size="sm" variant="outline" disabled={!connectionReady} onClick={() => {

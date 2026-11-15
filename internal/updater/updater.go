@@ -27,7 +27,7 @@ const repo = "icepie/rdev"
 // used to verify release asset signatures. Assets are signed in CI by
 // scripts/sign with the private key stored in the RDEV_UPDATE_SIGNING_KEY
 // GitHub secret; unsigned or tampered downloads must never be applied.
-const updatePublicKeyB64 = "jtVaB2ppsCLhcYyYYQjRKiviDvyPZvr+AS8nqOQlkUk="
+const updatePublicKeyB64 = "Pa4+y7+NfEePgrARhyqEUxQleTgClgUpelbvcoi77Qk="
 
 var updatePublicKey = mustDecodePublicKey(updatePublicKeyB64)
 

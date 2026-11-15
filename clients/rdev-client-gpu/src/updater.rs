@@ -20,7 +20,7 @@ const REPO_NAME: &str = "rdev";
 /// signatures. Assets are signed in CI by scripts/sign with the private key
 /// stored in the RDEV_UPDATE_SIGNING_KEY GitHub secret; unsigned or tampered
 /// downloads must never be applied.
-const UPDATE_PUBLIC_KEY_B64: &str = "jtVaB2ppsCLhcYyYYQjRKiviDvyPZvr+AS8nqOQlkUk=";
+const UPDATE_PUBLIC_KEY_B64: &str = "Pa4+y7+NfEePgrARhyqEUxQleTgClgUpelbvcoi77Qk=";
 
 const DEFAULT_PROXY_PREFIXES: &[&str] = &[
     "",

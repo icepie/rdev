@@ -8,7 +8,7 @@ use std::{
 };
 
 use crate::{
-    protocol::{Message, MessageType},
+    protocol::{IceServer, Message, MessageType},
     session::OutboundEvent,
 };
 use anyhow::{anyhow, Result};
@@ -36,6 +36,23 @@ const BRIDGE_QUEUE: usize = 2;
 const MAX_PENDING_CANDIDATES: usize = 128;
 const DATA_CHANNEL_HIGH_WATER: usize = 512 * 1024;
 const FRAME_MAGIC: &[u8; 4] = b"RDG1";
+
+fn rtc_ice_servers(config: Option<Vec<IceServer>>) -> Vec<RTCIceServer> {
+    match config {
+        Some(servers) => servers
+            .into_iter()
+            .map(|server| RTCIceServer {
+                urls: server.urls,
+                username: server.username,
+                credential: server.credential,
+            })
+            .collect(),
+        None => vec![RTCIceServer {
+            urls: vec!["stun:stun.l.google.com:19302".to_owned()],
+            ..Default::default()
+        }],
+    }
+}
 
 #[derive(Clone)]
 pub struct DesktopRtcManager {
@@ -173,10 +190,7 @@ impl DesktopRtcManager {
                 .with_media_engine(MediaEngine::default())
                 .build()
                 .new_peer_connection(RTCConfiguration {
-                    ice_servers: vec![RTCIceServer {
-                        urls: vec!["stun:stun.l.google.com:19302".to_owned()],
-                        ..Default::default()
-                    }],
+                    ice_servers: rtc_ice_servers(msg.ice_servers),
                     ..Default::default()
                 })
                 .await?,
@@ -466,4 +480,26 @@ async fn start_bridge(
     }
     let _ = sink.send(WsMessage::Close(None)).await;
     let _ = channel.close().await;
+}
+
+#[cfg(test)]
+mod ice_tests {
+    use super::*;
+
+    #[test]
+    fn legacy_default_explicit_empty_and_turn() {
+        assert_eq!(
+            rtc_ice_servers(None)[0].urls,
+            vec!["stun:stun.l.google.com:19302"]
+        );
+        assert!(rtc_ice_servers(Some(Vec::new())).is_empty());
+        let servers = rtc_ice_servers(Some(vec![IceServer {
+            urls: vec!["turn:relay.example:3478".to_owned()],
+            username: "alice".to_owned(),
+            credential: "private-token".to_owned(),
+        }]));
+        assert_eq!(servers[0].urls, vec!["turn:relay.example:3478"]);
+        assert_eq!(servers[0].username, "alice");
+        assert_eq!(servers[0].credential, "private-token");
+    }
 }

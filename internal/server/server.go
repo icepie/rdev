@@ -3,6 +3,7 @@ package server
 import (
 	"bufio"
 	"context"
+	"crypto/subtle"
 	"embed"
 	"encoding/json"
 	"io"
@@ -83,6 +84,8 @@ type ClientConn struct {
 	ID                string
 	RequestedID       string
 	InstanceID        string
+	DeviceIdentity    string
+	ReconnectProof    string
 	Version           string
 	OS                string
 	Conn              *gws.Conn
@@ -92,6 +95,7 @@ type ClientConn struct {
 	Sessions          map[string]*ProxySession
 	Forwards          map[string]*ProxyForward
 	FileOperations    []string
+	FileRTC           bool
 	Desktop           *protocol.DesktopCapabilities
 	ConfinedDownloads bool
 	writeMu           sync.Mutex
@@ -561,12 +565,14 @@ func (f *ReverseForward) Result() (uint32, string) {
 
 // Server manages WebSocket clients and SSH proxy
 type Server struct {
+	health              serverHealth
 	schedulerMu         sync.Mutex
 	scheduler           *Scheduler
 	automationMu        sync.Mutex
 	desktopOwners       map[string]desktopAutomationLease
-	BrowserEnabled      bool // explicit opt-in for server-hosted Chrome
-	WebRTCEnabled       bool // explicit opt-in for browser-device desktop WebRTC
+	BrowserEnabled      bool                 // explicit opt-in for server-hosted Chrome
+	WebRTCEnabled       bool                 // explicit opt-in for browser-device desktop WebRTC
+	WebRTCICEServers    []protocol.IceServer // nil uses legacy STUN; empty explicitly uses host candidates only
 	browserMu           sync.Mutex
 	browsers            map[string]*browserSession
 	clients             map[string]*ClientConn
@@ -604,6 +610,7 @@ type Server struct {
 	upgrader            *gws.Upgrader
 	authLimiter         *authRateLimiter // per-device password brute-force throttle
 	agentStoreOnce      sync.Once
+	agentStoreMu        sync.RWMutex
 	agentStoreInst      *agentSessionStore
 	agentFileMutations  agentFileMutations
 	agentSessionsMu     sync.Mutex
@@ -640,6 +647,8 @@ type Server struct {
 	// the TTL cleanup entirely.
 	DataDir         string
 	AgentSessionTTL time.Duration
+	identity        *identityRegistry
+	identityOnce    sync.Once
 
 	// ReleaseDir, when set, makes release downloads fully local: assets are
 	// served from <ReleaseDir>/<tag>/<asset> and no GitHub/mirror URL is ever
@@ -651,7 +660,9 @@ type Server struct {
 // NewServer creates a new Server
 func NewServer() *Server {
 	s := &Server{
+		health:            serverHealth{startedAt: time.Now()},
 		clients:           make(map[string]*ClientConn),
+		identity:          &identityRegistry{records: make(map[string]identityRecord)},
 		sessions:          make(map[string]*ProxySession),
 		forwards:          make(map[string]*ProxyForward),
 		revForwards:       make(map[string]*ReverseForward),
@@ -666,6 +677,7 @@ func NewServer() *Server {
 		gpuDesktopTunnels: make(map[string]*gpuDesktopTunnel),
 		proxyTunnels:      make(map[string]*proxyTunnelPending),
 		MaxSessions:       256,
+		WebRTCICEServers:  []protocol.IceServer{{URLs: []string{"stun:stun.l.google.com:19302"}}},
 		MaxForwards:       1024,
 		BatchConcurrency:  runtime.GOMAXPROCS(0) * 8,
 		authLimiter:       newAuthRateLimiter(),
@@ -811,6 +823,10 @@ func (h *wsHandler) OnMessage(socket *gws.Conn, message *gws.Message) {
 }
 
 func (h *wsHandler) handleRegister(socket *gws.Conn, msg *protocol.Message) {
+	if id, _ := socket.Session().Load("clientID"); id != nil {
+		_ = socket.WriteClose(1008, []byte("connection already registered"))
+		return
+	}
 	if msg.ClientID == "" {
 		socket.WriteClose(1000, nil)
 		return
@@ -824,11 +840,21 @@ func (h *wsHandler) handleRegister(socket *gws.Conn, msg *protocol.Message) {
 		socket.WriteClose(1000, nil)
 		return
 	}
+	identity := strings.TrimSpace(msg.DeviceIdentity)
+	assignedID, proof, _, authErr := h.srv.authenticateRegistration(identity, clientID, msg.ReconnectProof)
+	if authErr != nil {
+		log.Printf("rejected registration identity=%q: %v", identity, authErr)
+		socket.WriteClose(1008, []byte("identity authentication failed"))
+		return
+	}
+	clientID = assignedID
 	instanceID := strings.TrimSpace(msg.InstanceID)
 	client := &ClientConn{
 		ID:                clientID,
 		RequestedID:       clientID,
 		InstanceID:        instanceID,
+		DeviceIdentity:    identity,
+		ReconnectProof:    msg.ReconnectProof,
 		Version:           msg.ClientVersion,
 		OS:                msg.ClientOS,
 		Conn:              socket,
@@ -837,13 +863,17 @@ func (h *wsHandler) handleRegister(socket *gws.Conn, msg *protocol.Message) {
 		Password:          msg.Password,
 		Desktop:           cloneDesktopCapabilities(msg.DesktopCapabilities),
 		FileOperations:    append([]string(nil), msg.FileOperations...),
+		FileRTC:           msg.FileRTC,
 		ConfinedDownloads: msg.ConfinedDownloads,
 		Sessions:          make(map[string]*ProxySession),
 		Forwards:          make(map[string]*ProxyForward),
 	}
 
-	socket.Session().Store("clientID", clientID)
 	old, assignedID, duplicate := h.srv.registerClient(client)
+	if assignedID == "" {
+		h.srv.failRegistration(client)
+		return
+	}
 	socket.Session().Store("clientID", assignedID)
 
 	if old != nil && old.Transport != client.Transport {
@@ -858,11 +888,13 @@ func (h *wsHandler) handleRegister(socket *gws.Conn, msg *protocol.Message) {
 		log.Printf("client registered: %s", assignedID)
 	}
 	client.Send(&protocol.Message{
-		Type:       protocol.MsgRegister,
-		ClientID:   assignedID,
-		InstanceID: instanceID,
-		SSHPort:    h.srv.SSHPort,
-		HTTPHost:   h.srv.HTTPHost,
+		Type:           protocol.MsgRegister,
+		ClientID:       assignedID,
+		InstanceID:     instanceID,
+		DeviceIdentity: identity,
+		ReconnectProof: proof,
+		SSHPort:        h.srv.SSHPort,
+		HTTPHost:       h.srv.HTTPHost,
 	})
 	go h.srv.clientPingLoop(client)
 }
@@ -921,49 +953,37 @@ func desktopCapabilitiesIncludeGPUTunnel(caps *protocol.DesktopCapabilities) boo
 }
 
 func (s *Server) registerClient(client *ClientConn) (*ClientConn, string, bool) {
+	reg := s.identityRegistry()
+	reg.mu.Lock()
+	defer reg.mu.Unlock()
+	if err := s.loadIdentityLocked(reg); err != nil {
+		return nil, "", true
+	}
+	record, ok := reg.records[client.DeviceIdentity]
+	if !ok || record.Revoked || record.ClientID == "" || subtle.ConstantTimeCompare([]byte(record.ProofHash), []byte(hashIdentityProof(client.ReconnectProof))) != 1 {
+		return nil, "", true
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	requestedID := strings.TrimSpace(client.RequestedID)
-	if requestedID == "" {
-		requestedID = strings.TrimSpace(client.ID)
-	}
+	requestedID := record.ClientID
 	client.RequestedID = requestedID
-
-	if client.InstanceID != "" {
-		for id, old := range s.clients {
-			if old.InstanceID == client.InstanceID {
-				client.ID = id
-				s.clients[id] = client
-				s.notifyDeviceWatchersLocked()
-				return old, id, id != requestedID
-			}
-		}
-	}
-
-	if old := s.clients[requestedID]; old == nil || (client.InstanceID != "" && old.InstanceID == client.InstanceID) {
+	if old := s.clients[requestedID]; old == nil {
+		client.ID = requestedID
+		s.clients[requestedID] = client
+		s.notifyDeviceWatchersLocked()
+		return nil, requestedID, false
+	} else if old.DeviceIdentity == client.DeviceIdentity {
 		client.ID = requestedID
 		s.clients[requestedID] = client
 		s.notifyDeviceWatchersLocked()
 		return old, requestedID, false
 	}
-
-	assignedID := s.nextAvailableClientID(requestedID)
-	client.ID = assignedID
-	s.clients[assignedID] = client
-	s.notifyDeviceWatchersLocked()
-	return nil, assignedID, true
+	return nil, "", true
 }
 
-func (s *Server) nextAvailableClientID(base string) string {
-	base = strings.TrimSpace(base)
-	if base == "" {
-		base = "device"
-	}
-	for i := 2; ; i++ {
-		candidate := base + "-" + strconv.Itoa(i)
-		if _, exists := s.clients[candidate]; !exists {
-			return candidate
-		}
+func (s *Server) failRegistration(client *ClientConn) {
+	if client != nil && client.Transport != nil {
+		_ = client.Transport.Close("identity registration rejected")
 	}
 }
 
@@ -1144,11 +1164,21 @@ func (s *Server) registerStreamClient(transport DeviceTransport, msg *protocol.M
 		_ = transport.Close("invalid client id")
 		return "", false
 	}
+	identity := strings.TrimSpace(msg.DeviceIdentity)
+	assigned, proof, _, authErr := s.authenticateRegistration(identity, clientID, msg.ReconnectProof)
+	if authErr != nil {
+		log.Printf("rejected stream registration identity=%q: %v", identity, authErr)
+		_ = transport.Close("identity authentication failed")
+		return "", false
+	}
+	clientID = assigned
 	instanceID := strings.TrimSpace(msg.InstanceID)
 	client := &ClientConn{
 		ID:                clientID,
 		RequestedID:       clientID,
 		InstanceID:        instanceID,
+		DeviceIdentity:    identity,
+		ReconnectProof:    msg.ReconnectProof,
 		Version:           msg.ClientVersion,
 		OS:                msg.ClientOS,
 		Transport:         transport,
@@ -1156,11 +1186,16 @@ func (s *Server) registerStreamClient(transport DeviceTransport, msg *protocol.M
 		Password:          msg.Password,
 		Desktop:           cloneDesktopCapabilities(msg.DesktopCapabilities),
 		FileOperations:    append([]string(nil), msg.FileOperations...),
+		FileRTC:           msg.FileRTC,
 		ConfinedDownloads: msg.ConfinedDownloads,
 		Sessions:          make(map[string]*ProxySession),
 		Forwards:          make(map[string]*ProxyForward),
 	}
 	old, assignedID, duplicate := s.registerClient(client)
+	if assignedID == "" {
+		_ = transport.Close("identity registration rejected")
+		return "", false
+	}
 	if old != nil && old.Transport != transport {
 		log.Printf("client reconnected via %s: requested=%s assigned=%s", label, clientID, assignedID)
 		closeClientResources(s, old)
@@ -1172,17 +1207,20 @@ func (s *Server) registerStreamClient(transport DeviceTransport, msg *protocol.M
 	} else {
 		log.Printf("client registered via %s: %s", label, assignedID)
 	}
-	_ = client.Send(&protocol.Message{Type: protocol.MsgRegister, ClientID: assignedID, InstanceID: instanceID, SSHPort: s.SSHPort, HTTPHost: s.HTTPHost, TunnelBase: s.TunnelBase})
+	_ = client.Send(&protocol.Message{Type: protocol.MsgRegister, ClientID: assignedID, InstanceID: instanceID, DeviceIdentity: identity, ReconnectProof: proof, SSHPort: s.SSHPort, HTTPHost: s.HTTPHost, TunnelBase: s.TunnelBase})
 	go s.clientPingLoop(client)
 	return assignedID, true
 }
 
 func (s *Server) handleClientBinary(client *ClientConn, raw []byte) {
-	if s.handleFileManagerBinary(raw) {
-		return
-	}
 	typ, id, payload, err := protocol.DecodeBinFrame(raw)
 	if err != nil {
+		return
+	}
+	if route := s.getFileTask(id); route != nil && (route.client != client || route.rtc) {
+		return
+	}
+	if s.handleFileManagerBinary(raw) {
 		return
 	}
 	data := append([]byte(nil), payload...)
@@ -1278,7 +1316,12 @@ func (s *Server) handleClientMessage(client *ClientConn, msg *protocol.Message) 
 		s.handleFileResult(msg)
 	case protocol.MsgFileListResult, protocol.MsgFileUploadReady, protocol.MsgFileDownloadStart, protocol.MsgFileTransferEnd, protocol.MsgFileTransferError,
 		"file_create_result", "file_stat_result", "file_mkdir_result", "file_delete_result", "file_rename_result", "file_copy_result":
+		if route := s.getFileTask(msg.TaskID); route != nil && route.client != client {
+			return
+		}
 		s.handleFileManagerMessage(msg, client.ID)
+	case protocol.MsgFileRTCSignal:
+		s.handleFileRTCSignal(client, msg)
 	case protocol.MsgDesktopReady, protocol.MsgDesktopClose, protocol.MsgDesktopClipboard, protocol.MsgDesktopCuaResult:
 		s.handleDesktopMessage(msg)
 	case protocol.MsgDesktopRTCSignal:

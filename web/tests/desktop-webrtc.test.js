@@ -55,6 +55,16 @@ it("does not construct a late peer after disconnect or device replacement", asyn
   expect(await pending).toBeNull();
   expect(peers).toHaveLength(0); expect(sockets).toHaveLength(0);
 });
+it.each([
+  [{ enabled: true }, [{ urls: ["stun:stun.l.google.com:19302"] }]],
+  [{ enabled: true, iceServers: [] }, []],
+  [{ enabled: true, iceServers: [{ urls: ["turn:relay.example:3478"], username: "alice", credential: "private-token" }] }, [{ urls: ["turn:relay.example:3478"], username: "alice", credential: "private-token" }]],
+])("uses authenticated server ICE config (including explicit host-only mode)", async (config, expected) => {
+  apiJSON.mockResolvedValue(config);
+  const rtc = await connectDesktopRTC(options());
+  expect(peers[0].config).toEqual({ iceServers: expected });
+  rtc.close();
+});
 it("negotiates only after opt-in and disposes signaling, channel and peer", async () => {
   apiJSON.mockResolvedValue({ enabled: true });
   const handlers = options();

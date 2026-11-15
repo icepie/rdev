@@ -373,3 +373,399 @@ func TestAgentHistoryPersistsAnthropicReplayWithoutUIExposure(t *testing.T) {
 		t.Fatal("opaque state leaked into UI")
 	}
 }
+
+func TestAgentHistoryRoundTripOrdinaryAndLargeMessages(t *testing.T) {
+	for _, size := range []int{64, 3 << 20} {
+		t.Run(fmt.Sprintf("%d-bytes", size), func(t *testing.T) {
+			st := newTestStore(t)
+			user := strings.Repeat("u", size)
+			assistant := strings.Repeat("a", size)
+			st.save("large", "t_1", "model", []agent.Message{{Role: "user", Content: user}, {Role: "assistant", Content: assistant}})
+			got, _, _, _ := st.load("large", "t_1")
+			if len(got) != 2 || got[0].Content != user || got[1].Content != assistant {
+				t.Fatalf("history was truncated: messages=%d", len(got))
+			}
+		})
+	}
+}
+
+func TestAgentHistoryFaultIsReportedAndRecoveryPreservesOriginal(t *testing.T) {
+	st := newTestStore(t)
+	path := st.path("damaged", "t_1")
+	original := []byte("{\"t\":\"meta\",\"v\":1,\"model\":\"m\"}\n{\"t\":\"msg\",\"role\":\"user\",\"content\":\"kept\"}\n{broken\n")
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, original, 0600); err != nil {
+		t.Fatal(err)
+	}
+	got, _, _, _ := st.load("damaged", "t_1")
+	if len(got) != 1 || got[0].Content != "kept" {
+		t.Fatalf("valid prefix unavailable: %+v", got)
+	}
+	if health := st.historyHealth(); health.Faulted != 1 || len(health.Faults) != 1 {
+		t.Fatalf("missing corruption diagnostic: %+v", health)
+	}
+	st.save("damaged", "t_1", "m", append(got, agent.Message{Role: "assistant", Content: "must not append"}))
+	if current, _ := os.ReadFile(path); string(current) != string(original) {
+		t.Fatal("save overwrote damaged original before recovery")
+	}
+	count, backup, err := st.recover("damaged", "t_1")
+	if err != nil || count != 1 {
+		t.Fatalf("recover count=%d err=%v", count, err)
+	}
+	backupBytes, err := os.ReadFile(backup)
+	if err != nil || string(backupBytes) != string(original) {
+		t.Fatalf("recovery backup did not preserve original: %v", err)
+	}
+	recovered, _, _, _ := st.load("damaged", "t_1")
+	if len(recovered) != 1 || recovered[0].Content != "kept" || st.historyHealth().Faulted != 0 {
+		t.Fatalf("unsafe recovered history: %+v health=%+v", recovered, st.historyHealth())
+	}
+}
+
+func TestAgentHistoryAllWritersPreserveUnloadedCorruption(t *testing.T) {
+	writers := map[string]func(*agentSessionStore){
+		"save": func(st *agentSessionStore) {
+			st.save("d", "t", "m", []agent.Message{{Role: "user", Content: "replacement"}})
+		},
+		"replace":  func(st *agentSessionStore) { st.replace("d", "t", "m", nil) },
+		"title":    func(st *agentSessionStore) { st.setTitle("d", "t", "new", nil) },
+		"cwd":      func(st *agentSessionStore) { st.setCwd("d", "t", "/new", nil) },
+		"outcome":  func(st *agentSessionStore) { st.saveOutcome("d", "t", "m", "done", "now") },
+		"autonomy": func(st *agentSessionStore) { st.saveAutonomy("d", "t", "m", nil, nil) },
+		"clear":    func(st *agentSessionStore) { st.clear("d", "t") },
+		"cleanup":  func(st *agentSessionStore) { st.cleanup() },
+	}
+	for name, mutate := range writers {
+		t.Run(name, func(t *testing.T) {
+			st := newTestStore(t)
+			path := st.path("d", "t")
+			original := []byte("{\"t\":\"meta\",\"v\":1}\n{broken\n")
+			if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, original, 0600); err != nil {
+				t.Fatal(err)
+			}
+			old := time.Now().Add(-365 * 24 * time.Hour)
+			if err := os.Chtimes(path, old, old); err != nil {
+				t.Fatal(err)
+			}
+			mutate(st)
+			got, err := os.ReadFile(path)
+			if err != nil || string(got) != string(original) {
+				t.Fatalf("damaged original changed: %v", err)
+			}
+			if st.historyFault("d", "t") == "" {
+				t.Fatal("missing fault")
+			}
+		})
+	}
+}
+
+func TestAgentHistoryCheckpointCompactionPreservesTranscriptAndCursor(t *testing.T) {
+	for _, kind := range []string{"outcome", "autonomy"} {
+		t.Run(kind, func(t *testing.T) {
+			st := newTestStore(t)
+			history := []agent.Message{{Role: "user", Content: "retained"}}
+			st.save("d", "t", "m", history)
+			st.setTitle("d", "t", "title", history)
+			path := st.path("d", "t")
+			f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0600)
+			if err != nil {
+				t.Fatal(err)
+			}
+			padding := strings.Repeat("{\"t\":\"outcome\",\"outcome\":\"done\"}\n", agentHistoryMaxBytes/16)
+			if _, err := f.WriteString(padding); err != nil {
+				t.Fatal(err)
+			}
+			if err := f.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if kind == "outcome" {
+				st.saveOutcome("d", "t", "m", "stopped", "stamp")
+			} else {
+				st.saveAutonomy("d", "t", "m", &agentGoal{Status: "paused"}, nil)
+			}
+			info, err := os.Stat(path)
+			if err != nil || info.Size() >= agentHistoryMaxBytes {
+				t.Fatalf("checkpoint did not compact: %v", err)
+			}
+			if st.saved["d/t"] != len(history) {
+				t.Fatal("checkpoint changed memory cursor")
+			}
+			history = append(history, agent.Message{Role: "assistant", Content: "next"})
+			st.save("d", "t", "m", history)
+			reopened := newAgentSessionStore(st.dir, time.Hour)
+			got, model, _, title := reopened.load("d", "t")
+			if !reflect.DeepEqual(got, history) || model != "m" || title != "title" {
+				t.Fatalf("checkpoint lost transcript or metadata: %+v %q %q", got, model, title)
+			}
+			if kind == "outcome" && reopened.extras["d/t"].Outcome != "stopped" {
+				t.Fatal("outcome lost")
+			}
+			if kind == "autonomy" && reopened.extras["d/t"].Goal == nil {
+				t.Fatal("goal lost")
+			}
+		})
+	}
+}
+
+func TestAgentHistoryLimitsAndExactRecoveryBackup(t *testing.T) {
+	for _, kind := range []string{"line", "total"} {
+		t.Run(kind, func(t *testing.T) {
+			st := newTestStore(t)
+			path := st.path("d", "t")
+			original := "{\"t\":\"meta\",\"v\":1}\n{\"t\":\"msg\",\"role\":\"user\",\"content\":\"kept\"}\n"
+			if kind == "line" {
+				original += string(marshalAgentHistoryMsg(agent.Message{Role: "assistant", Content: strings.Repeat("x", agentHistoryMaxLineBytes)})) + "\n"
+			} else {
+				line := string(marshalAgentHistoryMsg(agent.Message{Role: "assistant", Content: strings.Repeat("x", 1<<20)})) + "\n"
+				original += strings.Repeat(line, 17)
+			}
+			if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte(original), 0600); err != nil {
+				t.Fatal(err)
+			}
+			st.load("d", "t")
+			if st.historyHealth().Faulted != 1 {
+				t.Fatal("oversize history accepted")
+			}
+			count, backup, err := st.recover("d", "t")
+			if err != nil || count < 1 {
+				t.Fatalf("recover: %d %v", count, err)
+			}
+			got, err := os.ReadFile(backup)
+			if err != nil || string(got) != original {
+				t.Fatalf("backup was truncated: %v", err)
+			}
+			if st.historyHealth().Faulted != 0 {
+				t.Fatal("successful recovery left fault")
+			}
+		})
+	}
+}
+
+func TestAgentHistoryFailedRecoveryKeepsFaultAndOriginal(t *testing.T) {
+	st := newTestStore(t)
+	st.save("d", "t", "m", []agent.Message{{Role: "user", Content: "kept"}})
+	path := st.path("d", "t")
+	original, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.mu.Lock()
+	st.recordFaultLocked("d", "t", "failed checkpoint")
+	st.mu.Unlock()
+	if err := os.Mkdir(path+".tmp", 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(path+".tmp", "block"), []byte("block"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	_, backup, err := st.recover("d", "t")
+	if err == nil || backup == "" {
+		t.Fatal("expected failed rewrite after backup")
+	}
+	st.load("d", "t")
+	if st.historyFault("d", "t") == "" {
+		t.Fatal("reload cleared unrecovered write fault")
+	}
+	for _, p := range []string{path, backup} {
+		got, err := os.ReadFile(p)
+		if err != nil || string(got) != string(original) {
+			t.Fatalf("original/backup changed: %v", err)
+		}
+	}
+}
+
+func TestAgentHistoryClearAndCleanupInvalidateAppendCursor(t *testing.T) {
+	for _, remove := range []string{"clear", "cleanup"} {
+		t.Run(remove, func(t *testing.T) {
+			st := newTestStore(t)
+			history := []agent.Message{{Role: "user", Content: "old"}, {Role: "assistant", Content: "old reply"}}
+			st.save("d", "t", "m", history)
+			if remove == "clear" {
+				st.clear("d", "t")
+			} else {
+				old := time.Now().Add(-365 * 24 * time.Hour)
+				if err := os.Chtimes(st.path("d", "t"), old, old); err != nil {
+					t.Fatal(err)
+				}
+				st.cleanup()
+			}
+			if _, ok := st.saved["d/t"]; ok {
+				t.Fatal("stale append cursor")
+			}
+			st.saveOutcome("d", "t", "m", "running", "")
+			st.save("d", "t", "m", history)
+			got, _, _, _ := st.load("d", "t")
+			if !reflect.DeepEqual(got, history) {
+				t.Fatalf("stale cursor lost transcript: %+v", got)
+			}
+		})
+	}
+}
+
+func TestAgentHistoryRecoveryHandlerReplacesHistoryWithoutDeadlock(t *testing.T) {
+	srv := newPrefsTestServer(t)
+	entry, err := srv.agentSessionFor(agentServerDeviceID, &ClientConn{ID: agentServerDeviceID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	th := entry.threads[entry.current]
+	store := srv.agentStore()
+	store.save(entry.deviceID, th.id, th.model, []agent.Message{{Role: "user", Content: "recovered"}})
+	path := store.path(entry.deviceID, th.id)
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString("{broken\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	store.load(entry.deviceID, th.id)
+	th.session.SetHistory([]agent.Message{{Role: "user", Content: "stale"}})
+	var replies []agentMsg
+	ac := &agentConn{entry: entry, current: th.id, deviceID: entry.deviceID, reply: func(msg agentMsg) { replies = append(replies, msg) }}
+	done := make(chan struct{})
+	go func() {
+		(&agentWSHandler{srv: srv}).handleRecoverHistory(ac, th.id)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("history recovery deadlocked")
+	}
+	if len(replies) != 2 || replies[0].Op != "history_recovered" || replies[0].Recovered != 1 || replies[1].Op != "thread_peeked" || replies[1].HistoryError != "" {
+		t.Fatalf("recovery replies: %+v", replies)
+	}
+	got := th.session.History()
+	if len(got) != 1 || got[0].Content != "recovered" {
+		t.Fatalf("stale session history: %+v", got)
+	}
+}
+
+func TestAgentHistoryExactLineLimitRoundTrip(t *testing.T) {
+	st := newTestStore(t)
+	message := agent.Message{Role: "user"}
+	overhead := len(marshalAgentHistoryMsg(agent.Message{Role: "user", Content: "x"})) - 1
+	message.Content = strings.Repeat("x", agentHistoryMaxLineBytes-overhead)
+	if len(marshalAgentHistoryMsg(message)) != agentHistoryMaxLineBytes {
+		t.Fatal("bad boundary fixture")
+	}
+	st.save("d", "t", "m", []agent.Message{message})
+	got, _, _, _ := st.load("d", "t")
+	if len(got) != 1 || got[0].Content != message.Content || st.historyHealth().Faulted != 0 {
+		t.Fatal("writer accepted a line that loader cannot read")
+	}
+}
+
+func TestAgentHistoryRejectedRewritePreservesOriginal(t *testing.T) {
+	for _, kind := range []string{"line", "total", "metadata"} {
+		t.Run(kind, func(t *testing.T) {
+			st := newTestStore(t)
+			st.save("d", "t", "m", []agent.Message{{Role: "user", Content: "original"}})
+			original, err := os.ReadFile(st.path("d", "t"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			switch kind {
+			case "line":
+				st.replace("d", "t", "m", []agent.Message{{Role: "user", Content: strings.Repeat("x", agentHistoryMaxLineBytes)}})
+			case "total":
+				message := agent.Message{Role: "user", Content: strings.Repeat("x", 6<<20)}
+				st.replace("d", "t", "m", []agent.Message{message, message, message})
+			case "metadata":
+				st.setTitle("d", "t", strings.Repeat("x", agentHistoryMaxLineBytes), nil)
+			}
+			got, err := os.ReadFile(st.path("d", "t"))
+			if err != nil || string(got) != string(original) {
+				t.Fatalf("failed rewrite changed original: %v", err)
+			}
+			if st.historyHealth().Faulted != 1 {
+				t.Fatal("write failure was hidden")
+			}
+		})
+	}
+}
+
+func TestAgentHistoryHandlersRejectDestructiveActionsBeforeRecovery(t *testing.T) {
+	for _, action := range []string{"reset", "delete", "active-recovery"} {
+		t.Run(action, func(t *testing.T) {
+			srv := newPrefsTestServer(t)
+			entry, err := srv.agentSessionFor(agentServerDeviceID, &ClientConn{ID: agentServerDeviceID})
+			if err != nil {
+				t.Fatal(err)
+			}
+			th := entry.threads[entry.current]
+			store := srv.agentStore()
+			path := store.path(entry.deviceID, th.id)
+			original := []byte("{\"t\":\"meta\",\"v\":1}\n{broken\n")
+			if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, original, 0600); err != nil {
+				t.Fatal(err)
+			}
+			var reply agentMsg
+			ac := &agentConn{entry: entry, current: th.id, deviceID: entry.deviceID, reply: func(msg agentMsg) { reply = msg }}
+			handler := &agentWSHandler{srv: srv}
+			switch action {
+			case "reset":
+				handler.handleReset(ac, th.id)
+			case "delete":
+				handler.handleDeleteThread(ac, th.id)
+			case "active-recovery":
+				th.running = true
+				handler.handleRecoverHistory(ac, th.id)
+			}
+			if reply.Op != "error" || entry.threads[th.id] != th {
+				t.Fatalf("destructive action accepted: %+v", reply)
+			}
+			got, err := os.ReadFile(path)
+			if err != nil || string(got) != string(original) {
+				t.Fatalf("original changed: %v", err)
+			}
+		})
+	}
+}
+
+func TestAgentHistoryAppendsAfterUnterminatedFinalRecord(t *testing.T) {
+	for _, kind := range []string{"message", "outcome", "autonomy"} {
+		t.Run(kind, func(t *testing.T) {
+			st := newTestStore(t)
+			history := []agent.Message{{Role: "user", Content: "retained"}}
+			st.save("d", "t", "m", history)
+			path := st.path("d", "t")
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, data[:len(data)-1], 0600); err != nil {
+				t.Fatal(err)
+			}
+			st.load("d", "t")
+			switch kind {
+			case "message":
+				history = append(history, agent.Message{Role: "assistant", Content: "next"})
+				st.save("d", "t", "m", history)
+			case "outcome":
+				st.saveOutcome("d", "t", "m", "done", "stamp")
+			case "autonomy":
+				st.saveAutonomy("d", "t", "m", &agentGoal{Status: "paused"}, nil)
+			}
+			got, _, _, _ := st.load("d", "t")
+			if !reflect.DeepEqual(got, history) || st.historyHealth().Faulted != 0 {
+				t.Fatal("append joined JSON records")
+			}
+		})
+	}
+}

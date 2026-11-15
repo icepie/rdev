@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -632,12 +633,18 @@ func (t *readFileTool) download(ctx context.Context, path string, maxBytes int64
 
 	// Wait for the download_start metadata echo (or an error).
 	var size int64
+	var digest string
 	for {
 		select {
 		case msg := <-task.events:
 			switch msg.Type {
 			case protocol.MsgFileDownloadStart:
 				size = msg.Size
+				digest = msg.SHA256
+				if size < 0 || len(digest) != sha256.Size*2 {
+					cancelTransfer()
+					return nil, fmt.Errorf("read %q: invalid download integrity metadata", path)
+				}
 				if size > maxBytes {
 					cancelTransfer()
 					return nil, fmt.Errorf("file %q is %d bytes, exceeds max_bytes %d; use shell (e.g. head/tail/dd) to read parts of it", path, size, maxBytes)
@@ -660,20 +667,27 @@ func (t *readFileTool) download(ctx context.Context, path string, maxBytes int64
 	// Collect chunks until the text transfer_end arrives.
 	parts := make(map[int64][]byte)
 	var received int64
+	acceptChunk := func(c agentChunk) error {
+		if len(c.payload) == 0 || c.offset < 0 || int64(len(c.payload)) > size-c.offset || c.offset > size || received > maxBytes-int64(len(c.payload)) {
+			return fmt.Errorf("read %q: chunk exceeds download bounds", path)
+		}
+		if _, exists := parts[c.offset]; exists { return fmt.Errorf("read %q: duplicate download offset", path) }
+		parts[c.offset] = c.payload
+		received += int64(len(c.payload))
+		return nil
+	}
 	for {
 		select {
 		case c := <-task.chunks:
-			parts[c.offset] = c.payload
-			received += int64(len(c.payload))
-			if received > maxBytes {
+			if err := acceptChunk(c); err != nil {
 				cancelTransfer()
-				return nil, fmt.Errorf("file %q grew past max_bytes %d during transfer", path, maxBytes)
+				return nil, err
 			}
 		case msg := <-task.events:
 			switch msg.Type {
 			case protocol.MsgFileTransferEnd:
-				if !msg.Success {
-					return nil, fmt.Errorf("read %q: transfer failed on device", path)
+				if !msg.Success || msg.SHA256 != digest || msg.Size != size {
+					return nil, fmt.Errorf("read %q: transfer completion integrity failed", path)
 				}
 				// Chunks and the end event arrive on separate channels fed by
 				// the same read loop, so every chunk was enqueued before the
@@ -682,8 +696,10 @@ func (t *readFileTool) download(ctx context.Context, path string, maxBytes int64
 				for drained := false; !drained; {
 					select {
 					case c := <-task.chunks:
-						parts[c.offset] = c.payload
-						received += int64(len(c.payload))
+						if err := acceptChunk(c); err != nil {
+							cancelTransfer()
+							return nil, err
+						}
 					default:
 						drained = true
 					}
@@ -700,8 +716,11 @@ func (t *readFileTool) download(ctx context.Context, path string, maxBytes int64
 					}
 					data = append(data, parts[off]...)
 				}
-				if size > 0 && int64(len(data)) != size {
+				if int64(len(data)) != size {
 					return nil, fmt.Errorf("read %q: got %d bytes, expected %d", path, len(data), size)
+				}
+				if fmt.Sprintf("%x", sha256.Sum256(data)) != digest {
+					return nil, fmt.Errorf("read %q: download SHA-256 mismatch", path)
 				}
 				return data, nil
 			case protocol.MsgFileTransferError:
@@ -811,12 +830,14 @@ func (t *writeFileTool) upload(ctx context.Context, path string, content []byte,
 		_ = t.client.Send(&protocol.Message{Type: protocol.MsgFileTransferCancel, TaskID: taskID})
 		_ = t.client.SendBinaryOffset(protocol.BinFileTransferCancel, taskID, 0, nil)
 	}
+	digest := fmt.Sprintf("%x", sha256.Sum256(content))
 
 	if err := t.client.Send(&protocol.Message{
 		Type:     protocol.MsgFileUploadStart,
 		TaskID:   taskID,
 		Path:     path,
 		Size:     int64(len(content)),
+		SHA256:   digest,
 		FileMode: mode,
 	}); err != nil {
 		return "", fmt.Errorf("failed to reach device: %v", err)
@@ -836,6 +857,11 @@ func (t *writeFileTool) upload(ctx context.Context, path string, content []byte,
 				if offset < 0 || offset > int64(len(content)) {
 					cancelTransfer()
 					return "", fmt.Errorf("write %q: device returned invalid resume offset %d", path, offset)
+				}
+				prefix := fmt.Sprintf("%x", sha256.Sum256(content[:offset]))
+				if msg.SHA256 != digest || msg.PrefixSHA256 != prefix || msg.Size != int64(len(content)) {
+					cancelTransfer()
+					return "", fmt.Errorf("write %q: upload identity or prefix SHA-256 mismatch", path)
 				}
 			case protocol.MsgFileTransferError:
 				return "", fmt.Errorf("write %q: %s", path, msg.Error)
@@ -892,8 +918,8 @@ func (t *writeFileTool) upload(ctx context.Context, path string, content []byte,
 		case msg := <-task.events:
 			switch msg.Type {
 			case protocol.MsgFileTransferEnd:
-				if !msg.Success {
-					return "", fmt.Errorf("write %q: transfer failed on device", path)
+				if !msg.Success || msg.SHA256 != digest || msg.Size != int64(len(content)) {
+					return "", fmt.Errorf("write %q: transfer completion integrity failed", path)
 				}
 				if offset > 0 {
 					return fmt.Sprintf("wrote %s (%d bytes new, resumed at offset %d)", path, int64(len(content))-offset, offset), nil

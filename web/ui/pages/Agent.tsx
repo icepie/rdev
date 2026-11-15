@@ -902,6 +902,7 @@ export function AgentPage() {
         const history = Array.isArray(msg.history) ? msg.history : [];
         primaryOps.turnOpen.current = false;
         primaryOps.setItems(replayHistory(history));
+		primaryOps.setHistoryError(asString(msg.historyError));
         primaryOps.scrollDown(true);
         /* Reattach mid-turn: replay the in-flight frames (turn_start,
          * deltas, tool calls, pending approval) so the live transcript
@@ -1109,6 +1110,7 @@ export function AgentPage() {
         panelRequestEpochRef.current++;
         const history = Array.isArray(msg.history) ? msg.history : [];
         primaryOps.setItems(replayHistory(history));
+		primaryOps.setHistoryError(asString(msg.historyError));
         primaryOps.scrollDown(true);
         /* The new thread's own model (threads may differ; the frame
          * carries the entry-level model only for legacy servers). */

@@ -26,15 +26,17 @@ export function encodeFrame(
   return buffer;
 }
 
-/** Reject truncated frames and offsets JS cannot represent without data loss. */
-export function decodeFrame(
-  buffer: ArrayBuffer,
-): {
+export interface FileTransferFrame {
   typ: number;
   taskId: string;
   offset: number;
   payload: ArrayBuffer;
-} | null {
+}
+
+/** Reject truncated frames and offsets JS cannot represent without data loss. */
+export function decodeFrame(
+  buffer: ArrayBuffer,
+): FileTransferFrame | null {
   const bytes = new Uint8Array(buffer);
   if (bytes.length < 2 || bytes[1] === 0) return null;
   const headerLength = 10 + bytes[1];

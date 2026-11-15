@@ -1,3 +1,5 @@
+import { File } from 'node:buffer';
+import { createHash } from 'node:crypto';
 import { JSDOM } from 'jsdom';
 import { act, createElement, Profiler } from 'react';
 import { createRoot } from 'react-dom/client';
@@ -10,6 +12,9 @@ vi.mock('../ui/lib/api', () => ({ wsURL: () => 'ws://fixture/files', getDevicePa
 import { encodeFrame } from '../ui/lib/file-transfer-frame';
 import { PanelFiles } from '../ui/components/agent/panel-files';
 
+const sha256 = value => createHash('sha256').update(value).digest('hex');
+const uploadSHA = sha256('abc');
+const emptySHA = sha256('');
 let dom, root, sockets, commits;
 beforeEach(async () => {
   dom = new JSDOM('<main></main>', { url:'http://localhost', pretendToBeVisual:true });
@@ -31,7 +36,10 @@ beforeEach(async () => {
 });
 afterEach(async () => { await act(async()=>root.unmount()); dom.window.close(); vi.unstubAllGlobals(); vi.useRealTimers(); });
 const render = (device, visible = false, onOpenFile = () => {}, workspaceKey) => act(async()=>root.render(createElement(Profiler,{id:'files',onRender:()=>commits.push(1)},createElement(PanelFiles,{device,visible,t:key=>key,onOpenFile,workspaceKey}))));
-const deliver = (socket, message) => act(async()=>socket.onmessage({data:JSON.stringify(message)}));
+const deliver = async (socket, message) => {
+  await act(async()=>socket.onmessage({data:JSON.stringify(message)}));
+  if (message.op === 'upload_ready') await act(async()=>vi.advanceTimersByTimeAsync(1));
+};
 const reply = (request, name, extra={}) => ({op:'list_result',requestId:request.requestId,path:'/tmp',entries:[{name,path:'/tmp/'+name,isDir:false,size:1}],total:1,offset:0,...extra});
 
 it('keeps the latest directory after older success/error and duplicate replies', async()=>{
@@ -77,7 +85,7 @@ for (const visible of [false, true]) {
     await deliver(socket,reply(socket.sent[0],'large.bin'));
     await act(async()=>document.querySelector('[aria-label="files.download large.bin"]').click());
     const request=socket.sent.at(-1);
-    await deliver(socket,{op:'download_start',taskId:request.taskId,size:1000});
+    await deliver(socket,{op:'download_start',taskId:request.taskId,size:1000,sha256:sha256(new Uint8Array(1000).fill(1))});
     const writes=vi.spyOn(dom.window.Storage.prototype,'setItem');
     commits.length=0;
     await act(async()=>{
@@ -110,7 +118,7 @@ it('flushes unsampled progress to the original device when changing devices', as
   await deliver(socket,reply(socket.sent[0],'pending.bin'));
   await act(async()=>document.querySelector('[aria-label="files.download pending.bin"]').click());
   const request=socket.sent.at(-1);
-  await deliver(socket,{op:'download_start',taskId:request.taskId,size:1000});
+  await deliver(socket,{op:'download_start',taskId:request.taskId,size:1000,sha256:sha256(new Uint8Array([1,2,3,...new Uint8Array(997)]))});
   await act(async()=>socket.onmessage({data:encodeFrame(0x22,request.taskId,0,new Uint8Array([1,2,3]).buffer)}));
   await render('two');
   expect(JSON.parse(localStorage.getItem('rdevFileTasks.one'))[0].done).toBe(3);
@@ -121,6 +129,7 @@ async function pickFile(name='upload.txt') {
   const input=document.querySelector('input[type=file]');
   Object.defineProperty(input,'files',{configurable:true,value:[new File(['abc'],name,{lastModified:1000})]});
   await act(async()=>input.dispatchEvent(new window.Event('change',{bubbles:true})));
+  await act(async()=>vi.advanceTimersByTimeAsync(1));
 }
 
 it('settles an uploaded file, refreshes the directory and ignores late old-attempt errors', async()=>{
@@ -129,11 +138,12 @@ it('settles an uploaded file, refreshes the directory and ignores late old-attem
   await pickFile();
   const start=socket.sent.at(-1);
   expect(start.op).toBe('upload_start');
-  await deliver(socket,{op:'upload_ready',taskId:start.taskId,path:'/tmp/upload.txt',offset:0});
+  expect(start).toMatchObject({sha256:uploadSHA,size:3,restart:false});
+  await deliver(socket,{op:'upload_ready',taskId:start.taskId,path:'/tmp/upload.txt',offset:0,sha256:uploadSHA,prefixSha256:emptySHA});
   expect(socket.sent.at(-1)).toBeInstanceOf(ArrayBuffer);
   await act(async()=>socket.onmessage({data:encodeFrame(0x21,start.taskId,3)}));
   expect(socket.sent.at(-1)).toMatchObject({op:'upload_end',taskId:start.taskId});
-  await deliver(socket,{op:'transfer_end',taskId:start.taskId});
+  await deliver(socket,{op:'transfer_end',taskId:start.taskId,success:true,sha256:uploadSHA});
   expect(JSON.parse(localStorage.getItem('rdevFileTasks.one'))[0]).toMatchObject({status:'completed',done:3});
   expect(socket.sent.at(-1).op).toBe('list');
   await deliver(socket,{op:'transfer_error',taskId:start.taskId,message:'late old failure'});
@@ -144,13 +154,13 @@ it('cancels the old upload wait and isolates acknowledgments after resume', asyn
   const socket=sockets[0];
   await pickFile();
   const first=socket.sent.at(-1);
-  await deliver(socket,{op:'upload_ready',taskId:first.taskId,path:'/tmp/upload.txt',offset:0});
+  await deliver(socket,{op:'upload_ready',taskId:first.taskId,path:'/tmp/upload.txt',offset:0,sha256:uploadSHA,prefixSha256:emptySHA});
   await act(async()=>document.querySelector('[aria-label="files.pause upload.txt"]').click());
   expect(socket.sent.at(-1)).toMatchObject({op:'cancel',taskId:first.taskId});
   await act(async()=>document.querySelector('[aria-label="files.resume upload.txt"]').click());
   const second=socket.sent.at(-1);
   expect(second.taskId).not.toBe(first.taskId);
-  await deliver(socket,{op:'upload_ready',taskId:second.taskId,path:'/tmp/upload.txt',offset:0});
+  await deliver(socket,{op:'upload_ready',taskId:second.taskId,path:'/tmp/upload.txt',offset:0,sha256:uploadSHA,prefixSha256:emptySHA});
   const sent=socket.sent.length;
   await act(async()=>socket.onmessage({data:encodeFrame(0x21,first.taskId,3)}));
   await deliver(socket,{op:'canceled',taskId:first.taskId});
@@ -165,16 +175,16 @@ it('resumes a running upload with a new attempt after socket reconnect', async()
   const old=sockets[0];
   await pickFile();
   const first=old.sent.at(-1);
-  await deliver(old,{op:'upload_ready',taskId:first.taskId,path:'/tmp/upload.txt',offset:0});
+  await deliver(old,{op:'upload_ready',taskId:first.taskId,path:'/tmp/upload.txt',offset:0,sha256:uploadSHA,prefixSha256:emptySHA});
   await act(async()=>{ old.onclose(); vi.advanceTimersByTime(2000); });
   const current=sockets.at(-1);
   expect(current).not.toBe(old);
   await act(async()=>current.onopen());
   const next=current.sent.find(x=>x.op==='upload_start');
   expect(next.taskId).not.toBe(first.taskId);
-  await deliver(current,{op:'upload_ready',taskId:next.taskId,path:'/tmp/upload.txt',offset:3});
+  await deliver(current,{op:'upload_ready',taskId:next.taskId,path:'/tmp/upload.txt',offset:3,sha256:uploadSHA,prefixSha256:uploadSHA});
   expect(current.sent.at(-1)).toMatchObject({op:'upload_end',taskId:next.taskId});
-  await deliver(current,{op:'transfer_end',taskId:next.taskId});
+  await deliver(current,{op:'transfer_end',taskId:next.taskId,success:true,sha256:uploadSHA});
   expect(JSON.parse(localStorage.getItem('rdevFileTasks.one'))[0].status).toBe('completed');
 });
 
@@ -286,6 +296,7 @@ it('fails new offline transfers without replaying them when the socket reconnect
   await act(async () => current.onopen());
   expect(current.sent.some(message => message.op === 'download_start' || message.op === 'upload_start')).toBe(false);
   await act(async () => document.querySelector('[aria-label="files.resume offline-upload.txt"]').click());
+  await act(async()=>vi.advanceTimersByTimeAsync(1));
   expect(current.sent.filter(message => message.op === 'upload_start')).toHaveLength(1);
 });
 
@@ -389,4 +400,32 @@ it('does not restore another file workspace transfers on the same device', async
   expect(document.body.textContent).not.toContain('private.txt');
   await render('one',true,()=>{},'workspace-a');
   expect(document.body.textContent).toContain('private.txt');
+});
+
+it('rejects a corrupt persisted prefix before bytes and retries with an explicit reset', async()=>{
+  const socket=sockets[0];
+  await pickFile();
+  const first=socket.sent.at(-1);
+  await deliver(socket,{op:'upload_ready',taskId:first.taskId,path:'/tmp/upload.txt',offset:2,sha256:uploadSHA,prefixSha256:sha256('xy')});
+  expect(socket.sent.filter(message=>message instanceof ArrayBuffer)).toHaveLength(0);
+  expect(JSON.parse(localStorage.getItem('rdevFileTasks.one'))[0]).toMatchObject({status:'failed',restart:true});
+  await act(async()=>document.querySelector('[aria-label="files.resume upload.txt"]').click());
+  const retry=socket.sent.at(-1);
+  expect(retry).toMatchObject({op:'upload_start',sha256:uploadSHA,restart:true,size:3});
+  expect(retry.taskId).not.toBe(first.taskId);
+  await deliver(socket,{op:'upload_ready',taskId:retry.taskId,path:'/tmp/upload.txt',offset:0,sha256:uploadSHA,prefixSha256:emptySHA});
+  expect(socket.sent.filter(message=>message instanceof ArrayBuffer)).toHaveLength(1);
+  await act(async()=>socket.onmessage({data:encodeFrame(0x21,retry.taskId,3)}));
+  await deliver(socket,{op:'transfer_end',taskId:retry.taskId,success:true,sha256:uploadSHA});
+  expect(JSON.parse(localStorage.getItem('rdevFileTasks.one'))[0]).toMatchObject({status:'completed',restart:false});
+});
+
+it('does not accept an upload completion without authoritative hash and success', async()=>{
+  const socket=sockets[0];
+  await pickFile();
+  const start=socket.sent.at(-1);
+  await deliver(socket,{op:'upload_ready',taskId:start.taskId,path:'/tmp/upload.txt',offset:0,sha256:uploadSHA,prefixSha256:emptySHA});
+  await act(async()=>socket.onmessage({data:encodeFrame(0x21,start.taskId,3)}));
+  await deliver(socket,{op:'transfer_end',taskId:start.taskId});
+  expect(JSON.parse(localStorage.getItem('rdevFileTasks.one'))[0]).toMatchObject({status:'failed',message:'Transfer terminal integrity verification failed'});
 });

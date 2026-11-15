@@ -14,8 +14,9 @@ func TestDeviceEventsCoalesceAndIgnoreStaleDisconnect(t *testing.T) {
 	ch, unsubscribe := s.subscribeDeviceEvents()
 	<-ch
 	old := &ClientConn{ID: "device", InstanceID: "instance"}
+	enrollIdentityTestClient(t, s, old)
 	s.registerClient(old)
-	next := &ClientConn{ID: "device", InstanceID: "instance", Transport: &streamDeviceTransport{}}
+	next := &ClientConn{ID: "device", InstanceID: "instance", DeviceIdentity: old.DeviceIdentity, ReconnectProof: old.ReconnectProof, Transport: &streamDeviceTransport{}}
 	s.registerClient(next)
 	// Both mutations collapse into one invalidation for a slow listener.
 	if len(ch) != 1 {
@@ -71,7 +72,9 @@ func TestDeviceEventStreamAuthenticatesAndResynchronizes(t *testing.T) {
 			t.Fatalf("snapshot invalidation %q %v", got, err)
 		}
 	}
-	s.registerClient(&ClientConn{ID: "device", Password: "private"})
+	client := &ClientConn{ID: "device", Password: "private"}
+	enrollIdentityTestClient(t, s, client)
+	s.registerClient(client)
 	got, err := reader.ReadString('\n')
 	if err != nil || got != "event: devices\n" {
 		t.Fatalf("registration update %q %v", got, err)

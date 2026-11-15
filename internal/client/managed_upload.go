@@ -15,9 +15,14 @@ import (
 type managedUpload struct {
 	mu                          sync.Mutex // file handle, offset and terminal state
 	id, path, pathKey, partPath string
+	sha256                      string
 	file                        *os.File
 	size, offset                int64
 	closed                      bool
+	cancel                      chan struct{}
+	cancelOnce                  sync.Once
+	rtcCancel                   <-chan struct{}
+	rtc                         *fileRTCSession
 }
 
 func (c *Client) managedUploadFor(id string) *managedUpload {
@@ -53,6 +58,7 @@ func (c *Client) finishManagedUpload(up *managedUpload) {
 	c.uploadMu.Unlock()
 }
 func (c *Client) cancelManagedUpload(up *managedUpload) {
+	up.cancelOnce.Do(func() { if up.cancel != nil { close(up.cancel) } })
 	up.mu.Lock()
 	defer up.mu.Unlock()
 	c.finishManagedUpload(up)
@@ -77,6 +83,10 @@ func (c *Client) handleManagedUploadStart(msg *protocol.Message) {
 		fail(fmt.Errorf("missing target path"))
 		return
 	}
+	if msg.Size < 0 || !validFileSHA256(msg.SHA256) {
+		fail(fmt.Errorf("invalid upload size or SHA-256"))
+		return
+	}
 	abs, err := filepath.Abs(target)
 	if err != nil {
 		fail(err)
@@ -98,13 +108,14 @@ func (c *Client) handleManagedUploadStart(msg *protocol.Message) {
 	if runtime.GOOS == "windows" {
 		key = strings.ToLower(key)
 	}
-	up := &managedUpload{id: msg.TaskID, path: target, pathKey: key, partPath: target + ".rdevpart", size: msg.Size}
+	up := &managedUpload{id: msg.TaskID, path: target, pathKey: key, partPath: target + ".rdevpart", size: msg.Size, sha256: msg.SHA256, rtc: c.fileRTCFor(msg.TaskID), cancel: make(chan struct{})}
+	if up.rtc != nil { up.rtcCancel = up.rtc.done }
 	up.mu.Lock()
 	defer up.mu.Unlock()
 	// Disconnect snapshots uploads while holding c.mu. Reserve before it, or
 	// reject a delayed start after its originating transport has disappeared.
 	c.mu.Lock()
-	if c.transport != transport {
+	if c.transport != transport || (msg.RTCType == "offer" && (up.rtc == nil || up.rtc.closed.Load() || up.rtc.transport != transport)) {
 		c.mu.Unlock()
 		return
 	}
@@ -130,24 +141,20 @@ func (c *Client) handleManagedUploadStart(msg *protocol.Message) {
 		fail(err)
 		return
 	}
-	st, err := up.file.Stat()
-	if err != nil {
+	if err = bindUploadPartial(up, msg.Restart); err != nil {
 		fail(err)
 		return
 	}
-	up.offset = st.Size()
-	if msg.Size >= 0 && up.offset > msg.Size {
-		if err = up.file.Truncate(0); err != nil {
-			fail(err)
-			return
-		}
-		up.offset = 0
+	prefix, err := filePrefixSHA256Cancelable(up.file, up.offset, up.cancel, up.rtcCancel)
+	if err != nil {
+		fail(err)
+		return
 	}
 	if _, err = up.file.Seek(up.offset, io.SeekStart); err != nil {
 		fail(err)
 		return
 	}
-	if err = c.send(&protocol.Message{Type: protocol.MsgFileUploadReady, TaskID: up.id, Path: up.path, Offset: up.offset, Size: up.size}); err != nil {
+	if err = c.send(&protocol.Message{Type: protocol.MsgFileUploadReady, TaskID: up.id, Path: up.path, Offset: up.offset, Size: up.size, SHA256: up.sha256, PrefixSHA256: prefix}); err != nil {
 		return
 	}
 	ready = true
@@ -167,6 +174,8 @@ func (c *Client) handleManagedUploadChunk(id string, offset int64, data []byte) 
 	var err error
 	if offset != up.offset {
 		err = fmt.Errorf("unexpected offset %d, want %d", offset, up.offset)
+	} else if int64(len(data)) > up.size-up.offset {
+		err = fmt.Errorf("upload chunk exceeds declared size")
 	} else {
 		var n int
 		n, err = up.file.Write(data)
@@ -184,7 +193,9 @@ func (c *Client) handleManagedUploadChunk(id string, offset int64, data []byte) 
 		c.sendFileTransferError(id, up.path, err.Error())
 		return
 	}
-	c.sendBinaryOffset(protocol.BinFileUploadAck, id, next, nil)
+	if err := c.sendFileBinary(up.rtc, protocol.BinFileUploadAck, id, next, nil); err != nil && up.rtc != nil {
+		up.rtc.close(true)
+	}
 }
 
 func (c *Client) handleManagedUploadEnd(msg *protocol.Message) {
@@ -198,17 +209,37 @@ func (c *Client) handleManagedUploadEnd(msg *protocol.Message) {
 		up.mu.Unlock()
 		return
 	}
-	err := up.file.Sync()
+	before, err := up.file.Stat()
+	if err == nil && (up.offset != up.size || before.Size() != up.size) {
+		err = fmt.Errorf("size mismatch: wrote %d of %d", up.offset, up.size)
+	}
+	if err == nil {
+		var actual string
+		actual, err = filePrefixSHA256Cancelable(up.file, up.size, up.cancel, up.rtcCancel)
+		if err == nil && actual != up.sha256 {
+			err = fmt.Errorf("upload SHA-256 mismatch; destination unchanged")
+		}
+	}
+	if err == nil {
+		var after os.FileInfo
+		after, err = up.file.Stat()
+		if err == nil && !sameDownloadVersion(before, after) {
+			err = fmt.Errorf("upload partial changed during verification")
+		}
+	}
+	if err == nil { err = up.file.Sync() }
 	if closeErr := up.file.Close(); err == nil {
 		err = closeErr
 	}
 	up.file = nil
-	if err == nil && up.size >= 0 && up.offset != up.size {
-		err = fmt.Errorf("size mismatch: wrote %d of %d", up.offset, up.size)
+	if err == nil {
+		select { case <-up.cancel: err = fmt.Errorf("upload canceled"); case <-up.rtcCancel: err = fmt.Errorf("upload canceled"); default: }
 	}
 	if err == nil {
 		err = os.Rename(up.partPath, up.path)
 	}
+	// Failed final verification must not make a corrupt prefix sticky on retry.
+	_ = os.Remove(up.partPath + ".meta")
 	c.fileListings.invalidate()
 	size := up.offset
 	c.finishManagedUpload(up)
@@ -217,5 +248,8 @@ func (c *Client) handleManagedUploadEnd(msg *protocol.Message) {
 		c.sendFileTransferError(msg.TaskID, up.path, err.Error())
 		return
 	}
-	c.send(&protocol.Message{Type: protocol.MsgFileTransferEnd, TaskID: msg.TaskID, Path: up.path, Size: size, Success: true})
+	if up.rtc != nil {
+		up.rtc.completed()
+	}
+	c.send(&protocol.Message{Type: protocol.MsgFileTransferEnd, TaskID: msg.TaskID, Path: up.path, Size: size, SHA256: up.sha256, Success: true})
 }

@@ -23,12 +23,17 @@ type fileMsg struct {
 	DeviceID   string               `json:"deviceId,omitempty"`
 	RequestID  string               `json:"requestId,omitempty"`
 	TaskID     string               `json:"taskId,omitempty"`
+	RTCType    string               `json:"rtcType,omitempty"`
+	RTCData    json.RawMessage      `json:"rtcData,omitempty"`
 	Path       string               `json:"path,omitempty"`
 	From       string               `json:"from,omitempty"`
 	To         string               `json:"to,omitempty"`
 	ParentPath string               `json:"parentPath,omitempty"`
 	Name       string               `json:"name,omitempty"`
 	Size       int64                `json:"size,omitempty"`
+	SHA256     string               `json:"sha256,omitempty"`
+	PrefixSHA256 string             `json:"prefixSha256,omitempty"`
+	Restart    bool                 `json:"restart,omitempty"`
 	Offset     int64                `json:"offset,omitempty"`
 	Length     int64                `json:"length,omitempty"`
 	Limit      int                  `json:"limit,omitempty"`
@@ -48,18 +53,24 @@ type fileMsg struct {
 }
 
 type fileSocket struct {
-	prefix     string // private wire namespace, never exposed to the browser
-	conn       *gws.Conn
-	srv        *Server
-	mu         sync.Mutex
-	authMu     sync.RWMutex
-	authorized map[string]string
-	authFails  map[string]int
+	prefix      string // private wire namespace, never exposed to the browser
+	conn        *gws.Conn
+	srv         *Server
+	mu          sync.Mutex
+	authMu      sync.RWMutex
+	authorized  map[string]string
+	authFails   map[string]int
+	adminBypass bool
 }
 
 type fileTaskRoute struct {
-	socket   *fileSocket
-	deviceID string
+	socket           *fileSocket
+	deviceID         string
+	client           *ClientConn // originating connection, never a replacement device
+	rtc              bool
+	candidates       uint32
+	deviceCandidates uint32
+	timer            *time.Timer
 }
 
 type filesWSHandler struct {
@@ -97,11 +108,12 @@ func (s *fileSocket) writeBinary(raw []byte) {
 
 func (h *filesWSHandler) OnOpen(socket *gws.Conn) {
 	socket.Session().Store("fileSocket", &fileSocket{
-		conn:       socket,
-		prefix:     generateID() + ":",
-		srv:        h.srv,
-		authorized: make(map[string]string),
-		authFails:  make(map[string]int),
+		conn:        socket,
+		prefix:      generateID() + ":",
+		srv:         h.srv,
+		authorized:  make(map[string]string),
+		authFails:   make(map[string]int),
+		adminBypass: h.adminBypass,
 	})
 }
 
@@ -117,7 +129,7 @@ func (h *filesWSHandler) OnClose(socket *gws.Conn, err error) {
 func (s *Server) closeFileSocket(fs *fileSocket) {
 	// Detach this browser atomically. Device writes may block, so perform them
 	// after releasing the global routing lock used by every file workspace.
-	tasks := make(map[string]string)
+	tasks := make(map[string]*ClientConn)
 	s.fileMu.Lock()
 	for id, owner := range s.fileRequests {
 		if owner.socket == fs {
@@ -129,13 +141,16 @@ func (s *Server) closeFileSocket(fs *fileSocket) {
 	}
 	for id, route := range s.fileTasks {
 		if route.socket == fs {
-			tasks[id] = route.deviceID
+			tasks[id] = route.client
+			if route.timer != nil {
+				route.timer.Stop()
+			}
 			delete(s.fileTasks, id)
 		}
 	}
 	s.fileMu.Unlock()
-	for id, deviceID := range tasks {
-		if client, ok := s.GetClient(deviceID); ok {
+	for id, client := range tasks {
+		if client != nil {
 			client.Send(&protocol.Message{Type: protocol.MsgFileTransferCancel, TaskID: id})
 			client.SendBinaryOffset(protocol.BinFileTransferCancel, id, 0, nil)
 		}
@@ -192,6 +207,8 @@ func (h *filesWSHandler) OnMessage(socket *gws.Conn, message *gws.Message) {
 		h.handleFileOp(fs, msg)
 	case "cancel":
 		h.handleCancel(fs, msg)
+	case "rtc_signal":
+		h.forwardFileRTCSignal(fs, msg)
 	}
 }
 
@@ -275,7 +292,12 @@ func (h *filesWSHandler) handleUploadStart(socket *fileSocket, msg fileMsg) {
 	if !ok {
 		return
 	}
-	h.srv.registerFileTask(msg.TaskID, socket, msg.DeviceID)
+	h.prepareFileRTC(client, &msg)
+	if !h.srv.registerBoundFileTask(msg.TaskID, socket, client, msg.RTCType == "offer") {
+		h.srv.recordTransferFailure("transport")
+		socket.writeText(fileMsg{Op: "error", TaskID: msg.TaskID, Message: "task already active"})
+		return
+	}
 	err := client.Send(&protocol.Message{
 		Type:       protocol.MsgFileUploadStart,
 		TaskID:     msg.TaskID,
@@ -283,9 +305,15 @@ func (h *filesWSHandler) handleUploadStart(socket *fileSocket, msg fileMsg) {
 		ParentPath: msg.ParentPath,
 		Name:       msg.Name,
 		Size:       msg.Size,
+		SHA256:     msg.SHA256,
+		Restart:    msg.Restart,
 		ModTime:    msg.ModTime,
+		RTCType:    msg.RTCType,
+		RTCData:    msg.RTCData,
+		IceServers: h.srv.rtcOfferICEServers(msg.RTCType),
 	})
 	if err != nil {
+		h.srv.recordTransferFailure("transport")
 		h.srv.removeFileTask(msg.TaskID)
 		socket.writeText(fileMsg{Op: "error", DeviceID: msg.DeviceID, TaskID: msg.TaskID, Message: "failed to reach device"})
 	}
@@ -299,9 +327,15 @@ func (h *filesWSHandler) handleDownloadStart(socket *fileSocket, msg fileMsg) {
 	if !ok {
 		return
 	}
-	h.srv.registerFileTask(msg.TaskID, socket, msg.DeviceID)
-	if err := client.Send(&protocol.Message{Type: protocol.MsgFileDownloadStart, TaskID: msg.TaskID, Path: msg.Path, Offset: msg.Offset, Length: msg.Length}); err != nil {
+	h.prepareFileRTC(client, &msg)
+	if !h.srv.registerBoundFileTask(msg.TaskID, socket, client, msg.RTCType == "offer") {
+		h.srv.recordTransferFailure("transport")
+		socket.writeText(fileMsg{Op: "error", TaskID: msg.TaskID, Message: "task already active"})
+		return
+	}
+	if err := client.Send(&protocol.Message{Type: protocol.MsgFileDownloadStart, TaskID: msg.TaskID, Path: msg.Path, SHA256: msg.SHA256, Offset: msg.Offset, Length: msg.Length, RTCType: msg.RTCType, RTCData: msg.RTCData, IceServers: h.srv.rtcOfferICEServers(msg.RTCType)}); err != nil {
 		h.srv.removeFileTask(msg.TaskID)
+		h.srv.recordTransferFailure("transport")
 		socket.writeText(fileMsg{Op: "error", DeviceID: msg.DeviceID, TaskID: msg.TaskID, Message: "failed to reach device"})
 	}
 }
@@ -335,12 +369,16 @@ func (h *filesWSHandler) forwardTaskControl(socket *fileSocket, msg fileMsg, typ
 		socket.writeText(fileMsg{Op: "error", TaskID: msg.TaskID, Message: "task not found"})
 		return
 	}
-	client, ok := h.srv.GetClient(route.deviceID)
-	if !ok {
+	client := route.client
+	if !h.srv.fileRouteAuthorized(route) {
 		socket.writeText(fileMsg{Op: "error", TaskID: msg.TaskID, Message: "device not connected"})
 		return
 	}
-	client.Send(&protocol.Message{Type: typ, TaskID: msg.TaskID, Path: msg.Path, Size: msg.Size, Offset: msg.Offset})
+	if err := client.Send(&protocol.Message{Type: typ, TaskID: msg.TaskID, Path: msg.Path, Size: msg.Size, Offset: msg.Offset}); err != nil {
+		h.srv.recordTransferFailure("transport")
+		h.srv.removeFileTask(msg.TaskID)
+		socket.writeText(fileMsg{Op: "transfer_error", TaskID: msg.TaskID, Message: "failed to reach device"})
+	}
 }
 
 func (h *filesWSHandler) handleCancel(socket *fileSocket, msg fileMsg) {
@@ -348,7 +386,7 @@ func (h *filesWSHandler) handleCancel(socket *fileSocket, msg fileMsg) {
 	if route == nil || route.socket != socket {
 		return
 	}
-	if client, ok := h.srv.GetClient(route.deviceID); ok {
+	if client := route.client; client != nil {
 		client.Send(&protocol.Message{Type: protocol.MsgFileTransferCancel, TaskID: msg.TaskID})
 		client.SendBinaryOffset(protocol.BinFileTransferCancel, msg.TaskID, msg.Offset, nil)
 	}
@@ -372,24 +410,37 @@ func (h *filesWSHandler) handleBinary(socket *fileSocket, raw []byte) {
 		socket.writeText(fileMsg{Op: "error", TaskID: taskID, Message: "task not found"})
 		return
 	}
-	client, ok := h.srv.GetClient(route.deviceID)
-	if !ok {
+	client := route.client
+	if !h.srv.fileRouteAuthorized(route) {
 		socket.writeText(fileMsg{Op: "error", TaskID: taskID, Message: "device not connected"})
 		return
 	}
 	switch typ {
 	case protocol.BinFileUploadChunk:
-		client.SendBinaryOffset(protocol.BinFileUploadChunk, taskID, offset, payload)
+		if !route.rtc {
+			if err := client.SendBinaryOffset(protocol.BinFileUploadChunk, taskID, offset, payload); err != nil {
+				h.srv.recordTransferFailure("transport")
+				h.srv.removeFileTask(taskID)
+				socket.writeText(fileMsg{Op: "transfer_error", TaskID: taskID, Message: "failed to reach device"})
+			}
+		}
 	case protocol.BinFileTransferCancel:
 		client.SendBinaryOffset(protocol.BinFileTransferCancel, taskID, offset, nil)
 		h.srv.removeFileTask(taskID)
 	}
 }
 
-func (s *Server) registerFileTask(taskID string, socket *fileSocket, deviceID string) {
+func (s *Server) registerBoundFileTask(taskID string, socket *fileSocket, client *ClientConn, rtc bool) bool {
+	if client == nil {
+		return false
+	}
 	s.fileMu.Lock()
-	s.fileTasks[taskID] = &fileTaskRoute{socket: socket, deviceID: deviceID}
-	s.fileMu.Unlock()
+	defer s.fileMu.Unlock()
+	if s.fileTasks[taskID] != nil {
+		return false
+	}
+	s.fileTasks[taskID] = &fileTaskRoute{socket: socket, deviceID: client.ID, client: client, rtc: rtc}
+	return true
 }
 
 func (s *Server) getFileTask(taskID string) *fileTaskRoute {
@@ -400,6 +451,9 @@ func (s *Server) getFileTask(taskID string) *fileTaskRoute {
 
 func (s *Server) removeFileTask(taskID string) {
 	s.fileMu.Lock()
+	if route := s.fileTasks[taskID]; route != nil && route.timer != nil {
+		route.timer.Stop()
+	}
 	delete(s.fileTasks, taskID)
 	s.fileMu.Unlock()
 }
@@ -410,6 +464,7 @@ func (s *Server) handleFileManagerMessage(msg *protocol.Message, devices ...stri
 		device = devices[0]
 	}
 	if s.routeAgentFileMsg(msg) {
+		if msg.Type == protocol.MsgFileTransferError { s.recordTransferFailure("device") }
 		return
 	}
 	switch msg.Type {
@@ -433,7 +488,7 @@ func (s *Server) handleFileManagerMessage(msg *protocol.Message, devices ...stri
 		}
 	case protocol.MsgFileUploadReady:
 		if route := s.getFileTask(msg.TaskID); route != nil {
-			route.socket.writeText(fileMsg{Op: "upload_ready", TaskID: msg.TaskID, Path: msg.Path, Offset: msg.Offset, Size: msg.Size})
+			route.socket.writeText(fileMsg{Op: "upload_ready", TaskID: msg.TaskID, Path: msg.Path, Offset: msg.Offset, Size: msg.Size, SHA256: msg.SHA256, PrefixSHA256: msg.PrefixSHA256})
 		}
 	case "file_create_result":
 		s.forwardFileOpResult(msg, "create_result", device)
@@ -449,15 +504,20 @@ func (s *Server) handleFileManagerMessage(msg *protocol.Message, devices ...stri
 		s.forwardFileOpResult(msg, "copy_result", device)
 	case protocol.MsgFileDownloadStart:
 		if route := s.getFileTask(msg.TaskID); route != nil {
-			route.socket.writeText(fileMsg{Op: "download_start", TaskID: msg.TaskID, Path: msg.Path, Name: msg.Name, Size: msg.Size, Offset: msg.Offset, Length: msg.Length, ModTime: msg.ModTime})
+			route.socket.writeText(fileMsg{Op: "download_start", TaskID: msg.TaskID, Path: msg.Path, Name: msg.Name, Size: msg.Size, SHA256: msg.SHA256, Offset: msg.Offset, Length: msg.Length, ModTime: msg.ModTime})
 		}
 	case protocol.MsgFileTransferEnd:
 		if route := s.getFileTask(msg.TaskID); route != nil {
-			route.socket.writeText(fileMsg{Op: "transfer_end", TaskID: msg.TaskID, Path: msg.Path, Size: msg.Size, Offset: msg.Offset, Success: msg.Success})
-			s.removeFileTask(msg.TaskID)
+			route.socket.writeText(fileMsg{Op: "transfer_end", TaskID: msg.TaskID, Path: msg.Path, Size: msg.Size, SHA256: msg.SHA256, Offset: msg.Offset, Success: msg.Success})
+			if route.rtc {
+				s.expireFileRTC(msg.TaskID, route)
+			} else {
+				s.removeFileTask(msg.TaskID)
+			}
 		}
 	case protocol.MsgFileTransferError:
 		if route := s.getFileTask(msg.TaskID); route != nil {
+			s.recordTransferFailure("device")
 			route.socket.writeText(fileMsg{Op: "transfer_error", TaskID: msg.TaskID, Path: msg.Path, Error: msg.Error, Message: msg.Error})
 			s.removeFileTask(msg.TaskID)
 		}
@@ -491,7 +551,9 @@ func (s *Server) handleFileManagerBinary(raw []byte) bool {
 			return true
 		}
 		route.socket.writeBinary(raw)
-		if typ == protocol.BinFileTransferEnd || typ == protocol.BinFileTransferCancel {
+		// Binary END closes a range, not the operation: retain its route for
+		// the authoritative verified text completion (or explicit failure).
+		if typ == protocol.BinFileTransferCancel {
 			s.removeFileTask(taskID)
 		}
 		return true

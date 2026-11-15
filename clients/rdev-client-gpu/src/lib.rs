@@ -3,6 +3,7 @@ pub mod desktop;
 pub mod desktop_env;
 pub mod desktop_rtc;
 mod file_rename;
+pub mod file_rtc;
 pub mod fileput;
 pub mod files;
 pub mod forward;

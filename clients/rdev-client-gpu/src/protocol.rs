@@ -91,10 +91,29 @@ pub enum MessageType {
     DesktopClose,
     #[serde(rename = "desktop_rtc_signal")]
     DesktopRTCSignal,
+    #[serde(rename = "file_rtc_signal")]
+    FileRTCSignal,
     #[serde(rename = "gpu_desktop_tunnel")]
     GpuDesktopTunnel,
     #[serde(other)]
     Unknown,
+}
+
+#[derive(Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct IceServer {
+    pub urls: Vec<String>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub username: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub credential: String,
+}
+
+// Message derives Debug; never expose ICE credentials (including URL-embedded secrets).
+impl std::fmt::Debug for IceServer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("IceServer { urls: [redacted], username: [redacted], credential: [redacted] }")
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -102,6 +121,12 @@ pub enum MessageType {
 pub struct Message {
     #[serde(rename = "type")]
     pub ty: Option<MessageType>,
+    #[serde(
+        default,
+        rename = "fileRTC",
+        skip_serializing_if = "std::ops::Not::not"
+    )]
+    pub file_rtc: bool,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub client_id: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -110,6 +135,10 @@ pub struct Message {
     pub client_version: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub instance_id: String,
+	#[serde(default, skip_serializing_if = "String::is_empty")]
+	pub device_identity: String,
+	#[serde(default, skip_serializing_if = "String::is_empty")]
+	pub reconnect_proof: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub subsystem: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -166,6 +195,16 @@ pub struct Message {
     pub size: i64,
     #[serde(default, skip_serializing_if = "is_zero_i64")]
     pub offset: i64,
+    #[serde(default, skip_serializing_if = "is_zero_i64")]
+    pub length: i64,
+    /// Full SHA-256 (lowercase hexadecimal) for the transfer source.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub sha256: String,
+    /// SHA-256 of the exact persisted upload prefix.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub prefix_sha256: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub restart: bool,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub mod_time: String,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -184,6 +223,9 @@ pub struct Message {
     pub rtc_type: String,
     #[serde(default, skip_serializing_if = "Value::is_null")]
     pub rtc_data: serde_json::Value,
+    // None keeps older servers' STUN default; Some([]) requests host candidates only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ice_servers: Option<Vec<IceServer>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -411,5 +453,43 @@ mod tests {
         let text = encode_message(&msg).unwrap();
         assert!(text.contains("\"clientId\":\"dev\""));
         assert!(text.contains("\"instanceId\":\"inst\""));
+    }
+    #[test]
+    fn file_commands_decode_without_registration_identity() {
+        let list =
+            decode_message(r#"{"type":"file_list","requestId":"r1","path":"/tmp"}"#).unwrap();
+        assert_eq!(list.ty, Some(MessageType::FileList));
+        assert_eq!(list.path, "/tmp");
+        let signal =
+            decode_message(r#"{"type":"file_rtc_signal","taskId":"t1","rtcType":"close"}"#)
+                .unwrap();
+        assert_eq!(signal.ty, Some(MessageType::FileRTCSignal));
+        assert_eq!(signal.task_id, "t1");
+    }
+
+    #[test]
+    fn direct_file_frame_has_empty_task_id() {
+        let frame = encode_bin_frame_offset(BIN_FILE_DOWNLOAD_CHUNK, "", 7, b"x").unwrap();
+        let (_, id, offset, payload) = decode_bin_frame_offset(&frame).unwrap();
+        assert!(id.is_empty());
+        assert_eq!(offset, 7);
+        assert_eq!(payload, b"x");
+    }
+    #[test]
+    fn rtc_ice_servers_preserve_missing_and_empty() {
+        let legacy = decode_message(r#"{"type":"desktop_rtc_signal","rtcType":"offer"}"#).unwrap();
+        assert!(legacy.ice_servers.is_none());
+        let host_only = decode_message(r#"{"type":"desktop_rtc_signal","iceServers":[]}"#).unwrap();
+        assert!(host_only.ice_servers.as_ref().is_some_and(Vec::is_empty));
+        assert!(encode_message(&host_only)
+            .unwrap()
+            .contains("\"iceServers\":[]"));
+        let turn = decode_message(r#"{"type":"desktop_rtc_signal","iceServers":[{"urls":["turn:relay.example:3478"],"username":"alice","credential":"private-token"}]}"#).unwrap();
+        assert_eq!(
+            turn.ice_servers.as_ref().unwrap()[0].credential,
+            "private-token"
+        );
+        assert!(!format!("{turn:?}").contains("private-token"));
+        assert!(!format!("{turn:?}").contains("turn:relay.example"));
     }
 }

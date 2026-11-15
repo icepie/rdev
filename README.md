@@ -77,6 +77,8 @@
 
 桌面 WebRTC 需服务端显式启用、客户端声明 `desktop.rtc: true` 且浏览器支持；浏览器先查询鉴权后的 `/api/desktop/rtc`，关闭或查询失败时不会创建 PeerConnection/信令连接。视频可通过 `rdev-desktop` DataChannel 直连，人工输入和剪贴板保留服务端 WebSocket 以维持鉴权及 Agent 接管仲裁；直连失败自动保留/恢复 WebSocket 视频，不反复立即重协商。当前使用公共 STUN、无 TURN，网络不允许直连时走回退路径。详见 [远程桌面说明](docs/remote-desktop.md)。
 
+文件页与 Agent 文件面板同样支持 WebRTC：服务端启用 `--webrtc`、设备声明 `fileRTC` 且浏览器支持时，上传/下载文件数据走可靠有序的 `rdev-file` DataChannel；目录操作、鉴权、ICE 信令与传输控制仍走服务端。Go 和 Rust 客户端均支持，无需启用远程桌面。健康直连不通过服务端中继文件数据；协商失败或传输中断时取消旧任务，以新任务从已确认的上传偏移/已接收的下载偏移切回中继，不在同一任务内混用两条数据通道。关闭 WebRTC、旧客户端或不支持直连的网络继续使用中继；当前使用 STUN，无 TURN。暂停、取消、关闭面板及控制连接断开会清理对应直连。
+
 
 `model-config.json` 示例（容忍 `opencode_npm` 等多余字段，`api_key` 支持 `${ENV_VAR}`）：
 
@@ -149,7 +151,9 @@ powershell -Command "iwr -useb https://rdev.singzer.cn/run.ps1 | iex; RDev wss:/
 
 客户端和服务端默认启用自动更新：启动 1 分钟后开始检查 GitHub latest release，之后每 1 分钟轮询一次。Go 客户端/服务端发现新版本后会下载当前平台/架构对应资产，使用 `github.com/minio/selfupdate` 替换当前二进制并重启进程。Rust GPU 客户端同样支持 `--no-auto-update`、`--auto-update`、`--update-interval` 和 `RDEV_UPDATE_PROXY`，会下载对应 `rdev-client-gpu-*` 归档并替换当前可执行文件；归档内的 DLL/sidecar 仍由安装脚本或服务包装器负责部署。
 
-**更新包签名校验**：下载链路经过第三方 GitHub 代理，因此所有更新包都带有 ed25519 签名。发布 CI 使用 `scripts/sign` 为每个资产生成 `<资产名>.sig`，客户端内置公钥（Go 与 Rust updater 相同）在替换二进制前验签，签名缺失或不匹配会拒绝更新。维护者需要在仓库 Secrets 中配置 `RDEV_UPDATE_SIGNING_KEY`（base64 编码的 64 字节 ed25519 私钥，可用 `go run ./scripts/sign -generate` 生成密钥对）；未配置时 CI 会跳过签名并发出警告。**注意：未签名的旧 Release 资产将不再被新版客户端的自动更新接受**，启用验签后请确保后续发布均带签名。此外 `RDEV_UPDATE_PROXY` 仅接受 `https://` 前缀（仅本地测试允许 loopback 的 `http://`）。
+**更新包签名校验**：下载链路经过第三方 GitHub 代理，客户端内置公钥（Go 与 Rust updater 相同）在替换二进制前验证 ed25519 签名，签名缺失或不匹配会拒绝更新。Go、Rust GPU 与 Android 正式发布 CI 使用 `scripts/sign` 为每个资产生成 `<资产名>.sig`；缺少 `RDEV_UPDATE_SIGNING_KEY` 时直接失败，不上传无签名资产。维护者需要在仓库 Secrets 中配置该密钥（base64 编码的 64 字节 ed25519 私钥，可用 `go run ./scripts/sign -generate` 生成密钥对，并将对应公钥同步到 Go/Rust updater）。分支构建不要求发布密钥。Android 的旁路资产签名不代替 APK 自身的安装签名，现有 debug APK 构建类型不变。**未签名的旧 Release 资产不能被启用验签的客户端自动更新接受**。`RDEV_UPDATE_PROXY` 仅接受 `https://` 前缀（仅本地测试允许 loopback 的 `http://`）。
+
+签名密钥已于 2026-11-15 轮换；Go/Rust 内置新公钥的 SHA-256 指纹为 `57bf24ad70845431d49dc9a3519284856378f7b32a02fd69b554bfd4189d32bb`。只信任旧公钥的客户端/服务端需要手动升级一次到采用新公钥的版本，不能通过关闭验签绕过。Actions Secret 不可回读，请通过受控轮换维护，不要将私钥写入源码、日志或聊天。
 
 ```bash
 # 禁用自动更新
@@ -204,6 +208,23 @@ ssh -L 8080:localhost:80 my-device@your-server -p 2222
 # 远程端口转发 (暴露本地 3000 端口到服务端)
 ssh -R 3000:localhost:3000 my-device@your-server -p 2222
 ```
+
+### 设备身份与撤销
+
+Go、Rust GPU、Android 客户端在首次注册前持久保存随机 `deviceIdentity` 和独立的 `reconnectProof`（各为 64 位小写十六进制）。服务端只保存 proof 的 SHA-256 校验值；公开设备 ID 和 `instanceId` 都不是重连凭证。不同身份申请同名时分配后缀，已有或已撤销身份的名称不会转给新身份。同一有效身份重启后恢复原名称并替换旧连接。
+
+Go/Rust 默认使用系统配置目录下的 `rdev/identity-*.json`：Linux `$XDG_CONFIG_HOME/rdev` 或 `~/.config/rdev`，macOS `~/Library/Application Support/rdev`，Windows `%APPDATA%/rdev`；`RDEV_IDENTITY_DIR` 可覆盖目录。凭证按服务端入口和配置设备 ID 隔离；文件先私密写入并同步，再原子发布且不覆盖并发进程已保存的身份。Android 使用应用私有 SharedPreferences 的同步提交，提交失败不注册。不要复制凭证到其他设备、手改 proof，或将凭证加入版本库；丢失/损坏时应恢复原文件，删除后重新注册不能恢复旧名称和历史。
+
+服务端配置持久数据目录后，将注册、替换和撤销写入 `identity-registry.json`；未配置目录时重启会丢失注册与撤销记录。存储错误拒绝新的身份准入；撤销写盘失败会断开当前设备并返回错误，但重启后的撤销状态必须在修复持久化后确认。Dashboard 的 Device identities 区域和 `GET /api/identity` 提供不含凭证的清单/审计，`POST /api/identity/revoke`（JSON `deviceIdentity`）永久撤销并断开控制连接和桌面隧道。
+
+管理 API 使用服务端 admin token；未设置时管理 API（包括撤销）不受 token 保护。admin token 不控制设备首次注册，首次注册仍是开放的 first-claim 模式；设备密码控制访问设备，不替代身份 proof。跨不可信网络必须使用 WSS 或可信加密通道，TCP/KCP/WS 本身不保护传输中的 proof；反向代理应避免记录 GPU 隧道 URL 的查询参数。C++ 客户端是独立 GameStream 查看器，使用 Sunshine/Apollo 证书配对，不参与 rdev 设备注册。
+
+### 运行健康与指标
+
+Dashboard 展示运行健康、历史存储故障、定时任务状态和传输失败计数。`GET /healthz` 是不带运行信息的公开存活检查；`GET /readyz`、`GET /api/health`、`GET /metrics` 使用管理 API 鉴权（`X-RDev-Token`）。已知历史/身份/定时任务存储故障或调度器停止时，readiness 返回 503，存活检查仍返回 200。
+
+指标采用 Prometheus 文本格式；失败计数仅分 device/transport，进程重启后归零。健康查询不启动懒加载子系统、不扫描磁盘；正常状态仅代表已初始化子系统和已访问历史没有已知故障，不是全盘完整性保证。历史故障应通过 Agent 的显式恢复操作保留原件后恢复；调度器存储故障需先修复存储再重启，不能删除 manifest 绕过。
+
 
 ### 代理端口（HTTP + SOCKS5）
 

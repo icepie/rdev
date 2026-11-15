@@ -79,7 +79,7 @@ func (c *Client) handleDesktopRTCSignal(msg *protocol.Message) {
 
 	switch msg.RTCType {
 	case "offer":
-		rtc.acceptOffer(msg.RTCData)
+		rtc.acceptOffer(msg.RTCData, msg.IceServers)
 	case "candidate":
 		var candidate webrtc.ICECandidateInit
 		if len(msg.RTCData) == 0 || json.Unmarshal(msg.RTCData, &candidate) != nil {
@@ -89,14 +89,14 @@ func (c *Client) handleDesktopRTCSignal(msg *protocol.Message) {
 	}
 }
 
-func (r *desktopRTCSession) acceptOffer(raw json.RawMessage) {
+func (r *desktopRTCSession) acceptOffer(raw json.RawMessage, iceServers *[]protocol.IceServer) {
 	var offer webrtc.SessionDescription
 	if len(raw) == 0 || json.Unmarshal(raw, &offer) != nil || offer.Type != webrtc.SDPTypeOffer {
 		r.close()
 		return
 	}
 	peer, err := webrtc.NewPeerConnection(webrtc.Configuration{
-		ICEServers: []webrtc.ICEServer{{URLs: []string{"stun:stun.l.google.com:19302"}}},
+		ICEServers: rtcICEServers(iceServers),
 	})
 	if err != nil {
 		r.close()

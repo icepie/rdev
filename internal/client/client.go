@@ -199,32 +199,37 @@ type pendingTCPDial struct {
 type Client struct {
 	tcpDials map[string]*pendingTCPDial // guarded by mu; pending outbound connects
 
-	serverURL       string
-	clientID        string
-	requestedID     string
-	instanceID      string
-	password        string
-	shell           string
-	version         string
-	conn            *gws.Conn
-	transport       clientTransport
-	writeMu         sync.Mutex
-	sessions        map[string]*clientSession
-	forwards        map[string]net.Conn
-	forwardOpen     map[string]chan struct{}
-	listeners       map[string]net.Listener
-	fileStreams     map[string]*fileStream
-	fileListings    fileListingCache
-	uploadMu        sync.Mutex // upload maps; never held during file I/O
-	uploadPaths     map[string]*managedUpload
-	uploads         map[string]*managedUpload
-	downloads       map[string]chan struct{}
-	desktopSessions map[string]*desktopSession
-	mu              sync.Mutex
-	done            chan struct{}
-	reconnectReset  chan struct{}
-	reconnectMin    time.Duration
-	reconnectMax    time.Duration
+	serverURL            string
+	clientID             string
+	requestedID          string
+	instanceID           string
+	deviceIdentity       string
+	reconnectProof       string
+	identityErr          error
+	password             string
+	shell                string
+	version              string
+	conn                 *gws.Conn
+	transport            clientTransport
+	writeMu              sync.Mutex
+	sessions             map[string]*clientSession
+	forwards             map[string]net.Conn
+	forwardOpen          map[string]chan struct{}
+	listeners            map[string]net.Listener
+	fileStreams          map[string]*fileStream
+	fileListings         fileListingCache
+	uploadMu             sync.Mutex // upload maps; never held during file I/O
+	uploadPaths          map[string]*managedUpload
+	uploads              map[string]*managedUpload
+	downloads            map[string]chan struct{}
+	downloadFingerprints downloadFingerprintCache
+	fileRTC              map[string]*fileRTCSession // guarded by mu
+	desktopSessions      map[string]*desktopSession
+	mu                   sync.Mutex
+	done                 chan struct{}
+	reconnectReset       chan struct{}
+	reconnectMin         time.Duration
+	reconnectMax         time.Duration
 
 	// Server info (received on register response)
 	sshPort  string
@@ -294,11 +299,15 @@ func (t *streamClientTransport) Close(reason string) error {
 
 // NewClient creates a new client
 func NewClient(serverURL, clientID, password, shell string) *Client {
+	savedIdentity, _, identityErr := loadClientIdentity(serverURL, clientID)
 	c := &Client{
 		serverURL:       serverURL,
 		clientID:        clientID,
 		requestedID:     clientID,
 		instanceID:      newClientInstanceID(),
+		deviceIdentity:  savedIdentity.DeviceIdentity,
+		reconnectProof:  savedIdentity.ReconnectProof,
+		identityErr:     identityErr,
 		password:        password,
 		shell:           shell,
 		sessions:        make(map[string]*clientSession),
@@ -395,15 +404,23 @@ func (h *wsEventHandler) OnOpen(socket *gws.Conn) {
 	h.client.conn = socket
 	h.client.transport = &wsClientTransport{conn: socket}
 	h.client.mu.Unlock()
+	if h.client.identityErr != nil {
+		log.Printf("identity credentials unavailable: %v", h.client.identityErr)
+		socket.WriteClose(1011, []byte("identity credentials unavailable"))
+		return
+	}
 	if err := h.client.send(&protocol.Message{
 		Type:                protocol.MsgRegister,
 		ClientID:            h.client.requestedID,
 		InstanceID:          h.client.instanceID,
+		DeviceIdentity:      h.client.deviceIdentity,
+		ReconnectProof:      h.client.reconnectProof,
 		ClientVersion:       h.client.version,
 		ClientOS:            runtime.GOOS,
 		Password:            h.client.password,
 		DesktopCapabilities: desktopCapabilities(),
 		FileOperations:      []string{"create", "mkdir", "delete", "rename", "rename_directory"},
+		FileRTC:             true,
 		ConfinedDownloads:   true,
 	}); err != nil {
 		log.Printf("register send error: %v", err)
@@ -446,6 +463,7 @@ func (h *wsEventHandler) OnClose(socket *gws.Conn, err error) {
 	h.client.conn = nil
 	h.client.transport = nil
 	h.client.mu.Unlock()
+	h.client.closeFileRTCSessions()
 	for _, upload := range uploads {
 		h.client.cancelManagedUpload(upload)
 	}
@@ -515,7 +533,7 @@ func (h *wsEventHandler) handleBinaryMessage(raw []byte) {
 		h.client.handleBinFileEnd(id)
 	case protocol.BinFileUploadChunk:
 		_, taskID, offset, data, err := protocol.DecodeBinFrameOffset(raw)
-		if err == nil {
+		if err == nil && h.client.fileRTCFor(taskID) == nil {
 			h.client.handleManagedUploadChunk(taskID, offset, data)
 		}
 	case protocol.BinFileTransferCancel:
@@ -795,6 +813,10 @@ func (c *Client) connectStream(kind, endpoint string) error {
 			return fmt.Errorf("dial tcp: %w", err)
 		}
 	}
+	if c.identityErr != nil {
+		conn.Close()
+		return fmt.Errorf("identity credentials unavailable: %w", c.identityErr)
+	}
 	transport := &streamClientTransport{conn: conn}
 	c.mu.Lock()
 	c.transport = transport
@@ -805,11 +827,14 @@ func (c *Client) connectStream(kind, endpoint string) error {
 		Type:                protocol.MsgRegister,
 		ClientID:            c.requestedID,
 		InstanceID:          c.instanceID,
+		DeviceIdentity:      c.deviceIdentity,
+		ReconnectProof:      c.reconnectProof,
 		ClientVersion:       c.version,
 		ClientOS:            runtime.GOOS,
 		Password:            c.password,
 		DesktopCapabilities: desktopCapabilities(),
 		FileOperations:      []string{"create", "mkdir", "delete", "rename", "rename_directory"},
+		FileRTC:             true,
 		ConfinedDownloads:   true,
 	}); err != nil {
 		conn.Close()
@@ -888,6 +913,7 @@ func (c *Client) closeCurrentTransport(transport clientTransport, conn net.Conn)
 	c.transport = nil
 	c.conn = nil
 	c.mu.Unlock()
+	c.closeFileRTCSessions()
 	for _, upload := range uploads {
 		c.cancelManagedUpload(upload)
 	}
@@ -940,11 +966,13 @@ func (c *Client) handleMessage(msg *protocol.Message) {
 	case protocol.MsgFileListRequest:
 		go c.handleFileListRequest(msg)
 	case protocol.MsgFileUploadStart:
-		go c.handleManagedUploadStart(msg)
+		c.startFileTransfer(msg)
 	case protocol.MsgFileUploadEnd:
 		go c.handleManagedUploadEnd(msg)
 	case protocol.MsgFileDownloadStart:
-		go c.handleManagedDownloadStart(msg)
+		c.startFileTransfer(msg)
+	case protocol.MsgFileRTCSignal:
+		c.handleFileRTCSignal(msg)
 	case protocol.MsgFileTransferCancel:
 		c.handleManagedTransferCancel(msg.TaskID)
 	case protocol.MsgDesktopStart:
@@ -976,6 +1004,9 @@ func (c *Client) sendBinaryOffset(typ byte, id string, offset int64, data []byte
 
 func (c *Client) sendFileTransferError(taskID, path, errText string) {
 	c.send(&protocol.Message{Type: protocol.MsgFileTransferError, TaskID: taskID, Path: path, Error: errText})
+	if rtc := c.fileRTCFor(taskID); rtc != nil {
+		rtc.close(true)
+	}
 }
 
 func defaultFilePath(path string) string {
@@ -1098,110 +1129,21 @@ func safeJoinFile(dir, name string) string {
 	return filepath.Join(defaultFilePath(dir), filepath.Base(name))
 }
 
-func (c *Client) handleManagedDownloadStart(msg *protocol.Message) {
-	taskID := msg.TaskID
-	path := msg.Path
-	if taskID == "" || path == "" {
-		return
-	}
-	var f *os.File
-	var err error
-	if msg.DownloadRoot != "" {
-		f, err = os.OpenInRoot(msg.DownloadRoot, path)
-	} else {
-		f, err = os.Open(path)
-	}
-	if err != nil {
-		c.sendFileTransferError(taskID, path, err.Error())
-		return
-	}
-	defer f.Close()
-	st, err := f.Stat()
-	if err != nil {
-		c.sendFileTransferError(taskID, path, err.Error())
-		return
-	}
-	if st.IsDir() || (msg.DownloadRoot != "" && !st.Mode().IsRegular()) {
-		c.sendFileTransferError(taskID, path, "cannot download non-regular file")
-		return
-	}
-	offset := msg.Offset
-	if msg.Length < 0 || (msg.Length > 0 && (offset < 0 || offset > st.Size())) {
-		c.sendFileTransferError(taskID, path, "invalid download range")
-		return
-	}
-	if offset < 0 || offset > st.Size() {
-		offset = 0
-	}
-	if _, err := f.Seek(offset, io.SeekStart); err != nil {
-		c.sendFileTransferError(taskID, path, err.Error())
-		return
-	}
-	cancel := make(chan struct{})
-	c.mu.Lock()
-	if old := c.downloads[taskID]; old != nil {
-		close(old)
-	}
-	c.downloads[taskID] = cancel
-	c.mu.Unlock()
-	defer func() {
-		c.mu.Lock()
-		if c.downloads[taskID] == cancel {
-			delete(c.downloads, taskID)
-		}
-		c.mu.Unlock()
-	}()
-	length := st.Size() - offset
-	if msg.Length > 0 {
-		length = min(length, msg.Length)
-	}
-	if err := c.send(&protocol.Message{Type: protocol.MsgFileDownloadStart, TaskID: taskID, Path: path, Name: filepath.Base(path), DownloadRoot: msg.DownloadRoot, Size: st.Size(), Offset: offset, Length: length, ModTime: st.ModTime().Format(time.RFC3339)}); err != nil {
-		return
-	}
-	var reader io.Reader = f
-	if msg.Length > 0 {
-		reader = io.LimitReader(f, length)
-	}
-	buf := make([]byte, max(1, min(int64(512*1024), length)))
-	cur := offset
-	for {
-		select {
-		case <-cancel:
-			return
-		default:
-		}
-		n, readErr := reader.Read(buf)
-		if n > 0 {
-			select {
-			case <-cancel:
-				return
-			default:
-			}
-			if err := c.sendBinaryOffset(protocol.BinFileDownloadChunk, taskID, cur, buf[:n]); err != nil {
-				return
-			}
-			cur += int64(n)
-		}
-		if readErr == io.EOF {
-			if msg.Length > 0 && cur-offset != length {
-				c.sendFileTransferError(taskID, path, "file changed during range download")
-				return
-			}
-			c.sendBinaryOffset(protocol.BinFileTransferEnd, taskID, cur, nil)
-			c.send(&protocol.Message{Type: protocol.MsgFileTransferEnd, TaskID: taskID, Path: path, Size: st.Size(), Offset: cur, Success: true})
-			return
-		}
-		if readErr != nil {
-			c.sendFileTransferError(taskID, path, readErr.Error())
-			return
-		}
-	}
-}
-
 func (c *Client) handleManagedTransferCancel(taskID string) {
 	if taskID == "" {
 		return
 	}
+	if rtc := c.fileRTCFor(taskID); rtc != nil {
+		rtc.close(false)
+		rtc.startMu.Lock()
+		c.cancelFileOperations(taskID)
+		rtc.startMu.Unlock()
+		return
+	}
+	c.cancelFileOperations(taskID)
+}
+
+func (c *Client) cancelFileOperations(taskID string) {
 	if up := c.managedUploadFor(taskID); up != nil {
 		c.cancelManagedUpload(up)
 	}

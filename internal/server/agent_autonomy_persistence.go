@@ -1,12 +1,6 @@
 package server
 
-import (
-	"encoding/json"
-	"log"
-	"os"
-
-	"rdev/internal/agent"
-)
+import "rdev/internal/agent"
 
 // Caller holds the thread persistence lock. Append checkpoints rather than
 // rewriting the transcript at every provider round; compaction folds them into
@@ -14,29 +8,12 @@ import (
 func (st *agentSessionStore) saveAutonomy(device, thread, model string, goal *agentGoal, loop *agentLoop) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
-	path := st.path(device, thread)
-	if _, err := os.Stat(path); os.IsNotExist(err) {
-		if err := st.rewriteLocked(device, thread, model, nil); err != nil {
-			log.Printf("agent autonomy: %v", err)
-			return
-		}
-	}
-	data, _ := json.Marshal(agentHistoryLine{T: "autonomy", Goal: goal, Loop: loop})
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0600)
-	if err == nil {
-		_, err = f.Write(append(data, '\n'))
-		if closeErr := f.Close(); err == nil {
-			err = closeErr
-		}
-	}
-	if err != nil {
-		log.Printf("agent autonomy: %v", err)
+	if !st.writableLocked(device, thread) {
 		return
 	}
-	key := device + "/" + thread
-	x := st.extras[key]
+	x := st.extras[device+"/"+thread]
 	x.Goal, x.Loop = cloneGoal(goal), cloneLoop(loop)
-	st.extras[key] = x
+	st.appendCheckpointLocked(device, thread, model, agentHistoryLine{T: "autonomy", Goal: x.Goal, Loop: x.Loop}, x)
 }
 
 func (st *agentSessionStore) loadAutonomy(device, thread string) (*agentGoal, *agentLoop) {

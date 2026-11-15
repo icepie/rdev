@@ -1,4 +1,4 @@
-export type FileTaskStatus = "queued" | "running" | "paused" | "completed" | "failed" | "canceled";
+export type FileTaskStatus = "queued" | "running" | "saving" | "paused" | "completed" | "failed" | "canceled";
 
 /** An active request must be canceled before its task can be removed. */
 export function availableFileTaskActions(status: FileTaskStatus) {
@@ -74,8 +74,9 @@ export function readListingPage(
 
 /** A page reload loses local File objects, so active uploads need reselection. */
 export function restoreFileTask<
-  T extends { dir: string; status: string; message?: string },
+  T extends { dir: string; status: string; message?: string; diskDownload?: boolean },
 >(task: T, reselectMessage: string): T {
+  if (task.diskDownload && task.status !== "completed" && task.status !== "canceled") return { ...task, status: "failed" };
   return task.dir === "upload" &&
     (task.status === "running" || task.status === "queued")
     ? { ...task, status: "failed", message: reselectMessage }

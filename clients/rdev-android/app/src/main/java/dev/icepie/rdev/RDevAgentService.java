@@ -52,6 +52,12 @@ public class RDevAgentService extends Service {
     private volatile Network activeNetwork;
     private volatile int networkGeneration;
     private String instanceId;
+    private String deviceIdentity;
+    private String reconnectProof;
+    private boolean identityReady;
+    private String identityServer;
+    private String identityClientId;
+    private String connectionPassword;
     private volatile boolean stopping;
     private volatile boolean videoDemandActive;
     private int reconnectDelayMs = 1000;
@@ -64,14 +70,48 @@ public class RDevAgentService extends Service {
         super.onCreate();
         startForeground(NOTIFICATION_ID, notification("RDev Android 正在运行"));
         instanceId = UUID.randomUUID().toString();
+        loadIdentity(getSharedPreferences("rdev", MODE_PRIVATE));
+
         terminalManager = new AndroidTerminalManager(this);
         fileManager = new AndroidFileManager(this);
         acquireKeepAliveLocks();
         registerNetworkCallback();
         AndroidVideoHub.setDemandListener(this::handleVideoDemandChanged);
     }
+    private void loadIdentity(SharedPreferences prefs) {
+        identityServer = prefs.getString("server", "");
+        identityClientId = prefs.getString("id", "android");
+        connectionPassword = prefs.getString("password", "");
+        SharedPreferences identityPrefs = getSharedPreferences("rdev_identity", MODE_PRIVATE);
+        String identityScope = identityServer + "\u0000" + identityClientId;
+        String identityKey = "identity_" + UUID.nameUUIDFromBytes(identityScope.getBytes(java.nio.charset.StandardCharsets.UTF_8)).toString().replace("-", "");
+        deviceIdentity = identityPrefs.getString(identityKey, null);
+        reconnectProof = identityPrefs.getString(identityKey + "_proof", null);
+        if (deviceIdentity == null && reconnectProof == null) {
+            deviceIdentity = randomIdentityHex();
+            reconnectProof = randomIdentityHex();
+        }
+        // commit() also retries a failed write retained in SharedPreferences memory.
+        identityReady = validIdentityHex(deviceIdentity) && validIdentityHex(reconnectProof)
+            && identityPrefs.edit().putString(identityKey, deviceIdentity).putString(identityKey + "_proof", reconnectProof).commit();
+        if (!identityReady) Log.e(TAG, "Device identity unavailable; refusing enrollment until durable credentials can be restored");
+    }
+    private static boolean validIdentityHex(String value) {
+        return value != null && value.matches("[0-9a-f]{64}");
+    }
+    private String randomIdentityHex() {
+        byte[] bytes = new byte[32];
+        reconnectRandom.nextBytes(bytes);
+        StringBuilder out = new StringBuilder(64);
+        for (byte value : bytes) out.append(String.format(java.util.Locale.US, "%02x", value & 0xff));
+        return out.toString();
+    }
 
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
+        if (!identityReady) {
+            stopSelf();
+            return START_NOT_STICKY;
+        }
         stopping = false;
         if (intent != null && ACTION_CONNECT.equals(intent.getAction())) {
             reconnectNow();
@@ -209,11 +249,18 @@ public class RDevAgentService extends Service {
         startWebSocket();
     }
 
-    private void startWebSocket() {
+    private synchronized void startWebSocket() {
+        if (stopping) return;
         final int generation = ++reconnectGeneration;
         SharedPreferences prefs = getSharedPreferences("rdev", MODE_PRIVATE);
         if (client != null) client.close();
-        String server = prefs.getString("server", "");
+        if (!java.util.Objects.equals(identityServer, prefs.getString("server", "")) || !java.util.Objects.equals(identityClientId, prefs.getString("id", "android")) || !identityReady) {
+            if (tunnel != null) { tunnel.close(); tunnel = null; }
+            loadIdentity(prefs);
+        }
+        if (!identityReady) return;
+        connectionPassword = prefs.getString("password", "");
+        String server = identityServer;
         if (server == null || server.trim().length() == 0) {
             Log.w(TAG, "server is empty; open app or rdev:// link to configure");
             scheduleReconnect();
@@ -222,11 +269,12 @@ public class RDevAgentService extends Service {
         String endpoint = selectControlEndpoint(server);
         client = newControlConnection(endpoint, new RDevControlConnection.Listener() {
             @Override public void onOpen() {
+                if (stopping || generation != reconnectGeneration) return;
                 reconnectDelayMs = 1000;
                 sendRegister();
             }
-            @Override public void onText(String text) { handleText(text); }
-            @Override public void onBinary(byte[] data) { handleBinary(data); }
+            @Override public void onText(String text) { if (!stopping && generation == reconnectGeneration) handleText(text); }
+            @Override public void onBinary(byte[] data) { if (!stopping && generation == reconnectGeneration) handleBinary(data); }
             @Override public void onClosed(Exception error) {
                 Log.i(TAG, "connection closed error=" + error);
                 closeAllForwards();
@@ -291,13 +339,15 @@ public class RDevAgentService extends Service {
                 .put("inputBackends", new JSONArray().put("android-accessibility"))
                 .put("videoCodecs", new JSONArray().put("h264"))
                 .put("encoderBackends", new JSONArray().put("mediacodec"));
-            JSONObject msg = new JSONObject()
-                .put("type", "register")
-                .put("clientId", prefs.getString("id", "android"))
-                .put("clientVersion", "android/" + BuildConfig.VERSION_NAME)
-                .put("instanceId", instanceId)
-                .put("password", prefs.getString("password", ""))
-                .put("desktop", desktop)
+			JSONObject msg = new JSONObject()
+				.put("type", "register")
+				.put("clientId", identityClientId)
+				.put("clientVersion", "android/" + BuildConfig.VERSION_NAME)
+				.put("instanceId", instanceId)
+				.put("deviceIdentity", deviceIdentity)
+				.put("reconnectProof", reconnectProof)
+				.put("password", connectionPassword)
+				.put("desktop", desktop)
                 .put("fileOperations", new JSONArray().put("create").put("mkdir").put("delete").put("rename").put("rename_directory").put("stat").put("copy"));
             client.sendText(msg.toString());
             Log.i(TAG, "register sent id=" + prefs.getString("id", "android"));
@@ -547,15 +597,16 @@ public class RDevAgentService extends Service {
     }
 
     private void startTunnel(String registeredId) {
-        SharedPreferences prefs = getSharedPreferences("rdev", MODE_PRIVATE);
         if (tunnel != null) tunnel.close();
-        tunnel = new RDevGpuTunnel(
-            this,
-            prefs.getString("server", ""),
-            registeredId,
-            instanceId,
-            prefs.getString("password", "")
-        );
+		tunnel = new RDevGpuTunnel(
+			this,
+			identityServer,
+			registeredId,
+			instanceId,
+			deviceIdentity,
+			reconnectProof,
+			connectionPassword
+		);
         tunnel.connect();
     }
 

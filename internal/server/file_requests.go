@@ -69,6 +69,7 @@ func (s *Server) removeFileRequest(id string) { s.takeFileRequest(id, "") }
 
 func (s *Server) failClientFileRequests(client *ClientConn) {
 	pending := make(map[string]*fileRequestRoute)
+	tasks := make(map[string]*fileTaskRoute)
 	s.fileMu.Lock()
 	for id, route := range s.fileRequests {
 		if route.client == client {
@@ -79,8 +80,20 @@ func (s *Server) failClientFileRequests(client *ClientConn) {
 			}
 		}
 	}
+	for id, route := range s.fileTasks {
+		if route.client == client {
+			tasks[id] = route
+			delete(s.fileTasks, id)
+			if route.timer != nil {
+				route.timer.Stop()
+			}
+		}
+	}
 	s.fileMu.Unlock()
 	for id, route := range pending {
 		route.socket.writeText(fileMsg{Op: "error", Code: "disconnected", RequestID: id, DeviceID: route.device, Message: "device disconnected"})
+	}
+	for id, route := range tasks {
+		route.socket.writeText(fileMsg{Op: "transfer_error", Code: "disconnected", TaskID: id, DeviceID: route.deviceID, Error: "device disconnected", Message: "device disconnected"})
 	}
 }

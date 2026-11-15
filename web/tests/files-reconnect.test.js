@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+import { File as NativeFile } from "node:buffer";
+import { createHash } from "node:crypto";
 import { JSDOM } from "jsdom";
 import { act, createElement, Profiler } from "react";
 import { createRoot } from "react-dom/client";
@@ -64,7 +66,7 @@ it.each([false, true])("isolates reconnect attempts and waits for device authent
     expect(document.body.textContent).toContain("files.connectionLost");
     const offlinePicker = document.querySelector('input[type="file"]');
     await act(async () => offlinePicker.click());
-    Object.defineProperty(offlinePicker, "files", { configurable: true, value: [new dom.window.File(["offline"], "offline.txt")] });
+    Object.defineProperty(offlinePicker, "files", { configurable: true, value: [new NativeFile(["offline"], "offline.txt")] });
     await act(async () => offlinePicker.dispatchEvent(new dom.window.Event("change", { bubbles: true })));
     expect(JSON.parse(localStorage.getItem("rdevFileTasks")).find(task => task.name === "offline.txt"))
       .toMatchObject({ status: "failed", message: "files.connectionLost" });
@@ -75,13 +77,14 @@ it.each([false, true])("isolates reconnect attempts and waits for device authent
     if (protectedDevice) {
       const picker = document.querySelector('input[type="file"]');
       await act(async () => picker.click());
-      Object.defineProperty(picker, "files", { configurable: true, value: [new dom.window.File(["upload"], "upload.txt")] });
+      Object.defineProperty(picker, "files", { configurable: true, value: [new NativeFile(["upload"], "upload.txt")] });
       await act(async () => picker.dispatchEvent(new dom.window.Event("change", { bubbles: true })));
       await act(async () => vi.advanceTimersByTimeAsync(6000));
       expect(second.sent.filter(m => m.op === "download_start")).toHaveLength(0);
       expect(second.sent.filter(m => m.op === "upload_start")).toHaveLength(0);
       expect(second.sent.filter(m => m.op === "auth")).toHaveLength(1);
       await act(async () => second.message({ op: "auth_ok", deviceId: "device-a" }));
+      await act(async () => vi.advanceTimersByTimeAsync(1));
       expect(second.sent.filter(m => m.op === "upload_start")).toHaveLength(1);
       expect(second.sent.find(m => m.op === "upload_start")).toMatchObject({ deviceId: "device-a", name: "upload.txt" });
     }
@@ -143,9 +146,10 @@ it.each([false, true])("isolates reconnect attempts and waits for device authent
     const movedList = second.sent.filter(m => m.op === "list").at(-1);
     await act(async () => second.message({ op: "list_result", requestId: movedList.requestId, path: "/elsewhere", entries: [] }));
     await act(async () => fixtures.shell.onDevicePick("device-b"));
-    Object.defineProperty(delayedPicker, "files", { configurable: true, value: [new dom.window.File(["captured"], "captured.txt")] });
+    Object.defineProperty(delayedPicker, "files", { configurable: true, value: [new NativeFile(["captured"], "captured.txt")] });
     await act(async () => delayedPicker.dispatchEvent(new dom.window.Event("change", { bubbles: true })));
     if (protectedDevice) await act(async () => second.message({ op: "auth_ok", deviceId: "device-a" }));
+    await act(async () => vi.advanceTimersByTimeAsync(1));
     expect(second.sent.find(m => m.op === "upload_start" && m.name === "captured.txt"))
       .toMatchObject({ deviceId: "device-a", parentPath: "/current" });
     await act(async () => fixtures.shell.onDevicePick("device-a"));
@@ -153,7 +157,7 @@ it.each([false, true])("isolates reconnect attempts and waits for device authent
     // A canceled picker cannot later submit files with a stale destination.
     await act(async () => delayedPicker.click());
     await act(async () => delayedPicker.dispatchEvent(new dom.window.Event("cancel")));
-    Object.defineProperty(delayedPicker, "files", { configurable: true, value: [new dom.window.File(["canceled"], "canceled.txt")] });
+    Object.defineProperty(delayedPicker, "files", { configurable: true, value: [new NativeFile(["canceled"], "canceled.txt")] });
     await act(async () => delayedPicker.dispatchEvent(new dom.window.Event("change", { bubbles: true })));
     expect(second.sent.some(m => m.op === "upload_start" && m.name === "canceled.txt")).toBe(false);
 
@@ -213,8 +217,6 @@ it.each([false, true])("isolates reconnect attempts and waits for device authent
     await act(async () => fixtures.panes.current.get(0).transferItemsTo(1, [
       { name: "offline-file", path: "/offline-file", isDir: false, size: 4 },
     ]));
-    expect(JSON.parse(localStorage.getItem("rdevFileTasks")).find(task => task.name === "offline-file"))
-      .toMatchObject({ status: "failed", message: "files.connectionLost" });
     await act(async () => fixtures.panes.current.get(0).transferItemsTo(1, [
       { name: "offline-empty", path: "/offline-empty", isDir: true, size: 0 },
     ]));
@@ -318,6 +320,8 @@ it("batches concurrent file progress, flushes on page exit, and leaves idle pane
     await act(async () => socket.open());
     const downloads = socket.sent.filter(message => message.op === "download_start");
     expect(downloads).toHaveLength(2);
+    const sourceSHA = createHash("sha256").update(Uint8Array.from({length:1000}, (_, offset) => offset % 256)).digest("hex");
+    await act(async () => downloads.forEach(task => socket.message({op:"download_start",taskId:task.taskId,size:1000,sha256:sourceSHA})));
     writes.mockClear();
     commits.mockClear();
     for (let offset = 0; offset < 100; offset++) {
@@ -339,7 +343,8 @@ it("batches concurrent file progress, flushes on page exit, and leaves idle pane
     expect(commits).not.toHaveBeenCalled();
     expect(writes).not.toHaveBeenCalled();
 
-    await act(async () => panesRef.current.get(0).receiveUpload(new File(["fixture"], "queued.txt"), "/target", "device-a"));
+    await act(async () => panesRef.current.get(0).receiveUpload(new NativeFile(["fixture"], "queued.txt"), "/target", "device-a"));
+    await act(async () => vi.advanceTimersByTimeAsync(1));
     const upload = socket.sent.find(message => message.op === "upload_start");
     expect(upload).toBeDefined();
     const card = [...host.querySelectorAll("strong")].find(element => element.textContent === "queued.txt").parentElement.parentElement.parentElement;

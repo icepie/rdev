@@ -7,9 +7,14 @@ import { FilesPaneLayout } from "../components/files-pane-layout";
 import { isImeComposing } from "../lib/keyboard";
 import { createKeyedRequest } from "../lib/keyed-request";
 import { createTransferAttempts } from "../lib/file-transfer-attempts";
-import { RecursiveTransferError, walkTransferFiles, type TransferDestination } from "../lib/file-transfer-route";
+import { RecursiveTransferError, walkTransferFiles } from "../lib/file-transfer-route";
 import { encodeFrame, decodeFrame } from "../lib/file-transfer-frame";
 import { uploadChunks } from "../lib/upload-chunks";
+import { BLOB_LIMIT_MESSAGE, UploadPrefixMismatch, checkBlobDownload, downloadMetadata, hashSource, sourceFingerprint, validateUploadPrefix, type UploadSource } from "../lib/file-integrity";
+import { createRemoteFileSources } from "../lib/file-copy-source";
+import { createFallbackDownloads } from "../lib/file-download-fallback";
+import { createFileRTCTransfers, FILE_RTC_CHUNK, FILE_RTC_WINDOW, type FileRTCDiagnostics } from "../lib/file-webrtc";
+import { createDiskDownloads, DOWNLOAD_RANGE, pickDownloadDestination } from "../lib/file-download-disk";
 import { availableFileTaskActions, type FileTaskStatus, canResumeUpload, createListingGuard, readListingPage, restoreFileTask, uploadResumeRequest } from "../lib/file-request-state";
 import {
   useCallback,
@@ -101,6 +106,12 @@ interface FileTask {
   path?: string;
   parentPath?: string;
   size: number;
+  sha256?: string;
+  restart?: boolean;
+  ready?: Record<string, unknown>;
+  terminal?: boolean;
+  binaryEnd?: number;
+  verifying?: boolean;
   done: number;
   status: TaskStatus;
   created: number;
@@ -112,9 +123,10 @@ interface FileTask {
   saved?: boolean;
   blobParts?: ArrayBuffer[];
   waitAck?: (() => void) | null;
-  /* Cross-pane transfer: on completion the bytes go to the target pane's
-   * upload queue (parentDir on the target device) instead of a browser save. */
-  transfer?: TransferDestination;
+  uploadAcks?: Map<number, () => void>;
+  sent?: number;
+  diagnostics?: FileRTCDiagnostics;
+  diskDownload?: boolean;
 }
 
 /* Drag payload + inter-pane API for moving files between split panes. */
@@ -131,7 +143,7 @@ export interface FilesPaneApi {
   directoryReady(): boolean;
   transferItemsTo(targetLeaf: number, items: PaneDragItem[]): Promise<void>;
   createDirectory(path: string, device: string): Promise<void>;
-  receiveUpload(file: File, parentDir: string, device: string): void;
+  receiveUpload(file: UploadSource & { name: string }, parentDir: string, device: string): void;
 }
 
 interface ListView {
@@ -185,10 +197,13 @@ function persistTasks(tasks: Map<string, FileTask>) {
     TASKS_KEY,
     JSON.stringify(
       [...tasks.values()].map(
-        ({ blobParts, samples, waitAck, ...rest }) => {
+        ({ blobParts, samples, waitAck, uploadAcks, ready, verifying, ...rest }) => {
           void blobParts;
           void samples;
           void waitAck;
+          void uploadAcks;
+          void ready;
+          void verifying;
           return rest;
         },
       ),
@@ -281,7 +296,16 @@ export function FilesBrowser({
   const tasks = tasksRef.current;
   const transferAuth = useRef(new Map<string, string>());
   const transferAttempts = useRef(createTransferAttempts(makeId));
-  const filesByTaskRef = useRef(new Map<string, File>());
+  const fileRTC = useRef(createFileRTCTransfers());
+  const diskDownloads = useRef(createDiskDownloads());
+  const fallbackDownloads = useRef(createFallbackDownloads());
+  const directBinary = useRef<(frame: ArrayBuffer) => void>(() => {});
+  const filesByTaskRef = useRef(new Map<string, UploadSource & { name: string }>());
+  const copySources = useRef(createRemoteFileSources(message => {
+    const socket = wsRef.current;
+    if (!socket || socket.readyState !== WebSocket.OPEN) throw new Error("Copy source disconnected");
+    socket.send(JSON.stringify(message));
+  }, makeId));
   const currentPathRef = useRef("");
   const directoryReadyRef = useRef(false);
   const parentPathRef = useRef("");
@@ -337,6 +361,7 @@ export function FilesBrowser({
   const progressDirty = useRef(false);
   const bump = useCallback(() => setTasksTick((n) => n + 1), []);
   const saveTasks = useCallback(() => {
+    fallbackDownloads.current.reconcile(tasksRef.current!);
     if (primary) persistTasks(tasksRef.current!);
     progressDirty.current = false;
   }, [primary]);
@@ -407,8 +432,18 @@ export function FilesBrowser({
     if (!authorized) throw new Error(tRef.current("files.authCanceled"));
   }, [ensureAuth]);
 
-  const startTransfer = useCallback((task: FileTask, request: Record<string, unknown>) => {
+  const startTransfer = useCallback((task: FileTask, request: Record<string, unknown>): void => {
+    if (task.dir === "download" && !task.diskDownload) {
+      try { fallbackDownloads.current.acquire(task); }
+      catch (error) { task.status = "failed"; task.message = String(error); saveTasks(); bump(); return; }
+    }
+    diskDownloads.current.get(task.id)?.suspend();
     const previous = transferAttempts.current.current(task.id);
+    fileRTC.current.close(previous, false);
+    uploadRunsRef.current.get(task.id)?.abort();
+    task.verifying = false;
+    task.terminal = false;
+    task.binaryEnd = undefined;
     if (previous && wsRef.current?.readyState === WebSocket.OPEN) send({ op: "cancel", taskId: previous, offset: task.done || 0 });
     const wireId = transferAttempts.current.begin(task.id);
     const epoch = connectionEpoch.current;
@@ -416,11 +451,49 @@ export function FilesBrowser({
     const current = () => epoch === connectionEpoch.current &&
       transferAttempts.current.current(task.id) === wireId &&
       (task.status === "running" || task.status === "queued");
-    void requireConnectedDevice(task.device).then(() => {
+    void requireConnectedDevice(task.device).then(async () => {
       if (!current()) return;
-      send({ ...request, deviceId: task.device, taskId: wireId });
+      const controller = new AbortController();
+      uploadRunsRef.current.set(task.id, controller);
+      if (task.dir === "upload") {
+        const source = filesByTaskRef.current.get(task.id);
+        if (!source) throw new Error(tRef.current("files.reselect"));
+        task.message = "Computing SHA-256…";
+        task.sha256 = await sourceFingerprint(source, controller.signal);
+        if (!current()) return;
+        request = { ...request, sha256: task.sha256, size: source.size, restart: task.restart === true };
+      } else request = { ...request, ...(task.sha256 ? { sha256: task.sha256 } : {}) };
+      const offer = await fileRTC.current.prepare({
+        taskId: task.id, wireId, direction: task.dir, isCurrent: current, send,
+        boundedDownload: task.diskDownload,
+        onBinary: frame => directBinary.current(frame),
+        onDiagnostics: value => { if (current()) { task.diagnostics = { ...task.diagnostics, ...value }; progressDirty.current = true; } },
+        onFallback: () => {
+          if (!current()) return;
+          const retry = async () => {
+            const sink = diskDownloads.current.get(task.id);
+            await sink?.drain();
+            if (!current()) return;
+            const offset = task.dir === "download" ? sink?.committed ?? (task.blobParts || []).reduce((sum, part) => sum + part.byteLength, 0) : task.done;
+            task.done = offset;
+            task.lastRequested = Date.now();
+            startTransfer(task, { ...request, offset });
+          };
+          void retry().catch(error => { if (!current()) return; task.status = "failed"; task.message = String(error); diskDownloads.current.abort(task.id); saveTasks(); bump(); });
+        },
+      });
+      if (!current()) { fileRTC.current.close(wireId, false); return; }
+      const sink = diskDownloads.current.get(task.id);
+      if (sink) {
+        const offset = await sink.begin();
+        if (!current()) return;
+        request = { ...request, offset, length: DOWNLOAD_RANGE };
+      }
+      send({ ...request, ...offer, deviceId: task.device, taskId: wireId });
+      fileRTC.current.started(wireId);
     }).catch((error) => {
       if (!current()) return;
+      fileRTC.current.close(wireId);
       task.status = "failed";
       task.message = error instanceof Error ? error.message : String(error);
       saveTasks();
@@ -445,12 +518,30 @@ export function FilesBrowser({
   const resumeDownload = useCallback(
     (task: FileTask, offset: number, message?: string) => {
       if (!task || task.dir !== "download" || task.saved) return;
-      let resumeOffset = Number(offset || 0);
+      if (diskDownloads.current.isOpening(task.id)) return;
+      const sink = diskDownloads.current.get(task.id);
+      if (task.diskDownload && !sink) {
+        const destination = pickDownloadDestination(task.name);
+        if (!destination) { task.status = "failed"; task.message = tRef.current("files.diskRestart"); saveTasks(); bump(); return; }
+        task.status = "running";
+        task.done = 0;
+        void diskDownloads.current.open(task.id, destination, () => tasksRef.current!.get(task.id) === task && task.status === "running", committed => { task.done = committed; task.lastProgress = Date.now(); progressDirty.current = true; }, error => {
+          const wire = transferAttempts.current.current(task.id);
+          fileRTC.current.close(wire, false);
+          if (wire) send({ op: "cancel", taskId: wire, offset: task.done });
+          transferAttempts.current.remove(task.id);
+          task.status = "failed"; task.message = String(error); diskDownloads.current.abort(task.id); saveTasks(); bump();
+        }).then(ok => {
+          if (ok) startTransfer(task, { op: "download_start", deviceId: task.device, path: task.path, offset: 0, length: DOWNLOAD_RANGE });
+        }).catch(error => { if (tasksRef.current!.get(task.id) !== task || task.status !== "running") return; task.status = error instanceof DOMException && error.name === "AbortError" ? "canceled" : "failed"; task.message = String(error); saveTasks(); bump(); });
+        return;
+      }
+      let resumeOffset = sink?.committed ?? Number(offset || 0);
       const buffered = (task.blobParts || []).reduce(
         (sum, part) => sum + (part.byteLength || 0),
         0,
       );
-      if (resumeOffset > 0 && buffered !== resumeOffset) {
+      if (!sink && resumeOffset > 0 && buffered !== resumeOffset) {
         resumeOffset = 0;
         task.blobParts = [];
       }
@@ -464,6 +555,7 @@ export function FilesBrowser({
         deviceId: task.device,
         path: task.path,
         offset: resumeOffset,
+        ...(task.diskDownload ? { length: DOWNLOAD_RANGE } : {}),
       });
       bump();
     },
@@ -472,30 +564,10 @@ export function FilesBrowser({
 
   const finishDownload = useCallback(
     (task: FileTask) => {
-      if (task.dir !== "download" || !task.blobParts || task.saved) return;
+      if (task.dir !== "download" || !task.blobParts || task.saved || task.status !== "completed") return;
       const blob = new Blob(task.blobParts);
       if (task.size && blob.size < task.size) {
         resumeDownload(task, blob.size, tRef.current("files.resuming"));
-        return;
-      }
-      /* Cross-pane transfer: hand the bytes to the target pane's upload
-       * queue instead of saving in the browser. */
-      if (task.transfer) {
-        const target = panesRef.current.get(task.transfer.targetLeaf);
-        if (!target || !task.transfer.device) {
-          task.status = "failed";
-          task.message = tRef.current("files.transferNoTarget");
-          saveTasks();
-          return;
-        }
-        target.receiveUpload(
-          new File(task.blobParts, task.name || "download"),
-          task.transfer.parentDir,
-          task.transfer.device,
-        );
-        task.saved = true;
-        task.blobParts = undefined;
-        saveTasks();
         return;
       }
       const a = document.createElement("a");
@@ -503,10 +575,7 @@ export function FilesBrowser({
       a.download = task.name || "download";
       document.body.appendChild(a);
       a.click();
-      setTimeout(() => {
-        URL.revokeObjectURL(a.href);
-        a.remove();
-      }, 1000);
+      fallbackDownloads.current.retire(task, () => { URL.revokeObjectURL(a.href); a.remove(); });
       task.saved = true;
       task.blobParts = undefined;
       saveTasks();
@@ -515,21 +584,43 @@ export function FilesBrowser({
   );
 
   const completeDownload = useCallback(
-    (task: FileTask, offset: number) => {
+    (task: FileTask, offset: number, binary = true) => {
       if (!task || task.dir !== "download" || task.saved || task.status !== "running") return;
-      const finalOffset = Number(offset || task.done || 0);
-      if (task.size && finalOffset < task.size) {
-        task.done = Math.max(task.done || 0, finalOffset);
-        resumeDownload(task, task.done || 0, tRef.current("files.resuming"));
+      if (binary) task.binaryEnd = offset;
+      if (!binary && task.binaryEnd !== offset) return;
+      if (offset === task.size && (!task.terminal || task.binaryEnd !== offset)) return;
+      if (task.diskDownload) {
+        const sink = diskDownloads.current.get(task.id);
+        if (!sink) return;
+        const wireId = transferAttempts.current.current(task.id);
+        void sink.end(offset, task.size, () => { fileRTC.current.close(wireId); task.status = "saving"; task.speed = 0; saveTasks(); bump(); }).then(async result => {
+          if ((task.status !== "running" && task.status !== "saving") || transferAttempts.current.current(task.id) !== wireId) return;
+          task.done = sink.committed;
+          if (result === "next") {
+            const next = await sink.begin();
+            if (task.status !== "running" || transferAttempts.current.current(task.id) !== wireId) return;
+            task.lastRequested = Date.now();
+            if (!fileRTC.current.continueDownload(wireId, next) && transferAttempts.current.current(task.id) === wireId) resumeDownload(task, next, tRef.current("files.resuming"));
+          }
+          else if (result === "complete") { task.status = "completed"; task.saved = true; task.message = ""; diskDownloads.current.abort(task.id); saveTasks(); bump(); }
+        }).catch(error => { if (tasksRef.current!.get(task.id) !== task || transferAttempts.current.current(task.id) !== wireId || (task.status !== "running" && task.status !== "saving")) return; task.status = "failed"; task.message = error instanceof Error ? error.message : String(error); diskDownloads.current.abort(task.id); saveTasks(); bump(); });
         return;
       }
-      task.done = finalOffset;
-      task.status = "completed";
-      task.message = "";
-      saveTasks();
-      finishDownload(task);
+      const finalOffset = Number(offset);
+      if (finalOffset !== task.done || finalOffset > task.size) { task.status = "failed"; task.message = "Invalid download end"; saveTasks(); bump(); return; }
+      if (finalOffset < task.size) { resumeDownload(task, task.done, tRef.current("files.resuming")); return; }
+      if (task.verifying) return;
+      task.verifying = true;
+      const wireId = transferAttempts.current.current(task.id);
+      const controller = new AbortController();
+      uploadRunsRef.current.set(task.id, controller);
+      void hashSource(new Blob(task.blobParts), controller.signal).then(hash => {
+        if (controller.signal.aborted || task.status !== "running" || transferAttempts.current.current(task.id) !== wireId) return;
+        if (hash !== task.sha256) throw new Error("Download SHA-256 verification failed");
+        task.status = "completed"; task.message = ""; finishDownload(task); saveTasks(); bump();
+      }).catch(error => { if (controller.signal.aborted || transferAttempts.current.current(task.id) !== wireId) return; task.status = "failed"; task.message = String(error); saveTasks(); bump(); }).finally(() => { if (uploadRunsRef.current.get(task.id) === controller) { task.verifying = false; uploadRunsRef.current.delete(task.id); } });
     },
-    [resumeDownload, saveTasks, finishDownload],
+    [resumeDownload, saveTasks, finishDownload, bump],
   );
 
   const startDownload = useCallback(
@@ -537,7 +628,6 @@ export function FilesBrowser({
       path: string,
       name: string,
       size: number,
-      transfer?: TransferDestination,
       activeDevice = activeDeviceRef.current,
     ) => {
       const now = Date.now();
@@ -555,12 +645,23 @@ export function FilesBrowser({
         lastRequested: now,
         speed: 0,
         blobParts: [],
-        transfer,
       };
       tasksRef.current!.set(task.id, task);
       saveTasks();
       bump();
-      startTransfer(task, { op: "download_start", path, offset: 0 });
+      const destination = pickDownloadDestination(name);
+      if (destination) {
+        task.diskDownload = true;
+        void diskDownloads.current.open(task.id, destination, () => tasksRef.current!.get(task.id) === task && task.status === "running", offset => { task.done = offset; task.lastProgress = Date.now(); progressDirty.current = true; }, error => {
+          const wire = transferAttempts.current.current(task.id);
+          fileRTC.current.close(wire, false);
+          if (wire) send({ op: "cancel", taskId: wire, offset: task.done });
+          transferAttempts.current.remove(task.id);
+          task.status = "failed"; task.message = String(error); diskDownloads.current.abort(task.id); saveTasks(); bump();
+        }).then(ok => {
+          if (ok) startTransfer(task, { op: "download_start", path, offset: task.done, length: DOWNLOAD_RANGE });
+        }).catch(error => { if (tasksRef.current!.get(task.id) !== task || task.status !== "running") return; task.status = error instanceof DOMException && error.name === "AbortError" ? "canceled" : "failed"; task.message = String(error); saveTasks(); bump(); });
+      } else startTransfer(task, { op: "download_start", path, offset: 0 });
     },
     [saveTasks, send, bump, startTransfer],
   );
@@ -571,6 +672,7 @@ export function FilesBrowser({
     uploadRunsRef.current.get(task.id)?.abort();
     uploadRunsRef.current.delete(task.id);
     task.waitAck = null;
+    task.uploadAcks?.clear();
   }, []);
 
   const uploadLoop = useCallback(
@@ -583,25 +685,42 @@ export function FilesBrowser({
       try {
         const file = filesByTaskRef.current.get(task.id);
         if (!file) throw new Error(tRef.current("files.reselect"));
+        if (!task.ready) throw new Error("Missing upload integrity metadata");
+        task.message = "Verifying upload prefix…";
+        const offset = await validateUploadPrefix(file, task.sha256, task.ready, controller.signal);
+        if (controller.signal.aborted || transferAttempts.current.current(task.id) !== wireId || task.status !== "running") return;
+        if (task.restart && offset !== 0) throw new Error("Device did not reset the corrupt partial");
+        task.restart = false;
+        task.done = offset;
+        task.message = "";
+        task.uploadAcks = new Map();
         const complete = await uploadChunks({
-          file, chunkSize: CHUNK, offset: () => task.done || 0, signal: controller.signal,
-          write: (chunk, offset) => {
+          file, chunkSize: fileRTC.current.direct(wireId) ? FILE_RTC_CHUNK : CHUNK,
+          offset: () => task.done || 0, signal: controller.signal,
+          windowBytes: fileRTC.current.direct(wireId) ? FILE_RTC_WINDOW : CHUNK,
+          onSent: offset => { task.sent = offset; },
+          write: async (chunk, offset) => {
             const ws = wsRef.current;
             if (!ws || ws.readyState !== WebSocket.OPEN) throw new Error(tRef.current("files.disconnected"));
             const ack = Promise.withResolvers<void>();
-            task.waitAck = ack.resolve;
-            ws.send(encodeFrame(FRAME_UPLOAD_CHUNK, wireId, offset, chunk));
+            task.uploadAcks!.set(offset + chunk.byteLength, ack.resolve);
+            if (fileRTC.current.direct(wireId)) await fileRTC.current.send(wireId, offset, chunk, controller.signal);
+            else ws.send(encodeFrame(FRAME_UPLOAD_CHUNK, wireId, offset, chunk));
             return ack.promise;
           },
         });
         if (complete && !controller.signal.aborted && transferAttempts.current.current(task.id) === wireId && task.status === "running") send({ op: "upload_end", taskId: wireId, path: task.path, size: file.size });
       } catch (error) {
-        if (!controller.signal.aborted) {
-          task.status = "failed";
-          task.message = error instanceof Error ? error.message : String(error);
-          saveTasks();
-          bump();
-        }
+        if (controller.signal.aborted || transferAttempts.current.current(task.id) !== wireId || task.status !== "running") return;
+        if (error instanceof UploadPrefixMismatch) task.restart = true;
+        if (!task.restart && fileRTC.current.direct(wireId)) { fileRTC.current.fail(wireId); return; }
+        if (transferAttempts.current.current(task.id) !== wireId) return;
+        task.status = "failed";
+        fileRTC.current.close(wireId, false);
+        send({ op: "cancel", taskId: wireId });
+        task.message = error instanceof Error ? error.message : String(error);
+        saveTasks();
+        bump();
       } finally {
         if (uploadRunsRef.current.get(task.id) === controller) {
           uploadRunsRef.current.delete(task.id);
@@ -613,7 +732,7 @@ export function FilesBrowser({
   );
 
   const startUpload = useCallback(
-    (file: File, destDir?: string, activeDevice = activeDeviceRef.current) => {
+    (file: UploadSource & { name: string }, destDir?: string, activeDevice = activeDeviceRef.current) => {
       if (!activeDevice || !file) return;
       const parentDir = destDir ?? currentPathRef.current;
       const pending = [...tasksRef.current!.values()].find(
@@ -633,7 +752,7 @@ export function FilesBrowser({
           parentPath: pending.parentPath,
           name: pending.name,
           size: pending.size,
-          modTime: new Date(file.lastModified).toISOString(),
+          ...(file.lastModified !== undefined ? { modTime: new Date(file.lastModified).toISOString() } : {}),
         });
         return;
       }
@@ -659,7 +778,7 @@ export function FilesBrowser({
         parentPath: parentDir,
         name: file.name,
         size: file.size,
-        modTime: new Date(file.lastModified).toISOString(),
+        ...(file.lastModified !== undefined ? { modTime: new Date(file.lastModified).toISOString() } : {}),
       });
     },
     [saveTasks, send, bump, startTransfer],
@@ -673,6 +792,8 @@ export function FilesBrowser({
 
   const onText = useCallback(
     (msg: Record<string, unknown>) => {
+      if (copySources.current.text(msg)) return;
+      if (fileRTC.current.text(msg)) return;
       if (treeRPC.current?.accept(msg)) return;
       if (msg.op === "auth_ok" || msg.op === "auth_fail" || msg.op === "auth_required") {
         const id = typeof msg.deviceId === "string" ? msg.deviceId : "";
@@ -791,13 +912,22 @@ export function FilesBrowser({
       if (msg.op === "upload_ready" && task) {
         if (task.status !== "queued" && task.status !== "running") return;
         task.path = typeof msg.path === "string" ? msg.path : task.path;
-        task.done = Number(msg.offset || 0);
+        if (task.ready?.taskId === taskId) return;
+        task.ready = msg;
         task.status = "running";
         saveTasks();
         void uploadLoop(task);
       } else if (msg.op === "download_start" && task) {
         if (task.dir !== "download" || task.status !== "running" || task.saved) return;
-        task.size = Number(msg.size || 0) || task.size;
+        try {
+          const metadata = downloadMetadata(msg, task.sha256);
+          if (!task.diskDownload) checkBlobDownload(metadata.size, task.done);
+          task.size = metadata.size; task.sha256 = metadata.sha256;
+          diskDownloads.current.get(task.id)?.setIdentity(metadata.sha256, metadata.size);
+        } catch (error) {
+          task.status = "failed"; task.message = String(error); task.blobParts = undefined;
+          fileRTC.current.close(taskId, false); send({ op: "cancel", taskId }); diskDownloads.current.abort(task.id); saveTasks(); bump(); return;
+        }
         task.name = typeof msg.name === "string" && msg.name ? msg.name : task.name;
         task.status = "running";
         task.message = "";
@@ -805,7 +935,13 @@ export function FilesBrowser({
         if (Number(msg.offset || 0) === 0 && (task.done || 0) === 0) task.blobParts = [];
         saveTasks();
       } else if (msg.op === "transfer_end" && task) {
-        completeDownload(task, Number(msg.offset || task.done || 0));
+        if (task.status !== "running") return;
+        if (!task.sha256 || msg.success !== true || msg.sha256 !== task.sha256) {
+          stopUpload(task); task.status = "failed"; task.message = "Transfer terminal integrity verification failed";
+          diskDownloads.current.abort(task.id); saveTasks(); bump(); return;
+        }
+        task.terminal = true;
+        completeDownload(task, Number(msg.offset ?? task.done), false);
         /* Upload finished (browser upload or cross-pane transfer): refresh
          * the visible listing so the new file shows up. */
         if (task.dir === "upload" && task.status === "running") {
@@ -821,13 +957,14 @@ export function FilesBrowser({
         if (task.status !== "running" && task.status !== "queued") return;
         stopUpload(task);
         task.status = "failed";
+        diskDownloads.current.abort(task.id);
         task.message =
           (typeof msg.message === "string" && msg.message) ||
           (typeof msg.error === "string" && msg.error) ||
           tRef.current("common.error");
         saveTasks();
       } else if (msg.op === "canceled" && task) {
-        if (task.status === "completed" || task.status === "failed") return;
+        if (task.status === "completed" || task.status === "failed" || task.status === "saving") return;
         stopUpload(task);
         if (task.status !== "paused") {
           task.status = "canceled";
@@ -842,23 +979,41 @@ export function FilesBrowser({
   );
 
   const onBinary = useCallback(
-    (buf: ArrayBuffer) => {
+    (buf: ArrayBuffer, direct = false) => {
       const f = decodeFrame(buf);
       if (!f) return;
+      if (copySources.current.binary(f)) return;
+      if (!direct && fileRTC.current.direct(f.taskId)) return;
       const task = tasksRef.current!.get(transferAttempts.current.resolve(f.taskId) || "");
       if (!task) return;
       if (f.typ === FRAME_UPLOAD_ACK) {
         if (task.dir !== "upload" || task.status !== "running") return;
+        if (!task.uploadAcks?.has(f.offset) || f.offset <= task.done || f.payload.byteLength) {
+          if (direct) fileRTC.current.fail(f.taskId);
+          else { stopUpload(task); task.status = "failed"; task.message = "Invalid upload acknowledgement"; saveTasks(); bump(); }
+          return;
+        }
         task.done = f.offset;
         progressDirty.current = true;
-        if (task.waitAck) {
-          const r = task.waitAck;
-          task.waitAck = null;
-          r();
+        for (const [end, resolve] of task.uploadAcks) {
+          if (end > f.offset) break;
+          task.uploadAcks.delete(end);
+          resolve();
         }
       } else if (f.typ === FRAME_DOWNLOAD_CHUNK) {
         if (task.dir !== "download" || task.status !== "running" || task.saved) return;
+        if (!task.sha256) { task.status = "failed"; task.message = "Download bytes arrived before integrity metadata"; saveTasks(); bump(); return; }
+        if (task.diskDownload) {
+          const sink = diskDownloads.current.get(task.id);
+          if (!sink) return;
+          try { sink.receive(f.offset, f.payload); } catch (error) { task.status = "failed"; task.message = error instanceof Error ? error.message : String(error); diskDownloads.current.abort(task.id); saveTasks(); bump(); }
+          return;
+        }
         if (f.offset === (task.done || 0)) {
+          try { checkBlobDownload(task.size, f.offset + f.payload.byteLength); } catch (error) {
+            task.status = "failed"; task.message = String(error); task.blobParts = undefined;
+            fileRTC.current.close(f.taskId, false); send({ op: "cancel", taskId: f.taskId }); saveTasks(); bump(); return;
+          }
           task.blobParts = task.blobParts || [];
           task.blobParts.push(f.payload);
           task.done = f.offset + f.payload.byteLength;
@@ -867,16 +1022,21 @@ export function FilesBrowser({
           progressDirty.current = true;
         } else if (f.offset < (task.done || 0)) {
           // Duplicate chunk from a resumed request; ignore it.
+        } else if (direct) {
+          fileRTC.current.fail(f.taskId);
         } else if (Date.now() - (task.lastRequested || 0) > 1000) {
           resumeDownload(task, task.done || 0, tRef.current("files.resuming"));
         }
       } else if (f.typ === FRAME_DOWNLOAD_END) {
+        if (task.diskDownload) { completeDownload(task, f.offset); return; }
+        if (direct && (f.offset !== task.done || (task.size > 0 && f.offset !== task.size))) { fileRTC.current.fail(f.taskId); return; }
         completeDownload(task, f.offset || task.done || 0);
         bump();
       }
     },
-    [resumeDownload, completeDownload, bump],
+    [resumeDownload, completeDownload, bump, stopUpload, saveTasks],
   );
+  directBinary.current = frame => onBinary(frame, true);
 
   /* Single shared /files socket with exponential-backoff reconnect. */
   useEffect(() => {
@@ -923,6 +1083,8 @@ export function FilesBrowser({
       ws.onclose = () => {
         if (disposed || wsRef.current !== ws) return;
         wsRef.current = null;
+        copySources.current.clear();
+        fileRTC.current.clear();
         sendQueueRef.current = [];
         endPendingRequests();
         listingGuard.current.invalidate();
@@ -962,6 +1124,8 @@ export function FilesBrowser({
     connect();
     return () => {
       disposed = true;
+      fileRTC.current.clear();
+      copySources.current.clear();
       endPendingRequests();
       uploadRunsRef.current.forEach(controller => controller.abort());
       uploadRunsRef.current.clear();
@@ -972,6 +1136,8 @@ export function FilesBrowser({
         ws.close();
         wsRef.current = null;
       }
+      diskDownloads.current.clear();
+      fallbackDownloads.current.clear();
     };
   }, [onBinary, onText, resumeDownload, stopUpload, saveTasks, bump, ensureAuth, failPreviews]);
 
@@ -989,9 +1155,12 @@ export function FilesBrowser({
         if (
           wsRef.current?.readyState === WebSocket.OPEN &&
           !transferAuth.current.has(task.id) &&
+          !fileRTC.current.direct(transferAttempts.current.current(task.id)) &&
           task.dir === "download" &&
           task.status === "running" &&
           !task.saved &&
+          !diskDownloads.current.get(task.id)?.busy &&
+          !task.verifying &&
           now - (task.lastProgress || task.created || 0) > DOWNLOAD_STALL_MS &&
           now - (task.lastRequested || 0) > DOWNLOAD_RETRY_MS
         ) {
@@ -1146,9 +1315,7 @@ export function FilesBrowser({
     if (activeDeviceRef.current === device) void listRef.current(currentPathRef.current);
   }, [requireConnectedDevice, send]);
 
-  /* Transfer entries from THIS pane's device to another pane's device:
-   * files download to memory here, then upload there; directories walk
-   * recursively, explicitly creating empty directories on the destination. */
+  /* Copy ranges are pulled only as the destination ACK window frees capacity. */
   const transferItemsTo = useCallback(
     async (targetLeaf: number, items: PaneDragItem[]) => {
       const target = panesRef.current.get(targetLeaf);
@@ -1167,8 +1334,11 @@ export function FilesBrowser({
         await walkTransferFiles(items, sourceDevice, destination, {
           list: listDirAll,
           mkdir: (path, device) => target.createDirectory(path, device),
-          download: (item, device, transfer) => {
-            startDownload(item.path, item.name, item.size, transfer, device);
+          download: async (item, device, transfer) => {
+            await requireConnectedDevice(device);
+            const source = await copySources.current.open(device, item.path, item.name, new AbortController().signal);
+            if (panesRef.current.get(targetLeaf) !== target) throw new Error(tRef.current("files.transferNoTarget"));
+            target.receiveUpload(source, transfer.parentDir, transfer.device);
           },
         });
       } catch (error) {
@@ -1177,7 +1347,7 @@ export function FilesBrowser({
           : error instanceof Error ? error.message : String(error));
       }
     },
-    [panesRef, startDownload, listDirAll],
+    [panesRef, listDirAll, requireConnectedDevice],
   );
 
   /* Publish this pane's API for sibling panes. */
@@ -1218,7 +1388,10 @@ export function FilesBrowser({
   const taskAction = useCallback(
     (task: FileTask, act: "pause" | "resume" | "cancel" | "clear") => {
       if (tasksRef.current!.get(task.id) !== task || !availableFileTaskActions(task.status)[act]) return;
+      if (act !== "resume") fileRTC.current.close(transferAttempts.current.current(task.id), false);
+      if (act === "cancel" || act === "clear") diskDownloads.current.abort(task.id);
       if (act === "pause") {
+        diskDownloads.current.get(task.id)?.suspend();
         stopUpload(task);
         task.status = "paused";
         send({ op: "cancel", taskId: transferAttempts.current.current(task.id), offset: task.done || 0 });
@@ -1345,6 +1518,7 @@ export function FilesBrowser({
   return (
     <div className="page-workspace @container/files overflow-hidden">
       <TooltipProvider delayDuration={300}>
+      {!("showSaveFilePicker" in globalThis) && <p className="px-3 py-1 text-xs text-muted-foreground">{BLOB_LIMIT_MESSAGE}</p>}
       <div className="page-toolbar gap-1.5">
       {/* Device is picked from the left rail; keep the toolbar focused on navigation. */}
       <div className="flex h-8 min-w-0 max-w-48 items-center gap-1.5 rounded-md border border-border-seam bg-surface-recessed px-2 text-xs text-muted-foreground select-none">
@@ -1609,7 +1783,7 @@ export function FilesBrowser({
             <div className="min-h-0 flex-1">
               <FileEditorTabs tabs={previews.tabs} active={previews.active} onSelect={previews.select} onClose={previews.close}
                 onRefresh={path => openPreview(path, true)} connected={!!device && wsRef.current?.readyState === WebSocket.OPEN}
-                onDownload={tab => startDownload(tab.path, tab.path.split(/[\\/]/).pop() || "download", 0, undefined, tab.device)} t={t} />
+                onDownload={tab => startDownload(tab.path, tab.path.split(/[\\/]/).pop() || "download", 0, tab.device)} t={t} />
             </div>
           </div>
         </div>
@@ -1677,6 +1851,7 @@ export function FilesBrowser({
                       {stat}
                       {task.message ? " · " + task.message : ""}
                     </div>
+                    {task.diagnostics && <div className="text-xs text-muted-foreground" data-testid="file-transfer-diagnostics">{t(`files.transport.${task.diagnostics.transport}`)}{task.diagnostics.reason ? ` · ${t(`files.rtcReason.${task.diagnostics.reason}`)}` : ""}{task.diagnostics.rttMs !== undefined ? ` · RTT ${Math.round(task.diagnostics.rttMs)}ms` : ""}{task.diagnostics.bufferedBytes !== undefined ? ` · ${t("files.buffered")} ${fmtBytes(task.diagnostics.bufferedBytes)}` : ""}{task.diagnostics.negotiationMs !== undefined ? ` · ${t("files.negotiationTime")} ${Math.round(task.diagnostics.negotiationMs)}ms` : ""}</div>}
                   </div>
                   <div className="flex flex-wrap gap-1.5">
                     {(["pause", "resume", "cancel"] as const).map(action => actions[action] && (

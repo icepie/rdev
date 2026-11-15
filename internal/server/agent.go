@@ -71,8 +71,10 @@ type agentMsg struct {
 	Message            string              `json:"message,omitempty"`
 	History            []agentHistoryEntry `json:"history,omitempty"`
 	Running            bool                `json:"running,omitempty"`
+	HistoryError       string              `json:"historyError,omitempty"`
 	ID                 string              `json:"id,omitempty"`
 	JobID              string              `json:"jobId,omitempty"`
+	Recovered          int                 `json:"recovered,omitempty"`
 	SubagentID         string              `json:"subagentId,omitempty"`
 	CustomInstructions string              `json:"customInstructions,omitempty"`
 	FromByte           *int64              `json:"fromByte,omitempty"`
@@ -1289,16 +1291,17 @@ type agentThreadSnapshot struct {
 	loop         *agentLoop
 	participants []agentParticipant
 
-	automation *automationView
-	history    []agentHistoryEntry
-	todos      []todoItem
-	queue      []string
-	queueIDs   []string
-	queueModes []string
-	running    bool
-	working    *agentWorking
-	usage      *agentUsage
-	live       []json.RawMessage
+	automation   *automationView
+	history      []agentHistoryEntry
+	historyError string
+	todos        []todoItem
+	queue        []string
+	queueIDs     []string
+	queueModes   []string
+	running      bool
+	working      *agentWorking
+	usage        *agentUsage
+	live         []json.RawMessage
 }
 
 // threadSnapshotLocked snapshots a thread for an attacher. History and live
@@ -1342,6 +1345,12 @@ func (s *Server) threadSnapshotLocked(entry *agentSessionEntry, th *agentThread)
 		snap.live = th.live.Snapshot()
 	}
 	snap.history = renderAgentHistory(msgs)
+	s.agentStoreMu.RLock()
+	store := s.agentStoreInst
+	s.agentStoreMu.RUnlock()
+	if store != nil {
+		snap.historyError = store.historyFault(entry.deviceID, th.id)
+	}
 	if snap.history == nil {
 		snap.history = []agentHistoryEntry{}
 	}
@@ -1416,6 +1425,7 @@ func (h *agentWSHandler) establish(ac *agentConn, client *ClientConn) {
 		Model:          model,
 		ModelName:      modelName,
 		Models:         h.srv.Agent.Models(),
+		HistoryError:   snap.historyError,
 		History:        snap.history,
 		Running:        snap.running,
 		Thread:         current,
@@ -1640,8 +1650,8 @@ func (h *agentWSHandler) OnMessage(socket *gws.Conn, message *gws.Message) {
 		h.handleNewThread(ac)
 	case "switch_thread":
 		h.handleSwitchThread(ac, msg.Thread)
-	case "peek_thread":
-		h.handlePeekThread(ac, msg.Thread)
+	case "recover_history":
+		h.handleRecoverHistory(ac, msg.Thread)
 	case "delete_thread":
 		h.handleThreadAction(ac, msg)
 	case "rename_thread", "pin_thread":
@@ -1778,6 +1788,19 @@ func (h *agentWSHandler) handleChatWithImages(ac *agentConn, entry *agentSession
 		return
 	}
 	srv := h.srv
+	targetThread := threadRef
+	if targetThread == "" {
+		targetThread = ac.current
+	}
+	srv.agentStoreMu.RLock()
+	store := srv.agentStoreInst
+	srv.agentStoreMu.RUnlock()
+	if store != nil {
+		if fault := store.historyFault(entry.deviceID, targetThread); fault != "" {
+			ac.sendErrorThread(targetThread, "history is incomplete; recover it before chatting: "+fault)
+			return
+		}
+	}
 	// One lock hold covers the queue check and the turn start: two chats
 	// arriving together can never both start a turn (one queues).
 	srv.agentSessionsMu.Lock()
@@ -1958,6 +1981,16 @@ func (h *agentWSHandler) handleReset(ac *agentConn, threadRef string) {
 		return
 	}
 	defer th.persistMu.Unlock()
+	if store := srv.agentStore(); store != nil {
+		store.mu.Lock()
+		writable := store.writableLocked(entry.deviceID, threadID)
+		store.mu.Unlock()
+		if !writable {
+			srv.agentSessionsMu.Unlock()
+			ac.sendErrorThread(threadID, "recover damaged history before resetting it")
+			return
+		}
+	}
 	cancel := th.cancel
 	oldAutomation := th.automation
 	th.automation = nil
@@ -2124,11 +2157,16 @@ func (h *agentWSHandler) handlePeekThread(ac *agentConn, threadID string) {
 	snap := srv.threadSnapshotLocked(entry, th)
 	srv.agentSessionsMu.Unlock()
 
-	ac.writeJSON(agentMsg{
+	ac.writeJSON(snap.peekMessage(threadID))
+}
+
+func (snap agentThreadSnapshot) peekMessage(threadID string) agentMsg {
+	return agentMsg{
 		Goal: snap.goal, Loop: snap.loop,
 		Op:           "thread_peeked",
 		Thread:       threadID,
 		History:      snap.history,
+		HistoryError: snap.historyError,
 		Todos:        snap.todos,
 		Queue:        snap.queue,
 		QueueIDs:     snap.queueIDs,
@@ -2139,7 +2177,59 @@ func (h *agentWSHandler) handlePeekThread(ac *agentConn, threadID string) {
 		Automation:   snap.automation,
 		Participants: snap.participants,
 		Usage:        snap.usage,
-	})
+	}
+}
+
+func (h *agentWSHandler) handleRecoverHistory(ac *agentConn, threadID string) {
+	if threadID == "" {
+		threadID = ac.current
+	}
+	entry := ac.entry
+	if entry == nil {
+		ac.sendError("agent session not ready")
+		return
+	}
+	th := h.srv.lockAgentThreadPersistence(entry, threadID)
+	if th == nil {
+		ac.sendErrorThread(threadID, "unknown thread "+threadID)
+		return
+	}
+	defer th.persistMu.Unlock()
+	if th.running || th.autonomyPending {
+		h.srv.agentSessionsMu.Unlock()
+		ac.sendErrorThread(threadID, "stop the active turn before recovering history")
+		return
+	}
+	h.srv.agentSessionsMu.Unlock()
+	store := h.srv.agentStore()
+	if store == nil {
+		ac.sendErrorThread(threadID, "history persistence is disabled")
+		return
+	}
+	count, backup, err := store.recover(entry.deviceID, threadID)
+	if err != nil {
+		ac.sendErrorThread(threadID, "history recovery failed: "+err.Error())
+		return
+	}
+	messages, _, _, _ := store.load(entry.deviceID, threadID)
+	goal, loop := store.loadAutonomy(entry.deviceID, threadID)
+	store.mu.Lock()
+	extras := store.extras[entry.deviceID+"/"+threadID]
+	store.mu.Unlock()
+	h.srv.agentSessionsMu.Lock()
+	if entry.threads[threadID] == th {
+		th.session.SetHistory(messages)
+		th.goal, th.loop = goal, loop
+		th.lastOutcome, th.outcomeAt = restoredAgentOutcome(extras.Outcome), extras.OutcomeAt
+		th.turnHistory = nil
+		th.live.Reset()
+	}
+	snap := h.srv.threadSnapshotLocked(entry, th)
+	h.srv.agentSessionsMu.Unlock()
+	ac.writeJSON(agentMsg{Op: "history_recovered", Thread: threadID, Recovered: count, Message: "Recovered valid records; original preserved at " + backup})
+	ac.writeJSON(snap.peekMessage(threadID))
+	h.srv.agentBroadcast(entry, snap.peekMessage(threadID))
+	h.srv.broadcastThreadList(entry)
 }
 
 // connsViewThreadLocked reports whether any subscribed connection has the
@@ -2170,6 +2260,16 @@ func (h *agentWSHandler) handleDeleteThread(ac *agentConn, threadID string) {
 		return
 	}
 	defer th.persistMu.Unlock()
+	if store := srv.agentStore(); store != nil {
+		store.mu.Lock()
+		writable := store.writableLocked(entry.deviceID, threadID)
+		store.mu.Unlock()
+		if !writable {
+			srv.agentSessionsMu.Unlock()
+			ac.sendErrorThread(threadID, "recover damaged history before deleting it")
+			return
+		}
+	}
 	// Invalidate the old generation before canceling: its late events and
 	// final save cannot recreate the deleted conversation.
 	th.epoch++

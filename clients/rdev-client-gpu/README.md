@@ -84,11 +84,14 @@ From the repository root, after `make rust-client-gpu`:
 Useful flags:
 
 - `--shell /bin/bash` selects the shell used for exec/shell sessions.
-- `--instance-id <id>` pins the reconnect identity for tests.
+- `--instance-id <id>` pins the process-instance marker for tests; it is not a reconnect credential.
 - `--no-desktop` registers without staged desktop capabilities and disables the GPU desktop tunnel.
 - `--gpu-desktop-local 127.0.0.1:1701` selects where the embedded RDev-compatible desktop service listens.
 - `--no-gpu-desktop-tunnel` disables only the GPU desktop tunnel while keeping other client features.
 - `--reconnect-delay 2s` controls reconnect backoff.
+
+Device enrollment persists a private `deviceIdentity`/`reconnectProof` pair before connecting. The canonical JSON format is shared with the Go client for the same endpoint and configured device ID. Storage defaults to `$XDG_CONFIG_HOME/rdev` or `~/.config/rdev` on Linux, `~/Library/Application Support/rdev` on macOS, and `%APPDATA%/rdev` on Windows; override with `RDEV_IDENTITY_DIR`. Corrupt or inaccessible files fail closed rather than silently changing identity. Back up the original credential securely: deleting it does not recover a reserved name or undo revocation. Use WSS or another encrypted transport for remote enrollment and reconnect.
+
 
 ## Validation
 

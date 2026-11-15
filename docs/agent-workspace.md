@@ -101,11 +101,15 @@
 
 ## 并发与持久化边界
 
+Scheduled run persistence, manifest recovery, retention, health reporting, and browser refresh behavior are documented in [Scheduler persistence and refresh lifecycle](scheduler.md).
+
 审批和问题 ID 包含会话标识，多个会话的回复不会串线。历史保存、重置、删除和元数据更新按会话串行；偏好按设备串行保存，写盘不占用全局会话锁。存储实现仍串行处理 JSONL 写入。
 
 Agent 的 write_file/edit 使用按设备与路径隔离、可取消的写入锁，防止同一文件读改写互相覆盖；不同文件和不同设备继续并行。Windows 路径统一分隔符和大小写。该锁不覆盖外部编辑器、shell 写入、符号链接或不同相对/绝对路径别名。
 
 会话历史按 `<data>/agent/sessions/<device>/<thread>.jsonl` 保存；偏好保存在 `<data>/agent/prefs/`。关闭持久化时仍可以在进程内使用会话与后台任务。
+
+读取历史会检测 JSONL 记录错误和超限行/文件，并在认证与线程快照中报告；首次写入前也会验证已有文件。损坏线程不接受新消息、普通持久化写入（含 outcome/autonomy 检查点）、重置或删除，TTL 清理也保留损坏原件，避免把部分加载内容冒充完整历史。用户可发送 `recover_history` 显式恢复可解析记录；恢复先保存原文件的逐字节 `.corrupt-<时间戳>` 备份，再从该备份解析并原子重写。备份或重写失败时原件与故障状态不变，普通重读不会清除故障。成功后回复 `history_recovered`，并向所有已连接的会话视图广播 `thread_peeked` 权威快照，清除损坏提示。服务端 `AgentHistoryHealth()` 提供不初始化存储、不扫描文件的缓存健康快照。单行 JSON 上限为 8 MiB（不含换行），整文件读写上限为 16 MiB；消息和检查点追加预计超过 1 MiB 时触发压缩重写，最多保留最近 150 条消息并去掉开头孤立的 tool 结果。1 MiB 是压缩触发阈值而非硬截断，合法的大消息仍可保留。重置、清理与迁移会失效追加游标，避免后续检查点重建文件后漏存消息。
 
 ## 会话管理
 

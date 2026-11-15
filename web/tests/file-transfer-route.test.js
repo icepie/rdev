@@ -90,3 +90,16 @@ it.each([
   await walkTransferFiles([{ name: "work", path, isDir: true, size: 0 }], "source", { targetLeaf: 2, device, parentDir }, operations);
   expect(operations.mkdir).toHaveBeenCalledTimes(1);
 });
+
+it("awaits bounded source setup and propagates copy failures before walking further", async () => {
+  const setup = Promise.withResolvers();
+  const operations = { list: vi.fn(), mkdir: vi.fn(), download: vi.fn(() => setup.promise) };
+  const result = walkTransferFiles([
+    { name: "one", path: "/one", isDir: false, size: 1 },
+    { name: "two", path: "/two", isDir: false, size: 1 },
+  ], "source", { targetLeaf: 2, device: "target", parentDir: "/out" }, operations);
+  expect(operations.download).toHaveBeenCalledTimes(1);
+  setup.reject(new Error("Source changed"));
+  await expect(result).rejects.toThrow("Source changed");
+  expect(operations.download).toHaveBeenCalledTimes(1);
+});

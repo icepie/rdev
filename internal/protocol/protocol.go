@@ -54,6 +54,7 @@ const (
 	MsgFileTransferEnd    MessageType = "file_transfer_end"    // bidir: transfer finished
 	MsgFileTransferError  MessageType = "file_transfer_error"  // bidir: transfer failed
 	MsgFileTransferCancel MessageType = "file_transfer_cancel" // bidir: cancel transfer
+	MsgFileRTCSignal      MessageType = "file_rtc_signal"      // bidir: scoped file transfer SDP/ICE
 
 	// Remote desktop (text frames for control, binary for frames)
 	MsgDesktopSnapshot  MessageType = "desktop_snapshot"   // S->C: capture one image in an on-demand session
@@ -102,18 +103,28 @@ const (
 // File binary extended layout after common header:
 // [2 bytes pathLen BE] [pathLen bytes: path] [4 bytes mode BE] [optional file data]
 
+// IceServer is the standard WebRTC ICE server configuration sent to authorized peers.
+type IceServer struct {
+	URLs       []string `json:"urls"`
+	Username   string   `json:"username,omitempty"`
+	Credential string   `json:"credential,omitempty"`
+}
+
 // Message is the WebSocket protocol message (for text/JSON frames)
 type Message struct {
 	FileOperations []string    `json:"fileOperations,omitempty"`
+	FileRTC        bool        `json:"fileRTC,omitempty"`
 	Type           MessageType `json:"type"`
 	ClientID       string      `json:"clientId,omitempty"`
 	SessionID      string      `json:"sessionId,omitempty"`
 	ClientVersion  string      `json:"clientVersion,omitempty"`
 	ClientOS       string      `json:"clientOS,omitempty"` // GOOS, sent at registration
 
-	// Client registration identity. InstanceID is a stable per-process token used
-	// to distinguish duplicate IDs from reconnects of the same running client.
+	// InstanceID identifies this process for diagnostics. DeviceIdentity and
+	// ReconnectProof authenticate the persistent device across process restarts.
 	InstanceID        string `json:"instanceId,omitempty"`
+	DeviceIdentity    string `json:"deviceIdentity,omitempty"`
+	ReconnectProof    string `json:"reconnectProof,omitempty"`
 	ConfinedDownloads bool   `json:"confinedDownloads,omitempty"` // device enforces DownloadRoot
 
 	// Session creation
@@ -167,6 +178,9 @@ type Message struct {
 	ParentPath   string      `json:"parentPath,omitempty"`
 	Name         string      `json:"name,omitempty"`
 	Size         int64       `json:"size,omitempty"`
+	SHA256       string      `json:"sha256,omitempty"`
+	PrefixSHA256 string      `json:"prefixSha256,omitempty"`
+	Restart      bool        `json:"restart,omitempty"`
 	Offset       int64       `json:"offset,omitempty"`
 	Length       int64       `json:"length,omitempty"` // download byte limit; zero preserves whole-file/resume behavior
 	ModTime      string      `json:"modTime,omitempty"`
@@ -184,32 +198,35 @@ type Message struct {
 	DesktopCapabilities *DesktopCapabilities `json:"desktop,omitempty"`
 	RTCType             string               `json:"rtcType,omitempty"` // offer, answer, candidate, or close
 	RTCData             json.RawMessage      `json:"rtcData,omitempty"`
-	Width               int                  `json:"width,omitempty"`
-	Height              int                  `json:"height,omitempty"`
-	Format              string               `json:"format,omitempty"`
-	Codec               string               `json:"codec,omitempty"`
-	Description         []byte               `json:"description,omitempty"`
-	Source              string               `json:"source,omitempty"`
-	Quality             int                  `json:"quality,omitempty"`
-	OnDemand            bool                 `json:"onDemand,omitempty"`
-	FPS                 int                  `json:"fps,omitempty"`
-	InputType           string               `json:"inputType,omitempty"`
-	InputBackend        string               `json:"inputBackend,omitempty"`
-	ShowCursor          bool                 `json:"showCursor,omitempty"`
-	X                   int                  `json:"x,omitempty"`
-	Y                   int                  `json:"y,omitempty"`
-	Button              int                  `json:"button,omitempty"`
-	DeltaX              int                  `json:"deltaX,omitempty"`
-	DeltaY              int                  `json:"deltaY,omitempty"`
-	Key                 string               `json:"key,omitempty"`
-	Code                string               `json:"code,omitempty"`
-	CtrlKey             bool                 `json:"ctrlKey,omitempty"`
-	AltKey              bool                 `json:"altKey,omitempty"`
-	ShiftKey            bool                 `json:"shiftKey,omitempty"`
-	MetaKey             bool                 `json:"metaKey,omitempty"`
-	PointerType         string               `json:"pointerType,omitempty"`
-	PointerID           int                  `json:"pointerId,omitempty"`
-	Pressure            float64              `json:"pressure,omitempty"`
+	// IceServers is present only on authorized RTC offers. A non-nil empty slice
+	// explicitly disables STUN/TURN; absence preserves older clients' defaults.
+	IceServers   *[]IceServer `json:"iceServers,omitempty"`
+	Width        int          `json:"width,omitempty"`
+	Height       int          `json:"height,omitempty"`
+	Format       string       `json:"format,omitempty"`
+	Codec        string       `json:"codec,omitempty"`
+	Description  []byte       `json:"description,omitempty"`
+	Source       string       `json:"source,omitempty"`
+	Quality      int          `json:"quality,omitempty"`
+	OnDemand     bool         `json:"onDemand,omitempty"`
+	FPS          int          `json:"fps,omitempty"`
+	InputType    string       `json:"inputType,omitempty"`
+	InputBackend string       `json:"inputBackend,omitempty"`
+	ShowCursor   bool         `json:"showCursor,omitempty"`
+	X            int          `json:"x,omitempty"`
+	Y            int          `json:"y,omitempty"`
+	Button       int          `json:"button,omitempty"`
+	DeltaX       int          `json:"deltaX,omitempty"`
+	DeltaY       int          `json:"deltaY,omitempty"`
+	Key          string       `json:"key,omitempty"`
+	Code         string       `json:"code,omitempty"`
+	CtrlKey      bool         `json:"ctrlKey,omitempty"`
+	AltKey       bool         `json:"altKey,omitempty"`
+	ShiftKey     bool         `json:"shiftKey,omitempty"`
+	MetaKey      bool         `json:"metaKey,omitempty"`
+	PointerType  string       `json:"pointerType,omitempty"`
+	PointerID    int          `json:"pointerId,omitempty"`
+	Pressure     float64      `json:"pressure,omitempty"`
 
 	ClipboardAction string          `json:"clipboardAction,omitempty"`
 	Text            string          `json:"text,omitempty"`

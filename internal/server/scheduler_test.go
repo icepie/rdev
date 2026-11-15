@@ -30,15 +30,13 @@ func TestScheduleDispatchReservationBeforeSideEffect(t *testing.T) {
 	m.state.Schedules[sc.ID] = sc
 	observed := make(chan ScheduleRun, 1)
 	m.execute = func(_ context.Context, r ScheduleRun, _ func(ScheduledUpdate)) ScheduledResult {
-		data, err := os.ReadFile(m.path)
-		if err != nil {
+		storedScheduler := schedulerFixture(t)
+		storedScheduler.path = m.path
+		if err := storedScheduler.loadLocked(); err != nil {
 			t.Error(err)
 			return ScheduledResult{State: "failed"}
 		}
-		var stored schedulerState
-		if err = json.Unmarshal(data, &stored); err != nil {
-			t.Error(err)
-		}
+		stored := storedScheduler.state
 		persisted := stored.Runs[r.ID]
 		if persisted.State != "dispatching" || stored.Schedules[sc.ID].Runs != 1 {
 			t.Errorf("not durably reserved: %+v", stored)

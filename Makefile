@@ -1,4 +1,4 @@
-.PHONY: all build clean cross server client client-cgo client-cgo-native rust-cua-bridge web web-install test vet fmt win7-go-client win7-service-wrapper rust-client-gpu rust-client-gpu-check rust-client-gpu-fmt rust-client-gpu-clippy rust-client-gpu-test rust-client-gpu-smoke rust-client-gpu-linux-desktop-package rust-client-gpu-windows-arm64-package rust-client-gpu-win7-package rust-client-gpu-win7-rdev-desktop-package rust-client-gpu-win7-stage rust-client-gpu-win7-smoke
+.PHONY: all build clean cross server client client-cgo client-cgo-native rust-cua-bridge web web-install test vet fmt win7-go-client win7-service-wrapper rust-client-gpu rust-client-gpu-check rust-client-gpu-fmt rust-client-gpu-clippy rust-client-gpu-test rust-client-gpu-smoke rust-client-gpu-linux-desktop-package rust-client-gpu-windows-arm64-package rust-client-gpu-win7-package rust-client-gpu-win7-rdev-desktop-package rust-client-gpu-win7-stage rust-client-gpu-win7-smoke client-cpp
 
 BINS = rdev-server rdev-client rdev-client-cgo
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
@@ -12,6 +12,7 @@ RUST_CLIENT_GPU_WIN7_RUNTIME_DIR ?= /opt/llvm-mingw/x86_64-w64-mingw32/bin
 RUST_CLIENT_GPU_WIN7_RDEV_DESKTOP_DIST = clients/rdev-client-gpu/target/win7-rdev-desktop-dist
 RUST_CUA_BRIDGE_MANIFEST = clients/rdev-client-gpu/cua-driver-bridge/Cargo.toml
 RUST_CUA_BRIDGE_TARGET = internal/client/cua_native/rust-target
+CPP_CLIENT_BUILD_DIR = target/rdev-client-cpp
 
 all: build
 
@@ -33,6 +34,10 @@ client:
 client-cgo:
 	CGO_ENABLED=1 go build -tags x264cgo -ldflags "$(LDFLAGS)" -o rdev-client-cgo ./cmd/rdev-client
 
+client-cpp:
+	cmake -S clients/rdev-client-cpp -B $(CPP_CLIENT_BUILD_DIR)
+	cmake --build $(CPP_CLIENT_BUILD_DIR) --parallel
+
 rust-cua-bridge:
 	cargo build --release --manifest-path $(RUST_CUA_BRIDGE_MANIFEST) --features cua-native --target-dir $(RUST_CUA_BRIDGE_TARGET)
 
@@ -41,7 +46,7 @@ client-cgo-native: rust-cua-bridge
 
 clean:
 	rm -f $(BINS) $(BINS)-*
-	rm -rf clients/rdev-client-gpu/target internal/client/cua_native/rust-target $(WIN7_SERVICE_DIST)
+	rm -rf clients/rdev-client-gpu/target internal/client/cua_native/rust-target $(WIN7_SERVICE_DIST) $(CPP_CLIENT_BUILD_DIR)
 
 win7-go-client:
 	mkdir -p $(WIN7_SERVICE_DIST)

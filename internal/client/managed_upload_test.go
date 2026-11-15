@@ -2,6 +2,8 @@ package client
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"fmt"
 	"encoding/json"
 	"net"
 	"os"
@@ -48,7 +50,7 @@ func TestManagedUploadDestinationOwnership(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "file.txt")
 	var wg sync.WaitGroup
 	for _, id := range []string{"one", "two"} {
-		wg.Go(func() { c.handleManagedUploadStart(&protocol.Message{TaskID: id, Path: path, Size: 4}) })
+		wg.Go(func() { c.handleManagedUploadStart(&protocol.Message{TaskID: id, Path: path, Size: 4, SHA256: transferDigest("data")}) })
 	}
 	wg.Wait()
 	replies := []protocol.Message{uploadReply(t, tr), uploadReply(t, tr)}
@@ -81,7 +83,7 @@ func TestManagedUploadDestinationOwnership(t *testing.T) {
 	if len(c.uploads) != 0 || len(c.uploadPaths) != 0 {
 		t.Fatal("destination ownership leaked")
 	}
-	c.handleManagedUploadStart(&protocol.Message{TaskID: "next", Path: path, Size: 3})
+	c.handleManagedUploadStart(&protocol.Message{TaskID: "next", Path: path, Size: 3, SHA256: transferDigest("new")})
 	if m := uploadReply(t, tr); m.Type != protocol.MsgFileUploadReady {
 		t.Fatal(m)
 	}
@@ -100,10 +102,11 @@ func TestManagedUploadAliasesAndResumeAfterDisconnect(t *testing.T) {
 		t.Skip(err)
 	}
 	path := filepath.Join(real, "file.txt")
-	c.handleManagedUploadStart(&protocol.Message{TaskID: "owner", Path: path, Size: 6})
+	digest := fmt.Sprintf("%x", sha256.Sum256([]byte("abcdef")))
+	c.handleManagedUploadStart(&protocol.Message{TaskID: "owner", Path: path, Size: 6, SHA256: digest})
 	uploadReply(t, tr)
 	c.handleManagedUploadChunk("owner", 0, []byte("abc"))
-	c.handleManagedUploadStart(&protocol.Message{TaskID: "other", Path: filepath.Join(alias, "file.txt"), Size: 6})
+	c.handleManagedUploadStart(&protocol.Message{TaskID: "other", Path: filepath.Join(alias, "file.txt"), Size: 6, SHA256: digest})
 	if m := uploadReply(t, tr); m.Type != protocol.MsgFileTransferError {
 		t.Fatal("alias bypassed ownership", m)
 	}
@@ -116,8 +119,8 @@ func TestManagedUploadAliasesAndResumeAfterDisconnect(t *testing.T) {
 	c.mu.Lock()
 	c.transport = tr
 	c.mu.Unlock()
-	c.handleManagedUploadStart(&protocol.Message{TaskID: "resume", Path: path, Size: 6})
-	if m := uploadReply(t, tr); m.Type != protocol.MsgFileUploadReady || m.Offset != 3 {
+	c.handleManagedUploadStart(&protocol.Message{TaskID: "resume", Path: path, Size: 6, SHA256: digest})
+	if m := uploadReply(t, tr); m.Type != protocol.MsgFileUploadReady || m.Offset != 3 || m.PrefixSHA256 != fmt.Sprintf("%x", sha256.Sum256([]byte("abc"))) {
 		t.Fatal("resume lost partial data", m)
 	}
 	c.handleManagedUploadChunk("resume", 3, []byte("def"))
@@ -132,13 +135,13 @@ func TestManagedUploadAliasesAndResumeAfterDisconnect(t *testing.T) {
 func TestManagedUploadsDifferentDestinationsDoNotShareIOLock(t *testing.T) {
 	c, tr := newUploadTestClient()
 	dir := t.TempDir()
-	c.handleManagedUploadStart(&protocol.Message{TaskID: "one", Path: filepath.Join(dir, "a"), Size: 1})
+	c.handleManagedUploadStart(&protocol.Message{TaskID: "one", Path: filepath.Join(dir, "a"), Size: 1, SHA256: transferDigest("a")})
 	uploadReply(t, tr)
 	first := c.managedUploadFor("one")
 	first.mu.Lock()
 	done := make(chan struct{})
 	go func() {
-		c.handleManagedUploadStart(&protocol.Message{TaskID: "two", Path: filepath.Join(dir, "b"), Size: 1})
+		c.handleManagedUploadStart(&protocol.Message{TaskID: "two", Path: filepath.Join(dir, "b"), Size: 1, SHA256: transferDigest("b")})
 		c.handleManagedUploadChunk("two", 0, []byte("b"))
 		c.handleManagedUploadEnd(&protocol.Message{TaskID: "two"})
 		close(done)
@@ -158,7 +161,7 @@ func TestManagedUploadFinishCancelWriteRace(t *testing.T) {
 		c, _ := newUploadTestClient()
 		path := filepath.Join(t.TempDir(), "race.bin")
 		data := bytes.Repeat([]byte("x"), 8192)
-		c.handleManagedUploadStart(&protocol.Message{TaskID: "race", Path: path, Size: int64(len(data))})
+		c.handleManagedUploadStart(&protocol.Message{TaskID: "race", Path: path, Size: int64(len(data)), SHA256: fmt.Sprintf("%x", sha256.Sum256(data))})
 		var wg sync.WaitGroup
 		wg.Go(func() { c.handleManagedUploadChunk("race", 0, data) })
 		wg.Go(func() { c.handleManagedUploadEnd(&protocol.Message{TaskID: "race"}) })

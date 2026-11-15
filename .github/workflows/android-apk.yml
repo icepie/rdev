@@ -61,6 +61,12 @@ jobs:
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
     steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.26'
+
       - name: Download APK artifact
         uses: actions/download-artifact@v8
         with:
@@ -72,6 +78,17 @@ jobs:
           find artifacts -type f -name '*.apk' -exec cp {} release/ \;
           echo "=== Android APK release files ==="
           ls -lh release
+
+      - name: Sign release assets
+        env:
+          RDEV_UPDATE_SIGNING_KEY: ${{ secrets.RDEV_UPDATE_SIGNING_KEY }}
+        run: |
+          if [ -z "$RDEV_UPDATE_SIGNING_KEY" ]; then
+            echo "::error::RDEV_UPDATE_SIGNING_KEY is required for release publication"
+            exit 1
+          fi
+          go run ./scripts/sign -key "$RDEV_UPDATE_SIGNING_KEY" release/*
+          ls -lh release/*.sig
 
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v3

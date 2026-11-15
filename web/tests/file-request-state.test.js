@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import {
+  availableFileTaskActions,
   canResumeUpload,
   createListingGuard,
   readListingPage,
@@ -133,4 +134,9 @@ it("consumes each visible page once while allowing a failed page to be retried",
   guard.invalidate();
   expect(guard.consume("other-device")).toBe(false);
   expect(guard.consume("")).toBe(false);
+});
+
+it("blocks actions during irreversible saving and recovers interrupted saving on reload", () => {
+  expect(availableFileTaskActions("saving")).toEqual({ pause: false, resume: false, cancel: false, clear: false });
+  expect(restoreFileTask({ dir: "download", diskDownload: true, status: "saving" }, "reselect").status).toBe("failed");
 });

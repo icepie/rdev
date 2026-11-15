@@ -3,7 +3,9 @@ package server
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"net/http/httptest"
 	"rdev/internal/protocol"
 	"strings"
@@ -42,6 +44,7 @@ func (t *mediaTestTransport) WriteJSON(raw []byte) error {
 		n = min(m.Length, n)
 	}
 	meta := &protocol.Message{Type: protocol.MsgFileDownloadStart, TaskID: m.TaskID, DownloadRoot: m.DownloadRoot, Size: int64(len(t.data)), Offset: m.Offset, Length: n, ModTime: "2026-11-08T00:00:00Z"}
+	meta.SHA256 = fmt.Sprintf("%x", sha256.Sum256(t.data))
 	if t.noRoot {
 		meta.DownloadRoot = ""
 	}
@@ -52,7 +55,7 @@ func (t *mediaTestTransport) WriteJSON(raw []byte) error {
 	if n > 0 {
 		t.srv.routeAgentFileBinary(protocol.EncodeBinFrameOffset(protocol.BinFileDownloadChunk, m.TaskID, m.Offset, t.data[m.Offset:m.Offset+n]))
 	}
-	t.srv.routeAgentFileMsg(&protocol.Message{Type: protocol.MsgFileTransferEnd, TaskID: m.TaskID, Offset: m.Offset + n, Success: true})
+	t.srv.routeAgentFileMsg(&protocol.Message{Type: protocol.MsgFileTransferEnd, TaskID: m.TaskID, Offset: m.Offset + n, Size: meta.Size, SHA256: meta.SHA256, Success: true})
 	return nil
 }
 func (t *mediaTestTransport) WriteBinary([]byte) error { return nil }

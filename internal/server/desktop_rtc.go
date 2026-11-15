@@ -2,13 +2,57 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"strings"
 	"sync"
 
 	"github.com/lxzan/gws"
+	"github.com/pion/stun/v4"
 	"rdev/internal/protocol"
 )
+
+// ParseWebRTCICEServers validates the JSON CLI/environment ICE configuration.
+// Errors intentionally never include user-supplied URLs or credentials.
+func ParseWebRTCICEServers(raw string) ([]protocol.IceServer, error) {
+	decoder := json.NewDecoder(strings.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	var servers []protocol.IceServer
+	if err := decoder.Decode(&servers); err != nil || servers == nil {
+		return nil, errors.New("invalid WebRTC ICE servers JSON array")
+	}
+	if decoder.Decode(new(any)) != io.EOF {
+		return nil, errors.New("invalid trailing WebRTC ICE servers JSON")
+	}
+	for _, server := range servers {
+		if len(server.URLs) == 0 {
+			return nil, errors.New("WebRTC ICE server requires urls array")
+		}
+		for _, address := range server.URLs {
+			uri, err := stun.ParseURI(address)
+			if err != nil || uri.Port < 1 || uri.Port > 65535 || uri.Host == "" {
+				return nil, errors.New("invalid WebRTC ICE server URL")
+			}
+		}
+	}
+	return servers, nil
+}
+
+func (s *Server) webRTCICEServers() []protocol.IceServer {
+	if s.WebRTCICEServers == nil {
+		return []protocol.IceServer{{URLs: []string{"stun:stun.l.google.com:19302"}}}
+	}
+	return s.WebRTCICEServers
+}
+
+func (s *Server) rtcOfferICEServers(kind string) *[]protocol.IceServer {
+	if kind != "offer" {
+		return nil
+	}
+	servers := s.webRTCICEServers()
+	return &servers
+}
 
 type desktopRTCConn struct {
 	srv      *Server
@@ -38,8 +82,9 @@ func (s *Server) HandleDesktopRTCAPI(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	_ = json.NewEncoder(w).Encode(struct {
-		Enabled bool `json:"enabled"`
-	}{Enabled: s.WebRTCEnabled})
+		Enabled    bool                 `json:"enabled"`
+		IceServers []protocol.IceServer `json:"iceServers"`
+	}{Enabled: s.WebRTCEnabled, IceServers: s.webRTCICEServers()})
 }
 
 // HandleDesktopRTCWS relays only signaling. Video may use the browser-device
@@ -139,10 +184,12 @@ func (h *desktopRTCWSHandler) OnMessage(socket *gws.Conn, message *gws.Message) 
 	if !h.srv.WebRTCEnabled || conn == nil || conn.client.Desktop == nil || !conn.client.Desktop.RTC || !validDesktopRTCSignal(msg.RTCType, msg.RTCData) {
 		return
 	}
-	_ = conn.client.Send(&protocol.Message{
+	forwarded := &protocol.Message{
 		Type: protocol.MsgDesktopRTCSignal, SessionID: conn.session,
 		RTCType: msg.RTCType, RTCData: append(json.RawMessage(nil), msg.RTCData...),
-	})
+	}
+	forwarded.IceServers = h.srv.rtcOfferICEServers(msg.RTCType)
+	_ = conn.client.Send(forwarded)
 }
 
 func (h *desktopRTCWSHandler) OnClose(socket *gws.Conn, _ error) {
