@@ -73,7 +73,6 @@ public class RDevAgentService extends Service {
         loadIdentity(getSharedPreferences("rdev", MODE_PRIVATE));
 
         terminalManager = new AndroidTerminalManager(this);
-        fileManager = new AndroidFileManager(this);
         acquireKeepAliveLocks();
         registerNetworkCallback();
         AndroidVideoHub.setDemandListener(this::handleVideoDemandChanged);
@@ -252,8 +251,11 @@ public class RDevAgentService extends Service {
     private synchronized void startWebSocket() {
         if (stopping) return;
         final int generation = ++reconnectGeneration;
-        SharedPreferences prefs = getSharedPreferences("rdev", MODE_PRIVATE);
         if (client != null) client.close();
+        if (fileManager != null) fileManager.closeAll();
+        final AndroidFileManager files = new AndroidFileManager(this);
+        fileManager = files;
+        SharedPreferences prefs = getSharedPreferences("rdev", MODE_PRIVATE);
         if (!java.util.Objects.equals(identityServer, prefs.getString("server", "")) || !java.util.Objects.equals(identityClientId, prefs.getString("id", "android")) || !identityReady) {
             if (tunnel != null) { tunnel.close(); tunnel = null; }
             loadIdentity(prefs);
@@ -273,10 +275,11 @@ public class RDevAgentService extends Service {
                 reconnectDelayMs = 1000;
                 sendRegister();
             }
-            @Override public void onText(String text) { if (!stopping && generation == reconnectGeneration) handleText(text); }
-            @Override public void onBinary(byte[] data) { if (!stopping && generation == reconnectGeneration) handleBinary(data); }
+            @Override public void onText(String text) { if (!stopping && generation == reconnectGeneration) handleText(text, files); }
+            @Override public void onBinary(byte[] data) { if (!stopping && generation == reconnectGeneration) handleBinary(data, files); }
             @Override public void onClosed(Exception error) {
                 Log.i(TAG, "connection closed error=" + error);
+                files.closeAll();
                 closeAllForwards();
                 if (!stopping && generation == reconnectGeneration) scheduleReconnect();
             }
@@ -356,7 +359,7 @@ public class RDevAgentService extends Service {
         }
     }
 
-    private void handleText(String text) {
+    private void handleText(String text, AndroidFileManager files) {
         try {
             JSONObject msg = new JSONObject(text);
             String type = msg.optString("type", "");
@@ -376,33 +379,34 @@ public class RDevAgentService extends Service {
                 String sessionId = msg.optString("sessionId", "");
                 if (terminalManager != null) terminalManager.close(sessionId);
                 String taskId = msg.optString("taskId", "");
-                if (fileManager != null && taskId.length() > 0) fileManager.cancel(taskId);
+                if (taskId.length() > 0) files.dispatch(taskId, () -> files.cancel(taskId));
             } else if ("tcp_connect".equals(type)) {
                 handleTcpConnect(msg);
             } else if ("tcp_close".equals(type)) {
                 handleTcpClose(msg);
             } else if ("file_list".equals(type)) {
-                if (fileManager != null) new Thread(() -> fileManager.handleList(msg), "rdev-file-list").start();
+                new Thread(() -> files.handleList(msg), "rdev-file-list").start();
             } else if ("file_upload_start".equals(type)) {
-                if (fileManager != null) fileManager.handleUploadStart(msg);
+                files.dispatch(msg.optString("taskId", ""), () -> files.handleUploadStart(msg));
             } else if ("file_upload_end".equals(type)) {
-                if (fileManager != null) fileManager.handleUploadEnd(msg);
+                files.dispatch(msg.optString("taskId", ""), () -> files.handleUploadEnd(msg));
             } else if ("file_download_start".equals(type)) {
-                if (fileManager != null) fileManager.handleDownloadStart(msg);
+                files.handleDownloadStart(msg);
             } else if ("file_stat".equals(type)) {
-                if (fileManager != null) fileManager.handleStat(msg);
+                files.handleStat(msg);
             } else if ("file_create".equals(type)) {
-                if (fileManager != null) fileManager.handleCreate(msg);
+                files.handleCreate(msg);
             } else if ("file_mkdir".equals(type)) {
-                if (fileManager != null) fileManager.handleMkdir(msg);
+                files.handleMkdir(msg);
             } else if ("file_delete".equals(type)) {
-                if (fileManager != null) fileManager.handleDelete(msg);
+                files.handleDelete(msg);
             } else if ("file_rename".equals(type) || "file_move".equals(type)) {
-                if (fileManager != null) fileManager.handleRename(msg);
+                files.handleRename(msg);
             } else if ("file_copy".equals(type)) {
-                if (fileManager != null) fileManager.handleCopy(msg);
+                files.handleCopy(msg);
             } else if ("file_transfer_cancel".equals(type)) {
-                if (fileManager != null) fileManager.cancel(msg.optString("taskId", ""));
+                String taskId = msg.optString("taskId", "");
+                files.dispatch(taskId, () -> files.cancel(taskId));
             } else {
                 Log.d(TAG, "message type=" + type);
             }
@@ -411,7 +415,7 @@ public class RDevAgentService extends Service {
         }
     }
 
-    private void handleBinary(byte[] data) {
+    private void handleBinary(byte[] data, AndroidFileManager files) {
         try {
             RDevProtocol frame = RDevProtocol.decode(data);
             if (frame.type == RDevProtocol.BIN_DATA) {
@@ -419,9 +423,10 @@ public class RDevAgentService extends Service {
             } else if (frame.type == RDevProtocol.BIN_TCP_DATA) {
                 handleTcpData(frame.id, frame.payload);
             } else if (frame.type == RDevProtocol.BIN_FILE_UPLOAD_CHUNK) {
-                if (fileManager != null) fileManager.handleUploadChunk(frame.id, frame.offset, frame.offsetPayload);
+                files.dispatchUploadChunk(frame.id, frame.offset, frame.offsetPayload);
             } else if (frame.type == RDevProtocol.BIN_FILE_TRANSFER_CANCEL) {
-                if (fileManager != null) fileManager.cancel(frame.id);
+                String taskId = frame.id;
+                files.dispatch(taskId, () -> files.cancel(taskId));
             }
         } catch (Exception e) {
             Log.w(TAG, "invalid websocket binary", e);

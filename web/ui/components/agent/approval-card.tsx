@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { cn } from "../../lib/utils";
 import { Button } from "../button";
-import { CodeBlock } from "../markdown";
+import { CodeBlock } from "../code-block";
 import { Icon } from "../icon";
 import { ToolIcon } from "./tool-icon";
 import type { ApprovalItem, Translator } from "./types";

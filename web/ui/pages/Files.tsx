@@ -76,7 +76,6 @@ import { OsIcon } from "../components/os-icon";
 
 const CHUNK = 512 * 1024;
 const FILE_LIST_LIMIT = 100;
-const DOWNLOAD_STALL_MS = 12000;
 const DOWNLOAD_RETRY_MS = 2500;
 const TASKS_KEY = "rdevFileTasks";
 
@@ -489,6 +488,8 @@ export function FilesBrowser({
         if (!current()) return;
         request = { ...request, offset, length: DOWNLOAD_RANGE };
       }
+      task.lastRequested = Date.now();
+      task.lastProgress = task.lastRequested;
       send({ ...request, ...offer, deviceId: task.device, taskId: wireId });
       fileRTC.current.started(wireId);
     }).catch((error) => {
@@ -525,7 +526,7 @@ export function FilesBrowser({
         if (!destination) { task.status = "failed"; task.message = tRef.current("files.diskRestart"); saveTasks(); bump(); return; }
         task.status = "running";
         task.done = 0;
-        void diskDownloads.current.open(task.id, destination, () => tasksRef.current!.get(task.id) === task && task.status === "running", committed => { task.done = committed; task.lastProgress = Date.now(); progressDirty.current = true; }, error => {
+        void diskDownloads.current.open(task.id, destination, () => tasksRef.current!.get(task.id) === task && task.status === "running", committed => { task.done = committed; task.lastProgress = Date.now(); transferAttempts.current.progress(task.id, transferAttempts.current.current(task.id) || ""); progressDirty.current = true; }, error => {
           const wire = transferAttempts.current.current(task.id);
           fileRTC.current.close(wire, false);
           if (wire) send({ op: "cancel", taskId: wire, offset: task.done });
@@ -612,6 +613,7 @@ export function FilesBrowser({
       if (task.verifying) return;
       task.verifying = true;
       const wireId = transferAttempts.current.current(task.id);
+      transferAttempts.current.phase(task.id, wireId || "", "verifying");
       const controller = new AbortController();
       uploadRunsRef.current.set(task.id, controller);
       void hashSource(new Blob(task.blobParts), controller.signal).then(hash => {
@@ -652,7 +654,7 @@ export function FilesBrowser({
       const destination = pickDownloadDestination(name);
       if (destination) {
         task.diskDownload = true;
-        void diskDownloads.current.open(task.id, destination, () => tasksRef.current!.get(task.id) === task && task.status === "running", offset => { task.done = offset; task.lastProgress = Date.now(); progressDirty.current = true; }, error => {
+        void diskDownloads.current.open(task.id, destination, () => tasksRef.current!.get(task.id) === task && task.status === "running", offset => { task.done = offset; task.lastProgress = Date.now(); transferAttempts.current.progress(task.id, transferAttempts.current.current(task.id) || ""); progressDirty.current = true; }, error => {
           const wire = transferAttempts.current.current(task.id);
           fileRTC.current.close(wire, false);
           if (wire) send({ op: "cancel", taskId: wire, offset: task.done });
@@ -914,7 +916,7 @@ export function FilesBrowser({
         task.path = typeof msg.path === "string" ? msg.path : task.path;
         if (task.ready?.taskId === taskId) return;
         task.ready = msg;
-        task.status = "running";
+        transferAttempts.current.phase(task.id, taskId, "receiving");
         saveTasks();
         void uploadLoop(task);
       } else if (msg.op === "download_start" && task) {
@@ -931,6 +933,7 @@ export function FilesBrowser({
         task.name = typeof msg.name === "string" && msg.name ? msg.name : task.name;
         task.status = "running";
         task.message = "";
+        transferAttempts.current.phase(task.id, taskId, "receiving");
         task.lastProgress = Date.now();
         if (Number(msg.offset || 0) === 0 && (task.done || 0) === 0) task.blobParts = [];
         saveTasks();
@@ -1017,7 +1020,7 @@ export function FilesBrowser({
           task.blobParts = task.blobParts || [];
           task.blobParts.push(f.payload);
           task.done = f.offset + f.payload.byteLength;
-          task.lastProgress = Date.now();
+          transferAttempts.current.progress(task.id, f.taskId);
           task.message = "";
           progressDirty.current = true;
         } else if (f.offset < (task.done || 0)) {
@@ -1154,14 +1157,12 @@ export function FilesBrowser({
         }
         if (
           wsRef.current?.readyState === WebSocket.OPEN &&
-          !transferAuth.current.has(task.id) &&
           !fileRTC.current.direct(transferAttempts.current.current(task.id)) &&
           task.dir === "download" &&
           task.status === "running" &&
           !task.saved &&
           !diskDownloads.current.get(task.id)?.busy &&
-          !task.verifying &&
-          now - (task.lastProgress || task.created || 0) > DOWNLOAD_STALL_MS &&
+          transferAttempts.current.expired(task.id, now) &&
           now - (task.lastRequested || 0) > DOWNLOAD_RETRY_MS
         ) {
           resumeDownload(task, task.done || 0, tRef.current("files.resuming"));

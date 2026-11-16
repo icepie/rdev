@@ -1,4 +1,8 @@
 import PinIcon from "@hugeicons/core-free-icons/PinIcon";
+import GithubIcon from "@hugeicons/core-free-icons/GithubIcon";
+import LockIcon from "@hugeicons/core-free-icons/LockIcon";
+import Menu02Icon from "@hugeicons/core-free-icons/Menu02Icon";
+import TimeScheduleIcon from "@hugeicons/core-free-icons/TimeScheduleIcon";
 import {
   Component,
   createContext,
@@ -197,6 +201,11 @@ const SectionMoveStrokeRoundedIcon: IconSvgElement = [
 ];
 
 const CORE_ICON_MAP = {
+  // Dashboard, navigation and its device drawer must not load the feature catalog.
+  AlignLeft: Menu02Icon,
+  Github: GithubIcon,
+  Lock: LockIcon,
+  TimeSchedule: TimeScheduleIcon,
   AlertCircle: AlertCircleIcon,
   AlertTriangle: Alert02Icon,
   Archive: Archive03Icon,

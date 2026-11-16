@@ -28,3 +28,31 @@ it("does not accept persisted UI task IDs or unknown protocol IDs", () => {
   expect(attempts.resolve("unknown")).toBeUndefined();
   expect(attempts.resolve("fresh-wire")).toBe("persisted-task");
 });
+
+it("gives preparation time its own deadline and resets deadlines per attempt", () => {
+  let sequence = 0;
+  const attempts = createTransferAttempts(() => `wire-${++sequence}`);
+  const first = attempts.begin("download", 0);
+  expect(attempts.expired("download", 15_000)).toBe(false);
+  attempts.phase("download", first, "receiving", 15_000);
+  expect(attempts.expired("download", 26_999)).toBe(false);
+  expect(attempts.expired("download", 27_000)).toBe(true);
+
+  const retry = attempts.begin("download", 27_000);
+  expect(attempts.resolve(first)).toBeUndefined();
+  expect(attempts.progress("download", first, 30_000)).toBe(false);
+  expect(attempts.expired("download", 30_000)).toBe(false);
+  attempts.phase("download", retry, "receiving", 30_000);
+  expect(attempts.progress("download", retry, 40_000)).toBe(true);
+  expect(attempts.expired("download", 51_999)).toBe(false);
+  expect(attempts.expired("download", 52_000)).toBe(true);
+});
+
+it("separates verification deadlines from receive stalls", () => {
+  const attempts = createTransferAttempts(() => "wire");
+  attempts.begin("download", 1_000);
+  attempts.phase("download", "wire", "verifying", 20_000);
+  expect(attempts.expired("download", 20_001)).toBe(false);
+  expect(attempts.expired("download", 319_999)).toBe(false);
+  expect(attempts.expired("download", 320_000)).toBe(true);
+});

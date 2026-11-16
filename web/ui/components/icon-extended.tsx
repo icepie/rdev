@@ -57,7 +57,6 @@ import GitPullRequestArrow from "@hugeicons/core-free-icons/GitPullRequestIcon";
 import GitPullRequestClosedIcon from "@hugeicons/core-free-icons/GitPullRequestClosedIcon";
 import GitPullRequestDraftIcon from "@hugeicons/core-free-icons/GitPullRequestDraftIcon";
 import GitPullRequestIcon from "@hugeicons/core-free-icons/GitPullRequestIcon";
-import GithubIcon from "@hugeicons/core-free-icons/GithubIcon";
 import GridViewIcon from "@hugeicons/core-free-icons/GridViewIcon";
 import InternetIcon from "@hugeicons/core-free-icons/InternetIcon";
 import LaptopIcon from "@hugeicons/core-free-icons/LaptopIcon";
@@ -69,10 +68,8 @@ import Link02Icon from "@hugeicons/core-free-icons/Link02Icon";
 import LinkSquare02Icon from "@hugeicons/core-free-icons/LinkSquare02Icon";
 import ListEndIcon from "@hugeicons/core-free-icons/ListEndIcon";
 import ListViewIcon from "@hugeicons/core-free-icons/ListViewIcon";
-import LockIcon from "@hugeicons/core-free-icons/LockIcon";
 import Mail02Icon from "@hugeicons/core-free-icons/Mail02Icon";
 import MailOpen01Icon from "@hugeicons/core-free-icons/MailOpen01Icon";
-import Menu02Icon from "@hugeicons/core-free-icons/Menu02Icon";
 import MessageAdd02Icon from "@hugeicons/core-free-icons/MessageAdd02Icon";
 import Mic02Icon from "@hugeicons/core-free-icons/Mic02Icon";
 import MinusSignIcon from "@hugeicons/core-free-icons/MinusSignIcon";
@@ -105,7 +102,6 @@ import StarIcon from "@hugeicons/core-free-icons/StarIcon";
 import TestTube01Icon from "@hugeicons/core-free-icons/TestTube01Icon";
 import SpaceIcon from "@hugeicons/core-free-icons/SpaceIcon";
 import TextWrapIcon from "@hugeicons/core-free-icons/TextWrapIcon";
-import TimeScheduleIcon from "@hugeicons/core-free-icons/TimeScheduleIcon";
 import Unarchive03Icon from "@hugeicons/core-free-icons/Unarchive03Icon";
 import UserIcon from "@hugeicons/core-free-icons/UserIcon";
 import UserMultiple02Icon from "@hugeicons/core-free-icons/UserMultiple02Icon";
@@ -233,7 +229,6 @@ export const EXTENDED_ICON_MAP: ExtendedIconMap = {
   AiBrain01: AiBrain01Icon,
   AiBrowser: AiBrowserIcon,
   AiContentGenerator01: AiContentGenerator01Icon,
-  AlignLeft: Menu02Icon,
   AppWindow: BrowserIcon,
   ArchiveRestore: Unarchive03Icon,
   ArrowDown: ArrowDown02Icon,
@@ -271,7 +266,6 @@ export const EXTENDED_ICON_MAP: ExtendedIconMap = {
   Discord: DiscordIcon,
   DiscordLogo: DiscordLogoIcon,
   DateTime: DateTimeIcon,
-  Github: GithubIcon,
   GithubLogo: GithubLogoIcon,
   DragDropHorizontal: DragDropHorizontalIcon,
   DragDropVertical: DragDropVerticalIcon,
@@ -305,7 +299,6 @@ export const EXTENDED_ICON_MAP: ExtendedIconMap = {
   Link: Link02Icon,
   ListEnd: ListEndIcon,
   ListView: ListViewIcon,
-  Lock: LockIcon,
   Mail: Mail02Icon,
   MailOpen: MailOpen01Icon,
   Maximize2: ExpandIcon,
@@ -344,7 +337,6 @@ export const EXTENDED_ICON_MAP: ExtendedIconMap = {
   SquareUnlock02: SquareUnlock02Icon,
   Star: StarIcon,
   TextWrap: TextWrapIcon,
-  TimeSchedule: TimeScheduleIcon,
   UserRound: UserIcon,
   ZoomIn: ZoomInAreaIcon,
   ZoomOut: ZoomOutAreaIcon,

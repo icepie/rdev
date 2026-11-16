@@ -38,7 +38,7 @@ import {
 } from "../components/tooltip";
 import { Icon } from "../components/icon";
 import { OsIcon } from "../components/os-icon";
-import { CodeBlock } from "../components/markdown";
+import { CodeBlock } from "../components/code-block";
 import { useCopy } from "../lib/clipboard";
 import { COARSE_POINTER_HEADER_ICON_BUTTON_CLASS } from "../components/coarse-pointer-sizing";
 import { HealthPanel } from "../components/health-panel";

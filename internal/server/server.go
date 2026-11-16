@@ -2230,27 +2230,22 @@ func (s *Server) StaticHandler() http.Handler {
 	if err != nil {
 		return http.NotFoundHandler()
 	}
-	// Embedded assets carry no etag/modtime, so heuristic browser caching
-	// would serve stale JS/HTML after upgrades with no way to revalidate.
-	// no-cache forces a (cheap) refetch on every navigation.
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Cache-Control", "no-cache")
 		if r.URL.Path == "/run.sh" || r.URL.Path == "/run.ps1" {
 			s.serveRunner(w, r, sub)
 			return
 		}
-		http.FileServer(http.FS(sub)).ServeHTTP(w, r)
+		serveStatic(w, r, sub, strings.TrimPrefix(r.URL.Path, "/"))
 	})
 }
 
 // StaticPageHandler serves a named embedded UI page without exposing the .html suffix.
 func (s *Server) StaticPageHandler(name string) http.HandlerFunc {
+	sub, err := fs.Sub(templateFS, "static")
+	if err != nil {
+		return http.NotFound
+	}
 	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet && r.Method != http.MethodHead {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		w.Header().Set("Cache-Control", "no-cache")
-		http.ServeFileFS(w, r, templateFS, "static/"+name)
+		serveStatic(w, r, sub, name)
 	}
 }

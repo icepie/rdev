@@ -2,7 +2,8 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { expect, it } from "vitest";
 import { CommandOutputBody } from "../ui/components/agent/command-output";
-import { Markdown, CodeBlock } from "../ui/components/markdown";
+import { Markdown } from "../ui/components/markdown";
+import { CodeBlock } from "../ui/components/code-block";
 import { highlightMarkdownCode } from "../ui/lib/code-highlight";
 
 it("renders an unlabeled single-line fence as a code block, preserving inline code", () => {

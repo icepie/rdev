@@ -61,6 +61,13 @@ requires explicit confirmation and does not use a recycle bin.
 Directory pagination reuses short-lived snapshots (10 seconds, eight directories,
 32 MiB total per client). First-page requests refresh the snapshot; local mutations
 invalidate it. Rust and Android uploads reject concurrent writers to one path.
+Rust and Android keep upload registries separate from per-upload I/O locks. A
+destination lease covers initialization, hashing, sync, replacement and cleanup;
+slow work for one target does not hold the registry lock for other targets.
+Android dispatches each task in FIFO order with four workers, at most 128 pending
+operations and a 1 MiB pending-byte budget. Admission applies backpressure rather
+than dropping chunks or accumulating an unbounded queue. Disconnect discards
+queued work and invalidates old upload handles while active cleanup retains leases.
 
 ## Direct transfers and bounded disk downloads
 
@@ -103,6 +110,12 @@ aborts uncommitted writes; it is not reported as a saved partial download. Once
 the final writer close begins, the task enters **saving** and pause, resume,
 cancel and clear are disabled until close succeeds or fails. This irreversible
 commit cannot be represented as a successful cancellation.
+Each start/resume gets a fresh wire identity and preparation deadline. Preparation
+(including device-side hashing) and final verification each allow five minutes;
+only the receiving phase uses the 12-second no-progress timeout. Successful byte
+progress refreshes that receive deadline. A stalled transfer that resumes returns
+to preparation rather than inheriting its expired receive timer. Replies and
+asynchronous completions from a previous attempt cannot alter the replacement.
 Pause/fallback resumes from committed bytes, not merely received bytes. A browser
 reload cannot restore the destination handle: select a destination again and
 restart. Before saving begins, cancel aborts the writable destination. Devices must

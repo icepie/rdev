@@ -1,5 +1,8 @@
 # rdev-client one-click runner for Windows
 # Compatible with: PowerShell 2.0+ (Win7/8/8.1/10/11)
+# Requires locally trusted OpenSSL 3.0+ (Ed25519) on PATH, including Win7/PS2.
+# Obtain this bootstrap over trusted HTTPS or from a verified checkout: release
+# signatures do not authenticate the script itself. No verifier is downloaded.
 #
 # One-liner:
 #   powershell -Command "iwr -useb http://SERVER/run.ps1 | iex; RDev"
@@ -172,36 +175,57 @@ function Exit-RDevCacheLock([string]$Lock) {
     if ($Lock) { Remove-Item -Recurse -Force $Lock -EA SilentlyContinue }
 }
 
-function Test-RDevCache([string]$RunPath, [string]$CacheDir) {
-    $Complete = Join-Path $CacheDir '.complete'
-    # The runtime marker invalidates caches created before companion DLLs
-    # were preserved for the Rust GPU client.
-    $RuntimeComplete = Join-Path $CacheDir '.runtime-complete'
-    $f = Get-Item $RunPath -EA SilentlyContinue
-    return ((Test-Path $Complete) -and (Test-Path $RuntimeComplete) -and $f -and $f.Length -gt 0)
+function Assert-RDevVerifier {
+    $Command = Get-Command openssl -CommandType Application -EA SilentlyContinue | Select-Object -First 1
+    if (-not $Command) { throw 'Install trusted OpenSSL 3.0+ with Ed25519 support and put openssl.exe on PATH. No unsigned verifier will be downloaded.' }
+    $script:OpenSSL = $Command.Definition
+    $Version = & $script:OpenSSL version
+    if ($LASTEXITCODE -ne 0 -or $Version -notmatch '^OpenSSL ([0-9]+)\.' -or [int]$Matches[1] -lt 3) {
+        throw 'Install trusted OpenSSL 3.0+ on PATH; older OpenSSL/LibreSSL cannot verify Ed25519 with pkeyutl -rawin.'
+    }
 }
 
-function Publish-RDevCache([string]$SourceRunPath, [string]$CacheDir, [string]$CacheRunName) {
+function Test-RDevSignature([string]$Path, [string]$Signature) {
+    $Scratch = Join-Path $env:TEMP ('rdev-verify-' + [Guid]::NewGuid().ToString('N'))
+    try {
+        New-Item -ItemType Directory -Path $Scratch -ErrorAction Stop | Out-Null
+        $Sig = [Convert]::FromBase64String([IO.File]::ReadAllText($Signature).Trim())
+        if ($Sig.Length -ne 64) { return $false }
+        # DER SubjectPublicKeyInfo wrapping internal/updater/updater.go's key.
+        $Key = [Convert]::FromBase64String('MCowBQYDK2VwAyEAPa4+y7+NfEePgrARhyqEUxQleTgClgUpelbvcoi77Qk=')
+        $KeyPath = Join-Path $Scratch 'key.der'
+        $SigPath = Join-Path $Scratch 'signature.bin'
+        [IO.File]::WriteAllBytes($KeyPath, $Key)
+        [IO.File]::WriteAllBytes($SigPath, $Sig)
+        & $script:OpenSSL pkeyutl -verify -pubin -inkey $KeyPath -keyform DER -rawin -in $Path -sigfile $SigPath 2>&1 | Out-Null
+        return ($LASTEXITCODE -eq 0)
+    } catch { return $false } finally {
+        Remove-Item -Recurse -Force $Scratch -EA SilentlyContinue
+    }
+}
+
+function Test-RDevCache([string]$OutPath, [string]$CacheDir) {
+    # Copy first, then verify exactly the bytes that will be extracted/executed.
+    # Markers and old extracted executable/DLL caches never establish trust.
+    try {
+        Copy-Item (Join-Path $CacheDir 'payload') $OutPath -Force -ErrorAction Stop
+        Copy-Item (Join-Path $CacheDir 'payload.sig') "$OutPath.sig" -Force -ErrorAction Stop
+        return (Test-RDevSignature $OutPath "$OutPath.sig")
+    } catch { return $false }
+}
+
+function Publish-RDevCache([string]$Payload, [string]$CacheDir) {
     $Lock = Enter-RDevCacheLock $CacheDir
-    if (-not $Lock) { return '' }
+    if (-not $Lock) { return }
     try {
         $Part = "$CacheDir.part"
         Remove-Item -Recurse -Force $Part -EA SilentlyContinue
-        New-Item -ItemType Directory -Force -Path $Part | Out-Null
-        Copy-Item $SourceRunPath (Join-Path $Part $CacheRunName) -Force
-
-        # Rust GPU Windows packages require lib*.dll beside the executable.
-        # Keep this PS 2.0-compatible: avoid the newer Get-ChildItem -File.
-        $SourceDir = Split-Path $SourceRunPath -Parent
-        foreach ($Dll in (Get-ChildItem -Path $SourceDir -Filter '*.dll' -EA SilentlyContinue | Where-Object { -not $_.PSIsContainer })) {
-            Copy-Item $Dll.FullName (Join-Path $Part $Dll.Name) -Force
-        }
-
-        New-Item -ItemType File -Force -Path (Join-Path $Part '.complete') | Out-Null
-        New-Item -ItemType File -Force -Path (Join-Path $Part '.runtime-complete') | Out-Null
+        New-Item -ItemType Directory -Path $Part -ErrorAction Stop | Out-Null
+        Copy-Item $Payload (Join-Path $Part 'payload') -ErrorAction Stop
+        Copy-Item "$Payload.sig" (Join-Path $Part 'payload.sig') -ErrorAction Stop
+        New-Item -ItemType File -Path (Join-Path $Part '.complete') | Out-Null
         Remove-Item -Recurse -Force $CacheDir -EA SilentlyContinue
-        Move-Item $Part $CacheDir -Force
-        return (Join-Path $CacheDir $CacheRunName)
+        Move-Item $Part $CacheDir -ErrorAction Stop
     } finally {
         Exit-RDevCacheLock $Lock
     }
@@ -211,7 +235,18 @@ function Publish-RDevCache([string]$SourceRunPath, [string]$CacheDir, [string]$C
 $script:WinPTYVersion = '0.4.3'
 $script:WinPTYAsset = "winpty-$script:WinPTYVersion-msvc2015.zip"
 $script:WinPTYRepo = 'rprichard/winpty'
-$script:WinPTYDir = Join-Path $env:TEMP 'rdev-winpty'
+# Pinned from the official GitHub HTTPS release asset (3892280), 2375169 bytes.
+# No checksum is accepted from a download server at runtime.
+$script:WinPTYHash = '35a48ece2ff4acdcbc8299d4920de53eb86b1fb41e64d2fe5ae7898931bcee89'
+
+function Test-WinPTYArchive([string]$Path) {
+    try {
+        $Stream = [IO.File]::OpenRead($Path)
+        $Hash = [Security.Cryptography.SHA256]::Create()
+        try { return ([BitConverter]::ToString($Hash.ComputeHash($Stream)).Replace('-', '').ToLowerInvariant() -eq $script:WinPTYHash) }
+        finally { $Stream.Dispose(); $Hash.Dispose() }
+    } catch { return $false }
+}
 
 function Get-WindowsVersion {
     $major = 0
@@ -263,56 +298,41 @@ function Expand-ZipLegacy([string]$Zip, [string]$Dest) {
 function Test-RDevPackage([string]$Path, [string]$PackageKind) {
     $f = Get-Item $Path -EA SilentlyContinue
     if (-not $f -or $f.Length -le 0) { return $false }
-    if ($PackageKind -ne 'zip') { return $true }
-    try {
-        Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction Stop
-        $zip = [System.IO.Compression.ZipFile]::OpenRead($Path)
-        try {
-            foreach ($entry in $zip.Entries) {
-                if ($entry.FullName -match '(^|/)rdev-client-gpu\.exe$') { return $true }
-            }
-        } finally {
-            $zip.Dispose()
-        }
-    } catch {}
-    Write-Host "  Downloaded package does not contain rdev-client-gpu.exe" -ForegroundColor DarkGray
-    return $false
+    # Signature verification has already authenticated the entire payload.
+    # Check archive contents during extraction, including the PS2 COM path.
+    return $true
 }
 
 function Install-WinPTYIfRequired([string]$Arch, [string]$Mirror) {
     if (-not (Requires-WinPTY)) { return '' }
-    $Dll = Join-Path $script:WinPTYDir 'winpty.dll'
-    $Agent = Join-Path $script:WinPTYDir 'winpty-agent.exe'
-    if ((Test-Path $Dll) -and (Test-Path $Agent)) { return $script:WinPTYDir }
 
     Write-Host "  Legacy Windows detected, preparing WinPTY..." -ForegroundColor Cyan
-    $Tmp = Join-Path $env:TEMP $script:WinPTYAsset
+    $Tmp = Join-Path $WorkDir $script:WinPTYAsset
+    $CachedArchive = Join-Path $env:TEMP $script:WinPTYAsset
+    if (Test-Path $CachedArchive) { Copy-Item $CachedArchive $Tmp -Force -ErrorAction Stop }
     $Base = "https://github.com/$script:WinPTYRepo/releases/download/$script:WinPTYVersion/$script:WinPTYAsset"
-    $OK = $false
-    if ($Mirror -eq 'auto') {
+    $OK = Test-WinPTYArchive $Tmp
+    if (-not $OK -and $Mirror -eq 'auto') {
         foreach ($M in $script:Mirrors) {
             Write-Host "  Trying WinPTY via $M..." -ForegroundColor DarkGray
-            if (Dl (Convert-RDevMirrorUrl $M $Base) $Tmp) { $f = Get-Item $Tmp -EA SilentlyContinue; if ($f -and $f.Length -gt 0) { $OK = $true; break } }
+            if ((Dl (Convert-RDevMirrorUrl $M $Base) $Tmp) -and (Test-WinPTYArchive $Tmp)) { $OK = $true; break }
         }
-    } elseif ($Mirror -ne 'none' -and $Mirror -ne '') {
+    } elseif (-not $OK -and $Mirror -ne 'none' -and $Mirror -ne '') {
         Write-Host "  Trying WinPTY via $Mirror..." -ForegroundColor DarkGray
-        if (Dl (Convert-RDevMirrorUrl $Mirror $Base) $Tmp) { $f = Get-Item $Tmp -EA SilentlyContinue; if ($f -and $f.Length -gt 0) { $OK = $true } }
+        if ((Dl (Convert-RDevMirrorUrl $Mirror $Base) $Tmp) -and (Test-WinPTYArchive $Tmp)) { $OK = $true }
     }
     if (-not $OK) {
         Write-Host "  Trying WinPTY via github.com..." -ForegroundColor DarkGray
-        if (Dl $Base $Tmp) { $f = Get-Item $Tmp -EA SilentlyContinue; if ($f -and $f.Length -gt 0) { $OK = $true } }
+        if ((Dl $Base $Tmp) -and (Test-WinPTYArchive $Tmp)) { $OK = $true }
     }
-    if (-not $OK) { Write-Warning "WinPTY download failed; falling back to pipe shell"; return '' }
-
-    $Extract = Join-Path $env:TEMP 'rdev-winpty-extract'
+    if (-not $OK) { throw 'WinPTY archive failed pinned SHA-256 verification; refusing unsigned legacy runtime.' }
+    Copy-Item $Tmp $CachedArchive -Force -ErrorAction Stop
+    $Extract = Join-Path $WorkDir 'winpty'
     if (-not (Expand-ZipLegacy $Tmp $Extract)) { Write-Warning "WinPTY unzip failed; falling back to pipe shell"; return '' }
     $SrcArch = if ($Arch -eq 'arm64') { 'x64' } elseif ($Arch -eq 'amd64') { 'x64' } else { 'ia32' }
     $Src = Join-Path $Extract (Join-Path $SrcArch 'bin')
-    New-Item -ItemType Directory -Force -Path $script:WinPTYDir | Out-Null
-    Copy-Item (Join-Path $Src 'winpty.dll') $script:WinPTYDir -Force
-    Copy-Item (Join-Path $Src 'winpty-agent.exe') $script:WinPTYDir -Force
-    Write-Host "  OK WinPTY ready" -ForegroundColor Green
-    return $script:WinPTYDir
+    Write-Host "  OK verified WinPTY ready" -ForegroundColor Green
+    return $Src
 }
 
 function Test-RDevAdministrator {
@@ -392,6 +412,7 @@ function global:RDev {
     $Server = $Server.Trim()
     if ($Server.StartsWith('{')) { $Server = '' }
     if (-not $Server) { Write-Error "Server is required"; return }
+    Assert-RDevVerifier
 
     # An explicit -Password always wins.
     if ($RandomPassword -and -not $Password) {
@@ -473,33 +494,36 @@ function global:RDev {
             return $true
         } catch {
             Write-Host "  Download error: $($_.Exception.Message)" -ForegroundColor DarkGray
-            try { if ($_.Exception.InnerException) { Write-Host "  Inner error: $($_.Exception.InnerException.Message)" -ForegroundColor DarkGray } } catch {}
             return $false
         }
     }
+    function Dl-Signed([string]$Url, [string]$SignatureUrl, [string]$Out) {
+        if ((Dl $Url $Out) -and (Dl $SignatureUrl "$Out.sig") -and (Test-RDevSignature $Out "$Out.sig")) { return $true }
+        Remove-Item $Out, "$Out.sig" -Force -EA SilentlyContinue
+        return $false
+    }
 
     # ── Download (RDev server proxy → mirror → github) ───────
-    if ($PackageKind -eq 'zip') { $OutPath = Join-Path $env:TEMP "rdev-client-gpu-$SafeTag-windows-$Arch.zip" } else { $OutPath = Join-Path $env:TEMP "$SafeTag-$Asset" }
+    $WorkDir = Join-Path $env:TEMP ('rdev-run-' + [Guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $WorkDir -ErrorAction Stop | Out-Null
+    try {
+    $OutPath = Join-Path $WorkDir $Asset
     $OK = $false
 
     if ($Client -eq 'rs') {
         $ClientName = 'rdev-client-gpu'
         $CacheKey = "rs-$SafeTag-windows-$Arch-$(Convert-RDevSafeName $Asset)"
-        $CacheRunName = 'rdev-client-gpu.exe'
     } elseif ($Client -eq 'cgo') {
         $ClientName = 'rdev-client-cgo'
         $CacheKey = "cgo-$SafeTag-windows-$Arch-$(Convert-RDevSafeName $Asset)"
-        $CacheRunName = $Asset
     } else {
         $ClientName = 'rdev-client'
         $CacheKey = "go-$SafeTag-windows-$Arch-$(Convert-RDevSafeName $Asset)"
-        $CacheRunName = $Asset
     }
     $CacheDir = Join-Path $CacheBase $CacheKey
-    $CacheRunPath = Join-Path $CacheDir $CacheRunName
-    if (Test-RDevCache $CacheRunPath $CacheDir) {
-        $RunPath = $CacheRunPath
-        Write-Host "  Using cached $ClientName ($ResolvedTag, windows/$Arch)." -ForegroundColor Green
+    if (Test-RDevCache $OutPath $CacheDir) {
+        $OK = $true
+        Write-Host "  Using verified cached $ClientName ($ResolvedTag, windows/$Arch)." -ForegroundColor Green
     } else {
     Write-Host "  Downloading $ClientName package (windows/$Arch)..." -ForegroundColor Cyan
 
@@ -508,7 +532,7 @@ function global:RDev {
     $ReleaseUrl = Get-RDevReleaseUrl $Server $Asset $Tag
     if ($ReleaseUrl) {
         Write-Host "  Selecting fastest release source..." -ForegroundColor DarkGray
-        if (Dl $ReleaseUrl $OutPath) {
+        if (Dl-Signed $ReleaseUrl (Get-RDevReleaseUrl $Server "$Asset.sig" $Tag) $OutPath) {
             if (Test-RDevPackage $OutPath $PackageKind) { $OK = $true; Write-Host "  OK via measured release source" -ForegroundColor Green }
         }
         if (-not $OK) { Remove-Item $OutPath -Force -EA SilentlyContinue }
@@ -517,14 +541,14 @@ function global:RDev {
     if ($Mirror -eq 'auto' -and -not $OK) {
         foreach ($M in $script:Mirrors) {
             Write-Host "  Trying $M..." -ForegroundColor DarkGray
-            if (Dl (Convert-RDevMirrorUrl $M $GH_URL) $OutPath) {
+            if (Dl-Signed (Convert-RDevMirrorUrl $M $GH_URL) (Convert-RDevMirrorUrl $M "$GH_URL.sig") $OutPath) {
                 if (Test-RDevPackage $OutPath $PackageKind) { $OK = $true; Write-Host "  OK via $M" -ForegroundColor Green; break }
             }
             Remove-Item $OutPath -Force -EA SilentlyContinue
         }
     } elseif ($Mirror -ne 'none' -and $Mirror -ne '' -and -not $OK) {
         Write-Host "  Trying $Mirror..." -ForegroundColor DarkGray
-        if (Dl (Convert-RDevMirrorUrl $Mirror $GH_URL) $OutPath) {
+        if (Dl-Signed (Convert-RDevMirrorUrl $Mirror $GH_URL) (Convert-RDevMirrorUrl $Mirror "$GH_URL.sig") $OutPath) {
             if (Test-RDevPackage $OutPath $PackageKind) { $OK = $true; Write-Host "  OK via $Mirror" -ForegroundColor Green }
         }
         if (-not $OK) { Remove-Item $OutPath -Force -EA SilentlyContinue }
@@ -536,7 +560,7 @@ function global:RDev {
         $ProxyUrl = Get-RDevProxyUrl $Server $Asset $Tag
         if ($ProxyUrl) {
             Write-Host "  Trying RDev server proxy..." -ForegroundColor DarkGray
-            if (Dl $ProxyUrl $OutPath) {
+            if (Dl-Signed $ProxyUrl (Get-RDevProxyUrl $Server "$Asset.sig" $Tag) $OutPath) {
                 if (Test-RDevPackage $OutPath $PackageKind) { $OK = $true; Write-Host "  OK via RDev server proxy" -ForegroundColor Green }
             }
             if (-not $OK) { Remove-Item $OutPath -Force -EA SilentlyContinue }
@@ -545,24 +569,23 @@ function global:RDev {
 
     if (-not $OK) {
         Write-Host "  Trying github.com..." -ForegroundColor DarkGray
-        if (Dl $GH_URL $OutPath) {
+        if (Dl-Signed $GH_URL "$GH_URL.sig" $OutPath) {
             if (Test-RDevPackage $OutPath $PackageKind) { $OK = $true; Write-Host "  OK via github.com" -ForegroundColor Green }
         }
     }
 
-    if (-not $OK) { Write-Error "Download failed"; return }
+    if (-not $OK) { throw 'No source supplied a valid Ed25519-signed release. Missing/bad signatures are rejected; install trusted OpenSSL 3.0+ with Ed25519 support if unavailable.' }
+    Publish-RDevCache $OutPath $CacheDir
+    }
 
     if ($PackageKind -eq 'zip') {
-        $ExtractDir = Join-Path $env:TEMP "rdev-client-gpu-$SafeTag-windows-$Arch"
+        $ExtractDir = Join-Path $WorkDir 'runtime'
         if (-not (Expand-ZipLegacy $OutPath $ExtractDir)) { Write-Error "Package unzip failed"; return }
         $Exe = Get-ChildItem -Path $ExtractDir -Recurse -Filter 'rdev-client-gpu.exe' -EA SilentlyContinue | Select-Object -First 1
         if (-not $Exe) { Write-Error "rdev-client-gpu.exe not found in package"; return }
         $RunPath = $Exe.FullName
     } else {
         $RunPath = $OutPath
-    }
-    $Published = Publish-RDevCache $RunPath $CacheDir $CacheRunName
-    if ($Published) { $RunPath = $Published }
     }
 
     $WinPTYDir = Install-WinPTYIfRequired $Arch $Mirror
@@ -583,7 +606,10 @@ function global:RDev {
 
     if ($Elevate) {
         try {
-            Start-Process -FilePath $RunPath -ArgumentList $A -Verb RunAs | Out-Null
+            # Start-Process joins ArgumentList without escaping. Quote each
+            # Windows argv element, doubling backslashes before quotes/end.
+            $CommandLine = ($A | ForEach-Object { '"' + ($_ -replace '(\\*)"', '$1$1\"' -replace '(\\+)$', '$1$1') + '"' }) -join ' '
+            Start-Process -FilePath $RunPath -ArgumentList $CommandLine -Verb RunAs -Wait | Out-Null
             return
         } catch {
             Write-Warning "Elevation failed; continuing in normal user mode: $($_.Exception.Message)"
@@ -591,6 +617,9 @@ function global:RDev {
     }
 
     & $RunPath @A
+    } finally {
+        Remove-Item -Recurse -Force $WorkDir -EA SilentlyContinue
+    }
 }
 
 # ── Banner: show usage hint when piped via iex ──────────────

@@ -519,7 +519,13 @@ Examples:
 	updater.Start(context.Background(), updater.Config{App: "server", Version: version, Enabled: autoUpdate, Interval: updateInterval})
 
 	log.Printf("HTTP server listening on %s", httpAddr)
-	httpServer := &http.Server{Handler: mux}
+	// Bound idle/partial-header connections without limiting streaming bodies,
+	// SSE responses, or upgraded WebSocket sessions.
+	httpServer := &http.Server{
+		Handler:           mux,
+		ReadHeaderTimeout: 5 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
 	shutdown, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stopSignals()
 	shutdownDone := make(chan struct{})

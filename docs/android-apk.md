@@ -213,6 +213,12 @@ Verified on an Android 15 x86_64 emulator: real Rhino execution and console logs
 
 Use JDK 21 and an Android SDK with accepted licenses. The pinned upstream wrapper supplies Gradle; required SDK/NDK components are resolved by the Android build. The overlay keeps the upstream checkout unmodified and uses its pinned shared dependencies.
 
+For headless builds, point `JAVA_HOME` at a regular JDK 21 distribution (verified
+with Temurin), not Android Studio's JBR. The upstream platform plugin can identify
+JBR as IntelliJ IDEA version `0` outside the IDE and reject it. A newer system JDK
+can instead trigger an additional toolchain download; using the installed JDK 21
+avoids both issues without bypassing the upstream compatibility checks.
+
 ```sh
 git submodule update --init --recursive
 export ANDROID_HOME="${ANDROID_HOME:-$HOME/Android/Sdk}"

@@ -39,7 +39,11 @@ final class AndroidFileManager {
     private static final int FINGERPRINT_LIMIT = 32;
     private final RDevAgentService service;
     private final Map<String, DirectorySnapshot> directoryCache = new LinkedHashMap<>();
-    private final Map<String, Upload> uploads = new ConcurrentHashMap<>();
+    private final Object uploadRegistry = new Object();
+    private final Map<String, Upload> uploads = new LinkedHashMap<>();
+    private final Map<File, Upload> uploadTargets = new LinkedHashMap<>();
+    private final AndroidFileDispatcher dispatcher = new AndroidFileDispatcher();
+    private volatile boolean closed;
     private final Map<String, Download> downloads = new ConcurrentHashMap<>();
     private final LinkedHashMap<String, Fingerprint> fingerprints = new LinkedHashMap<>();
 
@@ -87,68 +91,151 @@ final class AndroidFileManager {
         }
     }
 
-    synchronized void handleUploadStart(JSONObject msg) {
+    void dispatch(String taskId, Runnable operation) {
+        dispatcher.execute(taskId, operation);
+    }
+
+    void dispatchUploadChunk(String taskId, long offset, byte[] data) {
+        // Reject oversized chunks in task order without retaining their payloads.
+        byte[] chunk = data != null && data.length <= CHUNK_SIZE ? data : null;
+        dispatcher.execute(taskId, chunk == null ? 0 : chunk.length,
+            () -> handleUploadChunk(taskId, offset, chunk));
+    }
+
+    void handleUploadStart(JSONObject msg) {
         String taskId = msg.optString("taskId", "");
         if (taskId.isEmpty()) return;
         String path = msg.optString("path", "");
         if (path.isEmpty()) path = safeJoin(msg.optString("parentPath", ""), msg.optString("name", ""));
-        String sha256 = msg.optString("sha256", "");
-        long expected = msg.optLong("size", -1);
+        Upload upload = null;
         try {
-            if (!validSha256(sha256) || expected < 0) throw new IOException("invalid upload integrity metadata");
-            File target = mutationTarget(path);
-            File parent = target.getParentFile();
-            if (parent != null && !parent.exists() && !parent.mkdirs()) throw new IOException("mkdir failed: " + parent);
-            if (uploads.containsKey(taskId)) throw new IOException("upload already active for this task");
-            for (Upload active : uploads.values()) if (active.target.equals(target)) throw new IOException("upload already active for this destination");
-            File part = new File(target.getPath() + ".rdevpart");
-            File sidecar = sidecar(part);
-            long offset = prepareUploadPartial(part, sidecar, sha256, expected, msg.optBoolean("restart", false));
-            if (offset > expected) offset = prepareUploadPartial(part, sidecar, sha256, expected, true);
-            String prefixSha256 = hashPrefix(part, offset);
-            FileOutputStream out = new FileOutputStream(part, true);
-            Upload upload = new Upload(target, part, sidecar, out, expected, sha256, offset);
-            uploads.put(taskId, upload);
-            service.sendText(new JSONObject().put("type", "file_upload_ready").put("taskId", taskId)
-                .put("path", target.getAbsolutePath()).put("offset", offset).put("size", expected)
-                .put("sha256", sha256).put("prefixSha256", prefixSha256));
+            upload = reserveUpload(taskId, path, msg.optLong("size", -1), msg.optString("sha256", ""));
+            synchronized (upload) {
+                String prefixSha256 = initializeUpload(upload, msg.optBoolean("restart", false));
+                upload.requireActive();
+                service.sendText(new JSONObject().put("type", "file_upload_ready").put("taskId", taskId)
+                    .put("path", upload.target.getAbsolutePath()).put("offset", upload.offset).put("size", upload.size)
+                    .put("sha256", upload.sha256).put("prefixSha256", prefixSha256));
+            }
         } catch (Exception e) {
+            if (upload != null) releaseUpload(upload);
             sendError(taskId, path, e.getMessage());
         }
     }
 
-    synchronized void handleUploadChunk(String taskId, long offset, byte[] data) {
-        Upload upload = uploads.get(taskId);
+    Upload reserveUpload(String taskId, String path, long size, String sha256) throws IOException {
+        if (taskId.isEmpty() || !validSha256(sha256) || size < 0) throw new IOException("invalid upload integrity metadata");
+        File target = mutationTarget(path);
+        Upload upload = new Upload(taskId, target, size, sha256);
+        // Reserve before touching the shared partial or sidecar, including resume hashing.
+        synchronized (uploadRegistry) {
+            if (closed) throw new IOException("file connection closed");
+            if (uploads.containsKey(taskId)) throw new IOException("upload already active for this task");
+            if (uploadTargets.containsKey(target)) throw new IOException("upload already active for this destination");
+            uploads.put(taskId, upload);
+            uploadTargets.put(target, upload);
+        }
+        return upload;
+    }
+
+    String initializeUpload(Upload upload, boolean restart) throws Exception {
+        synchronized (upload) {
+            try {
+                upload.requireActive();
+                File parent = upload.target.getParentFile();
+                if (parent != null && !parent.isDirectory() && !parent.mkdirs() && !parent.isDirectory())
+                    throw new IOException("mkdir failed: " + parent);
+                upload.offset = prepareUploadPartial(upload.part, upload.sidecar, upload.sha256, upload.size, restart);
+                if (upload.offset > upload.size)
+                    upload.offset = prepareUploadPartial(upload.part, upload.sidecar, upload.sha256, upload.size, true);
+                String prefix = hashPrefix(upload.part, upload.offset);
+                upload.requireActive();
+                upload.out = new FileOutputStream(upload.part, true);
+                return prefix;
+            } catch (Exception e) {
+                releaseUpload(upload);
+                throw e;
+            }
+        }
+    }
+
+    private Upload findUpload(String taskId) {
+        synchronized (uploadRegistry) { return uploads.get(taskId); }
+    }
+
+    void handleUploadChunk(String taskId, long offset, byte[] data) {
+        Upload upload = findUpload(taskId);
         if (upload == null) { sendError(taskId, "", "upload not found"); return; }
+        synchronized (upload) {
+            try {
+                writeUpload(upload, offset, data);
+                upload.requireActive();
+                service.sendBinaryOffset(RDevProtocol.BIN_FILE_UPLOAD_ACK, taskId, upload.offset, new byte[0]);
+            } catch (Exception e) {
+                releaseUpload(upload);
+                sendError(taskId, upload.target.getAbsolutePath(), e.getMessage());
+            }
+        }
+    }
+
+    void writeUpload(Upload upload, long offset, byte[] data) throws IOException {
+        synchronized (upload) {
+            try {
+                upload.requireActive();
+                if (upload.out == null) throw new IOException("upload not ready");
+                if (offset != upload.offset) throw new IOException("unexpected offset " + offset + ", want " + upload.offset);
+                if (!validUploadChunk(offset, data == null ? 0 : data.length, upload.size)) throw new IOException("invalid upload chunk size");
+                upload.out.write(data);
+                upload.offset += data.length;
+            } catch (IOException e) {
+                releaseUpload(upload);
+                throw e;
+            }
+        }
+    }
+
+    void handleUploadEnd(JSONObject msg) {
+        String taskId = msg.optString("taskId", "");
+        Upload upload = findUpload(taskId);
+        if (upload == null) { sendError(taskId, msg.optString("path", ""), "upload not found"); return; }
         try {
-            if (offset != upload.offset) throw new IOException("unexpected offset " + offset + ", want " + upload.offset);
-            if (!validUploadChunk(offset, data == null ? 0 : data.length, upload.size)) throw new IOException("invalid upload chunk size");
-            upload.out.write(data);
-            upload.offset += data.length;
-            service.sendBinaryOffset(RDevProtocol.BIN_FILE_UPLOAD_ACK, taskId, upload.offset, new byte[0]);
+            finishUpload(upload, AndroidFileManager::atomicReplace);
+            if (!closed) service.sendText(new JSONObject().put("type", "file_transfer_end").put("taskId", taskId)
+                .put("path", upload.target.getAbsolutePath()).put("size", upload.offset).put("sha256", upload.sha256).put("success", true));
         } catch (Exception e) {
-            uploads.remove(taskId);
-            upload.close();
             sendError(taskId, upload.target.getAbsolutePath(), e.getMessage());
         }
     }
 
-    synchronized void handleUploadEnd(JSONObject msg) {
-        String taskId = msg.optString("taskId", "");
-        Upload upload = uploads.remove(taskId);
-        if (upload == null) { sendError(taskId, msg.optString("path", ""), "upload not found"); return; }
-        try {
-            upload.out.getFD().sync();
+    void finishUpload(Upload upload, UploadReplacer replacer) throws Exception {
+        synchronized (upload) {
+            try {
+                upload.requireActive();
+                if (upload.out == null) throw new IOException("upload not ready");
+                upload.out.getFD().sync();
+                upload.close();
+                if (upload.offset != upload.size || upload.part.length() != upload.size) throw new IOException("upload size mismatch");
+                publishUploadPart(upload.part, upload.target, upload.sidecar, upload.size, upload.sha256, (part, target) -> {
+                    upload.requireActive();
+                    replacer.replace(part, target);
+                });
+                synchronized (directoryCache) { directoryCache.clear(); }
+                synchronized (fingerprints) { fingerprints.remove(upload.target.getPath()); }
+            } finally {
+                // Retain the target lease until sync, hashing, rename and sidecar cleanup finish.
+                releaseUpload(upload);
+            }
+        }
+    }
+
+    private void releaseUpload(Upload upload) {
+        synchronized (upload) {
+            upload.finished = true;
             upload.close();
-            if (upload.offset != upload.size || upload.part.length() != upload.size) throw new IOException("upload size mismatch");
-            publishUploadPart(upload.part, upload.target, upload.sidecar, upload.size, upload.sha256, AndroidFileManager::atomicReplace);
-            if (upload.sidecar.exists()) upload.sidecar.delete();
-            synchronized (directoryCache) { directoryCache.clear(); }
-            synchronized (fingerprints) { fingerprints.remove(upload.target.getCanonicalPath()); }
-            service.sendText(new JSONObject().put("type", "file_transfer_end").put("taskId", taskId)
-                .put("path", upload.target.getAbsolutePath()).put("size", upload.offset).put("sha256", upload.sha256).put("success", true));
-        } catch (Exception e) {
-            sendError(taskId, upload.target.getAbsolutePath(), e.getMessage());
+            synchronized (uploadRegistry) {
+                if (uploads.get(upload.taskId) == upload) uploads.remove(upload.taskId);
+                if (uploadTargets.get(upload.target) == upload) uploadTargets.remove(upload.target);
+            }
         }
     }
 
@@ -157,8 +244,11 @@ final class AndroidFileManager {
         String path = canonicalPath(msg.optString("path", ""));
         if (taskId.length() == 0 || path.length() == 0) return;
         Download download = new Download();
-        Download old = downloads.put(taskId, download);
-        if (old != null) old.cancelled = true;
+        synchronized (uploadRegistry) {
+            if (closed) return;
+            Download old = downloads.put(taskId, download);
+            if (old != null) old.cancelled = true;
+        }
         new Thread(() -> download(taskId, path, msg.optLong("offset", 0), msg.optLong("length", 0), msg.optString("sha256", ""), download), "rdev-file-download").start();
     }
 
@@ -250,22 +340,35 @@ final class AndroidFileManager {
         }
     }
 
-    synchronized void cancel(String taskId) {
-        Upload upload = uploads.remove(taskId);
-        if (upload != null) upload.close();
+    void cancel(String taskId) {
+        Upload upload;
+        synchronized (uploadRegistry) {
+            upload = uploads.get(taskId);
+            if (upload != null) upload.cancelled = true;
+        }
+        if (upload != null) releaseUpload(upload);
         Download download = downloads.remove(taskId);
         if (download != null) download.cancelled = true;
     }
 
-    synchronized void closeAll() {
-        List<String> ids = new ArrayList<>(uploads.keySet());
-        ids.addAll(downloads.keySet());
-        for (String id : ids) cancel(id);
+    void closeAll() {
+        List<Upload> active;
+        synchronized (uploadRegistry) {
+            closed = true;
+            active = new ArrayList<>(uploads.values());
+            for (Upload upload : active) upload.cancelled = true;
+        }
+        dispatcher.close();
+        for (Download download : downloads.values()) download.cancelled = true;
+        downloads.clear();
+        // Never wait for an upload lock with the registry held.
+        for (Upload upload : active) releaseUpload(upload);
     }
 
     private void download(String taskId, String path, long offset, long length, String requestedSha256, Download download) {
         File file = new File(path);
         try (FileInputStream in = new FileInputStream(file)) {
+            if (download.cancelled) return;
             if (!file.isFile()) throw new IOException("cannot download directory");
             Fingerprint fingerprint = fingerprint(file);
             long size = fingerprint.size;
@@ -275,6 +378,7 @@ final class AndroidFileManager {
             if (offset > 0 && !validSha256(requestedSha256)) throw new IOException("resumed download requires source SHA-256");
             long skipped = in.skip(offset);
             if (skipped != offset) throw new IOException("seek failed");
+            if (download.cancelled) return;
             service.sendText(new JSONObject().put("type", "file_download_start").put("taskId", taskId)
                 .put("path", file.getAbsolutePath()).put("name", file.getName()).put("size", size)
                 .put("offset", offset).put("sha256", fingerprint.sha256).put("modTime", rfc3339(file.lastModified())));
@@ -303,7 +407,6 @@ final class AndroidFileManager {
             if (downloads.get(taskId) == download) downloads.remove(taskId);
         }
     }
-    private File sidecar(File part) { return new File(part.getPath() + ".meta"); }
 
     private boolean readSidecar(File sidecar, String sha256, long size) {
         try (BufferedReader reader = new BufferedReader(new InputStreamReader(new FileInputStream(sidecar), "UTF-8"))) {
@@ -525,6 +628,7 @@ final class AndroidFileManager {
     }
 
     private void sendError(String taskId, String path, String error) {
+        if (closed) return;
         try {
             service.sendText(new JSONObject()
                 .put("type", "file_transfer_error")
@@ -597,25 +701,33 @@ final class AndroidFileManager {
         boolean matches(File file) throws IOException { return sameSource(new Fingerprint(file)); }
     }
 
-    private static final class Upload {
+    static final class Upload {
+        final String taskId;
         final File target;
         final File part;
         final File sidecar;
-        final FileOutputStream out;
         final long size;
         final String sha256;
+        FileOutputStream out;
         long offset;
-        Upload(File target, File part, File sidecar, FileOutputStream out, long size, String sha256, long offset) {
+        volatile boolean cancelled;
+        boolean finished;
+        Upload(String taskId, File target, long size, String sha256) {
+            this.taskId = taskId;
             this.target = target;
-            this.part = part;
-            this.sidecar = sidecar;
-            this.out = out;
+            this.part = new File(target.getPath() + ".rdevpart");
+            this.sidecar = new File(part.getPath() + ".meta");
             this.size = size;
             this.sha256 = sha256;
-            this.offset = offset;
+        }
+        void requireActive() throws IOException {
+            if (cancelled || finished) throw new IOException("upload no longer active");
         }
         void close() {
-            try { out.close(); } catch (IOException ignored) {}
+            if (out != null) {
+                try { out.close(); } catch (IOException ignored) {}
+                out = null;
+            }
         }
     }
 

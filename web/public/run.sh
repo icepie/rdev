@@ -2,6 +2,9 @@
 # rdev-client one-click runner
 # Download → run, no install needed
 # Compatible with: POSIX sh, bash, dash, ash, zsh, ksh, busybox sh
+# Requires a locally trusted OpenSSL 3.0+ with Ed25519 support.
+# Signatures authenticate assets, not this bootstrap script: obtain it over
+# trusted HTTPS or from a verified checkout. Never download a verifier here.
 #
 # Usage:
 #   curl -sL http://SERVER:PORT/run.sh | sh -s --
@@ -298,9 +301,45 @@ download_ok() {
 }
 
 cache_complete() {
-    bin="$1"
-    dir="$2"
-    [ -f "$dir/.complete" ] && [ -s "$bin" ] && [ -x "$bin" ] && is_binary_file "$bin"
+    [ -f "$1/.complete" ] && [ -s "$1/payload" ] && [ -s "$1/payload.sig" ]
+}
+
+verify_asset() {
+    # SubjectPublicKeyInfo prefix + the same Ed25519 key as internal/updater.
+    printf '%s' 'MCowBQYDK2VwAyEAPa4+y7+NfEePgrARhyqEUxQleTgClgUpelbvcoi77Qk=' | openssl base64 -d -A > "$WORK_DIR/key.der" || return 1
+    tr -d '\r\n\t ' < "$2" > "$WORK_DIR/signature.b64" || return 1
+    [ "$(wc -c < "$WORK_DIR/signature.b64" | tr -d ' ')" = 88 ] || return 1
+    openssl base64 -d -A -in "$WORK_DIR/signature.b64" -out "$WORK_DIR/signature.bin" || return 1
+    [ "$(wc -c < "$WORK_DIR/signature.bin" | tr -d ' ')" = 64 ] || return 1
+    openssl pkeyutl -verify -pubin -inkey "$WORK_DIR/key.der" -keyform DER -rawin -in "$1" -sigfile "$WORK_DIR/signature.bin" >/dev/null 2>&1
+}
+
+download_signed() {
+    download_ok "$1" "$2" && dl "$3" "$2.sig" && verify_asset "$2" "$2.sig"
+}
+
+load_release() {
+    CACHE_DIR="$CACHE_BASE/$1"
+    PAYLOAD="$WORK_DIR/$2"
+    if cache_complete "$CACHE_DIR" && cp "$CACHE_DIR/payload" "$PAYLOAD" && cp "$CACHE_DIR/payload.sig" "$PAYLOAD.sig" && verify_asset "$PAYLOAD" "$PAYLOAD.sig"; then
+        echo "  Using verified cached release (${RESOLVED_TAG})." >&2
+        return
+    fi
+    rm -f "$PAYLOAD" "$PAYLOAD.sig"
+    download_with_fallback "$(release_url "$2")" "$PAYLOAD" "$2" || {
+        echo "Error: no valid Ed25519-signed release; reject missing/bad signatures. Install trusted OpenSSL 3.0+ with Ed25519 support if unavailable." >&2
+        exit 1
+    }
+    if cache_lock_acquire "$CACHE_DIR"; then
+        rm -rf "$CACHE_DIR.part"
+        mkdir -m 700 "$CACHE_DIR.part"
+        cp "$PAYLOAD" "$CACHE_DIR.part/payload"
+        cp "$PAYLOAD.sig" "$CACHE_DIR.part/payload.sig"
+        : > "$CACHE_DIR.part/.complete"
+        rm -rf "$CACHE_DIR"
+        mv "$CACHE_DIR.part" "$CACHE_DIR"
+        cache_lock_release
+    fi
 }
 
 # ── Determine version ──────────────────────────────────────
@@ -327,14 +366,14 @@ download_with_fallback() {
     proxy_url="$(release_proxy_url "$asset" 2>/dev/null || true)"
     if [ -n "$proxy_url" ]; then
         echo "  Trying RDev server proxy..." >&2
-        if download_ok "$proxy_url" "$out"; then ok=1; echo "  ok via RDev server proxy" >&2; fi
+        if download_signed "$proxy_url" "$out" "$(release_proxy_url "$asset.sig")"; then ok=1; echo "  ok via RDev server proxy" >&2; fi
         [ "$ok" = "1" ] || rm -f "$out" 2>/dev/null
     fi
     for m in $MIRRORS; do
         [ "$ok" = "1" ] && break
         [ -z "$m" ] && continue
         echo "  Trying ${m}..." >&2
-        if download_ok "$(mirror_url "$m" "$url")" "$out"; then
+        if download_signed "$(mirror_url "$m" "$url")" "$out" "$(mirror_url "$m" "$url.sig")"; then
             ok=1
             echo "  ok via ${m}" >&2
             break
@@ -343,7 +382,7 @@ download_with_fallback() {
     done
     if [ "$ok" = "0" ]; then
         echo "  Trying github.com..." >&2
-        if download_ok "$url" "$out"; then ok=1; echo "  ok via github.com" >&2; fi
+        if download_signed "$url" "$out" "$url.sig"; then ok=1; echo "  ok via github.com" >&2; fi
     fi
     [ "$ok" = "1" ]
 }
@@ -416,9 +455,19 @@ extract_zip() {
 
 # ── Resolve asset and download ─────────────────────────────
 TMPBASE="${TMPDIR:-/tmp}"
+command -v openssl >/dev/null 2>&1 || { echo "Error: install trusted OpenSSL 3.0+ with Ed25519 support" >&2; exit 1; }
+OPENSSL_MAJOR="$(openssl version 2>/dev/null | sed -n 's/^OpenSSL \([0-9][0-9]*\)\..*/\1/p')"
+if [ -z "$OPENSSL_MAJOR" ] || [ "$OPENSSL_MAJOR" -lt 3 ]; then
+    echo "Error: install trusted OpenSSL 3.0+; older OpenSSL/LibreSSL cannot verify Ed25519 with pkeyutl -rawin" >&2
+    exit 1
+fi
+umask 077
+WORK_DIR="$(mktemp -d "$TMPBASE/rdev-run.XXXXXXXX")" || exit 1
+trap 'cache_lock_release; rm -rf "$WORK_DIR"' 0
 CACHE_BASE="$TMPBASE/rdev-cache"
-mkdir -p "$CACHE_BASE" 2>/dev/null || true
+mkdir -p "$CACHE_BASE"
 resolve_latest_tag
+TAG="$RESOLVED_TAG"
 SAFE_TAG="$(safe_name "$RESOLVED_TAG")"
 RUN_BIN=""
 CLIENT_LABEL="rdev-client"
@@ -428,46 +477,28 @@ if [ "$RDEV_CLIENT" = "rs" ]; then
     case "$OS/$ARCH" in
         linux/amd64|linux/arm64)
             ASSET="rdev-client-gpu-${OS}-${ARCH}$(linux_rs_asset_suffix).tar.gz"
-            ARCHIVE="$TMPBASE/rdev-client-gpu-${SAFE_TAG}-${OS}-${ARCH}-$$.tar.gz"
             ;;
         android/amd64|android/arm64|android/armv7|android/386)
             ASSET_ARCH="$ARCH"
             [ "$ARCH" = "386" ] && ASSET_ARCH="x86"
             ASSET="rdev-client-gpu-${OS}-${ASSET_ARCH}.tar.gz"
-            ARCHIVE="$TMPBASE/rdev-client-gpu-${SAFE_TAG}-${OS}-${ASSET_ARCH}-$$.tar.gz"
             ;;
         darwin/amd64|darwin/arm64)
             ASSET="rdev-client-gpu-${OS}-${ARCH}.tar.gz"
-            ARCHIVE="$TMPBASE/rdev-client-gpu-${SAFE_TAG}-${OS}-${ARCH}-$$.tar.gz"
             ;;
         windows/amd64|windows/arm64)
             ASSET="rdev-client-gpu-windows-${ARCH}.zip"
-            ARCHIVE="$TMPBASE/rdev-client-gpu-${SAFE_TAG}-windows-${ARCH}-$$.zip"
             ;;
         *)
             echo "Error: performance Rust client is not published for ${OS}/${ARCH}" >&2
             exit 1
             ;;
     esac
-    GH_URL="$(release_url "$ASSET")"
     CACHE_KEY="rs-${SAFE_TAG}-${OS}-${ARCH}-$(safe_name "$ASSET")"
-    CACHE_DIR="$CACHE_BASE/$CACHE_KEY"
-    CACHE_BIN="$CACHE_DIR/rdev-client-gpu"
-    [ "$OS" = "windows" ] && CACHE_BIN="$CACHE_DIR/rdev-client-gpu.exe"
-    if cache_complete "$CACHE_BIN" "$CACHE_DIR"; then
-        RUN_BIN="$CACHE_BIN"
-        echo "  Using cached ${CLIENT_LABEL} (${RESOLVED_TAG}, ${OS}/${ARCH})." >&2
-    else
-    echo "  Downloading ${CLIENT_LABEL} package (${OS}/${ARCH})..." >&2
-    if ! download_with_fallback "$GH_URL" "$ARCHIVE" "$ASSET"; then
-        echo "Error: download failed" >&2
-        rm -f "$ARCHIVE" 2>/dev/null
-        exit 1
-    fi
-
-    EXTRACT_DIR="$TMPBASE/rdev-client-gpu-${SAFE_TAG}-${OS}-${ARCH}-$$"
-    rm -rf "$EXTRACT_DIR" 2>/dev/null
-    mkdir -p "$EXTRACT_DIR"
+    load_release "$CACHE_KEY" "$ASSET"
+    ARCHIVE="$PAYLOAD"
+    EXTRACT_DIR="$WORK_DIR/runtime"
+    mkdir "$EXTRACT_DIR"
     case "$ASSET" in
         *.tar.gz)
             command -v tar >/dev/null 2>&1 || { echo "Error: tar is required for Rust client package" >&2; exit 1; }
@@ -481,20 +512,8 @@ if [ "$RDEV_CLIENT" = "rs" ]; then
     esac
     [ -n "$RUN_BIN" ] || { echo "Error: rdev-client-gpu binary not found in package" >&2; exit 1; }
     chmod +x "$RUN_BIN" 2>/dev/null || true
-    if cache_lock_acquire "$CACHE_DIR"; then
-        rm -rf "$CACHE_DIR.part" 2>/dev/null
-        mkdir -p "$CACHE_DIR.part"
-        cp "$RUN_BIN" "$CACHE_DIR.part/$(basename "$CACHE_BIN")"
-        chmod +x "$CACHE_DIR.part/$(basename "$CACHE_BIN")" 2>/dev/null || true
-        : > "$CACHE_DIR.part/.complete"
-        rm -rf "$CACHE_DIR" 2>/dev/null
-        mv "$CACHE_DIR.part" "$CACHE_DIR"
-        cache_lock_release
-        RUN_BIN="$CACHE_BIN"
-    fi
-    rm -f "$ARCHIVE" 2>/dev/null || true
-    rm -rf "$EXTRACT_DIR" 2>/dev/null || true
-    fi
+    # Execute the freshly extracted package in place, preserving every runtime
+    # sidecar. Cached extracted files are never trusted or executed.
 else
     ASSET_ARCH="$ARCH"
     if [ "$RDEV_CLIENT" = "cgo" ]; then
@@ -519,35 +538,10 @@ else
         FLAVOR_KEY="go"
     fi
     [ "$OS" = "windows" ] && BINARY="${BINARY}.exe"
-    GH_URL="$(release_url "$BINARY")"
     CACHE_KEY="${FLAVOR_KEY}-${SAFE_TAG}-${OS}-${ASSET_ARCH}-$(safe_name "$BINARY")"
-    CACHE_DIR="$CACHE_BASE/$CACHE_KEY"
-    CACHE_BIN="$CACHE_DIR/$BINARY"
-    if cache_complete "$CACHE_BIN" "$CACHE_DIR"; then
-        RUN_BIN="$CACHE_BIN"
-        echo "  Using cached ${DOWNLOAD_NAME} (${RESOLVED_TAG}, ${OS}/${ARCH})." >&2
-    else
-    RUN_BIN="$TMPBASE/${DOWNLOAD_NAME}-${SAFE_TAG}-${OS}-${ASSET_ARCH}-$$"
-    echo "  Downloading ${DOWNLOAD_NAME} (${OS}/${ARCH})..." >&2
-    if ! download_with_fallback "$GH_URL" "$RUN_BIN" "$BINARY"; then
-        echo "Error: download failed" >&2
-        rm -f "$RUN_BIN" 2>/dev/null
-        exit 1
-    fi
+    load_release "$CACHE_KEY" "$BINARY"
+    RUN_BIN="$PAYLOAD"
     chmod +x "$RUN_BIN"
-    if cache_lock_acquire "$CACHE_DIR"; then
-        rm -rf "$CACHE_DIR.part" 2>/dev/null
-        mkdir -p "$CACHE_DIR.part"
-        cp "$RUN_BIN" "$CACHE_DIR.part/$BINARY"
-        chmod +x "$CACHE_DIR.part/$BINARY" 2>/dev/null || true
-        : > "$CACHE_DIR.part/.complete"
-        rm -rf "$CACHE_DIR" 2>/dev/null
-        mv "$CACHE_DIR.part" "$CACHE_DIR"
-        cache_lock_release
-        rm -f "$RUN_BIN" 2>/dev/null || true
-        RUN_BIN="$CACHE_BIN"
-    fi
-    fi
 fi
 
 # ── Build args & run ───────────────────────────────────────
@@ -586,12 +580,14 @@ printf '\n\n' >&2
 
 if [ "$RDEV_ELEVATE" = "1" ]; then
     if command -v sudo >/dev/null 2>&1; then
-        exec sudo "$RUN_BIN" "$@"
+        sudo "$RUN_BIN" "$@"
+        exit $?
     elif command -v doas >/dev/null 2>&1; then
-        exec doas "$RUN_BIN" "$@"
+        doas "$RUN_BIN" "$@"
+        exit $?
     else
         echo "  sudo/doas not found; continuing in normal user mode." >&2
     fi
 fi
 
-exec "$RUN_BIN" "$@"
+"$RUN_BIN" "$@"

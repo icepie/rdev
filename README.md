@@ -155,6 +155,8 @@ powershell -Command "iwr -useb https://rdev.singzer.cn/run.ps1 | iex; RDev wss:/
 
 签名密钥已于 2026-11-15 轮换；Go/Rust 内置新公钥的 SHA-256 指纹为 `57bf24ad70845431d49dc9a3519284856378f7b32a02fd69b554bfd4189d32bb`。只信任旧公钥的客户端/服务端需要手动升级一次到采用新公钥的版本，不能通过关闭验签绕过。Actions Secret 不可回读，请通过受控轮换维护，不要将私钥写入源码、日志或聊天。
 
+`run.sh` / `run.ps1` 同样在执行或解压前验证完整资产的 Ed25519 签名；缓存保留原始资产与 `.sig`，每次命中重新验签，不信任旧的解压目录或完成标记。两种脚本均要求 PATH 中已有可信的 **OpenSSL 3.0+**（Windows 包括 Win7/PowerShell 2）；不会下载未验证的验签器，也没有跳过验签选项。安装脚本自身须通过可信 HTTPS 或已验证源码获取，资产签名不保护被替换的安装脚本。POSIX 行为回归：`node --test scripts/test-runner-signatures.mjs`。
+
 ```bash
 # 禁用自动更新
 ./rdev-server --no-auto-update
@@ -305,6 +307,9 @@ Web UI 是 React 19 + Tailwind CSS v4 + Radix UI 单页应用，组件/设计令
 - 路由保持原有 URL：`/`、`/terminal`、`/remote-desktop`、`/batch`、`/sessions`、`/files`、`/agent`；`?token=` 管理令牌与 `rdev.devicePassword.<id>` 设备密码 localStorage 契约不变。
 - 明暗主题：右上角切换 自动/浅色/深色，持久化在 `rdevTheme`，自动模式跟随系统。
 - 构建顺序：`bun run build`（vite → `internal/server/static/`，go:embed）必须在 `go build` 之前。
+- 构建时生成 Brotli/gzip 静态资源；服务端按 `Accept-Encoding` 协商并设置 `Vary`，不在请求中压缩。带构建哈希的资源缓存一年且 `immutable`；HTML、安装脚本和缺失资源不使用不可变缓存。
+- Dashboard 不再预加载 Markdown 渲染器及完整扩展图标集；进入相关功能时才加载。
+- HTTP 请求头超时 5 秒、keep-alive 空闲超时 60 秒；不设置整次请求的读写时限，以保留长时间文件传输、SSE 和 WebSocket。
 
 ## Windows 兼容性
 
