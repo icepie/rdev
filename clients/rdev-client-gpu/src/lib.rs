@@ -2,6 +2,7 @@ pub mod config;
 pub mod desktop;
 pub mod desktop_env;
 pub mod desktop_rtc;
+pub mod terminal_rtc;
 mod file_rename;
 pub mod file_rtc;
 pub mod fileput;

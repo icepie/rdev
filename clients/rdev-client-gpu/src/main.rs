@@ -47,6 +47,7 @@ struct ClientRuntime<'a> {
     tunnel_base: &'a TunnelBase,
     rtc: &'a rdev_client_gpu::desktop_rtc::DesktopRtcManager,
     file_rtc: &'a rdev_client_gpu::file_rtc::FileRtcManager,
+    terminal_rtc: &'a rdev_client_gpu::terminal_rtc::TerminalRtcManager,
 }
 struct DesktopRtcCleanup(rdev_client_gpu::desktop_rtc::DesktopRtcManager);
 
@@ -59,6 +60,13 @@ impl Drop for DesktopRtcCleanup {
 struct FileRtcCleanup(rdev_client_gpu::file_rtc::FileRtcManager);
 
 impl Drop for FileRtcCleanup {
+    fn drop(&mut self) {
+        self.0.close_all();
+    }
+}
+struct TerminalRtcCleanup(rdev_client_gpu::terminal_rtc::TerminalRtcManager);
+
+impl Drop for TerminalRtcCleanup {
     fn drop(&mut self) {
         self.0.close_all();
     }
@@ -339,22 +347,25 @@ async fn run_once(
     files.attach_rtc(rtc.clone());
     let desktop_rtc = rdev_client_gpu::desktop_rtc::DesktopRtcManager::new();
     let _rtc_cleanup = DesktopRtcCleanup(desktop_rtc.clone());
+    let terminal_rtc = rdev_client_gpu::terminal_rtc::TerminalRtcManager::new(sessions.clone());
+    let _terminal_rtc_cleanup = TerminalRtcCleanup(terminal_rtc.clone());
     let mut registered = false;
 
-	let register = Message {
-		ty: Some(MessageType::Register),
-		client_id: args.id.clone(),
-		instance_id: instance_id.to_string(),
-		device_identity: args.device_identity.clone(),
-		reconnect_proof: args.reconnect_proof.clone(),
-		client_version: version::client_version(),
-		password: args.password.clone(),
-		file_rtc: true,
-		file_operations: ["create", "mkdir", "delete", "rename", "rename_directory"]
-			.map(str::to_owned)
-			.to_vec(),
-		..Default::default()
-	};
+    let register = Message {
+        ty: Some(MessageType::Register),
+        client_id: args.id.clone(),
+        instance_id: instance_id.to_string(),
+        device_identity: args.device_identity.clone(),
+        reconnect_proof: args.reconnect_proof.clone(),
+        client_version: version::client_version(),
+        password: args.password.clone(),
+        file_rtc: true,
+        terminal_rtc: true,
+        file_operations: ["create", "mkdir", "delete", "rename", "rename_directory"]
+            .map(str::to_owned)
+            .to_vec(),
+        ..Default::default()
+    };
     write
         .send(WsMessage::Text(protocol::encode_message(&register)?.into()))
         .await?;
@@ -364,9 +375,13 @@ async fn run_once(
             outbound = out_rx.recv() => {
                 match outbound {
                     Some(OutboundEvent::Message(msg)) => {
+                        if msg.ty == Some(MessageType::Close) { terminal_rtc.remove(&msg.session_id); }
                         write.send(WsMessage::Text(protocol::encode_message(&msg)?.into())).await?;
                     }
-                    Some(OutboundEvent::Binary { typ, id, payload }) => {
+                    Some(OutboundEvent::Binary { typ, id, mut payload }) => {
+                        if typ == BIN_DATA && terminal_rtc.send_output(&id, &mut payload).await {
+                            continue;
+                        }
                         write.send(WsMessage::Binary(protocol::encode_bin_frame(typ, &id, &payload)?.into())).await?;
                     }
                     Some(OutboundEvent::BinaryOffset { typ, id, offset, payload }) => {
@@ -384,6 +399,7 @@ async fn run_once(
                             desktop_enabled,
                             rtc: &desktop_rtc,
                             file_rtc: &rtc,
+                            terminal_rtc: &terminal_rtc,
                             gpu_tunnel_device_tx,
                             connect_printed: connect_printed.clone(),
                             tunnel_base: &tunnel_base,
@@ -535,21 +551,24 @@ async fn run_once_stream(
     files.attach_rtc(rtc.clone());
     let desktop_rtc = rdev_client_gpu::desktop_rtc::DesktopRtcManager::new();
     let _rtc_cleanup = DesktopRtcCleanup(desktop_rtc.clone());
+    let terminal_rtc = rdev_client_gpu::terminal_rtc::TerminalRtcManager::new(sessions.clone());
+    let _terminal_rtc_cleanup = TerminalRtcCleanup(terminal_rtc.clone());
     let mut registered = false;
-	let register = Message {
-		ty: Some(MessageType::Register),
-		client_id: args.id.clone(),
-		instance_id: instance_id.to_string(),
-		device_identity: args.device_identity.clone(),
-		reconnect_proof: args.reconnect_proof.clone(),
-		client_version: version::client_version(),
-		password: args.password.clone(),
-		file_rtc: true,
-		file_operations: ["create", "mkdir", "delete", "rename", "rename_directory"]
-			.map(str::to_owned)
-			.to_vec(),
-		..Default::default()
-	};
+    let register = Message {
+        ty: Some(MessageType::Register),
+        client_id: args.id.clone(),
+        instance_id: instance_id.to_string(),
+        device_identity: args.device_identity.clone(),
+        reconnect_proof: args.reconnect_proof.clone(),
+        client_version: version::client_version(),
+        password: args.password.clone(),
+        file_rtc: true,
+        terminal_rtc: true,
+        file_operations: ["create", "mkdir", "delete", "rename", "rename_directory"]
+            .map(str::to_owned)
+            .to_vec(),
+        ..Default::default()
+    };
     stream_frame::write_frame(
         &mut write_half,
         stream_frame::KIND_JSON,
@@ -562,9 +581,13 @@ async fn run_once_stream(
             outbound = out_rx.recv() => {
                 match outbound {
                     Some(OutboundEvent::Message(msg)) => {
+                        if msg.ty == Some(MessageType::Close) { terminal_rtc.remove(&msg.session_id); }
                         stream_frame::write_frame(&mut write_half, stream_frame::KIND_JSON, protocol::encode_message(&msg)?.as_bytes()).await?;
                     }
-                    Some(OutboundEvent::Binary { typ, id, payload }) => {
+                    Some(OutboundEvent::Binary { typ, id, mut payload }) => {
+                        if typ == BIN_DATA && terminal_rtc.send_output(&id, &mut payload).await {
+                            continue;
+                        }
                         let frame = protocol::encode_bin_frame(typ, &id, &payload)?;
                         stream_frame::write_frame(&mut write_half, stream_frame::KIND_BINARY, &frame).await?;
                     }
@@ -583,7 +606,7 @@ async fn run_once_stream(
                 match frame.kind {
                     stream_frame::KIND_JSON => {
                         let text = String::from_utf8(frame.payload)?;
-                        let runtime = ClientRuntime { args, server_host, desktop_enabled, gpu_tunnel_device_tx, connect_printed: connect_printed.clone(), tunnel_base: &tunnel_base, rtc: &desktop_rtc, file_rtc: &rtc };
+                        let runtime = ClientRuntime { args, server_host, desktop_enabled, gpu_tunnel_device_tx, connect_printed: connect_printed.clone(), tunnel_base: &tunnel_base, rtc: &desktop_rtc, file_rtc: &rtc, terminal_rtc: &terminal_rtc };
                         if handle_text(&text, runtime, modules, &sessions, &forwards, &files, &out_tx).await? {
                             registered = true;
                         }
@@ -648,10 +671,18 @@ async fn handle_text(
                     .send(Some(registered_id.to_string()));
             }
         }
-        Some(MessageType::NewSession) => sessions.start(msg, args.shell.clone(), out_tx.clone())?,
+        Some(MessageType::NewSession) => {
+            let session_id = msg.session_id.clone();
+            let direct = msg.terminal_rtc;
+            sessions.start(msg, args.shell.clone(), out_tx.clone())?;
+            if direct { runtime.terminal_rtc.bind_session(&session_id); }
+        }
         Some(MessageType::StdinClose) => sessions.stdin_close(&msg.session_id).await,
         Some(MessageType::Resize) => sessions.resize(&msg.session_id, msg.rows, msg.cols).await,
-        Some(MessageType::Close) => sessions.close(&msg.session_id).await,
+        Some(MessageType::Close) => {
+            runtime.terminal_rtc.remove(&msg.session_id);
+            sessions.close(&msg.session_id).await;
+        }
         Some(MessageType::TcpConnect) => {
             let forwards = forwards.clone();
             let out_tx = out_tx.clone();
@@ -737,11 +768,12 @@ async fn handle_text(
                 .await;
         }
         Some(MessageType::FileRTCSignal) => runtime.file_rtc.signal(msg),
+        Some(MessageType::TerminalRTCSignal) => {
+            runtime.terminal_rtc.signal(msg, out_tx.clone());
+        }
         Some(MessageType::DesktopRTCSignal) => {
             if runtime.desktop_enabled && !args.no_desktop {
-                runtime
-                    .rtc
-                    .signal(msg, args.gpu_desktop_local.clone(), out_tx.clone());
+                runtime.rtc.signal(msg, args.gpu_desktop_local.clone(), out_tx.clone());
             }
         }
         other => debug!("ignored message type: {:?}", other),

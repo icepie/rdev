@@ -59,7 +59,7 @@
 # 可选 VNC/RFB 入口（只支持带 username/password 的现代 VNC Viewer）
 ./rdev-server --vnc 127.0.0.1:5900
 
-# 可选桌面 WebRTC 视频直连（默认关闭；也可设置 RDEV_WEBRTC=true）
+# 可选桌面、文件和 Web Terminal 的 WebRTC 直连（默认关闭；也可设置 RDEV_WEBRTC=true）
 ./rdev-server --webrtc
 
 # 可选 Web Agent（OpenAI 兼容接口；配置后 Web UI 出现 Agent 入口）
@@ -79,6 +79,7 @@
 
 文件页与 Agent 文件面板同样支持 WebRTC：服务端启用 `--webrtc`、设备声明 `fileRTC` 且浏览器支持时，上传/下载文件数据走可靠有序的 `rdev-file` DataChannel；目录操作、鉴权、ICE 信令与传输控制仍走服务端。Go 和 Rust 客户端均支持，无需启用远程桌面。健康直连不通过服务端中继文件数据；协商失败或传输中断时取消旧任务，以新任务从已确认的上传偏移/已接收的下载偏移切回中继，不在同一任务内混用两条数据通道。关闭 WebRTC、旧客户端或不支持直连的网络继续使用中继；当前使用 STUN，无 TURN。暂停、取消、关闭面板及控制连接断开会清理对应直连。
 
+Web Terminal 连接支持 `terminalRTC` 的 Rust GPU 客户端时，也可使用可靠有序的 `rdev-terminal` DataChannel 直接传输 PTY 输入/输出；无需启动远程桌面。服务端须启用 `--webrtc`，鉴权、窗口尺寸、退出码与信令仍走服务端。协商失败使用普通中继；已建立的直连断开时，经设备确认后切回**同一个 PTY**，只发送尚未提交的输入，不重放可能已执行的命令，并明确提示在途字节可能丢失。输入排队有界，恢复超时会报错并断开，不静默丢弃后继续。会话监看接入会将该终端切回中继以恢复广播；直连期间的历史输出不保存在服务端。旧客户端、关闭 WebRTC 或不支持 WebRTC 的浏览器继续走中继。ICE 配置沿用 `--webrtc-ice-servers`，包括 TURN 或 `[]` host-only；主控制连接断开会关闭对应 PTY 和直连资源。
 
 `model-config.json` 示例（容忍 `opencode_npm` 等多余字段，`api_key` 支持 `${ENV_VAR}`）：
 

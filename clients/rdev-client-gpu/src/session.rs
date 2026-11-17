@@ -68,7 +68,13 @@ impl SessionManager {
             return Err(anyhow!("new_session missing sessionId"));
         }
         let (tx, rx) = mpsc::channel(1024);
-        self.sessions.lock().unwrap().insert(session_id.clone(), tx);
+        {
+            let mut sessions = self.sessions.lock().unwrap();
+            if sessions.contains_key(&session_id) {
+                return Err(anyhow!("session already exists"));
+            }
+            sessions.insert(session_id.clone(), tx);
+        }
         let manager = self.clone();
         spawn_tokio_thread(format!("rdev-session-{session_id}"), async move {
             let result = if msg.subsystem == "sftp" {
@@ -103,6 +109,18 @@ impl SessionManager {
 
     pub async fn send_data(&self, session_id: &str, data: Vec<u8>) {
         self.send_data_nowait(session_id, data);
+    }
+    pub async fn send_data_reliable(&self, session_id: &str, data: Vec<u8>) -> Result<()> {
+        let tx = self.sessions.lock().unwrap().get(session_id).cloned()
+            .ok_or_else(|| anyhow!("session is closed"))?;
+        tx.send(SessionInput::Data(data)).await.map_err(|_| anyhow!("session is closed"))
+    }
+
+    pub fn close_all_nowait(&self) {
+        let sessions = std::mem::take(&mut *self.sessions.lock().unwrap());
+        for (_, tx) in sessions {
+            tokio::spawn(async move { let _ = tx.send(SessionInput::Close).await; });
+        }
     }
 
     pub async fn stdin_close(&self, session_id: &str) {

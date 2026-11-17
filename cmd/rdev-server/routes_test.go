@@ -66,3 +66,28 @@ func TestCleanPageRoutes(t *testing.T) {
 		}
 	})
 }
+
+func TestAgentConversationRoutes(t *testing.T) {
+	srv := server.NewServer()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/agent", splitPageAndWebSocket(srv.StaticPageHandler("app.html"), func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusSwitchingProtocols)
+	}))
+	mux.HandleFunc("/agent/", srv.StaticPageHandler("app.html"))
+	for _, path := range []string{"/agent", "/agent?device=dev1&thread=old&turn=run1", "/agent/thread1?device=dev1", "/agent/missing?device=offline"} {
+		t.Run(path, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+			if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "<title") {
+				t.Fatalf("conversation route returned %d, want SPA HTML", rec.Code)
+			}
+		})
+	}
+	req := httptest.NewRequest(http.MethodGet, "/agent?device=dev1", nil)
+	req.Header.Set("Upgrade", "websocket")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusSwitchingProtocols {
+		t.Fatalf("Agent websocket returned %d, want 101", rec.Code)
+	}
+}

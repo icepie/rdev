@@ -33,10 +33,15 @@ func (r *terminalReadyRecorder) OnMessage(_ *gws.Conn, m *gws.Message) {
 }
 func connectTerminalFixture(t *testing.T, s *Server) (*gws.Conn, *terminalReadyRecorder) {
 	t.Helper()
+	return connectTerminalURLFixture(t, s, "?device=dev")
+}
+
+func connectTerminalURLFixture(t *testing.T, s *Server, query string) (*gws.Conn, *terminalReadyRecorder) {
+	t.Helper()
 	server := httptest.NewServer(http.HandlerFunc(s.HandleTerminalWS))
 	t.Cleanup(server.Close)
 	rec := &terminalReadyRecorder{text: make(chan terminalMsg, 8), binary: make(chan []byte, 8)}
-	c, _, err := gws.NewClient(rec, &gws.ClientOption{Addr: "ws" + strings.TrimPrefix(server.URL, "http") + "?device=dev", HandshakeTimeout: time.Second})
+	c, _, err := gws.NewClient(rec, &gws.ClientOption{Addr: "ws" + strings.TrimPrefix(server.URL, "http") + query, HandshakeTimeout: time.Second})
 	if err != nil {
 		t.Fatal(err)
 	}

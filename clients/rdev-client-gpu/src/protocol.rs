@@ -91,6 +91,8 @@ pub enum MessageType {
     DesktopClose,
     #[serde(rename = "desktop_rtc_signal")]
     DesktopRTCSignal,
+    #[serde(rename = "terminal_rtc_signal")]
+    TerminalRTCSignal,
     #[serde(rename = "file_rtc_signal")]
     FileRTCSignal,
     #[serde(rename = "gpu_desktop_tunnel")]
@@ -127,6 +129,12 @@ pub struct Message {
         skip_serializing_if = "std::ops::Not::not"
     )]
     pub file_rtc: bool,
+    #[serde(
+        default,
+        rename = "terminalRTC",
+        skip_serializing_if = "std::ops::Not::not"
+    )]
+    pub terminal_rtc: bool,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub client_id: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]

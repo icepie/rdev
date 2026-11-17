@@ -32,7 +32,8 @@ import {
   PanelResizeHandle,
   type ImperativePanelHandle,
 } from "react-resizable-panels";
-import { useSearchParams } from "react-router-dom";
+import { useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { agentConversationURL, agentRouteState, readAgentRoute } from "../lib/agent-route";
 import { setRailControl } from "../lib/rail-control";
 import { useI18n } from "../lib/i18n";
 import { useDevices } from "../lib/devices";
@@ -227,7 +228,23 @@ export function AgentPage() {
   const { devices: connectedDevices } = useDevices();
   const devices = useMemo(() => [{ id: SERVER_AGENT_ID, hostname: t("agent.server"), hasPassword: false, connectedAt: "" }, ...connectedDevices], [connectedDevices, t]);
   const [copiedId, copy] = useCopy();
-  const [searchParams, setSearchParams] = useSearchParams();
+  const [searchParams] = useSearchParams();
+  const { threadId } = useParams();
+  const location = useLocation();
+  const navigate = useNavigate();
+  const route = readAgentRoute(threadId, searchParams);
+  const routeRef = useRef(route);
+  routeRef.current = route;
+  const locationRef = useRef(location);
+  locationRef.current = location;
+  const pendingRouteSwitch = useRef("");
+  const pendingNewThread = useRef<string | null>(null);
+  const [routeError, setRouteError] = useState("");
+  const navigateThread = useCallback((targetDevice: string, targetThread = "", replace = false, preserveTurn = false) => {
+    const params = new URLSearchParams(locationRef.current.search);
+    if (!preserveTurn) params.delete("turn");
+    navigate(agentConversationURL(targetDevice, targetThread, params), { replace });
+  }, [navigate]);
 
   const [device, setDeviceState] = useState("");
   const [status, setStatus] = useState<Status>("disconnected");
@@ -726,6 +743,10 @@ export function AgentPage() {
      * they carry the NEW thread id and update threadRef themselves. */
     const op = String(msg.op);
     const frameThread = asString(msg.thread);
+    if (op === "error" && frameThread && frameThread === routeRef.current.thread && pendingRouteSwitch.current === frameThread) {
+      setRouteError(asString(msg.message) || t("common.error"));
+      return;
+    }
     if (!isLiveReplay() && document.visibilityState === "hidden" && (op === "done" || op === "error" || op === "stopped")) {
       const statusKey = op === "done" ? "agent.notificationDone" : op === "error" ? "agent.notificationError" : "agent.notificationStopped";
       showWebNotification(t("agent.notificationTitle"), {
@@ -860,28 +881,7 @@ export function AgentPage() {
         reconcileComposerTextDrafts(sourceDevice, authThread, msg.threads);
         const authThreads = parseThreads(msg.threads);
         setThreads(authThreads);
-        /* Deep link /agent?device=X&thread=Y: adopt Y when it lives on this
-         * device, then strip the param (replaceState) so later refreshes
-         * don't fight manual thread switches. */
-        const urlThread = new URLSearchParams(window.location.search).get("thread");
-        if (urlThread) {
-          if (
-            urlThread !== authThread &&
-            authThreads.some((th) => th.id === urlThread)
-          ) {
-            wsRef.current?.send(
-              JSON.stringify({ op: "switch_thread", thread: urlThread }),
-            );
-          }
-          setSearchParams(
-            (prev) => {
-              const next = new URLSearchParams(prev);
-              next.delete("thread");
-              return next;
-            },
-            { replace: true },
-          );
-        }
+        pendingRouteSwitch.current = "";
         primaryOps.setQueue(parseStringArray(msg.queue));
         primaryOps.setQueueIds(parseStringArray(msg.queueIds));
         primaryOps.setQueueModes(parseStringArray(msg.queueModes));
@@ -1086,6 +1086,11 @@ export function AgentPage() {
         const switchThread = asString(msg.thread);
         setThread(switchThread);
         threadRef.current = switchThread;
+        pendingRouteSwitch.current = "";
+        if (pendingNewThread.current === locationRef.current.key && routeRef.current.device === sourceDevice) {
+          pendingNewThread.current = null;
+          navigateThread(sourceDevice, switchThread);
+        }
         primaryOps.setTodos(parseTodos(msg.todos));
         applyScopedMessage(primaryOps, { ...msg, op: "autonomy" }, t);
         primaryOps.setQueue(parseStringArray(msg.queue));
@@ -1137,7 +1142,7 @@ export function AgentPage() {
         break;
       }
     }
-  }, [primaryOps, rejectPendingPanelRequests, setSearchParams, startPing, t]);
+  }, [primaryOps, rejectPendingPanelRequests, navigateThread, startPing, t]);
 
   /* Auto-reconnect with exponential backoff: 1s → 2s → 4s → 8s … cap 30s.
    * Reset on successful auth_ok (see handleMessage) or manual connect.
@@ -1260,22 +1265,15 @@ export function AgentPage() {
   }, [clearPing, clearReconnectTimer, handleMessage, primaryOps, rejectPendingPanelRequests, scheduleReconnect, t]);
   connectRef.current = connect;
 
-  const setDevice = useCallback((id: string) => {
+  const activateDevice = useCallback((id: string) => {
     setDeviceState(id);
     rejectPendingPanelRequests("device changed");
     pendingDeleteRef.current = null;
     pendingRenameRef.current.clear();
     setDeleteBusy(false);
     setManagementError("");
-    setSearchParams(
-      (prev) => {
-        const next = new URLSearchParams(prev);
-        if (id) next.set("device", id);
-        else next.delete("device");
-        return next;
-      },
-      { replace: true },
-    );
+    pendingRouteSwitch.current = "";
+    pendingNewThread.current = null;
     primaryOps.reset();
     for (const ops of secondarySinksRef.current.values()) ops.reset();
     setModels([]);
@@ -1311,22 +1309,31 @@ export function AgentPage() {
     fileRequestsRef.current!.clear();
     setStatus("disconnected");
     if (id) connect(id);
-  }, [clearPing, clearReconnectTimer, connect, primaryOps, rejectPendingPanelRequests, setSearchParams]);
+  }, [clearPing, clearReconnectTimer, connect, primaryOps, rejectPendingPanelRequests]);
 
-  /* Preserve explicit device links even while discovery reports them offline.
-   * The socket shows retry state and recovers when the device returns. */
+  const setDevice = useCallback((id: string) => navigateThread(id), [navigateThread]);
+  const routeState = agentRouteState(route, device, thread, authed, threads);
+  const routeBlocked = routeState !== "selected" && routeState !== "default";
+
+  // URL is the selection source of truth, including browser Back/Forward.
+  // Explicit offline devices stay selected; the socket owns their recovery.
   useEffect(() => {
-    if (!devices.length) return;
-    const preselect = searchParams.get("device") || "";
-    // Discovery can briefly lose a device during reconnect. Keep the
-    // selected workspace and its URL; the socket owns connection recovery.
-    if (device) return;
-    if (preselect) {
-      setDevice(preselect);
-    } else if (!preselect) {
-      setDevice(SERVER_AGENT_ID);
+    setRouteError("");
+    pendingRouteSwitch.current = "";
+    pendingNewThread.current = null;
+    if (route.device !== device) activateDevice(route.device);
+  }, [route.device, route.thread, location.key, device, activateDevice]);
+
+  useEffect(() => {
+    if (routeState === "default" && thread) {
+      navigateThread(device, thread, true, true);
+    } else if (routeState === "selected" && (!threadId || searchParams.has("thread"))) {
+      navigateThread(device, thread, true, true);
+    } else if (routeState === "switch" && !routeError && pendingNewThread.current === null && pendingRouteSwitch.current !== route.thread) {
+      pendingRouteSwitch.current = route.thread;
+      wsRef.current?.send(JSON.stringify({ op: "switch_thread", thread: route.thread }));
     }
-  }, [devices, device, searchParams, setDevice]);
+  }, [routeState, route.thread, routeError, device, thread, threadId, searchParams, navigateThread]);
 
   useEffect(
     () => () => {
@@ -1347,7 +1354,13 @@ export function AgentPage() {
 
   /* ── Actions ── */
 
-  const ready = authed && status === "connected" && wsRef.current?.readyState === WebSocket.OPEN;
+  const ready = !routeBlocked && !routeError && authed && status === "connected" && wsRef.current?.readyState === WebSocket.OPEN;
+
+  const newThread = () => {
+    if (!authed || wsRef.current?.readyState !== WebSocket.OPEN) return;
+    pendingNewThread.current = locationRef.current.key;
+    wsRef.current.send(JSON.stringify({ op: "new_thread" }));
+  };
 
   /* Manual reconnect: immediate, resets the backoff counter. */
   const manualReconnect = useCallback(() => {
@@ -1469,8 +1482,9 @@ export function AgentPage() {
     return true;
   };
 
-  const currentThreadTitle =
-    threads.find((th) => th.id === thread)?.title || t("agent.newThread");
+  const currentThreadTitle = routeBlocked
+    ? route.thread || t("common.loading")
+    : threads.find((th) => th.id === thread)?.title || t("agent.newThread");
 
   /* bb thread-list view state: one write per user gesture (menu handlers),
    * merged onto the persisted record. */
@@ -1522,6 +1536,14 @@ export function AgentPage() {
     }
   }, [thread]);
 
+  useEffect(() => {
+    if (routeState !== "selected") return;
+    setLayoutState(current => {
+      const pane = listPanes(current.root).find(item => item.threadId === null || item.threadId === route.thread);
+      return pane ? setFocus(current, pane.paneId) : current;
+    });
+  }, [routeState, route.thread]);
+
   /* Panes pinned to deleted threads close (bb keeps layout consistent with
    * the conversation list). Gated on a loaded list so the empty pre-auth
    * state does not nuke restored panes. */
@@ -1568,7 +1590,7 @@ export function AgentPage() {
           /* The following pane stays bound to the conn current: drive it
            * with switch_thread instead of pinning a thread id. */
           if (threadId !== threadRef.current) {
-            sendRaw({ op: "switch_thread", thread: threadId });
+            navigateThread(device, threadId);
           }
           setLayoutState(setFocus(l, paneId));
         } else if (target.threadId !== threadId) {
@@ -1580,7 +1602,7 @@ export function AgentPage() {
         setLayoutState(splitPane(l, paneId, decision.side, threadId));
       }
     },
-    [paneShowing, sendRaw],
+    [paneShowing, navigateThread, device],
   );
   const applyDropRef = useRef(applyDrop);
   applyDropRef.current = applyDrop;
@@ -1796,53 +1818,9 @@ export function AgentPage() {
     [];
 
   const openSidebarThread = (row: SidebarRow) => {
-    if (row.device === device) {
-      if (row.id !== thread && wsRef.current?.readyState === WebSocket.OPEN) {
-        wsRef.current.send(
-          JSON.stringify({ op: "switch_thread", thread: row.id }),
-        );
-      }
-    } else {
-      /* Cross-device: switch in place — setDevice tears down and reconnects
-       * the WS, and the auth_ok handler adopts the thread from the URL
-       * param (and then strips it). */
-      setSearchParams(
-        (prev) => {
-          const next = new URLSearchParams(prev);
-          next.set("thread", row.id);
-          return next;
-        },
-        { replace: true },
-      );
-      setDevice(row.device);
-      return;
-    }
-    /* Mobile keeps the left-right split: picking a thread does NOT
-     * dismiss the drawer — the chat stays visible beside it; the user
-     * closes via backdrop tap, edge swipe, or the header toggle. */
+    navigateThread(row.device, row.id);
   };
 
-  /* Sidebar click opens the thread in the FOCUSED pane: the pane following
-   * the conn current switches threads; an explicit pane swaps its thread
-   * (client-side, seeded by the pane's peek). Cross-device rows always
-   * navigate the whole page. */
-  const openInFocusedPane = (row: SidebarRow) => {
-    if (row.device !== device) {
-      openSidebarThread(row);
-      return;
-    }
-    const l = layoutRef.current;
-    const focused = findPane(l.root, l.focusedPaneId);
-    if (!focused || focused.threadId === null || focused.threadId === thread) {
-      openSidebarThread(row);
-      return;
-    }
-    if (focused.threadId !== row.id) {
-      setLayoutState(replacePaneThread(l, l.focusedPaneId, row.id));
-    }
-    /* Mobile keeps the left-right split: no auto-dismiss (see
-     * openSidebarThread). */
-  };
 
   /* Threads currently shown in any pane (sidebar highlight). */
   const openThreadIds = useMemo(() => {
@@ -2069,7 +2047,7 @@ export function AgentPage() {
           : 0
       }
       minSize={panelMinPct}
-      maxSize={panelFull && panelOpen ? 100 : 100 - panelMinPct}
+      maxSize={panelFull && panelOpen && !routeBlocked ? 100 : 100 - panelMinPct}
       onResize={(size) => {
         if (size > 0) panelWidthRef.current = size;
       }}
@@ -2078,7 +2056,9 @@ export function AgentPage() {
         PANEL_TRANSITION_CLASS,
       )}
     >
-      <AgentRightPanel {...rightPanelProps} />
+      <div className={cn("h-full", routeBlocked && "invisible")} inert={routeBlocked}>
+        <AgentRightPanel {...rightPanelProps} />
+      </div>
     </Panel>
   );
   const dockSlot = (
@@ -2213,7 +2193,7 @@ export function AgentPage() {
           suppressClickRef.current = false;
           return;
         }
-        openInFocusedPane(th);
+        openSidebarThread(th);
       }}
     >
       {sidebarView.organize === "flat" && <DeviceIcon device={th.device} os={th.os} />}
@@ -2443,7 +2423,7 @@ export function AgentPage() {
               disabled={!ready}
               onClick={() => {
                 if (wsRef.current?.readyState === WebSocket.OPEN) {
-                  wsRef.current.send(JSON.stringify({ op: "new_thread" }));
+                  newThread();
                   /* The fresh thread lands on the connected device: clear
                    * any device filter / search query that would hide it. */
                   if (sidebarView.deviceFilter) {
@@ -2631,7 +2611,7 @@ export function AgentPage() {
                       disabled={!sidebarDevices.some((d) => d.id === g.device && d.online)}
                       onClick={() => {
                         if (device !== g.device) setDevice(g.device);
-                        else if (ready) sendRaw({ op: "new_thread" });
+                        else if (authed) newThread();
                         else manualReconnect();
                         if (isNarrow) closeSidebar();
                       }}
@@ -2753,7 +2733,7 @@ export function AgentPage() {
             !sidebarDragging &&
             isNarrow &&
             "[transition:translate_220ms_cubic-bezier(0.32,0.72,0,1)] motion-reduce:transition-none",
-          isNarrow && panelOpen
+          isNarrow && panelOpen && !routeBlocked
             ? "-translate-x-full"
             : isNarrow && sidebarOpen
               ? "translate-x-[var(--agent-mobile-sidebar-width)]"
@@ -2784,7 +2764,7 @@ export function AgentPage() {
           className={cn(
             "min-w-0 overflow-clip transition-[flex-grow,flex-basis]",
             PANEL_TRANSITION_CLASS,
-            panelFull && panelOpen && !isNarrow && "hidden",
+            panelFull && panelOpen && !isNarrow && !routeBlocked && "hidden",
           )}
         >
       <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col bg-background">
@@ -2812,7 +2792,7 @@ export function AgentPage() {
         <span className="min-w-0 flex-1 truncate text-sm text-foreground">
           {currentThreadTitle}
         </span>
-        {thread && device !== SERVER_AGENT_ID && <Participants key={JSON.stringify([device,thread])} primary={device} rows={participantsByThread[JSON.stringify([device,thread])]??[]} error={participantErrors[JSON.stringify([device,thread])]??""} ready={ready} t={t} onRefresh={()=>{sendRaw({op:"participants",mode:"list",thread});}} onUpdate={(mode,target,password,cwd)=>{const id=`participants_${++requestSeqRef.current}`;if(password)participantPasswordsRef.current.set(id,{device:target,password});if(!sendRaw({op:"participants",mode,thread,id,device:target,password,path:cwd}))participantPasswordsRef.current.delete(id);}} />}
+        {!routeBlocked && thread && device !== SERVER_AGENT_ID && <Participants key={JSON.stringify([device,thread])} primary={device} rows={participantsByThread[JSON.stringify([device,thread])]??[]} error={participantErrors[JSON.stringify([device,thread])]??""} ready={ready} t={t} onRefresh={()=>{sendRaw({op:"participants",mode:"list",thread});}} onUpdate={(mode,target,password,cwd)=>{const id=`participants_${++requestSeqRef.current}`;if(password)participantPasswordsRef.current.set(id,{device:target,password});if(!sendRaw({op:"participants",mode,thread,id,device:target,password,path:cwd}))participantPasswordsRef.current.delete(id);}} />}
         {thread && (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -2826,6 +2806,10 @@ export function AgentPage() {
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="start">
+              <DropdownMenuItem disabled={!ready} onSelect={() => copy("conversation-link", new URL(agentConversationURL(device, thread), window.location.origin).href)}>
+                <Icon name="Copy" className="size-4 shrink-0" />
+                {t(copiedId === "conversation-link" ? "common.copied" : "agent.copyLink")}
+              </DropdownMenuItem>
               <DropdownMenuItem
                 disabled={notificationPermission === "granted" || notificationPermission === "denied" || notificationPermission === "unsupported"}
                 onSelect={enableWebNotifications}
@@ -2874,7 +2858,12 @@ export function AgentPage() {
         <AgentConnectionError message={authError} t={t} />
       )}
 
-      <SplitContainer
+      {routeBlocked || routeError ? (
+        <div role={routeState === "missing" || routeError ? "alert" : "status"} className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 p-6 text-sm text-muted-foreground">
+          <p>{routeError || (routeState === "missing" ? t("agent.threadUnavailable", { thread: route.thread, device: route.device }) : t("common.loading"))}</p>
+          {(routeState === "missing" || routeError) && <Button variant="outline" onClick={() => navigateThread(route.device)}>{t("agent.openDevice")}</Button>}
+        </div>
+      ) : <SplitContainer
         root={layout.root}
         renderPane={renderPane}
         onResize={onSplitResize}
@@ -2886,7 +2875,7 @@ export function AgentPage() {
             : threads.find(item => item.id === pane.threadId)?.title || t("agent.newThread"),
           label: t("agent.splitConversations"),
         } : undefined}
-      />
+      />}
 
       {/* bb-style in-app rename dialog (no native prompt). */}
       {renameTarget && (
@@ -2968,7 +2957,7 @@ export function AgentPage() {
        * sessions survive a close. Drag right on the shelf dismisses it. */}
       {isNarrow && (
         <div
-          inert={!panelOpen}
+          inert={!panelOpen || routeBlocked}
           className={cn(
             "fixed inset-y-0 right-0 z-30 w-full bg-background",
             transitionsReady
@@ -2976,7 +2965,7 @@ export function AgentPage() {
                 ? "[transition:translate_220ms_cubic-bezier(0.32,0.72,0,1),visibility_0s] motion-reduce:transition-none"
                 : "[transition:translate_220ms_cubic-bezier(0.32,0.72,0,1),visibility_0s_220ms] motion-reduce:transition-none"
               : "transition-none",
-            panelOpen
+            panelOpen && !routeBlocked
               ? "translate-x-0"
               : "invisible translate-x-full pointer-events-none",
           )}

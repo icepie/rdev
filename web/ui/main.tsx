@@ -32,7 +32,7 @@ function TitleSync() {
       "/browser": "nav.browser", "/terminal": "title.terminal", "/remote-desktop": "title.desktop",
       "/batch": "title.batch", "/sessions": "title.sessions", "/files": "title.files", "/tasks": "tasks.title",
     };
-    document.title = pathname === "/agent" ? `RDev - ${t("nav.agent")}` : t(titles[pathname] ?? (pathname.startsWith("/tasks/") ? "tasks.title" : "title.index"));
+    document.title = pathname === "/agent" || pathname.startsWith("/agent/") ? `RDev - ${t("nav.agent")}` : t(titles[pathname] ?? (pathname.startsWith("/tasks/") ? "tasks.title" : "title.index"));
 
   }, [pathname, t]);
   return null;
@@ -52,7 +52,7 @@ createRoot(document.getElementById("root")!).render(
                   <Route element={<AppShell />}>
                     <Route path="/" element={<DashboardPage />} />
                     <Route path="/browser" element={<BrowserPage />} />
-                    <Route path="/agent" element={<AgentPage />} />
+                    <Route path="/agent/:threadId?" element={<AgentPage />} />
                     <Route path="/terminal" element={<TerminalPage />} />
                     <Route path="/sessions" element={<SessionsPage />} />
                     <Route path="/files" element={<FilesPage />} />

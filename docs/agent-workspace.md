@@ -99,6 +99,14 @@
 
 动画遵循 BB 的 150/220ms 曲线和 `prefers-reduced-motion`：侧栏、抽屉、弹窗和工作态 shimmer 在减少动画时立即切换或停用；加载 spinner 保留状态提示但停止旋转。
 
+## 会话地址与浏览器历史
+
+会话的规范地址为 `/agent/<threadId>?device=<deviceId>`，两个标识都按 URL 编码。例如 `/agent/thread-123?device=%40server` 打开服务端会话，`/agent/thread-456?device=laptop` 打开指定设备会话。设备是会话身份的一部分；省略 `device` 固定表示 `@server`，不会在其他设备中猜测同名会话。对话标题旁“对话操作 → 复制对话链接”可复制含设备与会话的完整地址。
+
+`/agent` 和 `/agent?device=…` 仍打开该设备当前会话，认证后用 replace 更新为规范地址。旧的 `/agent?device=…&thread=…&turn=…` 调度链接仍可用：选中目标会话后转为路径地址并保留 `turn`，供聊天记录定位使用。手动切换会话会移除旧的 `turn`。侧栏选中会话、切换设备以及新建会话会更新地址并保留浏览器前进/后退历史；在分屏中，侧栏选择导航主会话并聚焦对应面板，拖拽创建的辅助面板布局仍是本机状态，不编码进链接。
+
+复制地址、新标签页打开和刷新都由同一设备/会话身份恢复；服务端 `/agent/…` 返回 SPA 页面，而 WebSocket 仍连接精确入口 `/agent?device=…`。地址中的设备即使离线也不会被默认设备替换，沿用连接错误/密码验证/重连提示。不存在或已删除的会话保留原地址，显示明确提示并禁用错误会话的聊天控件；必须主动选择其他会话或“打开设备工作区”才离开该地址，不会自动发送 `new_thread` 兜底。
+
 ## 并发与持久化边界
 
 Scheduled run persistence, manifest recovery, retention, health reporting, and browser refresh behavior are documented in [Scheduler persistence and refresh lifecycle](scheduler.md).

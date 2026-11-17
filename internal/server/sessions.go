@@ -157,6 +157,11 @@ func (h *sessionAttachHandler) attach(ac *sessionAttachConn) {
 	ac.authOK = true
 	h.sendJSON(ac.socket, sessionAttachMsg{Op: "auth_ok"})
 	go ac.pumpOutput(history, writeCh, stderrCh, done)
+	// An attached viewer needs the relay's broadcast stream. Preserve the PTY
+	// while switching its original terminal back to relay delivery.
+	if tc := ac.sess.terminal; tc != nil {
+		(&terminalWSHandler{srv: h.srv}).fallbackTerminalRTC(tc, tc.client)
+	}
 }
 
 func (h *sessionAttachHandler) OnClose(socket *gws.Conn, err error) {

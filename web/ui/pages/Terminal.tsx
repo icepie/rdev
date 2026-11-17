@@ -1,3 +1,4 @@
+import { createTerminalRTC, type TerminalRTC } from "../lib/terminal-webrtc";
 import { terminalMayTakeFocus } from "../lib/terminal-focus";
 import { createTerminalLayout } from "../lib/terminal-layout";
 import { useDevicePassword } from "../hooks/use-device-password";
@@ -68,6 +69,7 @@ type TabStatus = "disconnected" | "connecting" | "authing" | "connected";
 interface TermTab {
   id: number;
   deviceId: string;
+  rtc: TerminalRTC | null;
   ws: WebSocket | null;
   term: XTerm;
   layout: ReturnType<typeof createTerminalLayout>;
@@ -105,6 +107,11 @@ interface PaneTabs {
   active: number | null;
 }
 
+
+function closeTerminalRTC(tab: TermTab) {
+  tab.rtc?.close();
+  tab.rtc = null;
+}
 const terminalInputEncoder = new TextEncoder();
 
 const MOBILE_KEYS: { label: string; key: string }[] = [
@@ -146,9 +153,9 @@ function prepareTerminalInput(tab: TermTab, resize: () => void) {
 }
 
 function sendTerminalData(tab: TermTab | undefined, data: string) {
-  if (tab && tab.ws && tab.ws.readyState === WebSocket.OPEN && tab.status === "connected" && !tab.needAuth) {
-    tab.ws.send(terminalInputEncoder.encode(data));
-  }
+  if (!tab || tab.status !== "connected" || tab.needAuth) return;
+  if (tab.rtc) tab.rtc.send(terminalInputEncoder.encode(data));
+  else if (tab.ws?.readyState === WebSocket.OPEN) tab.ws.send(terminalInputEncoder.encode(data));
 }
 
 /* ── Page ── */
@@ -250,6 +257,7 @@ export function TerminalPage() {
         tab.ws.close();
         tab.ws = null;
       }
+      closeTerminalRTC(tab);
       tab.decoder = new TextDecoder();
       tab.status = "connecting";
       tab.needAuth = false;
@@ -259,7 +267,7 @@ export function TerminalPage() {
       patchMeta(tab.id, { status: "connecting", authOpen: false, authError: "" });
 
       const ws = new WebSocket(
-        wsURL("/terminal?device=" + encodeURIComponent(tab.deviceId)),
+        wsURL("/terminal?rtc=1&device=" + encodeURIComponent(tab.deviceId)),
       );
       tab.ws = ws;
       ws.binaryType = "arraybuffer";
@@ -289,6 +297,18 @@ export function TerminalPage() {
         } catch {
           return;
         }
+        if (msg.op === "rtc_start") {
+          closeTerminalRTC(tab);
+          tab.rtc = createTerminalRTC(ws, String(msg.sessionId ?? ""),
+            Array.isArray(msg.iceServers) ? msg.iceServers as RTCIceServer[] : [],
+            (data) => { if (tab.ws === ws) handleTerminalBytes(tab, data); },
+            (message) => { if (tab.ws === ws) tab.term.write("\r\n\x1b[33m[" + message + "]\x1b[0m\r\n"); });
+          return;
+        }
+        if (msg.op === "rtc_signal" || msg.op === "rtc_fallback") {
+          tab.rtc?.signal(msg);
+          return;
+        }
         if (msg.op === "auth") {
           tab.needAuth = true;
           tab.status = "authing";
@@ -305,6 +325,8 @@ export function TerminalPage() {
             tab.pendingPassword = "";
           }
           tab.needAuth = false;
+          if (msg.op === "auth_ok") return;
+          tab.rtc?.ready();
           tab.authOpen = false;
           tab.status = "connected";
           patchMeta(tab.id, { status: "connected", authOpen: false, authError: "" });
@@ -322,6 +344,7 @@ export function TerminalPage() {
                 : t("common.passwordWrong"),
           });
         } else if (msg.op === "exit") {
+          closeTerminalRTC(tab);
           removeAuthOverlay(tab);
           tab.term.write(
             "\r\n\x1b[33m[" +
@@ -346,6 +369,7 @@ export function TerminalPage() {
 
       ws.onclose = () => {
         if (tab.ws !== ws) return;
+        closeTerminalRTC(tab);
         removeAuthOverlay(tab);
         if (tab.ws === ws) tab.ws = null;
         if (tab.status !== "disconnected") {
@@ -358,6 +382,7 @@ export function TerminalPage() {
       };
       ws.onerror = () => {
         if (tab.ws !== ws) return;
+        closeTerminalRTC(tab);
         removeAuthOverlay(tab);
         tab.status = "disconnected";
         patchMeta(tab.id, { status: "disconnected" });
@@ -421,6 +446,7 @@ export function TerminalPage() {
       const tab: TermTab = {
         id,
         deviceId,
+        rtc: null,
         ws: null,
         term,
         layout: createTerminalLayout({
@@ -496,6 +522,7 @@ export function TerminalPage() {
           tab.ws.close();
           tab.ws = null;
         }
+        closeTerminalRTC(tab);
         tab.layout.dispose();
         tab.opened = false;
         tab.term.dispose();
@@ -617,6 +644,7 @@ export function TerminalPage() {
           tab.ws.close();
           tab.ws = null;
         }
+        closeTerminalRTC(tab);
         tab.layout.dispose();
         tab.opened = false;
         tab.term.dispose();
@@ -769,6 +797,7 @@ export function TerminalPage() {
           tab.ws.close();
           tab.ws = null;
         }
+        closeTerminalRTC(tab);
         tab.layout.dispose();
         tab.opened = false;
         tab.term.dispose();

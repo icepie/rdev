@@ -96,6 +96,7 @@ type ClientConn struct {
 	Forwards          map[string]*ProxyForward
 	FileOperations    []string
 	FileRTC           bool
+	TerminalRTC       bool
 	Desktop           *protocol.DesktopCapabilities
 	ConfinedDownloads bool
 	writeMu           sync.Mutex
@@ -267,6 +268,7 @@ func (c *ClientConn) SendPing() error {
 type ProxySession struct {
 	ID         string
 	ClientID   string
+	terminal   *terminalConn
 	WriteCh    chan []byte // client device -> SSH stdout / terminal
 	StderrCh   chan []byte // client device -> SSH stderr
 	CloseCh    chan struct{}
@@ -864,6 +866,7 @@ func (h *wsHandler) handleRegister(socket *gws.Conn, msg *protocol.Message) {
 		Desktop:           cloneDesktopCapabilities(msg.DesktopCapabilities),
 		FileOperations:    append([]string(nil), msg.FileOperations...),
 		FileRTC:           msg.FileRTC,
+		TerminalRTC:       msg.TerminalRTC,
 		ConfinedDownloads: msg.ConfinedDownloads,
 		Sessions:          make(map[string]*ProxySession),
 		Forwards:          make(map[string]*ProxyForward),
@@ -1187,6 +1190,7 @@ func (s *Server) registerStreamClient(transport DeviceTransport, msg *protocol.M
 		Desktop:           cloneDesktopCapabilities(msg.DesktopCapabilities),
 		FileOperations:    append([]string(nil), msg.FileOperations...),
 		FileRTC:           msg.FileRTC,
+		TerminalRTC:       msg.TerminalRTC,
 		ConfinedDownloads: msg.ConfinedDownloads,
 		Sessions:          make(map[string]*ProxySession),
 		Forwards:          make(map[string]*ProxyForward),
@@ -1261,13 +1265,13 @@ func (s *Server) handleClientMessage(client *ClientConn, msg *protocol.Message) 
 	switch msg.Type {
 	case protocol.MsgExitCode:
 		sess := s.getSession(msg.SessionID)
-		if sess != nil {
+		if sess != nil && (sess.terminal == nil || sess.terminal.client == client) {
 			sess.SetExitCode(msg.ExitCode)
 		}
 
 	case protocol.MsgClose:
 		sess := s.getSession(msg.SessionID)
-		if sess != nil {
+		if sess != nil && (sess.terminal == nil || sess.terminal.client == client) {
 			sess.SignalClose()
 		}
 
@@ -1326,6 +1330,8 @@ func (s *Server) handleClientMessage(client *ClientConn, msg *protocol.Message) 
 		s.handleDesktopMessage(msg)
 	case protocol.MsgDesktopRTCSignal:
 		s.handleDesktopRTCSignal(client, msg)
+	case protocol.MsgTerminalRTCSignal:
+		s.handleTerminalRTCSignal(client, msg)
 	}
 }
 

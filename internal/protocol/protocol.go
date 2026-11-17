@@ -55,6 +55,7 @@ const (
 	MsgFileTransferError  MessageType = "file_transfer_error"  // bidir: transfer failed
 	MsgFileTransferCancel MessageType = "file_transfer_cancel" // bidir: cancel transfer
 	MsgFileRTCSignal      MessageType = "file_rtc_signal"      // bidir: scoped file transfer SDP/ICE
+	MsgTerminalRTCSignal  MessageType = "terminal_rtc_signal"  // bidir: Web Terminal SDP/ICE
 
 	// Remote desktop (text frames for control, binary for frames)
 	MsgDesktopSnapshot  MessageType = "desktop_snapshot"   // S->C: capture one image in an on-demand session
@@ -114,6 +115,7 @@ type IceServer struct {
 type Message struct {
 	FileOperations []string    `json:"fileOperations,omitempty"`
 	FileRTC        bool        `json:"fileRTC,omitempty"`
+	TerminalRTC    bool        `json:"terminalRTC,omitempty"`
 	Type           MessageType `json:"type"`
 	ClientID       string      `json:"clientId,omitempty"`
 	SessionID      string      `json:"sessionId,omitempty"`
@@ -196,7 +198,7 @@ type Message struct {
 
 	// Remote desktop
 	DesktopCapabilities *DesktopCapabilities `json:"desktop,omitempty"`
-	RTCType             string               `json:"rtcType,omitempty"` // offer, answer, candidate, or close
+	RTCType             string               `json:"rtcType,omitempty"` // offer, answer, candidate, ready, or close
 	RTCData             json.RawMessage      `json:"rtcData,omitempty"`
 	// IceServers is present only on authorized RTC offers. A non-nil empty slice
 	// explicitly disables STUN/TURN; absence preserves older clients' defaults.
