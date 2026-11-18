@@ -8,7 +8,8 @@ function pane(top = 800) {
     observe(target) { this.targets.push(target); }
     disconnect() { this.targets = []; }
   });
-  const viewport = Object.assign(new EventTarget(), { scrollTop: top, scrollHeight: 1000, clientHeight: 200 });
+  const viewport = Object.assign(new EventTarget(), { scrollTop: top, scrollHeight: 1000, clientHeight: 200,
+    getBoundingClientRect: () => ({ top: 0 }), querySelectorAll: () => [] });
   const content = {};
   const attachment = vi.fn();
   const cleanup = observeTranscriptResize(viewport, content, attachment);
@@ -95,4 +96,31 @@ it('ignores a hidden pane without losing its last visible attachment', () => {
   p.viewport.scrollHeight = 2000;
   p.resize();
   expect(p.viewport.scrollTop).toBe(1800);
+});
+
+it('anchors the visible row when delayed media above a detached reader grows', () => {
+  const p = pane(300);
+  let rowTop = 320;
+  const row = { isConnected: true, getBoundingClientRect: () => ({ top: rowTop - p.viewport.scrollTop, bottom: rowTop - p.viewport.scrollTop + 100 }) };
+  p.viewport.querySelectorAll = () => [row];
+  p.viewport.dispatchEvent(new Event('scroll'));
+  rowTop += 500;
+  p.viewport.scrollHeight += 500;
+  p.resize();
+  expect(p.viewport.scrollTop).toBe(800);
+  expect(row.getBoundingClientRect().top).toBe(20);
+  p.cleanup();
+});
+
+it('does not undo a prepend anchor when the reader was initially at the bottom', () => {
+  const p = pane();
+  let rowTop = 820;
+  const row = { isConnected: true, getBoundingClientRect: () => ({ top: rowTop - p.viewport.scrollTop, bottom: rowTop - p.viewport.scrollTop + 100 }) };
+  p.viewport.querySelectorAll = () => [row];
+  p.viewport.dispatchEvent(new Event('scroll'));
+  rowTop += 600; p.viewport.scrollHeight += 600; p.viewport.scrollTop += 600;
+  p.viewport.dispatchEvent(new Event('transcript-anchor'));
+  p.resize();
+  expect(row.getBoundingClientRect().top).toBe(20);
+  p.cleanup();
 });

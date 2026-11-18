@@ -655,8 +655,8 @@ func TestAgentHistoryRecoveryHandlerReplacesHistoryWithoutDeadlock(t *testing.T)
 
 func TestAgentHistoryExactLineLimitRoundTrip(t *testing.T) {
 	st := newTestStore(t)
-	message := agent.Message{Role: "user"}
-	overhead := len(marshalAgentHistoryMsg(agent.Message{Role: "user", Content: "x"})) - 1
+	message := agent.Message{MessageID: "boundary", Role: "user"}
+	overhead := len(marshalAgentHistoryMsg(agent.Message{MessageID: message.MessageID, Role: "user", Content: "x"})) - 1
 	message.Content = strings.Repeat("x", agentHistoryMaxLineBytes-overhead)
 	if len(marshalAgentHistoryMsg(message)) != agentHistoryMaxLineBytes {
 		t.Fatal("bad boundary fixture")

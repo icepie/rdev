@@ -56,6 +56,7 @@ func TestContextRecoveryKeepsRunningSnapshotAndPersistsReplacement(t *testing.T)
 	th := entry.threads[entry.current]
 	original := []agent.Message{{Role: "user", Content: "Deploy the application"}, {Role: "assistant", Content: strings.Repeat("Earlier completed deployment details. ", 300)}}
 	th.session.SetHistory(original)
+	original = th.session.History()
 	srv.agentStore().save(entry.deviceID, th.id, th.model, original)
 	handler := &agentWSHandler{srv: srv}
 	handler.handleChat(&agentConn{deviceID: entry.deviceID, entry: entry, current: th.id}, "Verify the deployment", "", "", nil)
@@ -93,8 +94,12 @@ func TestContextRecoveryKeepsRunningSnapshotAndPersistsReplacement(t *testing.T)
 		t.Fatal("completed turn retained frozen transcript")
 	}
 	loaded, _, _, _ := srv.agentStore().load(entry.deviceID, th.id)
-	if !reflect.DeepEqual(loaded, expected) || !reflect.DeepEqual(terminal.History, renderAgentHistory(loaded)) {
-		t.Fatal("persisted, terminal and reconnect histories differ")
+	archive, archiveErr := srv.agentStore().transcriptPage(entry.deviceID, th.id, "", "", 50)
+	if archiveErr != nil || !reflect.DeepEqual(loaded, expected) || !reflect.DeepEqual(terminal.History, archive.History) {
+		t.Fatal("persisted model context or durable UI transcript differs")
+	}
+	if len(archive.History) < len(original)+2 || archive.History[0].Text != original[0].Content {
+		t.Fatal("semantic recovery discarded original transcript")
 	}
 	found := false
 	for _, m := range loaded {

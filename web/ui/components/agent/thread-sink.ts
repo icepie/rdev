@@ -1,3 +1,4 @@
+import { mergeHistory, type WorkspaceReply } from "./workspace-history";
 import { parseAutonomy, type AutonomyState } from "./autonomy";
 import { acceptQueueRemoval, clearQueueReturns, type QueueReturns } from "./queue-actions";
 import { TRANSCRIPT_BOTTOM_THRESHOLD } from "./transcript-resize";
@@ -67,6 +68,9 @@ export interface ThreadSinkState {
   jobs: AgentJob[];
   jobsError: string;
   items: TranscriptItem[];
+  historyHasMore: boolean;
+  historyBefore: string;
+  draft: string | null;
   todos: TodoItem[];
   queue: string[];
   queueIds: string[];
@@ -93,6 +97,11 @@ interface TurnCompletion {
 
 export interface ThreadSinkOps {
   setAutonomy: Dispatch<SetStateAction<AutonomyState>>;
+  workspaceReplies: RefObject<Map<string, WorkspaceReply>>;
+  liveMessageIDs: RefObject<Set<string>>;
+  assistantMessageID: RefObject<string>;
+  setDraft: Dispatch<SetStateAction<string | null>>;
+  restoreHistory: (frame: Record<string, unknown>, mode: "snapshot" | "before" | "around" | "refresh") => void;
   setJobsRevision: Dispatch<SetStateAction<number>>;
   jobActionReplies: RefObject<Map<string, (reply: Record<string, unknown> | null) => void>>;
   setJobsError: Dispatch<SetStateAction<string>>;
@@ -119,6 +128,7 @@ export interface ThreadSinkOps {
     images?: string[],
     imagePreviews?: string[],
     display?: unknown,
+    messageId?: string,
   ) => void;
   mutateOpenTurn: (fn: (turn: TurnItem) => TurnItem) => void;
   appendDelta: (text: string) => void;
@@ -154,6 +164,12 @@ export function isLiveReplay(): boolean {
 
 export function useThreadSink(): ThreadSink {
   const [autonomy, setAutonomy] = useState<AutonomyState>(() => parseAutonomy({}));
+  const workspaceReplies = useRef(new Map<string, WorkspaceReply>());
+  const liveMessageIDs = useRef(new Set<string>());
+  const assistantMessageID = useRef("");
+  const [historyHasMore, setHistoryHasMore] = useState(false);
+  const [historyBefore, setHistoryBefore] = useState("");
+  const [draft, setDraft] = useState<string | null>(null);
   const jobActionReplies = useRef(new Map<string, (reply: Record<string, unknown> | null) => void>());
   const [jobsError, setJobsError] = useState("");
   const [jobsRevision, setJobsRevision] = useState(0);
@@ -175,6 +191,20 @@ export function useThreadSink(): ThreadSink {
   const openToolIds = useRef<Set<string>>(new Set());
   const scrollEl = useRef<HTMLDivElement | null>(null);
   const scrollAnchor = useRef<{ element: HTMLDivElement; top: number; follow: boolean } | null>(null);
+  const restoreHistory = useCallback((frame: Record<string, unknown>, mode: "snapshot" | "before" | "around" | "refresh") => {
+    const restored = replayHistory(Array.isArray(frame.history) ? frame.history : []);
+    const live = new Set(liveMessageIDs.current);
+    setItems(previous => mode === "snapshot" ? restored : mergeHistory(previous, restored, mode, live));
+    if (mode !== "refresh") {
+      setHistoryHasMore(frame.historyHasMore === true);
+      setHistoryBefore(asString(frame.historyBefore));
+    }
+    if (mode === "snapshot") {
+      liveMessageIDs.current.clear();
+      [...workspaceReplies.current.values()].forEach(reply => reply(null));
+      setDraft(typeof frame.draft === "string" ? frame.draft : null);
+    }
+  }, []);
 
   const registerScrollEl = useCallback((el: HTMLDivElement | null) => {
     scrollEl.current = el;
@@ -225,13 +255,14 @@ export function useThreadSink(): ThreadSink {
   }, [scrollRequest]);
 
   const pushBubble = useCallback(
-    (kind: "user" | "error" | "system" | "setup", text: string, images?: string[], imagePreviews?: string[], display?: unknown) => {
+    (kind: "user" | "error" | "system" | "setup", text: string, images?: string[], imagePreviews?: string[], display?: unknown, messageId?: string) => {
       turnOpen.current = false;
-      setItems((prev) => [
+      setItems((prev) => messageId && prev.some(item => "messageId" in item && item.messageId === messageId) ? prev : [
         ...prev,
         {
           kind,
           key: nextKey(),
+          messageId,
           text,
           ...(images?.length ? { images, imagePreviews } : {}),
           /* bb ⋯ menu timestamp: live bubbles only (history has none). */
@@ -239,7 +270,7 @@ export function useThreadSink(): ThreadSink {
           ...parseDisplay(display),
         },
       ]);
-      scrollDown(true);
+      scrollDown(false);
     },
     [scrollDown],
   );
@@ -251,14 +282,15 @@ export function useThreadSink(): ThreadSink {
   const mutateOpenTurn = useCallback(
     (fn: (turn: TurnItem) => TurnItem) => {
       const open = turnOpen.current;
+      const messageId = assistantMessageID.current || undefined;
       turnOpen.current = true;
       setItems((prev) => {
-        if (open) {
+        if (open || messageId) {
           for (let i = prev.length - 1; i >= 0; i--) {
             const item = prev[i];
-            if (item.kind === "turn") {
+            if (item.kind === "turn" && (messageId ? item.messageId === messageId : open)) {
               const next = prev.slice();
-              next[i] = fn(item);
+              next[i] = fn(!open && messageId ? { ...item, text: "", reasoning: "", tools: [] } : item);
               return next;
             }
           }
@@ -268,6 +300,7 @@ export function useThreadSink(): ThreadSink {
           fn({
             kind: "turn",
             key: nextKey(),
+            messageId,
             text: "",
             reasoning: "",
             streaming: false,
@@ -331,6 +364,7 @@ export function useThreadSink(): ThreadSink {
 
   const resetTransient = useCallback(() => {
     const pendingActions = [...jobActionReplies.current.values()];
+    assistantMessageID.current = "";
     jobActionReplies.current.clear();
     pendingActions.forEach(reply => reply(null));
     turnOpen.current = false;
@@ -348,6 +382,11 @@ export function useThreadSink(): ThreadSink {
     setJobs([]);
     setJobsError("");
     setItems([]);
+    setHistoryHasMore(false);
+    setHistoryBefore("");
+    setDraft(null);
+    liveMessageIDs.current.clear();
+    [...workspaceReplies.current.values()].forEach(reply => reply(null));
     setTodos([]);
     setQueue([]);
     setQueueIds([]);
@@ -362,6 +401,11 @@ export function useThreadSink(): ThreadSink {
   const ops = useMemo<ThreadSinkOps>(
     () => ({
       setAutonomy,
+      workspaceReplies,
+      liveMessageIDs,
+      assistantMessageID,
+      restoreHistory,
+      setDraft,
       jobActionReplies,
       setJobsRevision,
       setJobs,
@@ -392,6 +436,7 @@ export function useThreadSink(): ThreadSink {
       reset,
     }),
     [
+      restoreHistory,
       pushBubble,
       mutateOpenTurn,
       appendDelta,
@@ -405,8 +450,8 @@ export function useThreadSink(): ThreadSink {
   );
 
 	const state = useMemo<ThreadSinkState>(
-		() => ({ autonomy, jobsRevision, jobs, jobsError, items, todos, queue, queueIds, queueModes, queueError, historyError, running, stopping, turnUsage, currentTool, workingSince }),
-		[autonomy, jobsRevision, jobs, jobsError, items, todos, queue, queueIds, queueModes, queueError, historyError, running, stopping, turnUsage, currentTool, workingSince],
+    () => ({ autonomy, jobsRevision, jobs, jobsError, items, historyHasMore, historyBefore, draft, todos, queue, queueIds, queueModes, queueError, historyError, running, stopping, turnUsage, currentTool, workingSince }),
+    [autonomy, jobsRevision, jobs, jobsError, items, historyHasMore, historyBefore, draft, todos, queue, queueIds, queueModes, queueError, historyError, running, stopping, turnUsage, currentTool, workingSince],
 	);
   return useMemo(() => ({ state, ops }), [state, ops]);
 }
@@ -447,6 +492,12 @@ export function applyScopedMessage(
   msg: Record<string, unknown>,
   t: Translator,
 ): void {
+  const response = ops.workspaceReplies.current.get(asString(msg.id));
+  if (response && ["history_page", "search_history", "worktree", "fork_thread", "error"].includes(String(msg.op))) {
+    response(msg);
+    return;
+  }
+  if (msg.op === "error" && /^(history|search|worktree|fork)-/.test(asString(msg.id))) return;
   switch (String(msg.op)) {
     case "autonomy":
       ops.setAutonomy(parseAutonomy(msg));
@@ -518,8 +569,7 @@ export function applyScopedMessage(
       ops.setCurrentTool(peekWorking.tool);
       ops.setWorkingSince(peekWorking.since);
       ops.setTurnUsage(parseUsage(msg.usage));
-      const history = Array.isArray(msg.history) ? msg.history : [];
-      ops.setItems(replayHistory(history));
+      ops.restoreHistory(msg, "snapshot");
       ops.scrollDown(true);
       if (Array.isArray(msg.live)) {
         setLiveReplay(true);
@@ -540,7 +590,8 @@ export function applyScopedMessage(
       if (msg.op === "steering" && ops.turnOpen.current) {
         ops.mutateOpenTurn(turn => ({ ...turn, streaming: false, streamingReasoning: false }));
       }
-      ops.pushBubble("user", asString(msg.text), parseStringArray(msg.images), parseStringArray(msg.imagePreviews), msg.display);
+      if (asString(msg.messageId)) ops.liveMessageIDs.current.add(asString(msg.messageId));
+      ops.pushBubble("user", asString(msg.text), parseStringArray(msg.images), parseStringArray(msg.imagePreviews), msg.display, asString(msg.messageId) || undefined);
       ops.setRunning(true);
       /* Replayed live frames (reattach mid-turn) must not restart the
        * elapsed timer: working.since from the server already set it. */
@@ -555,6 +606,8 @@ export function applyScopedMessage(
         ops.mutateOpenTurn(turn => ({ ...turn, streaming: false, streamingReasoning: false }));
       }
       ops.turnOpen.current = false;
+      ops.assistantMessageID.current = asString(msg.messageId);
+      if (ops.assistantMessageID.current) ops.liveMessageIDs.current.add(ops.assistantMessageID.current);
       return;
     case "reasoning":
       ops.appendReasoning(asString(msg.text));
@@ -708,11 +761,12 @@ export function applyScopedMessage(
       const doneUsage = parseUsage(usage);
       if (doneUsage) ops.setTurnUsage(doneUsage);
       if (msg.compacted === true && Array.isArray(msg.history)) {
-        ops.setItems(replayHistory(msg.history));
+        ops.restoreHistory(msg, "refresh");
+        ops.liveMessageIDs.current.clear();
         ops.pushBubble("system", t("agent.compacted"));
         ops.setRunning(false);
         ops.resetTransient();
-        ops.scrollDown(true);
+        ops.scrollDown(false);
         return;
       }
       ops.finishTurn({
@@ -723,18 +777,18 @@ export function applyScopedMessage(
         display: msg.display,
         unfinishedToolResult: t("agent.toolResultMissing"),
       });
+      if (Array.isArray(msg.history)) ops.restoreHistory(msg, "refresh");
+      ops.liveMessageIDs.current.clear();
       ops.setRunning(false);
       ops.resetTransient();
       return;
     }
     case "error": {
-      if (msg.compacted === true && Array.isArray(msg.history)) {
-        ops.setItems(replayHistory(msg.history));
-        ops.resetTransient();
-      }
       if (msg.code === "provider_content_filter") {
         const notice = t("agent.providerContentFilter");
         if (ops.turnOpen.current) ops.finishTurn({ display: msg.display, unfinishedToolResult: notice });
+        if (Array.isArray(msg.history)) ops.restoreHistory(msg, "refresh");
+        ops.liveMessageIDs.current.clear();
         ops.pushBubble("system", notice);
         ops.setRunning(false);
         ops.resetTransient();
@@ -751,6 +805,8 @@ export function applyScopedMessage(
         return;
       } else {
         if (ops.turnOpen.current) ops.finishTurn({ display: msg.display, unfinishedToolResult: message });
+        if (Array.isArray(msg.history)) ops.restoreHistory(msg, "refresh");
+        ops.liveMessageIDs.current.clear();
         ops.pushBubble("error", t("agent.toolError") + ": " + message);
         if (/api[-_ ]?key/i.test(message)) {
           ops.pushBubble("setup", t("agent.notConfiguredHint"));
@@ -761,17 +817,16 @@ export function applyScopedMessage(
       return;
     }
     case "stopped": {
-      if (msg.compacted === true && Array.isArray(msg.history)) {
-        ops.setItems(replayHistory(msg.history));
-        ops.resetTransient();
-        ops.pushBubble("system", t("agent.stopped"));
-      }
       /* A stop of a running turn closes the transcript with a marker; the
        * idle-stop ack (canceled:false, no open turn) is a no-op — calling
        * finishTurn unconditionally would append a phantom empty turn. */
       const wasOpen = ops.turnOpen.current;
       if (wasOpen) {
         ops.finishTurn({ display: msg.display, unfinishedToolResult: t("agent.stopped") });
+      }
+      if (Array.isArray(msg.history)) ops.restoreHistory(msg, "refresh");
+      ops.liveMessageIDs.current.clear();
+      if (wasOpen || msg.compacted === true) {
         ops.pushBubble("system", t("agent.stopped"));
       }
       ops.setRunning(false);

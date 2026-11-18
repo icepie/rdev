@@ -30,6 +30,9 @@ func (s *Session) compact(ctx context.Context, instructions string, aggressive b
 	revision := s.historyRevision
 	turnStart := s.turnHistoryIndex
 	s.mu.Unlock()
+	if err := s.captureHistory(); err != nil {
+		return Usage{}, err
+	}
 	latest := -1
 	for i := len(before) - 1; i >= 0; i-- {
 		if before[i].Role == "user" {
@@ -121,7 +124,7 @@ func (s *Session) compact(ctx context.Context, instructions string, aggressive b
 	if err != nil {
 		return worker.usage, err
 	}
-	replacement := []Message{{Role: "user", Content: "Context from earlier conversation (summary):\n\n" + summary}, {Role: "assistant", Content: "I will continue from this context and the latest conversation below."}}
+	replacement := []Message{{MessageID: NewMessageID(), ContextOnly: true, Role: "user", Content: "Context from earlier conversation (summary):\n\n" + summary}, {MessageID: NewMessageID(), ContextOnly: true, Role: "assistant", Content: "I will continue from this context and the latest conversation below."}}
 	retainedRequest := cut > latest
 	if retainedRequest {
 		replacement = append(replacement, before[latest])

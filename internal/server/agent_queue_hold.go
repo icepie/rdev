@@ -5,7 +5,7 @@ import "time"
 const queueEditLease = time.Minute
 
 func queueHeadReady(entry *agentSessionEntry, th *agentThread, now time.Time) bool {
-	return len(th.queue) > 0 && (entry.deviceID == agentServerDeviceID || entry.client != nil) && !now.Before(th.queue[0].editUntil)
+	return !entry.worktreeBusy && len(th.queue) > 0 && (entry.deviceID == agentServerDeviceID || entry.client != nil) && !now.Before(th.queue[0].editUntil)
 }
 
 func (s *Server) applyQueuedModelLocked(entry *agentSessionEntry, th *agentThread, item agentQueuedChat) bool {

@@ -372,6 +372,17 @@ it("preserves composer intent across modified keys, image loading and thread swi
     expect([...document.querySelectorAll("img")].map(image => image.alt)).toEqual(["keep-me.png"]);
     await act(async () => sendButton().click());
     expect(sent.at(-1).images.map(image => image.name)).toEqual(["keep-me.png"]);
+    const beforeForkDraft = sent.length;
+    props.threadId = "fork-review";
+    props.sink.state.draft = "edited request for review";
+    props.sink.ops.setDraft = value => { props.sink.state.draft = value; };
+    await render();
+    expect(sent).toHaveLength(beforeForkDraft);
+    expect(document.querySelector('textarea[role="combobox"]').value).toBe("edited request for review");
+    expect(document.body.textContent).toContain("agent.forkDraftReady");
+    await act(async () => sendButton().click());
+    expect(sent.at(-1)).toMatchObject({ op: "chat", thread: "fork-review", text: "edited request for review" });
+    expect(document.body.textContent).not.toContain("agent.forkDraftReady");
     await attach("sync-failure.png");
     expect(document.querySelector('[role="status"]')).toBeNull();
     expect(sendButton().disabled).toBe(true);

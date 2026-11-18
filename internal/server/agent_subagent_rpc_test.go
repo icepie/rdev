@@ -330,8 +330,8 @@ func TestSubagentRPCWireContract(t *testing.T) {
 	if got := guidance.snapshot(); len(got) != 1 || got[0] != "inspect tests" {
 		t.Fatal(got)
 	}
-	// Transcript reads use the bounded rdev output window and remain a normal
-	// correlated RPC response even before the subagent has produced output.
+	// Structured transcript reads remain correlated before the child produces
+	// its first message; selectors cannot escape the current thread.
 	for _, selector := range []map[string]any{
 		{"subagentId": child.ID, "sessionFile": "rdev://subagent/other"},
 		{"subagentId": child.ID, "fromByte": nil},

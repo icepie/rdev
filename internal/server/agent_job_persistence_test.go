@@ -37,8 +37,11 @@ func TestJobRecordsRestoreWithoutRestartingExecution(t *testing.T) {
 	srv.waitAgentWork()
 	store := srv.agentStore()
 	records := store.loadJobs(entry.deviceID, th.id)
-	if len(records) != 1 || records[0].Output != "compiled\n" || records[0].State != "completed" {
+	if len(records) != 1 || records[0].State != "completed" {
 		t.Fatal(records)
+	}
+	if records[0].OutputNext-records[0].OutputBase != int64(len(records[0].Output)) {
+		t.Fatal("persisted cursor no longer addresses the retained output")
 	}
 	// Simulate a crash checkpoint for another worker; no executable closure is stored.
 	records = append(records, agentJobSnapshot{ID: "interrupted", Kind: "subagent", Label: "inspect", State: "running", Started: time.Now(), Output: "last checkpoint", PendingGuidance: []string{"check logs"}, CancelRequested: true})

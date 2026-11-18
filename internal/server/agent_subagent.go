@@ -113,6 +113,7 @@ func (t *subagentTool) Execute(ctx context.Context, raw json.RawMessage) (string
 	cfg.SystemPrompt += "\nYou are a delegated subagent. Complete only the assigned task using the granted tools. Report results, evidence, and unresolved issues. Do not claim unverified outcomes."
 	guidance := &agentJobGuidance{}
 	job, err := t.jobs.start("subagent", truncateRunes(args.Task, 120), func(ctx context.Context, write func(string)) (string, error) {
+		id, _ := ctx.Value(agentChildJobKey{}).(string)
 		if args.Device != "" && t.deviceContext != nil {
 			scoped, finish, err := t.deviceContext(ctx, args.Device)
 			if err != nil {
@@ -123,10 +124,17 @@ func (t *subagentTool) Execute(ctx context.Context, raw json.RawMessage) (string
 		}
 		childCtx, cancel := context.WithTimeout(ctx, 30*time.Minute)
 		defer cancel()
+		// Never reuse a parent's persistence callback: child histories and
+		// identities belong exclusively to this thread-scoped child archive.
+		cfg.OnHistory = func(history []agent.Message) error {
+			return t.jobs.captureChildHistory(id, history)
+		}
 		child := agent.New(cfg)
 		emit := func(event agent.Event) {
 			switch event.Type {
 			case agent.EventTextDelta:
+				// Structured records are captured at settled message boundaries
+				// by OnHistory; this stream remains a bounded progress preview.
 				write(event.Text)
 			case agent.EventUserInput:
 				write("\n[guidance] " + event.Text + "\n")

@@ -288,7 +288,7 @@ func (h *agentWSHandler) handleAutonomySlash(ac *agentConn, text, thread string,
 // settle. Queued user work (including held edits) always takes precedence.
 func (s *Server) scheduleAutonomy(entry *agentSessionEntry, th *agentThread) {
 	s.agentSessionsMu.Lock()
-	if entry.threads[th.id] != th || th.running || len(th.queue) != 0 || th.autonomyPending || !autonomyWantedLocked(th) {
+	if entry.worktreeBusy || entry.threads[th.id] != th || th.running || len(th.queue) != 0 || th.autonomyPending || !autonomyWantedLocked(th) {
 		s.agentSessionsMu.Unlock()
 		return
 	}
@@ -326,7 +326,7 @@ func (s *Server) scheduleAutonomy(entry *agentSessionEntry, th *agentThread) {
 			return
 		}
 		th.autonomyPending, th.autonomyCancel = false, nil
-		if th.running || len(th.queue) != 0 {
+		if entry.worktreeBusy || th.running || len(th.queue) != 0 {
 			s.agentSessionsMu.Unlock()
 			return
 		}

@@ -12,6 +12,7 @@ func TestHistoryOwnsNestedToolCallsAndImages(t *testing.T) {
 				{Role: "user", Content: "inspect image", Images: []MessageImage{{Name: "screen.png", Mime: "image/png", Data: "original"}}},
 				{Role: "assistant", ToolCalls: []ToolCall{{ID: "call-1", Name: "read_file", Arguments: `{"path":"original"}`, Summary: "original summary"}}},
 			}
+			ensureMessageIDs(input)
 			first, second := New(Config{}), New(Config{})
 			for _, session := range []*Session{first, second} {
 				if write == "set" {

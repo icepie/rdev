@@ -12,10 +12,7 @@ import type { Translator } from "./types";
 const ACTION_BUTTON_CLASS =
   "inline-flex size-5 cursor-pointer items-center justify-center text-muted-foreground hover:text-foreground disabled:pointer-events-none disabled:opacity-40";
 
-/* bb MessageActionBar: 20px hover-revealed slot under a message (assistant
- * and user alike). Inline Copy + ⋯ overflow (Add to chat + timestamp
- * footer). bb's Edit / Fork / Copy link are not ported: rdev has no inline
- * message editor, no fork-thread op, and no message links. */
+/* Shared message actions keep durable links separate from the ephemeral row key. */
 export function MessageActionBar({
   align,
   text,
@@ -23,6 +20,9 @@ export function MessageActionBar({
   copied,
   onCopy,
   onAddToChat,
+  onCopyLink,
+  onFork,
+  onEditFork,
   t,
 }: {
   /* "start" = assistant (left), "end" = user (right). */
@@ -34,6 +34,9 @@ export function MessageActionBar({
   copied: boolean;
   onCopy: (text: string) => void;
   onAddToChat: (text: string) => void;
+  onCopyLink?: () => void;
+  onFork?: () => void;
+  onEditFork?: () => void;
   t: Translator;
 }) {
   return (
@@ -86,6 +89,9 @@ export function MessageActionBar({
               <Icon name="MessageSquarePlus" className="size-4 shrink-0" />
               {t("agent.addToChat")}
             </DropdownMenuItem>
+            {onCopyLink && <DropdownMenuItem onSelect={onCopyLink}>{t("agent.copyMessageLink")}</DropdownMenuItem>}
+            {onFork && <DropdownMenuItem onSelect={onFork}>{t("agent.forkMessage")}</DropdownMenuItem>}
+            {onEditFork && <DropdownMenuItem onSelect={onEditFork}>{t("agent.editForkMessage")}</DropdownMenuItem>}
             {timestamp !== undefined && (
               <div className="mt-1 border-t border-border px-2 pt-2 pb-1 text-xs text-subtle-foreground">
                 <time

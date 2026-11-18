@@ -110,7 +110,6 @@ import {
   parseUsage,
   parseModelCatalog,
   parseWorking,
-  replayHistory,
   threadCreatedMs,
   THREAD_SCOPED_OPS,
   TRANSCRIPT_OPS,
@@ -243,6 +242,7 @@ export function AgentPage() {
   const navigateThread = useCallback((targetDevice: string, targetThread = "", replace = false, preserveTurn = false) => {
     const params = new URLSearchParams(locationRef.current.search);
     if (!preserveTurn) params.delete("turn");
+    if (!preserveTurn) params.delete("message");
     navigate(agentConversationURL(targetDevice, targetThread, params), { replace });
   }, [navigate]);
 
@@ -743,6 +743,26 @@ export function AgentPage() {
      * they carry the NEW thread id and update threadRef themselves. */
     const op = String(msg.op);
     const frameThread = asString(msg.thread);
+    if (msg.type === "response" && msg.command === "get_subagent_messages") {
+      const id = asString(msg.id);
+      const owner = [primaryOps, ...secondarySinksRef.current.values()].find(ops => ops.workspaceReplies.current.has(id));
+      owner?.workspaceReplies.current.get(id)?.(msg);
+      return;
+    }
+    if (op === "search_history") {
+      const id = asString(msg.id);
+      const owner = [primaryOps, ...secondarySinksRef.current.values()].find(ops => ops.workspaceReplies.current.has(id));
+      if (owner) applyScopedMessage(owner, msg, t);
+      return;
+    }
+    if (op === "thread_switched") {
+      const id = asString(msg.id);
+      const owner = [primaryOps, ...secondarySinksRef.current.values()].find(ops => ops.workspaceReplies.current.has(id));
+      if (owner && id.startsWith("fork-")) {
+        owner.workspaceReplies.current.get(id)?.(msg);
+        navigateThread(sourceDevice, frameThread);
+      }
+    }
     if (op === "error" && frameThread && frameThread === routeRef.current.thread && pendingRouteSwitch.current === frameThread) {
       setRouteError(asString(msg.message) || t("common.error"));
       return;
@@ -899,9 +919,8 @@ export function AgentPage() {
           ops.reset();
         }
         threadsLoadedRef.current = true;
-        const history = Array.isArray(msg.history) ? msg.history : [];
         primaryOps.turnOpen.current = false;
-        primaryOps.setItems(replayHistory(history));
+        primaryOps.restoreHistory(msg, "snapshot");
 		primaryOps.setHistoryError(asString(msg.historyError));
         primaryOps.scrollDown(true);
         /* Reattach mid-turn: replay the in-flight frames (turn_start,
@@ -1113,10 +1132,13 @@ export function AgentPage() {
         diffRequestEpochRef.current.clear();
         fileRequestsRef.current!.clear();
         panelRequestEpochRef.current++;
-        const history = Array.isArray(msg.history) ? msg.history : [];
-        primaryOps.setItems(replayHistory(history));
+        primaryOps.restoreHistory(msg, "snapshot");
 		primaryOps.setHistoryError(asString(msg.historyError));
         primaryOps.scrollDown(true);
+        const switchCwd = asString(msg.cwd);
+        setCwd(switchCwd);
+        setBranch(asString(msg.branch));
+        if (switchCwd) setKnownCwds(previous => previous.includes(switchCwd) ? previous : [...previous, switchCwd]);
         /* The new thread's own model (threads may differ; the frame
          * carries the entry-level model only for legacy servers). */
         const switchModel = asString(msg.model);
@@ -1170,6 +1192,9 @@ export function AgentPage() {
     // Replacing a socket disables its onclose handler, so settle its pending
     // operations here as well as on an unexpected disconnect.
     rejectPendingPanelRequests("connection replaced");
+    for (const ops of [primaryOps, ...secondarySinksRef.current.values()]) {
+      [...ops.workspaceReplies.current.values()].forEach(reply => reply(null));
+    }
     if (pendingDeleteRef.current || pendingRenameRef.current.size > 0) {
       setManagementError(t("common.disconnected"));
     }
@@ -1231,6 +1256,9 @@ export function AgentPage() {
       streamBatchRef.current = null;
       clearPing();
       rejectPendingPanelRequests();
+      for (const ops of [primaryOps, ...secondarySinksRef.current.values()]) {
+        [...ops.workspaceReplies.current.values()].forEach(reply => reply(null));
+      }
       setAuthed(false);
       if (primaryOps.turnOpen.current) primaryOps.finishTurn();
       primaryOps.resetTransient();

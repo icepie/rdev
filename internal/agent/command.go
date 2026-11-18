@@ -30,17 +30,27 @@ func (s *Session) RunToolCommand(ctx context.Context, text, name string, args js
 	if emit == nil {
 		emit = func(Event) {}
 	}
+	userID, _ := ctx.Value(userMessageIDKey{}).(string)
+	s.appendHistory(Message{MessageID: userID, Role: "user", Content: text})
+	if err := s.captureHistory(); err != nil {
+		return err
+	}
+	assistantID := NewMessageID()
+	emit(Event{Type: EventAssistantStart, MessageID: assistantID})
 	emit(Event{Type: EventToolStart, ToolID: tc.ID, ToolName: name, ToolArgs: args, Summary: tc.Summary})
 	result, failed := s.executeTool(ctx, tool, tc, args, emit)
 	tc.IsError = failed
+	archiveResult := result
 	result = truncateToolOutput(result)
 	// Keep the complete call/result chain even when approval is denied or the
 	// tool is canceled. Reconnect and subsequent model turns see the same result.
 	s.appendHistory(
-		Message{Role: "user", Content: text},
-		Message{Role: "assistant", ToolCalls: []ToolCall{tc}},
-		Message{Role: "tool", ToolCallID: tc.ID, Content: result},
+		Message{MessageID: assistantID, Role: "assistant", ToolCalls: []ToolCall{tc}},
+		Message{Role: "tool", ToolCallID: tc.ID, Content: result, ArchiveContent: archiveResult},
 	)
+	if err := s.captureHistory(); err != nil {
+		return err
+	}
 	emit(Event{Type: EventToolEnd, ToolID: tc.ID, ToolName: name, ToolResult: result, IsError: failed})
 	if err := ctx.Err(); err != nil {
 		return err

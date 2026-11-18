@@ -28,6 +28,8 @@ export function TurnView({
   dimmed,
   onCopy,
   onAddToChat,
+  onCopyLink,
+  onFork,
   onOpenFile,
   onOpenLocalFile,
 }: {
@@ -39,6 +41,8 @@ export function TurnView({
   dimmed?: boolean;
   onCopy: (text: string) => void;
   onAddToChat: (text: string) => void;
+  onCopyLink?: () => void;
+  onFork?: () => void;
   /* Thread→panel linkage: preview tab / markdown local-file links. */
   onOpenFile?: (path: string) => void;
   onOpenLocalFile?: (link: LocalFileLink) => void;
@@ -123,7 +127,7 @@ export function TurnView({
           ))}
         </div>
       )}
-      {projected.text.trim() && !active && (
+      {(projected.text.trim() || turn.messageId) && !active && (
         <MessageActionBar
           align="start"
           text={projected.text}
@@ -131,6 +135,8 @@ export function TurnView({
           copied={copied}
           onCopy={onCopy}
           onAddToChat={onAddToChat}
+          onCopyLink={onCopyLink}
+          onFork={onFork}
           t={t}
         />
       )}

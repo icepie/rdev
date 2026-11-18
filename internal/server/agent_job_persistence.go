@@ -78,10 +78,20 @@ func (st *agentSessionStore) loadJobs(device, thread string) []agentJobSnapshot 
 }
 
 func boundedStoredJob(snapshot agentJobSnapshot) agentJobSnapshot {
+	// Old snapshots have only a bounded string; explicitly rebase that legacy
+	// window once. New snapshots retain their absolute stream positions.
+	if snapshot.OutputNext == 0 && len(snapshot.Output) > 0 {
+		snapshot.OutputNext = int64(len(snapshot.Output))
+	}
 	snapshot.Label = agentJobTail(snapshot.Label)
 	snapshot.Output = agentJobTail(snapshot.Output)
 	snapshot.Result = agentJobTail(snapshot.Result)
 	snapshot.Error = agentJobTail(snapshot.Error)
+	snapshot.OutputBase = snapshot.OutputNext - int64(len(snapshot.Output))
+	if snapshot.OutputBase < 0 {
+		snapshot.OutputBase = 0
+		snapshot.OutputNext = int64(len(snapshot.Output))
+	}
 	pending := snapshot.PendingGuidance
 	if len(pending) > agentMaxPendingGuidance {
 		pending = pending[len(pending)-agentMaxPendingGuidance:]
@@ -106,7 +116,7 @@ func (m *agentJobs) snapshotForStorage() ([]agentJobSnapshot, uint64) {
 	for _, job := range m.jobs {
 		snapshot := job.snapshot
 		if snapshot.Finished == nil {
-			snapshot.Output = job.output.String()
+			snapshot.Output, snapshot.OutputBase, snapshot.OutputNext = job.output.window()
 			if job.guidance != nil {
 				snapshot.PendingGuidance = job.guidance.snapshot()
 			}
@@ -148,6 +158,11 @@ func (m *agentJobs) restore(snapshots []agentJobSnapshot) (interrupted bool) {
 			now := time.Now()
 			snapshot.Finished = &now
 			interrupted = true
+			if snapshot.Kind == "subagent" && validAgentChildID(snapshot.ID) {
+				if err := m.restoreChildTranscriptLocked(&snapshot); err != nil {
+					snapshot.Error = agentJobTail(snapshot.Error + "\nChild transcript: " + err.Error())
+				}
+			}
 		} else if snapshot.Finished == nil {
 			continue
 		}

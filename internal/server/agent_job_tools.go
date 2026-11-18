@@ -233,7 +233,7 @@ func (s *Server) deliverAgentJob(entry *agentSessionEntry, th *agentThread, owne
 		return
 	}
 	entry.lastActive = time.Now()
-	if th.running {
+	if th.running || entry.worktreeBusy {
 		th.queue = append(th.queue, agentQueuedChat{text: text, display: display})
 		s.agentSessionsMu.Unlock()
 		s.broadcastQueue(entry, th)
@@ -471,16 +471,23 @@ type ompSubagentSnapshot struct {
 	LastUpdate  int64  `json:"lastUpdate"`
 }
 
-// ompSubagentMessages is a bounded rdev transcript view. Jobs do not persist
-// OMP session JSONL files, so the cursor describes the retained output window;
-// reset is true whenever the caller asks for bytes before that window.
+// Transcript cursors address durable JSONL records, independently of the
+// bounded human-readable job output. Messages contain actual captured roles,
+// tool results and reasoning; entries also include lifecycle records.
 type ompSubagentMessages struct {
-	SessionFile string           `json:"sessionFile"`
-	FromByte    int64            `json:"fromByte"`
-	NextByte    int64            `json:"nextByte"`
-	Reset       bool             `json:"reset"`
-	Entries     []map[string]any `json:"entries"`
-	Messages    []map[string]any `json:"messages"`
+	SessionFile           string            `json:"sessionFile"`
+	FromByte              int64             `json:"fromByte"`
+	NextByte              int64             `json:"nextByte"`
+	Reset                 bool              `json:"reset"`
+	HasMore               bool              `json:"hasMore"`
+	Entries               []json.RawMessage `json:"entries"`
+	Messages              []json.RawMessage `json:"messages"`
+	Output                string            `json:"output,omitempty"`
+	OutputBase            int64             `json:"outputBase"`
+	OutputNext            int64             `json:"outputNext"`
+	Retention             string            `json:"retention"`
+	TranscriptLimit       int64             `json:"transcriptLimit"`
+	ThreadTranscriptLimit int64             `json:"threadTranscriptLimit"`
 }
 
 func (h *agentWSHandler) handleGetSubagentMessages(ac *agentConn, request agentMsg) {
@@ -488,12 +495,16 @@ func (h *agentWSHandler) handleGetSubagentMessages(ac *agentConn, request agentM
 	if threadID == "" {
 		threadID = ac.current
 	}
+	fail := func(message string) {
+		success := false
+		ac.writeJSON(agentMsg{Type: "response", Command: request.Command, ID: request.ID, Thread: threadID, Success: &success, Code: "invalid_request", Error: message})
+	}
 	if request.SubagentID != "" && request.SessionFile != "" && request.SessionFile != "rdev://subagent/"+request.SubagentID {
-		h.writeRPCError(ac, request, "invalid_request", "subagentId and sessionFile must identify the same subagent")
+		fail("subagentId and sessionFile must identify the same subagent")
 		return
 	}
 	if request.SubagentID == "" && request.SessionFile == "" {
-		h.writeRPCError(ac, request, "invalid_request", "subagentId or sessionFile is required")
+		fail("subagentId or sessionFile is required")
 		return
 	}
 	var jobs *agentJobs
@@ -505,53 +516,35 @@ func (h *agentWSHandler) handleGetSubagentMessages(ac *agentConn, request agentM
 		h.srv.agentSessionsMu.Unlock()
 	}
 	if jobs == nil {
-		h.writeRPCError(ac, request, "invalid_request", "unknown thread")
+		fail("unknown thread")
 		return
 	}
-	var selected agentJobSnapshot
-	var found bool
-	for _, job := range jobs.List() {
-		if job.Kind == "subagent" && (request.SubagentID == job.ID || request.SessionFile == "rdev://subagent/"+job.ID) {
-			selected, found = job, true
-			if detailed, err := jobs.Read(job.ID); err == nil {
-				selected = detailed
-			}
-			break
+	id := request.SubagentID
+	if id == "" {
+		const prefix = "rdev://subagent/"
+		if !strings.HasPrefix(request.SessionFile, prefix) {
+			fail("invalid child sessionFile")
+			return
 		}
-	}
-	if !found && request.SubagentID != "" {
-		if job, err := jobs.Read(request.SubagentID); err == nil && job.Kind == "subagent" {
-			selected, found = job, true
-		}
-	}
-	if !found {
-		h.writeRPCError(ac, request, "invalid_request", "unknown subagent")
-		return
-	}
-	output := selected.Output
-	if selected.State != "running" && selected.Result != "" {
-		output = selected.Result
+		id = strings.TrimPrefix(request.SessionFile, prefix)
 	}
 	from := int64(0)
 	if request.FromByte != nil {
 		from = *request.FromByte
 	}
-	window := int64(len(output))
-	reset := from > window
-	if reset {
-		from = 0
+	// Archive lookup is thread-scoped and independent of the 64-job summary
+	// cache, so completed children remain readable after summary eviction.
+	data, err := jobs.readChildTranscript(id, from)
+	if err != nil {
+		fail(err.Error())
+		return
 	}
-	for from > 0 && from < window && (output[from]&0xc0) == 0x80 {
-		from--
-	}
-	content := output[from:]
-	data := ompSubagentMessages{SessionFile: "rdev://subagent/" + selected.ID, FromByte: from, NextByte: window, Reset: reset, Entries: []map[string]any{}, Messages: []map[string]any{}}
-	if content != "" {
-		data.Messages = []map[string]any{{"role": "assistant", "content": content}}
+	if snapshot, err := jobs.Read(id); err == nil {
+		data.Output, data.OutputBase, data.OutputNext = snapshot.Output, snapshot.OutputBase, snapshot.OutputNext
 	}
 	success := true
 	raw, _ := json.Marshal(data)
-	ac.writeJSON(agentMsg{Type: "response", Command: request.Command, ID: request.ID, Success: &success, Data: raw})
+	ac.writeJSON(agentMsg{Type: "response", Command: request.Command, ID: request.ID, Thread: threadID, Success: &success, Data: raw})
 }
 
 // Native browser cancellation uses distinct request and job identities. The

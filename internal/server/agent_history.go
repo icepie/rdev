@@ -58,6 +58,8 @@ type agentHistoryToolCall struct {
 
 // agentHistoryLine is one JSONL record: meta (t=="meta") or message (t=="msg").
 type agentHistoryLine struct {
+	MessageID     string                 `json:"messageId,omitempty"`
+	ContextOnly   bool                   `json:"contextOnly,omitempty"`
 	Goal          *agentGoal             `json:"goal,omitempty"`
 	Loop          *agentLoop             `json:"loop,omitempty"`
 	Anthropic     *agent.ProviderReplay  `json:"anthropic,omitempty"`
@@ -86,6 +88,7 @@ type agentHistoryLine struct {
 
 // agentHistoryEntry is one rendered conversation entry sent in auth_ok.
 type agentHistoryEntry struct {
+	MessageID     string             `json:"messageId"`
 	Display       json.RawMessage    `json:"display,omitempty"`
 	ImagePreviews []string           `json:"imagePreviews,omitempty"`
 	Role          string             `json:"role"` // "user" | "assistant"
@@ -122,13 +125,15 @@ type agentThreadMeta struct {
 // history as JSONL under <dir>/<deviceID>/<threadID>.jsonl. A single mutex
 // guards all files; volume is tiny.
 type agentSessionStore struct {
-	dir    string
-	ttl    time.Duration
-	mu     sync.Mutex
-	saved  map[string]int // deviceID + "/" + threadID -> number of history messages already on disk
-	extras map[string]agentThreadExtras
-	loaded map[string]bool
-	faults map[string]AgentHistoryFault
+	dir               string
+	ttl               time.Duration
+	mu                sync.Mutex
+	saved             map[string]int // deviceID + "/" + threadID -> number of history messages already on disk
+	extras            map[string]agentThreadExtras
+	loaded            map[string]bool
+	faults            map[string]AgentHistoryFault
+	transcripts       map[string]*agentTranscript
+	recentTranscripts sync.Map // key -> immutable agentHistoryPage; snapshot reads do not take disk mutex
 }
 
 // agentThreadExtras are the meta-line fields (besides the model) carried
@@ -322,6 +327,10 @@ func (st *agentSessionStore) load(deviceID, threadID string) (msgs []agent.Messa
 		delete(st.saved, key)
 	} else {
 		st.saved[key] = len(msgs)
+		assignLegacyMessageIDs(deviceID, threadID, msgs)
+		if err := st.captureTranscriptLocked(deviceID, threadID, msgs); err != nil {
+			log.Printf("agent transcript: migrate %s/%s: %v", deviceID, threadID, err)
+		}
 	}
 	return msgs, model, cwd, title
 }
@@ -410,7 +419,7 @@ func (st *agentSessionStore) loadPathLocked(deviceID, threadID, path string) (ms
 				parseErr = errors.Join(parseErr, fmt.Errorf("unsupported message role %q", line.Role))
 				continue
 			}
-			msg := agent.Message{Anthropic: line.Anthropic, Responses: line.Responses, Display: line.Display, Role: line.Role, Content: line.Content, ToolCallID: line.ToolCallID, Reasoning: line.Reasoning}
+			msg := agent.Message{MessageID: line.MessageID, ContextOnly: line.ContextOnly, Anthropic: line.Anthropic, Responses: line.Responses, Display: line.Display, Role: line.Role, Content: line.Content, ToolCallID: line.ToolCallID, Reasoning: line.Reasoning}
 			for i, name := range line.Images {
 				var preview string
 				if i < len(line.ImagePreviews) {
@@ -476,6 +485,11 @@ func (st *agentSessionStore) save(deviceID, threadID, model string, history []ag
 	key := deviceID + "/" + threadID
 	if !st.writableLocked(deviceID, threadID) {
 		return // explicit recovery is required before writing damaged history
+	}
+	assignLegacyMessageIDs(deviceID, threadID, history)
+	if err := st.captureTranscriptLocked(deviceID, threadID, history); err != nil {
+		log.Printf("agent transcript: save %s/%s: %v", deviceID, threadID, err)
+		return
 	}
 	savedCount := st.saved[key]
 	if savedCount > len(history) {
@@ -642,6 +656,11 @@ func (st *agentSessionStore) replace(deviceID, threadID, model string, history [
 	if !st.writableLocked(deviceID, threadID) {
 		return
 	}
+	assignLegacyMessageIDs(deviceID, threadID, history)
+	if err := st.captureTranscriptLocked(deviceID, threadID, history); err != nil {
+		log.Printf("agent transcript: replace %s/%s: %v", deviceID, threadID, err)
+		return
+	}
 	if err := st.rewriteLocked(deviceID, threadID, model, history); err != nil {
 		log.Printf("agent history: replace %s/%s: %v", deviceID, threadID, err)
 		return
@@ -777,6 +796,7 @@ func (st *agentSessionStore) setExtra(deviceID, threadID string, update func(*ag
 // strings are marshaled, so an error is practically unreachable.
 func marshalAgentHistoryMsg(m agent.Message) []byte {
 	line := agentHistoryLine{
+		MessageID: m.MessageID, ContextOnly: m.ContextOnly,
 		Responses: m.Responses,
 		Anthropic: m.Anthropic,
 		Display:   m.Display, ImagePreviews: agentImagePreviews(m.Images),
@@ -809,7 +829,11 @@ func (st *agentSessionStore) clear(deviceID, threadID string) {
 	if err := os.Remove(st.jobsPath(deviceID, threadID)); err != nil && !os.IsNotExist(err) {
 		log.Printf("agent jobs: clear %s/%s: %v", deviceID, threadID, err)
 	}
+	_ = os.RemoveAll(st.childTranscriptsPath(deviceID, threadID))
 	key := deviceID + "/" + threadID
+	_ = os.Remove(st.transcriptPath(deviceID, threadID))
+	delete(st.transcripts, key)
+	st.recentTranscripts.Delete(key)
 	delete(st.saved, key)
 	delete(st.faults, key)
 	delete(st.loaded, key)
@@ -865,6 +889,10 @@ func (st *agentSessionStore) cleanup() {
 			delete(st.saved, key)
 			delete(st.loaded, key)
 			delete(st.extras, key)
+			_ = os.Remove(st.transcriptPath(deviceID, threadID))
+			delete(st.transcripts, key)
+			st.recentTranscripts.Delete(key)
+			_ = os.RemoveAll(st.childTranscriptsPath(deviceID, threadID))
 			if strings.HasSuffix(path, ".jsonl") {
 				_ = os.Remove(strings.TrimSuffix(path, ".jsonl") + ".jobs.json")
 			}
@@ -954,9 +982,9 @@ func renderAgentHistory(msgs []agent.Message) []agentHistoryEntry {
 			if m.Content == "" && len(m.Images) == 0 {
 				continue
 			}
-			entries = append(entries, agentHistoryEntry{Display: m.Display, Role: "user", Text: m.Content, Images: agentImageNames(m.Images), ImagePreviews: agentImagePreviews(m.Images)})
+			entries = append(entries, agentHistoryEntry{MessageID: m.MessageID, Display: m.Display, Role: "user", Text: m.Content, Images: agentImageNames(m.Images), ImagePreviews: agentImagePreviews(m.Images)})
 		case "assistant":
-			e := agentHistoryEntry{Display: m.Display, Role: "assistant", Text: m.Content, Reasoning: m.Reasoning}
+			e := agentHistoryEntry{MessageID: m.MessageID, Display: m.Display, Role: "assistant", Text: m.Content, Reasoning: m.Reasoning}
 			// Call IDs are scoped to this response, not the conversation.
 			toolResults := make(map[string]string)
 			for j := i + 1; j < len(msgs) && msgs[j].Role == "tool"; j++ {

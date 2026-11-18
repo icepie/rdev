@@ -1,3 +1,7 @@
+import { HistorySearch } from "./history-search";
+import { WorktreeControl } from "./worktree-control";
+import { useWorkspaceHistory } from "./use-workspace-history";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../dialog";
 import { AutonomyControls } from "./autonomy";
 import { ThreadTimelineLoadingSkeleton } from "../loading-skeletons";
 import { useComposerAutosize } from "./use-composer-autosize";
@@ -181,6 +185,14 @@ export function ChatPaneView({
   useEffect(() => () => clearQueueReturns(ops.queueReturns.current), [draftKey, ops.queueReturns]);
   const [input, setInput] = useComposerTextDraft(draftKey);
   const [pendingImages, setPendingImages] = useComposerDraft(draftKey, EMPTY_COMPOSER_IMAGES);
+  const [forkDraftReview, setForkDraftReview] = useState(false);
+  useEffect(() => setForkDraftReview(false), [draftKey]);
+  useEffect(() => {
+    if (state.draft === null || state.draft === undefined) return;
+    setInput(state.draft);
+    setForkDraftReview(true);
+    ops.setDraft(null);
+  }, [state.draft, ops, setInput]);
   const pendingImageGallery = useMemo(() => pendingImages.map(image => ({ name: image.name, src: image.preview })), [pendingImages]);
   const imageReaders = useRef(new Map<FileReader, PendingImage | null | undefined>());
   const imageConversion = useRef(new AbortController());
@@ -336,6 +348,7 @@ export function ChatPaneView({
       payload.images = pendingImages.map(({ name, mime, data }) => ({ name, mime, data }));
     }
     if (!sendRaw(payload)) return;
+    setForkDraftReview(false);
     cancelImageReads();
     setComposerError("");
     setInput("");
@@ -364,6 +377,7 @@ export function ChatPaneView({
     if (threadId) payload.thread = threadId;
     if (pendingImages.length) payload.images = pendingImages.map(({ name, mime, data }) => ({ name, mime, data }));
     if (!sendRaw(payload)) return;
+    setForkDraftReview(false);
     cancelImageReads();
     setComposerError("");
     setInput("");
@@ -633,6 +647,7 @@ export function ChatPaneView({
    * while the conversation is actively running. */
   const transcriptRef = useRef<HTMLDivElement>(null);
   const transcriptContentRef = useRef<HTMLDivElement>(null);
+  const workspace = useWorkspaceHistory({ sink, device, thread: threadId, ready: connectionReady, sendRaw, viewport: transcriptRef, t, onCopy });
   const registerTranscript = useCallback((node: HTMLDivElement | null) => {
     transcriptRef.current = node;
     ops.registerScrollEl(node);
@@ -668,14 +683,29 @@ export function ChatPaneView({
 
   return (
     <>
+      <Dialog open={!!workspace.edit} onOpenChange={open => { if (!open && !workspace.forking) workspace.setEdit(null); }}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>{t("agent.editForkMessage")}</DialogTitle><DialogDescription>{t("agent.forkDraftReview")}</DialogDescription></DialogHeader>
+          <Textarea aria-label={t("agent.editForkMessage")} value={workspace.edit?.text || ""} onChange={event => workspace.setEdit(previous => previous ? { ...previous, text: event.target.value } : null)} />
+          {workspace.error && <p role="alert" className="text-sm text-destructive-text">{workspace.error}</p>}
+          <DialogFooter><Button disabled={!ready || workspace.forking || !workspace.edit?.text.trim()} onClick={() => { if (workspace.edit) workspace.fork(workspace.edit.messageId, workspace.edit.text); }}>{t("agent.forkReviewDraft")}</Button></DialogFooter>
+        </DialogContent>
+      </Dialog>
       {/* Transcript */}
       <div className="relative flex min-h-0 flex-1 flex-col">
+      <div className="flex shrink-0 items-center gap-2 px-3">
+        <HistorySearch device={device} thread={threadId} ready={connectionReady} ops={ops} sendRaw={sendRaw} t={t} />
+        <Button variant="ghost" size="sm" disabled={!connectionReady || workspace.loading} onClick={() => workspace.page(undefined, true)}>{t("agent.latestMessages")}</Button>
+        {forkDraftReview && <span role="status" className="text-xs text-muted-foreground">{t("agent.forkDraftReady")}</span>}
+        {workspace.error && <p role="alert" className="text-xs text-destructive-text">{workspace.error}</p>}
+      </div>
       <ThreadNavigation items={items} scrollRef={transcriptRef} t={t} />
       <div
         ref={registerTranscript}
         className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto"
       >
         <div ref={transcriptContentRef} className="mx-auto flex w-full max-w-[760px] min-w-0 flex-col gap-1 px-4 pt-3 pb-3">
+          {state.historyHasMore && <Button variant="ghost" disabled={!connectionReady || workspace.loading} onClick={() => workspace.page()}>{t(workspace.loading ? "common.loading" : "agent.loadEarlierMessages")}</Button>}
           {items.length === 0 && !ready && connStatus === "connecting" && <ThreadTimelineLoadingSkeleton label={t("common.loading")} />}
           {items.length === 0 && (ready || connStatus !== "connecting") && (
             <div className="px-4 py-12 text-center text-sm whitespace-pre-wrap text-muted-foreground">
@@ -695,15 +725,19 @@ export function ChatPaneView({
           {items.map((item) => {
             if (item.kind === "user") {
               const job = parseJobNotificationData(item.job) || (!item.images?.length ? parseJobNotification(item.text) : null);
-              if (job) return <JobNotification key={item.key} job={job} t={t} />;
+              if (job) return <div key={item.key} data-thread-message={item.key} data-message-id={item.messageId} tabIndex={-1} className={cn("group/message", workspace.highlight === item.messageId && "rounded ring-2 ring-timeline-accent")}>
+                <JobNotification job={job} t={t} />
+                <MessageActionBar align="start" text={item.text} timestamp={item.time} copied={copiedId === "u" + item.key} onCopy={text => onCopy("u" + item.key, text)} onAddToChat={addToChat} onCopyLink={item.messageId ? () => workspace.copyLink(item.messageId!) : undefined} onFork={item.messageId && ready && !running && !workspace.forking ? () => workspace.fork(item.messageId!) : undefined} t={t} />
+              </div>;
               const imageGallery = item.images?.map((name, index) => ({ name, src: item.imagePreviews?.[index] ?? "" }));
               return (
                 <div
                   key={item.key}
                   data-thread-message={item.key}
+                  data-message-id={item.messageId}
                   data-schedule-run={item.scheduleRunId}
-                  tabIndex={item.scheduleRunId ? -1 : undefined}
-                  className="group/message ml-auto flex w-fit max-w-[70%] flex-col items-end"
+                  tabIndex={-1}
+                  className={cn("group/message ml-auto flex w-fit max-w-[70%] flex-col items-end", workspace.highlight === item.messageId && "rounded ring-2 ring-timeline-accent")}
                 >
                   {item.steering && <span className="mb-1 flex items-center gap-1 text-xs text-muted-foreground"><Icon name="CornerDownRight" className="size-3" />{t("agent.steer")}</span>}
                   {item.images && item.images.length > 0 && (
@@ -732,6 +766,9 @@ export function ChatPaneView({
                     copied={copiedId === "u" + item.key}
                     onCopy={(text) => onCopy("u" + item.key, text)}
                     onAddToChat={addToChat}
+                    onCopyLink={item.messageId ? () => workspace.copyLink(item.messageId!) : undefined}
+                    onFork={item.messageId && ready && !running && !workspace.forking ? () => workspace.fork(item.messageId!) : undefined}
+                    onEditFork={item.messageId && ready && !running && !workspace.forking ? () => workspace.setEdit({ messageId: item.messageId!, text: item.text }) : undefined}
                     t={t}
                   />
                 </div>
@@ -793,7 +830,7 @@ export function ChatPaneView({
             }
             if (item.kind !== "turn") return null;
             return (
-              <div key={item.key} data-thread-message={item.key}>
+              <div key={item.key} data-thread-message={item.key} data-message-id={item.messageId} tabIndex={-1} className={workspace.highlight === item.messageId ? "rounded ring-2 ring-timeline-accent" : undefined}>
               <TurnView
                 turn={item}
                 active={item.key === activeTurnKey}
@@ -802,6 +839,8 @@ export function ChatPaneView({
                 dimmed={item.key !== lastTurnKey}
                 onCopy={(text) => onCopy("t" + item.key, text)}
                 onAddToChat={addToChat}
+                onCopyLink={item.messageId ? () => workspace.copyLink(item.messageId!) : undefined}
+                onFork={item.messageId && ready && !running && !workspace.forking ? () => workspace.fork(item.messageId!) : undefined}
                 onOpenFile={onOpenFile}
                 onOpenLocalFile={handleOpenLocalFile}
               />
@@ -1244,6 +1283,7 @@ export function ChatPaneView({
                 t={t}
               />
             )}
+            {device && cwd !== undefined && <WorktreeControl device={device} thread={threadId} cwd={cwd} ready={ready && !running} ops={ops} sendRaw={sendRaw} t={t} />}
             {device && branch && (
               <span
                 className="flex h-6 min-w-0 cursor-pointer items-center gap-1 rounded-md px-1.5 py-0.5 text-xs text-muted-foreground transition-colors hover:bg-state-hover hover:text-foreground"

@@ -15,6 +15,7 @@ func TestCompactPreservesLatestCompleteToolTurn(t *testing.T) {
 	sess := New(Config{BaseURL: provider.URL, Model: "test"})
 	recent := []Message{{Role: "user", Content: "Verify build"}, {Role: "assistant", ToolCalls: []ToolCall{{ID: "call-1", Name: "shell", Arguments: `{"command":"build"}`}}}, {Role: "tool", ToolCallID: "call-1", Content: "passed"}, {Role: "assistant", Content: "Build passed"}}
 	sess.SetHistory(append([]Message{{Role: "user", Content: "Fix deployment"}, {Role: "assistant", Content: "Updated config"}}, recent...))
+	recent = sess.History()[2:]
 	if _, err := sess.Compact(context.Background(), "Keep verification details"); err != nil {
 		t.Fatal(err)
 	}
@@ -32,6 +33,7 @@ func TestCompactFailurePreservesHistory(t *testing.T) {
 	sess := New(Config{BaseURL: provider.URL, Model: "test"})
 	before := []Message{{Role: "user", Content: "first"}, {Role: "assistant", Content: "answer"}, {Role: "user", Content: "second"}}
 	sess.SetHistory(before)
+	before = sess.History()
 	if _, err := sess.Compact(context.Background(), ""); err == nil {
 		t.Fatal("expected empty summary error")
 	}
@@ -74,6 +76,7 @@ func TestCompactDoesNotOverwriteResetOrCanceledConversation(t *testing.T) {
 			sess = New(Config{BaseURL: provider.URL, Model: "test", Tools: []Tool{&fakeTool{name: "shell"}}})
 			before := []Message{{Role: "user", Content: "earlier request"}, {Role: "assistant", Content: "earlier response"}, {Role: "user", Content: "latest user request"}}
 			sess.SetHistory(before)
+			before = sess.History()
 			if _, err := sess.Compact(ctx, ""); err == nil {
 				t.Fatal("expected compaction to abort")
 			}

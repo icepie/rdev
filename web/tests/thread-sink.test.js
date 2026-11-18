@@ -25,20 +25,18 @@ afterEach(async () => {
 });
 const frame = async message => act(async () => applyScopedMessage(sink.ops, message, key => key));
 
-it.each(['error', 'stopped'])('replaces pre-compaction transcript on terminal %s without duplicating the open turn', async op => {
-  await frame({ op: 'turn_start', text: 'old request' });
-  await act(async () => sink.ops.appendDelta('stale partial output'));
+it.each(['error', 'stopped'])('preserves archived messages across compaction on terminal %s', async op => {
+  await frame({ op: 'turn_start', messageId: 'u1', text: 'old request' });
+  await frame({ op: 'assistant_start', messageId: 'a1' });
+  await act(async () => sink.ops.appendDelta('partial output'));
   await frame({ op, compacted: true, canceled: true, message: 'provider unavailable', history: [
-    { role: 'user', text: 'Preserved task summary' },
-    { role: 'assistant', text: 'Retained answer' },
+    { role: 'user', messageId: 'u1', text: 'old request' },
+    { role: 'assistant', messageId: 'a1', text: 'partial output' },
   ] });
   expect(sink.state.running).toBe(false);
   expect(sink.ops.turnOpen.current).toBe(false);
-  const text = JSON.stringify(sink.state.items);
-  expect(text).toContain('Preserved task summary');
-  expect(text).toContain('Retained answer');
-  expect(text).not.toContain('stale partial output');
-  expect(text).not.toContain('old request');
+  expect(sink.state.items.filter(item => item.messageId).map(item => item.messageId)).toEqual(['u1', 'a1']);
+  expect(sink.state.items.find(item => item.messageId === 'a1').text).toBe('partial output');
   const notices = sink.state.items.filter(item => item.kind === (op === 'error' ? 'error' : 'system'));
   expect(notices.map(item => item.text)).toEqual([op === 'error' ? 'agent.toolError: provider unavailable' : 'agent.stopped']);
 });
@@ -107,15 +105,6 @@ it('keeps inspected job output during list refresh and removes it on reset', asy
   expect(sink.state.jobs[0]).toMatchObject({ output: 'compiled', result: 'exit code: 0', error: 'failed' });
   await frame({ op: 'reset_ok' });
   expect(sink.state.jobs).toEqual([]);
-});
-
-it('replaces the live transcript with the authoritative compacted history', async () => {
-  await frame({ op: 'turn_start', text: '/compact' });
-  await frame({ op: 'delta', text: 'compressing' });
-  await frame({ op: 'done', compacted: true, history: [{ role: 'user', text: 'Summary with task state' }, { role: 'assistant', text: 'Latest preserved answer' }] });
-  expect(sink.state.running).toBe(false);
-  expect(sink.ops.turnOpen.current).toBe(false);
-  expect(sink.state.items.map(item => item.text)).toEqual(['Summary with task state', 'Latest preserved answer', 'agent.compacted']);
 });
 
 it('keeps task list order when refreshing an inspected task', async () => {
@@ -501,4 +490,76 @@ it('shows content filtering as a provider notice while preserving partial output
   expect(sink.state.items.some(item => item.kind === 'turn' && item.text === 'partial answer')).toBe(true);
   expect(sink.state.items.some(item => item.kind === 'system' && item.text === 'agent.providerContentFilter')).toBe(true);
   expect(sink.state.items.some(item => item.kind === 'error')).toBe(false);
+});
+
+it('deduplicates live user replay and preserves durable ids across snapshots and pages', async () => {
+  const history = [{role:'user',messageId:'u',text:'request'}];
+  await frame({op:'thread_peeked',history,historyHasMore:true,historyBefore:'u',running:true,live:[
+    {op:'turn_start',messageId:'u',text:'request'},
+    {op:'assistant_start',messageId:'a'}, {op:'delta',text:'stream'},
+  ]});
+  expect(sink.state.items.map(item => item.messageId)).toEqual(['u','a']);
+  expect(sink.state.historyHasMore).toBe(true);
+  const keys = sink.state.items.map(item => item.key);
+  await act(async () => sink.ops.restoreHistory({history:[{role:'user',messageId:'old',text:'older'},...history],historyHasMore:false,historyBefore:'old'},'before'));
+  expect(sink.state.items.map(item => item.messageId)).toEqual(['old','u','a']);
+  expect(sink.state.items.slice(1).map(item => item.key)).toEqual(keys);
+  await frame({op:'delta',text:' continues'});
+  expect(sink.state.items.at(-1).text).toBe('stream continues');
+  await frame({op:'done',history:[...history,{role:'assistant',messageId:'a',text:'stream continues'}],historyHasMore:true,historyBefore:'u'});
+  expect(sink.state.items.map(item => item.messageId)).toEqual(['old','u','a']);
+  expect(sink.state.historyBefore).toBe('old');
+  expect(sink.state.historyHasMore).toBe(false);
+});
+
+it('keeps the running message while loading an around window and cancels stale requests on switch', async () => {
+  await frame({op:'turn_start',messageId:'live-user',text:'request'});
+  await frame({op:'assistant_start',messageId:'live-answer'});
+  await frame({op:'delta',text:'stream'});
+  await act(async () => sink.ops.restoreHistory({history:[{role:'user',messageId:'target',text:'old'}],historyHasMore:true,historyBefore:'target'},'around'));
+  expect(sink.state.items.map(item => item.messageId)).toEqual(['target','live-user','live-answer']);
+  await frame({op:'delta',text:' update'});
+  expect(sink.state.items.at(-1).text).toBe('stream update');
+  let reply = 'pending';
+  sink.ops.workspaceReplies.current.set('page', value => { reply=value; sink.ops.workspaceReplies.current.delete('page'); });
+  await frame({op:'thread_peeked',history:[],draft:'review before send'});
+  expect(reply).toBeNull();
+  expect(sink.state.draft).toBe('review before send');
+  expect(sink.state.running).toBe(false);
+});
+
+it('replays an overlapping assistant identity once without doubling streamed text', async () => {
+  await frame({op:'thread_peeked',running:true,history:[
+    {role:'user',messageId:'u',text:'request'},
+    {role:'assistant',messageId:'a',text:'partial'},
+  ],live:[{op:'turn_start',messageId:'u',text:'request'},{op:'assistant_start',messageId:'a'},{op:'delta',text:'partial'}]});
+  expect(sink.state.items.map(item=>item.messageId)).toEqual(['u','a']);
+  expect(sink.state.items[1].text).toBe('partial');
+  await frame({op:'error',message:'provider failed',history:[{role:'user',messageId:'u',text:'request'},{role:'assistant',messageId:'a',text:'partial'}]});
+  expect(sink.state.items.filter(item=>item.messageId).map(item=>item.messageId)).toEqual(['u','a']);
+  expect(sink.state.running).toBe(false);
+});
+
+it('keeps older loaded pages and detached scroll through a send and recent50 terminal refresh', async () => {
+  const records = Array.from({length:100}, (_,index) => ({role:'user',messageId:`m${index}`,text:`message ${index}`}));
+  await frame({op:'thread_peeked',history:records.slice(50),historyHasMore:true,historyBefore:'m50'});
+  await act(async () => sink.ops.restoreHistory({history:records.slice(0,50),historyHasMore:false,historyBefore:'m0'},'before'));
+  const oldKeys=sink.state.items.slice(0,50).map(item=>item.key);
+  const callbacks=[];
+  window.requestAnimationFrame=callback=>{callbacks.push(callback);return callbacks.length;};
+  const viewport={scrollHeight:10000,scrollTop:350,clientHeight:600};
+  sink.ops.registerScrollEl(viewport);
+  await frame({op:'turn_start',messageId:'new-user',text:'next task'});
+  await frame({op:'assistant_start',messageId:'new-answer'});
+  await frame({op:'delta',text:'answer'});
+  await frame({op:'done',history:[...records.slice(52),{role:'user',messageId:'new-user',text:'next task'},{role:'assistant',messageId:'new-answer',text:'answer'}],historyHasMore:true,historyBefore:'m52'});
+  viewport.scrollHeight=12000;
+  callbacks.forEach(callback=>callback());
+  expect(viewport.scrollTop).toBe(350);
+  expect(sink.state.items).toHaveLength(102);
+  expect(sink.state.items.slice(0,50).map(item=>item.key)).toEqual(oldKeys);
+  expect(sink.state.historyBefore).toBe('m0');
+  expect(sink.state.historyHasMore).toBe(false);
+  await frame({op:'thread_peeked',history:[{role:'user',messageId:'other',text:'other thread'}],historyBefore:'other',historyHasMore:false});
+  expect(sink.state.items.map(item=>item.messageId)).toEqual(['other']);
 });

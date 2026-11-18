@@ -7,8 +7,8 @@ import type { Translator } from "./types";
 /* bb ProjectSelector adapted: the rdev "project" is the current thread's
  * working directory, so options are the known per-thread cwds of this
  * device (bb pulls projects from a backend API; rdev has no project
- * entity). Selecting an option = set_cwd. bb's Reuse/Branch pickers are
- * environment/worktree concepts with no rdev counterpart — not ported.
+ * entity). Selecting an option = set_cwd. Managed worktree operations live
+ * beside this picker in WorktreeControl.
  * Deviation: trigger uses h-6 (the status strip is a fixed 24px row; bb's
  * OPTION trigger is h-8 for the composer footer row). */
 export function CwdPicker({

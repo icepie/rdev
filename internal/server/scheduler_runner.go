@@ -276,6 +276,10 @@ func (s *Server) runScheduledTask(ctx context.Context, run ScheduleRun, report f
 		return ScheduledResult{State: "failed", Reason: err.Error()}
 	}
 	s.agentSessionsMu.Lock()
+	if entry.worktreeBusy {
+		s.agentSessionsMu.Unlock()
+		return ScheduledResult{State: "skipped", Reason: "managed worktree operation in progress"}
+	}
 	th := entry.threads[spec.Thread]
 	if spec.SessionMode == "existing" {
 		if th == nil || scheduledThreadBusy(th) {

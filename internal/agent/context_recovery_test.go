@@ -163,6 +163,7 @@ func TestCompactAdaptsOversizedSingleRecordsWithoutDroppingText(t *testing.T) {
 	session := New(testConfig(server.URL, nil))
 	latest := Message{Role: "user", Content: "latest request must remain exact"}
 	session.SetHistory([]Message{{Role: "user", Content: "FIRST_FACT" + strings.Repeat("large record ", 5000) + "LAST_FACT"}, {Role: "assistant", Content: "old result"}, latest})
+	latest = session.History()[2]
 	if _, err := session.Compact(t.Context(), ""); err != nil {
 		t.Fatal(err)
 	}
@@ -220,6 +221,7 @@ func TestRecoveryFailureAndBoundedOverflowPreserveRequest(t *testing.T) {
 			session := New(testConfig(server.URL, nil))
 			before := []Message{{Role: "user", Content: "old"}, {Role: "assistant", Content: "old result"}}
 			session.SetHistory(before)
+			before = session.History()
 			_, err := session.Run(context.Background(), "latest", nil)
 			if !errors.Is(err, ErrContextLengthExceeded) || hits.Load() > 6 {
 				t.Fatalf("err=%v hits=%d", err, hits.Load())
@@ -228,7 +230,7 @@ func TestRecoveryFailureAndBoundedOverflowPreserveRequest(t *testing.T) {
 			if got[len(got)-1].Content != "latest" {
 				t.Fatal("overflow lost latest request")
 			}
-			if summaryFailure && !reflect.DeepEqual(got, append(before, Message{Role: "user", Content: "latest"})) {
+			if summaryFailure && (len(got) != len(before)+1 || !reflect.DeepEqual(got[:len(before)], before) || got[len(before)].Role != "user" || got[len(before)].Content != "latest") {
 				t.Fatal("failed summary changed history")
 			}
 		})
@@ -240,6 +242,7 @@ func TestCompactPartialSummaryOverflowDoesNotRetry(t *testing.T) {
 	session := New(testConfig(server.URL, nil))
 	before := []Message{{Role: "user", Content: strings.Repeat("old context ", 600)}, {Role: "assistant", Content: "completed"}, {Role: "user", Content: "latest"}}
 	session.SetHistory(before)
+	before = session.History()
 	if _, err := session.Compact(t.Context(), ""); err == nil {
 		t.Fatal("expected partial summary failure")
 	}
@@ -253,6 +256,7 @@ func TestCompactLateFailureKeepsEntireOriginalHistory(t *testing.T) {
 	session := New(testConfig(server.URL, nil))
 	before := []Message{{Role: "user", Content: strings.Repeat("large old context ", 3000)}, {Role: "assistant", Content: "result"}, {Role: "user", Content: "latest"}}
 	session.SetHistory(before)
+	before = session.History()
 	if _, err := session.Compact(t.Context(), ""); err == nil {
 		t.Fatal("expected later fragment failure")
 	}
@@ -290,6 +294,7 @@ func TestGenericInvalidRequestDoesNotTriggerCompaction(t *testing.T) {
 	session := New(testConfig(server.URL, nil))
 	before := []Message{{Role: "user", Content: "old"}, {Role: "assistant", Content: "old result"}}
 	session.SetHistory(before)
+	before = session.History()
 	revision := session.HistoryRevision()
 	_, err := session.Run(t.Context(), "new", nil)
 	if err == nil || errors.Is(err, ErrContextLengthExceeded) || hits.Load() != 1 {

@@ -10,11 +10,13 @@ import (
 // UTF-8 trimming happens on snapshots so split input runes can finish arriving.
 type agentJobOutput struct {
 	data      []byte
+	total     int64
 	start     int
 	truncated bool
 }
 
 func (output *agentJobOutput) append(text string) {
+	output.total += int64(len(text))
 	if len(text) >= agentJobOutputLimit {
 		output.truncated = output.truncated || len(output.data) > 0 || len(text) > agentJobOutputLimit
 		output.data = append(output.data[:0], text[len(text)-agentJobOutputLimit:]...)
@@ -52,4 +54,24 @@ func (output *agentJobOutput) String() string {
 		}
 	}
 	return result
+}
+
+// window publishes complete UTF-8 runes only. Incomplete trailing bytes stay in
+// the ring and become visible when the rest of the rune arrives; the cursor
+// does not consume them prematurely.
+func (output *agentJobOutput) window() (text string, base, next int64) {
+	text = output.String()
+	base = output.total - int64(len(text))
+	end := len(text)
+	for end > 0 {
+		start := end - 1
+		for start > 0 && !utf8.RuneStart(text[start]) {
+			start--
+		}
+		if utf8.FullRuneInString(text[start:end]) {
+			break
+		}
+		end = start
+	}
+	return text[:end], base, base + int64(end)
 }

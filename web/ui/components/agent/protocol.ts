@@ -183,6 +183,10 @@ export function parseAllThreads(v: unknown): AllThreadsDevice[] {
  * no pane shows it. auth_ok / thread_switched are deliberately absent (they
  * switch the view). */
 export const THREAD_SCOPED_OPS: Record<string, true> = {
+  history_page: true,
+  search_history: true,
+  worktree: true,
+  fork_thread: true,
   autonomy: true,
   participants: true,
   automation: true,
@@ -224,6 +228,10 @@ export const THREAD_SCOPED_OPS: Record<string, true> = {
 /* Subset of THREAD_SCOPED_OPS that mutates a pane's transcript state (the
  * rest feeds the page-level right panel / dialogs, current thread only). */
 export const TRANSCRIPT_OPS: Record<string, true> = {
+  history_page: true,
+  search_history: true,
+  worktree: true,
+  fork_thread: true,
   autonomy: true,
   assistant_start: true,
   thread_peeked: true,
@@ -261,6 +269,7 @@ export function replayHistory(history: unknown[]): TranscriptItem[] {
     if (!raw || typeof raw !== "object") continue;
     const entry = raw as {
       role?: unknown;
+      messageId?: unknown;
       text?: unknown;
       reasoning?: unknown;
       tools?: unknown;
@@ -274,6 +283,7 @@ export function replayHistory(history: unknown[]): TranscriptItem[] {
         ...parseDisplay(entry.display),
         kind: "user",
         key: nextKey(),
+        messageId: asString(entry.messageId) || undefined,
         text: asString(entry.text),
         ...(images.length ? { images, imagePreviews: parseStringArray(entry.imagePreviews) } : {}),
       });
@@ -287,6 +297,7 @@ export function replayHistory(history: unknown[]): TranscriptItem[] {
       ...parseDisplay(entry.display),
       kind: "turn",
       key: nextKey(),
+      messageId: asString(entry.messageId) || undefined,
       text,
       reasoning,
       streaming: false,

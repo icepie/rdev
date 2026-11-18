@@ -385,7 +385,7 @@ func (h *agentWSHandler) handleRPCPrompt(ac *agentConn, request agentMsg) {
 		h.writeRPCError(ac, request, "invalid_request", "unknown thread")
 		return
 	}
-	if th.running {
+	if th.running || ac.entry.worktreeBusy {
 		s.agentSessionsMu.Unlock()
 		h.writeRPCError(ac, request, "busy", "conversation is busy")
 		return
@@ -432,6 +432,11 @@ func (h *agentWSHandler) handleRPCQueuedInput(ac *agentConn, request agentMsg) {
 	if th == nil {
 		s.agentSessionsMu.Unlock()
 		h.writeRPCError(ac, request, "invalid_request", "unknown thread")
+		return
+	}
+	if ac.entry.worktreeBusy {
+		s.agentSessionsMu.Unlock()
+		h.writeRPCError(ac, request, "busy", "managed worktree operation in progress")
 		return
 	}
 	queued := th.running || len(th.queue) > 0
@@ -843,7 +848,7 @@ func (h *agentWSHandler) handleRPCCompact(ac *agentConn, request agentMsg) {
 		h.writeRPCError(ac, request, "invalid_request", "unknown thread")
 		return
 	}
-	if th.running {
+	if th.running || ac.entry.worktreeBusy {
 		s.agentSessionsMu.Unlock()
 		h.writeRPCError(ac, request, "invalid_request", "conversation is busy")
 		return

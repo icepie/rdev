@@ -1,5 +1,6 @@
 import { JobCancel } from "./job-cancel";
 import { JobGuidance } from "./job-guidance";
+import { ChildTranscript } from "./child-transcript";
 import { CommandOutputBody, commandOutputText } from "./command-output";
 import { useCopy } from "../../lib/clipboard";
 import { formatDuration } from "./transcript-rows";
@@ -180,6 +181,8 @@ export function JobsPanel({
                   <Markdown text={job.result || job.output || emptyOutput} />
                 </div>
               )}
+              {job.kind === "subagent" && <ChildTranscript key={`${threadId}:${job.id}`}
+                thread={threadId} job={job.id} ready={ready} ops={sink.ops} sendRaw={sendRaw} t={t} />}
               {!!job.pendingGuidance?.length && <div className="mt-2 text-xs text-muted-foreground">
                 <p>{t("agent.jobs.guidancePending")}</p>
                 <ul className="list-disc space-y-1 pl-4">{job.pendingGuidance.map((text, index) => <li key={index} className="whitespace-pre-wrap break-words">{text}</li>)}</ul>

@@ -61,7 +61,11 @@ func (s *Session) RunTurnWithSteering(ctx context.Context, userText string, imag
 	s.mu.Lock()
 	s.turnHistoryIndex = len(s.history)
 	s.mu.Unlock()
-	s.appendHistory(Message{Role: "user", Content: userText, Images: images})
+	userID, _ := ctx.Value(userMessageIDKey{}).(string)
+	s.appendHistory(Message{MessageID: userID, Role: "user", Content: userText, Images: images})
+	if err := s.captureHistory(); err != nil {
+		return "", err
+	}
 
 	injectSteering := func() bool {
 		if takeSteering == nil || ctx.Err() != nil {
@@ -71,8 +75,11 @@ func (s *Session) RunTurnWithSteering(ctx context.Context, userText string, imag
 		if message == nil {
 			return false
 		}
+		if message.MessageID == "" {
+			message.MessageID = NewMessageID()
+		}
 		s.appendHistory(*message)
-		emit(Event{Type: EventUserInput, Text: message.Content, Display: message.Display, Images: message.Images})
+		emit(Event{Type: EventUserInput, MessageID: message.MessageID, Text: message.Content, Display: message.Display, Images: message.Images})
 		return true
 	}
 	var total Usage
@@ -81,8 +88,12 @@ func (s *Session) RunTurnWithSteering(ctx context.Context, userText string, imag
 		if err := ctx.Err(); err != nil {
 			return "", err
 		}
+		if err := s.captureHistory(); err != nil {
+			return "", err
+		}
 		// Semantic recovery below preserves history until a complete summary is ready.
-		emit(Event{Type: EventAssistantStart})
+		assistantID := NewMessageID()
+		emit(Event{Type: EventAssistantStart, MessageID: assistantID})
 		assistant, usage, err := streamChat(ctx, cfg, s.History(),
 			func(delta string) {
 				emit(Event{Type: EventTextDelta, Text: delta})
@@ -90,6 +101,7 @@ func (s *Session) RunTurnWithSteering(ctx context.Context, userText string, imag
 			func(delta string) {
 				emit(Event{Type: EventReasoning, Text: delta})
 			})
+		assistant.MessageID = assistantID
 		if cfg.OnUsage != nil {
 			cfg.OnUsage(usage)
 		}
@@ -114,6 +126,9 @@ func (s *Session) RunTurnWithSteering(ctx context.Context, userText string, imag
 				assistant.Responses = nil
 				assistant.Anthropic = nil
 				s.appendHistory(assistant)
+				if captureErr := s.captureHistory(); captureErr != nil {
+					return "", errors.Join(err, captureErr)
+				}
 			case recoveries == 0 && !errors.Is(err, ErrContentFiltered) && !errors.Is(err, ErrContextLengthExceeded) && round == 0 && !assistantProgress(assistant):
 				// The first round failed with no output at all (both
 				// attempts): roll back the user message so the next request
@@ -133,6 +148,9 @@ func (s *Session) RunTurnWithSteering(ctx context.Context, userText string, imag
 
 		if len(assistant.ToolCalls) == 0 {
 			s.appendHistory(assistant)
+			if err := s.captureHistory(); err != nil {
+				return "", err
+			}
 			if err := ctx.Err(); err != nil {
 				return "", err
 			}
@@ -155,6 +173,7 @@ func (s *Session) RunTurnWithSteering(ctx context.Context, userText string, imag
 			result, isErr := s.executeTool(ctx, tool, *tc, args, emit)
 			tc.IsError = isErr
 			result, resultImages := sanitizeNativeToolResult(result)
+			archiveResult := result
 			nativeResult := isNativeComputerCall(tc.Name, args) || len(resultImages) > 0 || strings.Contains(result, nativeImagePlaceholder)
 			if !nativeResult {
 				result = truncateToolOutput(result)
@@ -168,11 +187,14 @@ func (s *Session) RunTurnWithSteering(ctx context.Context, userText string, imag
 					emit(Event{Type: EventTodo, ToolResult: items})
 				}
 			}
-			toolMsgs = append(toolMsgs, Message{Role: "tool", ToolCallID: tc.ID, Content: result, Images: resultImages})
+			toolMsgs = append(toolMsgs, Message{Role: "tool", ToolCallID: tc.ID, Content: result, ArchiveContent: archiveResult, Images: resultImages})
 		}
 		// Append the assistant message together with all its tool results so
 		// an aborted round never leaves dangling tool_calls in the history.
 		s.appendHistory(append([]Message{assistant}, toolMsgs...)...)
+		if err := s.captureHistory(); err != nil {
+			return "", err
+		}
 		if cfg.MaxTurns == 0 || round+1 < cfg.MaxTurns {
 			injectSteering()
 		}
@@ -206,8 +228,25 @@ func assistantProgress(assistant Message) bool {
 // appendHistory appends messages under the session lock.
 func (s *Session) appendHistory(msgs ...Message) {
 	s.mu.Lock()
-	s.history = append(s.history, cloneMessages(msgs)...)
+	cloned := cloneMessages(msgs)
+	ensureMessageIDs(cloned)
+	s.history = append(s.history, cloned...)
 	s.mu.Unlock()
+}
+
+func (s *Session) captureHistory() error {
+	if s.cfg.OnHistory != nil {
+		if err := s.cfg.OnHistory(s.History()); err != nil {
+			return fmt.Errorf("agent: durable transcript: %w", err)
+		}
+	}
+	// Original output belongs to the archive, not the provider-context window.
+	s.mu.Lock()
+	for i := range s.history {
+		s.history[i].ArchiveContent = ""
+	}
+	s.mu.Unlock()
+	return nil
 }
 
 // findTool looks up a configured tool by name (nil when unknown).

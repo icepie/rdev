@@ -14,8 +14,12 @@ func TestToolCommandRespectsApprovalWithoutProvider(t *testing.T) {
 			approvals++
 			return allow, nil
 		}})
-		var events []Event
-		err := sess.RunToolCommand(context.Background(), "/bg echo hi", "bg", json.RawMessage(`{"command":"echo hi"}`), func(e Event) { events = append(events, e) })
+		var outcome Event
+		err := sess.RunToolCommand(context.Background(), "/bg echo hi", "bg", json.RawMessage(`{"command":"echo hi"}`), func(e Event) {
+			if e.Type == EventToolEnd {
+				outcome = e
+			}
+		})
 		if (err == nil) != allow || tool.ran != allow || approvals != 1 {
 			t.Fatalf("allow=%v ran=%v approvals=%d err=%v", allow, tool.ran, approvals, err)
 		}
@@ -26,8 +30,8 @@ func TestToolCommandRespectsApprovalWithoutProvider(t *testing.T) {
 		if history[1].ToolCalls[0].IsError == allow {
 			t.Fatalf("persisted tool failure incorrect: %+v", history[1])
 		}
-		if len(events) != 2 || events[1].Type != EventToolEnd || events[1].IsError == allow {
-			t.Fatalf("unexpected events: %+v", events)
+		if outcome.Type != EventToolEnd || outcome.IsError == allow {
+			t.Fatalf("streamed tool failure incorrect: %+v", outcome)
 		}
 	}
 }

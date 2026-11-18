@@ -22,6 +22,8 @@ type agentJobSnapshot struct {
 	Label           string     `json:"label"`
 	State           string     `json:"state"`
 	Output          string     `json:"output,omitempty"`
+	OutputBase      int64      `json:"outputBase"`
+	OutputNext      int64      `json:"outputNext"`
 	Result          string     `json:"result,omitempty"`
 	Error           string     `json:"error,omitempty"`
 	Started         time.Time  `json:"started"`
@@ -50,6 +52,8 @@ type agentJobs struct {
 	pendingDeliveries       int // terminal jobs whose completion callback has not returned
 	onChange                func()
 	onComplete              func(agentJobSnapshot)
+	childTranscriptDir      string
+	children                map[string]*agentChildTranscript
 }
 
 func newAgentJobs(onComplete func(agentJobSnapshot)) *agentJobs {
@@ -79,11 +83,19 @@ func (m *agentJobs) start(kind, label string, run func(context.Context, func(str
 		m.mu.Unlock()
 		return agentJobSnapshot{}, fmt.Errorf("at most %d background jobs may run per thread", agentMaxRunningJobs)
 	}
+	ctx, cancel := context.WithCancel(context.Background())
+	job := &agentJob{guidance: guidance, snapshot: agentJobSnapshot{ID: generateID(), Kind: kind, Label: label, State: "running", Started: time.Now()}, cancel: cancel, done: make(chan struct{})}
+	if kind == "subagent" {
+		if err := m.createChildTranscriptLocked(job.snapshot.ID); err != nil {
+			cancel()
+			m.mu.Unlock()
+			return agentJobSnapshot{}, err
+		}
+		ctx = context.WithValue(ctx, agentChildJobKey{}, job.snapshot.ID)
+	}
 	if len(m.jobs) >= agentMaxRetainedJobs && oldest != nil {
 		delete(m.jobs, oldest.snapshot.ID)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	job := &agentJob{guidance: guidance, snapshot: agentJobSnapshot{ID: generateID(), Kind: kind, Label: label, State: "running", Started: time.Now()}, cancel: cancel, done: make(chan struct{})}
 	m.jobs[job.snapshot.ID] = job
 	m.revision++
 	initial := job.snapshot
@@ -104,7 +116,13 @@ func (m *agentJobs) run(ctx context.Context, job *agentJob, run func(context.Con
 		}
 		m.mu.Lock()
 		finished := time.Now()
-		job.snapshot.Output = job.output.String()
+		// A distinct final result extends the output stream. Replacing a tail
+		// would hide same-sized results from clients already at its old end.
+		if result != "" && result != job.output.String() {
+			job.output.append("\n[result]\n")
+			job.output.append(result)
+		}
+		job.snapshot.Output, job.snapshot.OutputBase, job.snapshot.OutputNext = job.output.window()
 		job.output = agentJobOutput{}
 		job.snapshot.Finished = &finished
 		job.snapshot.CancelRequested = false
@@ -122,6 +140,17 @@ func (m *agentJobs) run(ctx context.Context, job *agentJob, run func(context.Con
 			job.snapshot.Error = agentJobTail(err.Error())
 		default:
 			job.snapshot.State = "completed"
+		}
+		if job.snapshot.Kind == "subagent" && !m.closed {
+			entry := agentChildEntry{Type: "completion", State: job.snapshot.State, Result: result, Error: job.snapshot.Error, Finished: &finished, Output: job.snapshot.Output, OutputBase: job.snapshot.OutputBase, OutputNext: job.snapshot.OutputNext}
+			if archiveErr := m.appendChildEntriesLocked(job.snapshot.ID, []agentChildEntry{entry}); archiveErr != nil {
+				job.snapshot.State = "failed"
+				job.snapshot.Error = agentJobTail(strings.TrimSpace(job.snapshot.Error + "\n" + archiveErr.Error()))
+				failure := agentChildEntry{Type: "completion", State: "failed", Error: job.snapshot.Error, Finished: &finished}
+				if failureErr := m.appendChildEntriesLocked(job.snapshot.ID, []agentChildEntry{failure}); failureErr != nil {
+					job.snapshot.Error = agentJobTail(job.snapshot.Error + "\nUnable to persist failure status: " + failureErr.Error())
+				}
+			}
 		}
 		snapshot := job.snapshot
 		snapshot.PendingGuidance = append([]string(nil), snapshot.PendingGuidance...)
@@ -146,10 +175,15 @@ func (m *agentJobs) run(ctx context.Context, job *agentJob, run func(context.Con
 	}()
 	result, err = run(ctx, func(output string) {
 		m.mu.Lock()
-		if job.snapshot.Finished == nil {
+		changed := output != "" && job.snapshot.Finished == nil
+		if changed {
 			job.output.append(output)
+			m.revision++
 		}
 		m.mu.Unlock()
+		if changed && m.onChange != nil {
+			m.onChange()
+		}
 	})
 }
 
@@ -188,7 +222,7 @@ func (m *agentJobs) Read(id string) (agentJobSnapshot, error) {
 		snapshot := job.snapshot
 		snapshot.PendingGuidance = append([]string(nil), snapshot.PendingGuidance...)
 		if snapshot.Finished == nil {
-			snapshot.Output = job.output.String()
+			snapshot.Output, snapshot.OutputBase, snapshot.OutputNext = job.output.window()
 			if job.guidance != nil {
 				snapshot.PendingGuidance = job.guidance.snapshot()
 			}
@@ -276,7 +310,7 @@ func (m *agentJobs) wait(ctx context.Context, id string, interrupt <-chan struct
 	snapshot.PendingGuidance = append([]string(nil), snapshot.PendingGuidance...)
 	interrupted := snapshot.Finished == nil
 	if interrupted {
-		snapshot.Output = job.output.String()
+		snapshot.Output, snapshot.OutputBase, snapshot.OutputNext = job.output.window()
 		if job.guidance != nil {
 			snapshot.PendingGuidance = job.guidance.snapshot()
 		}

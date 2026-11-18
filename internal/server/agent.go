@@ -40,12 +40,22 @@ import (
 // device, not by a browser connection: events are broadcast to every
 // attached socket and a reopened tab reattaches mid-run (auth_ok.running).
 type agentMsg struct {
-	Goal         *agentGoal         `json:"goal"`
-	Loop         *agentLoop         `json:"loop"`
-	Action       string             `json:"action,omitempty"`
-	Objective    string             `json:"objective,omitempty"`
-	TokenBudget  *int64             `json:"tokenBudget,omitempty"`
-	Participants []agentParticipant `json:"participants,omitempty"`
+	MessageID      string             `json:"messageId,omitempty"`
+	Before         string             `json:"before,omitempty"`
+	Around         string             `json:"around,omitempty"`
+	Limit          int                `json:"limit,omitempty"`
+	EditText       *string            `json:"editText,omitempty"`
+	Draft          *string            `json:"draft,omitempty"`
+	HistoryHasMore bool               `json:"historyHasMore"`
+	HistoryBefore  string             `json:"historyBefore"`
+	Hits           []agentHistoryHit  `json:"hits,omitempty"`
+	Base           string             `json:"base,omitempty"`
+	Goal           *agentGoal         `json:"goal"`
+	Loop           *agentLoop         `json:"loop"`
+	Action         string             `json:"action,omitempty"`
+	Objective      string             `json:"objective,omitempty"`
+	TokenBudget    *int64             `json:"tokenBudget,omitempty"`
+	Participants   []agentParticipant `json:"participants,omitempty"`
 
 	Automation         *automationView     `json:"automation,omitempty"`
 	Pinned             bool                `json:"pinned,omitempty"`
@@ -142,10 +152,12 @@ type agentMsg struct {
 	// auth_ok (current thread) and thread_meta broadcasts. Path is the
 	// set_cwd input ("" = restore device default); Title is the
 	// rename_thread input.
-	Cwd    string `json:"cwd,omitempty"`
-	Branch string `json:"branch,omitempty"`
-	Path   string `json:"path,omitempty"`
-	Title  string `json:"title,omitempty"`
+	Cwd        string `json:"cwd,omitempty"`
+	Branch     string `json:"branch,omitempty"`
+	Path       string `json:"path,omitempty"`
+	Title      string `json:"title,omitempty"`
+	State      string `json:"state,omitempty"`
+	Repository string `json:"repository,omitempty"`
 	// Content and Truncated carry the file_read reply (op "file_content");
 	// Message holds the error text when the read failed. Encoding/Mime mark
 	// image replies: Content is base64 and the browser renders <img>.
@@ -387,8 +399,11 @@ type agentThread struct {
 	steeringWake  chan struct{} // guarded by agentSessionsMu; wakes only passive job waits
 	// Freeze the pre-turn transcript: semantic compaction may replace session
 	// history while live frames still describe the original running turn.
-	turnHistory []agent.Message
-	turnHistIdx int
+	turnHistory   []agent.Message
+	turnMessageID string
+	turnPage      agentHistoryPage
+	archive       []agent.Message // only used when durable persistence is disabled
+	turnHistIdx   int
 	// epoch is bumped by reset; a turn that started before the bump skips
 	// its save and terminal broadcast (its history belongs to the pre-reset
 	// conversation).
@@ -471,6 +486,7 @@ type agentSessionEntry struct {
 	subs            map[*gws.Conn]bool
 	lastActive      time.Time
 	threads         map[string]*agentThread
+	worktreeBusy    bool          // excludes Agent execution while a managed checkout changes
 	current         string        // current thread id
 	defaultCwd      string        // device default working directory
 	defaultCwdProbe chan struct{} // coalesces discovery across concurrent panel requests
@@ -635,6 +651,9 @@ func (s *Server) buildAgentSession(entry *agentSessionEntry, th *agentThread, cl
 	if th.jobs == nil {
 		jobs := newAgentJobs(nil)
 		jobs.persistenceEnabled = s.DataDir != "" && s.AgentSessionTTL > 0
+		if store := s.agentStore(); store != nil {
+			jobs.childTranscriptDir = store.childTranscriptsPath(entry.deviceID, th.id)
+		}
 		updates := &agentJobUpdates{launch: s.goAgent, publish: func() {
 			if s.broadcastAgentJobsChanged(entry, th, jobs) {
 				s.broadcastThreadList(entry)
@@ -749,6 +768,37 @@ func (s *Server) buildAgentSession(entry *agentSessionEntry, th *agentThread, cl
 	}
 	if th.scheduled != nil {
 		s.configureScheduledAgent(entry, th, &cfg)
+	}
+	epoch := th.epoch
+	cfg.OnHistory = func(messages []agent.Message) error {
+		th.persistMu.Lock()
+		defer th.persistMu.Unlock()
+		s.agentSessionsMu.Lock()
+		valid := th.epoch == epoch && entry.threads[th.id] == th
+		var archiveErr error
+		if valid && s.agentStore() == nil {
+			next := mergeAgentTranscript(th.archive, messages)
+			var bytes int
+			for _, m := range next {
+				bytes += len(marshalAgentHistoryMsg(m))
+			}
+			if len(next) > agentTranscriptMaxEntries || bytes > agentTranscriptMaxBytes {
+				archiveErr = errors.New("in-memory transcript quota reached; start a new thread")
+			} else {
+				th.archive = next
+			}
+		}
+		s.agentSessionsMu.Unlock()
+		if !valid {
+			return context.Canceled
+		}
+		if archiveErr != nil {
+			return archiveErr
+		}
+		if store := s.agentStore(); store != nil {
+			return store.captureTranscript(entry.deviceID, th.id, messages)
+		}
+		return nil
 	}
 	th.pendingReasoning = false
 	return agent.New(cfg)
@@ -1004,7 +1054,7 @@ func (s *Server) agentEvictionLoop() {
 	for range ticker.C {
 		s.agentSessionsMu.Lock()
 		for id, entry := range s.agentSessions {
-			busy := false
+			busy := entry.worktreeBusy
 			for _, th := range entry.threads {
 				if th.running || th.autonomyPending || th.turnCtx != nil || len(th.queue) > 0 || (th.jobs != nil && (th.jobs.Running() || th.jobs.pendingPersistence())) {
 					busy = true
@@ -1291,17 +1341,19 @@ type agentThreadSnapshot struct {
 	loop         *agentLoop
 	participants []agentParticipant
 
-	automation   *automationView
-	history      []agentHistoryEntry
-	historyError string
-	todos        []todoItem
-	queue        []string
-	queueIDs     []string
-	queueModes   []string
-	running      bool
-	working      *agentWorking
-	usage        *agentUsage
-	live         []json.RawMessage
+	automation     *automationView
+	history        []agentHistoryEntry
+	historyHasMore bool
+	historyBefore  string
+	historyError   string
+	todos          []todoItem
+	queue          []string
+	queueIDs       []string
+	queueModes     []string
+	running        bool
+	working        *agentWorking
+	usage          *agentUsage
+	live           []json.RawMessage
 }
 
 // threadSnapshotLocked snapshots a thread for an attacher. History and live
@@ -1309,10 +1361,6 @@ type agentThreadSnapshot struct {
 // frames, even if context recovery replaces the session history. Idle threads
 // use the complete current history. Caller must hold agentSessionsMu.
 func (s *Server) threadSnapshotLocked(entry *agentSessionEntry, th *agentThread) agentThreadSnapshot {
-	msgs := th.turnHistory
-	if !th.running {
-		msgs = th.session.History()
-	}
 	snap := agentThreadSnapshot{
 		goal: cloneGoal(th.goal), loop: cloneLoop(th.loop),
 		todos:      th.todos,
@@ -1344,12 +1392,15 @@ func (s *Server) threadSnapshotLocked(entry *agentSessionEntry, th *agentThread)
 	if th.autonomyPending {
 		snap.live = th.live.Snapshot()
 	}
-	snap.history = renderAgentHistory(msgs)
+	page := s.recentTranscriptPageLocked(entry, th)
+	snap.history, snap.historyHasMore, snap.historyBefore = page.History, page.HasMore, page.Before
 	s.agentStoreMu.RLock()
 	store := s.agentStoreInst
 	s.agentStoreMu.RUnlock()
 	if store != nil {
-		snap.historyError = store.historyFault(entry.deviceID, th.id)
+		if fault := store.historyFault(entry.deviceID, th.id); fault != "" {
+			snap.historyError = fault
+		}
 	}
 	if snap.history == nil {
 		snap.history = []agentHistoryEntry{}
@@ -1427,6 +1478,7 @@ func (h *agentWSHandler) establish(ac *agentConn, client *ClientConn) {
 		Models:         h.srv.Agent.Models(),
 		HistoryError:   snap.historyError,
 		History:        snap.history,
+		HistoryHasMore: snap.historyHasMore, HistoryBefore: snap.historyBefore,
 		Running:        snap.running,
 		Thread:         current,
 		Threads:        threads,
@@ -1648,6 +1700,14 @@ func (h *agentWSHandler) OnMessage(socket *gws.Conn, message *gws.Message) {
 		h.handleSetReasoningLevel(ac, msg.Level)
 	case "new_thread":
 		h.handleNewThread(ac)
+	case "history_page":
+		h.handleHistoryPage(ac, msg)
+	case "search_history":
+		h.handleSearchHistory(ac, msg)
+	case "fork_thread":
+		h.handleForkThread(ac, msg)
+	case "worktree":
+		h.handleWorktree(ac, msg)
 	case "switch_thread":
 		h.handleSwitchThread(ac, msg.Thread)
 	case "recover_history":
@@ -1819,6 +1879,11 @@ func (h *agentWSHandler) handleChatWithImages(ac *agentConn, entry *agentSession
 		} else {
 			ac.sendError("agent session not ready")
 		}
+		return
+	}
+	if entry.worktreeBusy {
+		srv.agentSessionsMu.Unlock()
+		ac.sendErrorThread(threadID, "managed worktree operation in progress")
 		return
 	}
 	cancelAutonomyPendingLocked(th)
@@ -2001,6 +2066,7 @@ func (h *agentWSHandler) handleReset(ac *agentConn, threadRef string) {
 	th.scheduled = nil
 	th.running = false
 	th.turnHistory = nil
+	th.archive = nil
 	th.cancel = nil
 	th.turnCtx = nil
 	th.workingTool = ""
@@ -2115,10 +2181,11 @@ func (h *agentWSHandler) handleSwitchThread(ac *agentConn, threadID string) {
 	// thread_switched is per-connection: only the requester's view changes.
 	ac.writeJSON(agentMsg{
 		Goal: snap.goal, Loop: snap.loop,
-		Op:           "thread_switched",
-		Thread:       threadID,
-		Model:        model,
-		History:      snap.history,
+		Op:             "thread_switched",
+		Thread:         threadID,
+		Model:          model,
+		History:        snap.history,
+		HistoryHasMore: snap.historyHasMore, HistoryBefore: snap.historyBefore,
 		Todos:        snap.todos,
 		Queue:        snap.queue,
 		QueueIDs:     snap.queueIDs,
@@ -2163,9 +2230,10 @@ func (h *agentWSHandler) handlePeekThread(ac *agentConn, threadID string) {
 func (snap agentThreadSnapshot) peekMessage(threadID string) agentMsg {
 	return agentMsg{
 		Goal: snap.goal, Loop: snap.loop,
-		Op:           "thread_peeked",
-		Thread:       threadID,
-		History:      snap.history,
+		Op:             "thread_peeked",
+		Thread:         threadID,
+		History:        snap.history,
+		HistoryHasMore: snap.historyHasMore, HistoryBefore: snap.historyBefore,
 		HistoryError: snap.historyError,
 		Todos:        snap.todos,
 		Queue:        snap.queue,
@@ -2254,12 +2322,35 @@ func (h *agentWSHandler) handleDeleteThread(ac *agentConn, threadID string) {
 		return
 	}
 	srv := h.srv
+	srv.agentSessionsMu.Lock()
+	target := entry.threads[threadID]
+	srv.agentSessionsMu.Unlock()
+	if target != nil {
+		if err := srv.AgentWorktreeDeletionGuard(context.Background(), entry, target); err != nil {
+			ac.sendErrorThread(threadID, err.Error())
+			return
+		}
+	}
 	th := srv.lockAgentThreadPersistence(entry, threadID)
 	if th == nil {
 		ac.sendError("unknown thread " + threadID)
 		return
 	}
 	defer th.persistMu.Unlock()
+	// Recheck after acquiring persistence ownership: a create may have completed
+	// between the preliminary guard and this lock. Never orphan its checkout.
+	srv.agentSessionsMu.Unlock()
+	_, managed, worktreeErr := srv.AgentWorktreeRecord(entry.deviceID, threadID)
+	srv.agentSessionsMu.Lock()
+	if worktreeErr != nil || managed || entry.worktreeBusy {
+		srv.agentSessionsMu.Unlock()
+		message := "remove the managed worktree before deleting its conversation"
+		if worktreeErr != nil {
+			message = worktreeErr.Error()
+		}
+		ac.sendErrorThread(threadID, message)
+		return
+	}
 	if store := srv.agentStore(); store != nil {
 		store.mu.Lock()
 		writable := store.writableLocked(entry.deviceID, threadID)
@@ -2344,10 +2435,11 @@ func (h *agentWSHandler) handleDeleteThread(ac *agentConn, threadID string) {
 		for _, conn := range affected {
 			conn.writeJSON(agentMsg{
 				Goal: snap.goal, Loop: snap.loop,
-				Op:           "thread_switched",
-				Thread:       switchedTo,
-				Model:        switchModel,
-				History:      snap.history,
+				Op:             "thread_switched",
+				Thread:         switchedTo,
+				Model:          switchModel,
+				History:        snap.history,
+				HistoryHasMore: snap.historyHasMore, HistoryBefore: snap.historyBefore,
 				Todos:        snap.todos,
 				Queue:        snap.queue,
 				QueueIDs:     snap.queueIDs,
@@ -2412,7 +2504,7 @@ func (h *agentWSHandler) handleSetCwd(ac *agentConn, path string) {
 		return
 	}
 	defer th.persistMu.Unlock()
-	if th.running {
+	if th.running || entry.worktreeBusy {
 		srv.agentSessionsMu.Unlock()
 		ac.sendError("agent is busy; stop first")
 		return
@@ -2893,6 +2985,7 @@ func (s *Server) startAgentTurnLocked(entry *agentSessionEntry, th *agentThread,
 			th.sessionClient = entry.client
 		}
 	}
+	th.turnPage = s.recentTranscriptPageLocked(entry, th)
 	th.running = true
 	command, _ := splitAgentCommand(text)
 	th.turnCommand = isAgentSessionCommand(command)
@@ -2909,7 +3002,8 @@ func (s *Server) startAgentTurnLocked(entry *agentSessionEntry, th *agentThread,
 	th.turnHistory = th.session.History()
 	th.turnHistIdx = len(th.turnHistory)
 	entry.lastActive = th.workingSince
-	ctx, cancel := context.WithCancel(context.Background())
+	th.turnMessageID = agent.NewMessageID()
+	ctx, cancel := context.WithCancel(agent.WithUserMessageID(context.Background(), th.turnMessageID))
 	th.turnCtx = ctx
 	th.cancel = cancel
 
@@ -2919,7 +3013,7 @@ func (s *Server) startAgentTurnLocked(entry *agentSessionEntry, th *agentThread,
 	}
 	metadata["time"] = th.workingSince.UnixMilli()
 	th.turnDisplay, _ = json.Marshal(metadata)
-	start := agentMsg{Display: th.turnDisplay, Op: "turn_start", Text: text, ImagePreviews: agentImagePreviews(images)}
+	start := agentMsg{MessageID: th.turnMessageID, Display: th.turnDisplay, Op: "turn_start", Text: text, ImagePreviews: agentImagePreviews(images)}
 	if names := agentImageNames(images); len(names) > 0 {
 		if raw, err := json.Marshal(names); err == nil {
 			start.Images = raw
@@ -2931,6 +3025,12 @@ func (s *Server) startAgentTurnLocked(entry *agentSessionEntry, th *agentThread,
 // startAgentTurn marks the thread running and spawns the turn goroutine.
 func (s *Server) startAgentTurn(entry *agentSessionEntry, th *agentThread, text string, images []agent.MessageImage) {
 	s.agentSessionsMu.Lock()
+	if entry.worktreeBusy {
+		th.queue = append(th.queue, agentQueuedChat{text: text, images: images})
+		s.agentSessionsMu.Unlock()
+		s.broadcastQueue(entry, th)
+		return
+	}
 	startFrame := s.startAgentTurnLocked(entry, th, text, images)
 	turn := snapshotAgentTurnLocked(th)
 	s.agentSessionsMu.Unlock()
@@ -3092,12 +3192,20 @@ func (s *Server) runAgentTurn(entry *agentSessionEntry, th *agentThread, turn ag
 	s.agentSessionsMu.Unlock()
 	if valid {
 		if store := s.agentStore(); store != nil {
+			if err := store.captureTranscript(entry.deviceID, th.id, sess.History()); err != nil && runErr == nil {
+				runErr = fmt.Errorf("history persistence: %w", err)
+				outcome = "error"
+			}
 			if historyReplaced {
 				store.replace(entry.deviceID, th.id, turnModel, sess.History())
 			} else {
 				store.save(entry.deviceID, th.id, turnModel, sess.History())
 			}
 			store.saveOutcome(entry.deviceID, th.id, turnModel, outcome, outcomeAt)
+			if fault := store.historyFault(entry.deviceID, th.id); fault != "" && runErr == nil {
+				runErr = fmt.Errorf("history persistence: %s", fault)
+				outcome = "error"
+			}
 		}
 	}
 	// Remain running until persistence completes.
@@ -3137,9 +3245,11 @@ func (s *Server) runAgentTurn(entry *agentSessionEntry, th *agentThread, turn ag
 			terminal.Code = "provider_content_filter"
 		}
 	}
-	if historyReplaced {
-		terminal.Compacted = true
-		terminal.History = renderAgentHistory(sess.History())
+	terminal.Compacted = historyReplaced
+	page, pageErr := s.completedTranscriptPageLocked(entry, th)
+	terminal.History, terminal.HistoryHasMore, terminal.HistoryBefore = page.History, page.HasMore, page.Before
+	if pageErr != nil {
+		terminal.HistoryError = pageErr.Error()
 	}
 	if turn.rpc != nil {
 		rpcErr = runErr

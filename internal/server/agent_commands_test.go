@@ -58,6 +58,7 @@ func TestCompactCommandPersistsAndPublishesReplacement(t *testing.T) {
 	thread := entry.threads[entry.current]
 	original := []agent.Message{{Role: "user", Content: "first task"}, {Role: "assistant", Content: "first result"}, {Role: "user", Content: "latest request"}, {Role: "assistant", Content: "latest result"}}
 	thread.session.SetHistory(original)
+	original = thread.session.History()
 	srv.agentStore().save(entry.deviceID, thread.id, thread.model, original)
 	handler := &agentWSHandler{srv: srv}
 	handler.handleChat(&agentConn{deviceID: entry.deviceID, entry: entry, current: thread.id}, "/compact retain paths", "", "", nil)
@@ -78,8 +79,8 @@ func TestCompactCommandPersistsAndPublishesReplacement(t *testing.T) {
 	if !reflect.DeepEqual(loaded, expected) {
 		t.Fatal("reconnect would load stale history")
 	}
-	if !reflect.DeepEqual(terminal.History, renderAgentHistory(loaded)) {
-		t.Fatal("live client and reconnect histories differ")
+	if !reflect.DeepEqual(terminal.History, renderAgentHistory(original)) {
+		t.Fatal("semantic compaction replaced the durable UI transcript")
 	}
 }
 
@@ -139,6 +140,7 @@ func TestExplicitCommandsRejectImagesWithoutMutatingHistory(t *testing.T) {
 			session := agent.New(agent.Config{Tools: []agent.Tool{tool}})
 			original := []agent.Message{{Role: "user", Content: "keep this"}}
 			session.SetHistory(original)
+			original = session.History()
 			replaced, err := runAgentConversation(t.Context(), session, command, []agent.MessageImage{{}}, func(agent.Event) { t.Error("rejected command emitted an event") })
 			if err == nil || !strings.Contains(err.Error(), "does not accept images") || replaced {
 				t.Fatalf("replaced=%v err=%v", replaced, err)

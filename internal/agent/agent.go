@@ -12,6 +12,8 @@ package agent
 import (
 	"cmp"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"slices"
@@ -33,6 +35,7 @@ const (
 
 // Event is one streamed unit of agent progress.
 type Event struct {
+	MessageID  string
 	Images     []MessageImage  // user_input: images accompanying queued guidance
 	Display    json.RawMessage // user_input: presentation metadata
 	Type       EventType
@@ -129,6 +132,9 @@ type Config struct {
 	// OnUsage observes each provider round, including reported usage on errors.
 	// It may cancel the run to enforce an explicitly authorized budget.
 	OnUsage func(Usage)
+	// OnHistory durably captures conversation records before context reduction.
+	// A failure stops the run rather than silently losing the transcript.
+	OnHistory func([]Message) error
 	// HTTPClient is optional; nil uses a default client with no total timeout
 	// (streaming relies on ctx for cancellation).
 	HTTPClient *http.Client
@@ -138,8 +144,11 @@ const DefaultMaxTurns = 0
 
 // Message is one conversation entry in OpenAI chat-completions wire shape.
 type Message struct {
-	Responses *ResponseReplay `json:"-"`
-	Anthropic *ProviderReplay `json:"-"`
+	MessageID      string          `json:"-"`
+	ContextOnly    bool            `json:"-"` // synthetic compaction context, not a conversation record
+	ArchiveContent string          `json:"-"` // original tool output before model-context truncation
+	Responses      *ResponseReplay `json:"-"`
+	Anthropic      *ProviderReplay `json:"-"`
 
 	Display    json.RawMessage `json:"-"`    // UI metadata, never sent to the provider
 	Role       string          `json:"role"` // "system" | "user" | "assistant" | "tool"
@@ -285,6 +294,7 @@ func (s *Session) History() []Message {
 func (s *Session) SetHistory(h []Message) {
 	s.mu.Lock()
 	s.history = cloneMessages(h)
+	ensureMessageIDs(s.history)
 	s.historyRevision++
 	s.turnHistoryIndex = 0
 	s.mu.Unlock()
@@ -303,6 +313,30 @@ func cloneMessages(messages []Message) []Message {
 		cloned[i].Anthropic = cloneProviderReplay(message.Anthropic)
 	}
 	return cloned
+}
+
+// NewMessageID returns an opaque transcript identity, never provider input.
+func NewMessageID() string {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		panic(err)
+	}
+	return "m_" + hex.EncodeToString(b[:])
+}
+
+func ensureMessageIDs(messages []Message) {
+	for i := range messages {
+		if messages[i].MessageID == "" {
+			messages[i].MessageID = NewMessageID()
+		}
+	}
+}
+
+type userMessageIDKey struct{}
+
+// WithUserMessageID joins the admitted live user frame to its durable record.
+func WithUserMessageID(ctx context.Context, id string) context.Context {
+	return context.WithValue(ctx, userMessageIDKey{}, id)
 }
 
 // AnnotateTurn records presentation metadata without changing model input.

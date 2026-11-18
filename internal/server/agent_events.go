@@ -15,7 +15,7 @@ func (s *Server) emitAgentTurnEvent(entry *agentSessionEntry, th *agentThread, e
 		s.agentSessionsMu.Unlock()
 		return false
 	}
-	msg := agentMsg{Thread: th.id}
+	msg := agentMsg{Thread: th.id, MessageID: event.MessageID}
 	switch event.Type {
 	case agent.EventAssistantStart:
 		msg.Op = "assistant_start"

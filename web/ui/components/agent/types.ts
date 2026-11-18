@@ -19,6 +19,7 @@ export interface ToolItem {
 export interface TurnItem {
   kind: "turn";
   key: number;
+  messageId?: string;
   text: string;
   reasoning: string;
   streaming: boolean;
@@ -51,6 +52,7 @@ export interface ApprovalItem {
 export interface BubbleItem {
   kind: "user" | "error" | "system" | "setup";
   key: number;
+  messageId?: string;
   text: string;
   /* Attachment file names on user bubbles (turn_start.images / history). */
   images?: string[];
