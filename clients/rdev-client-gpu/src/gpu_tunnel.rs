@@ -320,15 +320,15 @@ async fn run_once_stream_tunnel(args: &Args, instance_id: &str, endpoint: &str) 
             )
         };
     let (mut reader, mut writer) = tokio::io::split(stream);
-	let hello = Message {
-		ty: Some(MessageType::GpuDesktopTunnel),
-		client_id: args.id.clone(),
-		instance_id: instance_id.to_string(),
-		device_identity: args.device_identity.clone(),
-		reconnect_proof: args.reconnect_proof.clone(),
-		password: args.password.clone(),
-		..Default::default()
-	};
+    let hello = Message {
+        ty: Some(MessageType::GpuDesktopTunnel),
+        client_id: args.id.clone(),
+        instance_id: instance_id.to_string(),
+        device_identity: args.device_identity.clone(),
+        reconnect_proof: args.reconnect_proof.clone(),
+        password: args.password.clone(),
+        ..Default::default()
+    };
     stream_frame::write_frame(
         &mut writer,
         stream_frame::KIND_JSON,
@@ -620,9 +620,9 @@ fn tunnel_url_for_endpoint(args: &Args, _instance_id: &str, endpoint: &str) -> R
     url.set_path("/gpu-desktop-tunnel");
     url.query_pairs_mut()
         .clear()
-		.append_pair("device", &args.id)
-		.append_pair("deviceIdentity", &args.device_identity)
-		.append_pair("reconnectProof", &args.reconnect_proof);
+        .append_pair("device", &args.id)
+        .append_pair("deviceIdentity", &args.device_identity)
+        .append_pair("reconnectProof", &args.reconnect_proof);
     Ok(url)
 }
 
@@ -713,8 +713,14 @@ mod tests {
         assert_eq!(url.path(), "/gpu-desktop-tunnel");
         assert!(url.as_str().contains("device=dev1"));
         let query: HashMap<_, _> = url.query_pairs().collect();
-        assert_eq!(query.get("deviceIdentity").map(|v| v.as_ref()), Some(args.device_identity.as_str()));
-        assert_eq!(query.get("reconnectProof").map(|v| v.as_ref()), Some(args.reconnect_proof.as_str()));
+        assert_eq!(
+            query.get("deviceIdentity").map(|v| v.as_ref()),
+            Some(args.device_identity.as_str())
+        );
+        assert_eq!(
+            query.get("reconnectProof").map(|v| v.as_ref()),
+            Some(args.reconnect_proof.as_str())
+        );
         assert!(!query.contains_key("instanceId"));
     }
 

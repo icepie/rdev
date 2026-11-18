@@ -670,7 +670,8 @@ impl Session {
                 if raw.len() == FRAME_HEADER
                     && raw[0] == BIN_FILE_DOWNLOAD_ACK
                     && raw[1] == 0
-                    && lifecycle.range_end == Some(i64::from_be_bytes(raw[2..10].try_into().unwrap()))
+                    && lifecycle.range_end
+                        == Some(i64::from_be_bytes(raw[2..10].try_into().unwrap()))
                 {
                     lifecycle.range_end = None;
                     true
@@ -800,7 +801,11 @@ mod tests {
         msg.ty = Some(MessageType::FileUploadStart);
         assert!(!range_ack_enabled(&msg));
         msg.ty = Some(MessageType::FileDownloadStart);
-        for value in [Value::Null, Value::Bool(false), Value::String("true".into())] {
+        for value in [
+            Value::Null,
+            Value::Bool(false),
+            Value::String("true".into()),
+        ] {
             msg.rtc_data = serde_json::json!({"rangeAck": value});
             assert!(!range_ack_enabled(&msg));
         }
@@ -814,9 +819,12 @@ mod tests {
         for offset in [16, 32, 35] {
             manager.wait_for_range_ack("download", offset).unwrap();
             assert!(manager.resume_range("download").is_err());
-            session.receive(protocol::encode_bin_frame_offset(
-                BIN_FILE_DOWNLOAD_ACK, "", offset, &[],
-            ).unwrap()).await;
+            session
+                .receive(
+                    protocol::encode_bin_frame_offset(BIN_FILE_DOWNLOAD_ACK, "", offset, &[])
+                        .unwrap(),
+                )
+                .await;
             assert!(task.events.recv().await.is_some());
             manager.resume_range("download").unwrap();
             let life = session.lifecycle.lock().unwrap();
@@ -825,9 +833,9 @@ mod tests {
             assert!(life.terminal.is_none());
         }
         // A repeated ACK after consumption must not authorize another segment.
-        session.receive(protocol::encode_bin_frame_offset(
-            BIN_FILE_DOWNLOAD_ACK, "", 35, &[],
-        ).unwrap()).await;
+        session
+            .receive(protocol::encode_bin_frame_offset(BIN_FILE_DOWNLOAD_ACK, "", 35, &[]).unwrap())
+            .await;
         assert!(!manager.active("download"));
     }
 
@@ -848,9 +856,13 @@ mod tests {
                 manager.wait_for_range_ack("download", 16).unwrap();
             }
             if duplicate {
-                session.receive(protocol::encode_bin_frame_offset(typ, id, offset, payload).unwrap()).await;
+                session
+                    .receive(protocol::encode_bin_frame_offset(typ, id, offset, payload).unwrap())
+                    .await;
             }
-            session.receive(protocol::encode_bin_frame_offset(typ, id, offset, payload).unwrap()).await;
+            session
+                .receive(protocol::encode_bin_frame_offset(typ, id, offset, payload).unwrap())
+                .await;
             assert!(!manager.active("download"));
             assert!(*task.closed.borrow());
             assert!(task.events.len() <= 1);
@@ -873,7 +885,9 @@ mod tests {
         tokio::time::timeout(Duration::from_secs(1), async {
             task.closed.wait_for(|closed| *closed).await.unwrap();
             assert!(task.events.recv().await.is_none());
-        }).await.unwrap();
+        })
+        .await
+        .unwrap();
         assert!(manager.resume_range("download").is_err());
     }
 

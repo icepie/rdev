@@ -215,10 +215,11 @@ async fn run(mut args: Args) -> Result<()> {
     });
 
     desktop_env::prepare(&mut args);
-	let instance_id = args.instance_id.clone().unwrap_or_else(new_instance_id);
-	let (device_identity, reconnect_proof) = identity::load_device_identity(&args.server, &args.id)?;
-	args.device_identity = device_identity;
-	args.reconnect_proof = reconnect_proof;
+    let instance_id = args.instance_id.clone().unwrap_or_else(new_instance_id);
+    let (device_identity, reconnect_proof) =
+        identity::load_device_identity(&args.server, &args.id)?;
+    args.device_identity = device_identity;
+    args.reconnect_proof = reconnect_proof;
     let rdev_desktop_service = rdev_desktop_service::start(&args);
     let desktop_enabled = rdev_desktop_service.is_some();
     if let Some(service) = rdev_desktop_service.as_ref() {
@@ -675,7 +676,9 @@ async fn handle_text(
             let session_id = msg.session_id.clone();
             let direct = msg.terminal_rtc;
             sessions.start(msg, args.shell.clone(), out_tx.clone())?;
-            if direct { runtime.terminal_rtc.bind_session(&session_id); }
+            if direct {
+                runtime.terminal_rtc.bind_session(&session_id);
+            }
         }
         Some(MessageType::StdinClose) => sessions.stdin_close(&msg.session_id).await,
         Some(MessageType::Resize) => sessions.resize(&msg.session_id, msg.rows, msg.cols).await,
@@ -773,7 +776,9 @@ async fn handle_text(
         }
         Some(MessageType::DesktopRTCSignal) => {
             if runtime.desktop_enabled && !args.no_desktop {
-                runtime.rtc.signal(msg, args.gpu_desktop_local.clone(), out_tx.clone());
+                runtime
+                    .rtc
+                    .signal(msg, args.gpu_desktop_local.clone(), out_tx.clone());
             }
         }
         other => debug!("ignored message type: {:?}", other),

@@ -111,15 +111,24 @@ impl SessionManager {
         self.send_data_nowait(session_id, data);
     }
     pub async fn send_data_reliable(&self, session_id: &str, data: Vec<u8>) -> Result<()> {
-        let tx = self.sessions.lock().unwrap().get(session_id).cloned()
+        let tx = self
+            .sessions
+            .lock()
+            .unwrap()
+            .get(session_id)
+            .cloned()
             .ok_or_else(|| anyhow!("session is closed"))?;
-        tx.send(SessionInput::Data(data)).await.map_err(|_| anyhow!("session is closed"))
+        tx.send(SessionInput::Data(data))
+            .await
+            .map_err(|_| anyhow!("session is closed"))
     }
 
     pub fn close_all_nowait(&self) {
         let sessions = std::mem::take(&mut *self.sessions.lock().unwrap());
         for (_, tx) in sessions {
-            tokio::spawn(async move { let _ = tx.send(SessionInput::Close).await; });
+            tokio::spawn(async move {
+                let _ = tx.send(SessionInput::Close).await;
+            });
         }
     }
 

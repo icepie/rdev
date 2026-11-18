@@ -2,7 +2,6 @@ pub mod config;
 pub mod desktop;
 pub mod desktop_env;
 pub mod desktop_rtc;
-pub mod terminal_rtc;
 mod file_rename;
 pub mod file_rtc;
 pub mod fileput;
@@ -16,6 +15,7 @@ pub mod rdev_desktop_service;
 pub mod session;
 pub mod sftp;
 pub mod stream_frame;
+pub mod terminal_rtc;
 pub mod updater;
 pub mod version;
 #[cfg(windows)]

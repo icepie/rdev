@@ -143,10 +143,10 @@ pub struct Message {
     pub client_version: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub instance_id: String,
-	#[serde(default, skip_serializing_if = "String::is_empty")]
-	pub device_identity: String,
-	#[serde(default, skip_serializing_if = "String::is_empty")]
-	pub reconnect_proof: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub device_identity: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub reconnect_proof: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub subsystem: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]

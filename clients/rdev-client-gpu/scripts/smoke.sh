@@ -241,6 +241,8 @@ def recv_json(op=None, task_id=None, request_id=None):
         if opcode != 0x1:
             continue
         msg = json.loads(payload.decode())
+        if msg.get("op") == "error" and (not task_id or msg.get("taskId") == task_id):
+            raise RuntimeError(f"file operation failed: {msg}")
         if op and msg.get("op") != op:
             continue
         if task_id and msg.get("taskId") != task_id:
@@ -265,6 +267,7 @@ if "file.txt" not in {entry.get("name") for entry in listing.get("entries", [])}
 
 upload_id = "upload-smoke"
 content = b"hello-file-manager"
+digest = hashlib.sha256(content).hexdigest()
 send_json({
     "op": "upload_start",
     "deviceId": device_id,
@@ -272,6 +275,7 @@ send_json({
     "parentPath": str(remote_dir),
     "name": remote_file.name,
     "size": len(content),
+    "sha256": digest,
 })
 ready = recv_json("upload_ready", task_id=upload_id)
 if ready.get("offset", 0) != 0:
@@ -279,13 +283,13 @@ if ready.get("offset", 0) != 0:
 send_frame(0x2, encode_offset_frame(BIN_FILE_UPLOAD_CHUNK, upload_id, 0, content))
 send_json({"op": "upload_end", "taskId": upload_id, "path": ready.get("path"), "size": len(content)})
 end = recv_json("transfer_end", task_id=upload_id)
-if not end.get("success") or remote_file.read_bytes() != content:
+if not end.get("success") or end.get("sha256") != digest or remote_file.read_bytes() != content:
     raise SystemExit(f"upload failed: {end}")
 
 download_id = "download-smoke"
 send_json({"op": "download_start", "deviceId": device_id, "taskId": download_id, "path": str(remote_file)})
 start = recv_json("download_start", task_id=download_id)
-if start.get("size") != len(content):
+if start.get("size") != len(content) or start.get("sha256") != digest:
     raise SystemExit(f"bad download metadata: {start}")
 downloaded = bytearray()
 while True:

@@ -5,7 +5,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicU64, AtomicU8, Ordering},
-        Arc, Mutex, LazyLock, OnceLock,
+        Arc, LazyLock, Mutex, OnceLock,
     },
     time::{Duration, Instant, SystemTime},
 };
@@ -52,7 +52,10 @@ struct UploadTask {
 impl UploadTask {
     fn check_active(&self) -> Result<()> {
         if self.phase.load(Ordering::Acquire) != UPLOAD_ACTIVE
-            || self.rtc_closed.as_ref().is_some_and(|closed| *closed.borrow())
+            || self
+                .rtc_closed
+                .as_ref()
+                .is_some_and(|closed| *closed.borrow())
         {
             return Err(anyhow!("upload canceled"));
         }
@@ -61,7 +64,12 @@ impl UploadTask {
 
     fn cancel(&self) {
         // A rename already committed to its destination wins over cancellation.
-        let _ = self.phase.compare_exchange(UPLOAD_ACTIVE, UPLOAD_CANCELED, Ordering::AcqRel, Ordering::Acquire);
+        let _ = self.phase.compare_exchange(
+            UPLOAD_ACTIVE,
+            UPLOAD_CANCELED,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        );
     }
 }
 
@@ -78,6 +86,9 @@ struct UploadPause {
     resume: tokio::sync::Notify,
 }
 
+#[cfg(test)]
+type UploadPauseConfig = Option<(String, bool, Arc<UploadPause>)>;
+
 #[derive(Clone, Debug)]
 struct DownloadFingerprint {
     size: u64,
@@ -92,7 +103,15 @@ const FINGERPRINT_TTL: Duration = Duration::from_secs(30);
 #[cfg(unix)]
 fn metadata_version(meta: &std::fs::Metadata) -> String {
     use std::os::unix::fs::MetadataExt;
-    format!("{}:{}:{}:{}:{}:{}", meta.dev(), meta.ino(), meta.ctime(), meta.ctime_nsec(), meta.len(), meta.mtime_nsec())
+    format!(
+        "{}:{}:{}:{}:{}:{}",
+        meta.dev(),
+        meta.ino(),
+        meta.ctime(),
+        meta.ctime_nsec(),
+        meta.len(),
+        meta.mtime_nsec()
+    )
 }
 
 // Non-Unix std metadata has no portable inode or change-time API; use size and
@@ -106,7 +125,7 @@ fn metadata_version(meta: &std::fs::Metadata) -> String {
 pub struct FileManager {
     uploads: Arc<Mutex<UploadRegistry>>,
     #[cfg(test)]
-    upload_pause: Arc<Mutex<Option<(String, bool, Arc<UploadPause>)>>>,
+    upload_pause: Arc<Mutex<UploadPauseConfig>>,
     downloads: Arc<Mutex<HashMap<String, DownloadHandle>>>,
     listings: Arc<Mutex<HashMap<PathBuf, DirectorySnapshot>>>,
     listing_generation: Arc<AtomicU64>,
@@ -166,7 +185,11 @@ impl FileManager {
 
     fn release_upload(&self, task_id: &str, task: &Arc<UploadTask>) {
         let mut registry = self.uploads.lock().unwrap();
-        if registry.tasks.get(task_id).is_some_and(|current| Arc::ptr_eq(current, task)) {
+        if registry
+            .tasks
+            .get(task_id)
+            .is_some_and(|current| Arc::ptr_eq(current, task))
+        {
             registry.tasks.remove(task_id);
             if let Some(target) = task.target.get() {
                 registry.targets.remove(target);
@@ -186,7 +209,11 @@ impl FileManager {
 
     #[cfg(test)]
     async fn pause_upload(&self, task_id: &str, finalizing: bool) {
-        let pause = self.upload_pause.lock().unwrap().as_ref()
+        let pause = self
+            .upload_pause
+            .lock()
+            .unwrap()
+            .as_ref()
             .filter(|(id, phase, _)| id == task_id && *phase == finalizing)
             .map(|(_, _, pause)| pause.clone());
         if let Some(pause) = pause {
@@ -346,14 +373,27 @@ impl FileManager {
         }
         let path = upload_target(&msg);
         let result = self
-            .open_upload(&task_id, path.clone(), msg.size, &msg.sha256, msg.restart, None)
+            .open_upload(
+                &task_id,
+                path.clone(),
+                msg.size,
+                &msg.sha256,
+                msg.restart,
+                None,
+            )
             .await;
         match result {
             Ok((offset, prefix_sha256)) => {
                 let _ = outbound
                     .send(OutboundEvent::Message(Message {
-                        ty: Some(MessageType::FileUploadReady), task_id, path: path.to_string_lossy().to_string(),
-                        offset, size: msg.size, sha256: msg.sha256, prefix_sha256, ..Default::default()
+                        ty: Some(MessageType::FileUploadReady),
+                        task_id,
+                        path: path.to_string_lossy().to_string(),
+                        offset,
+                        size: msg.size,
+                        sha256: msg.sha256,
+                        prefix_sha256,
+                        ..Default::default()
                     }))
                     .await;
             }
@@ -382,7 +422,14 @@ impl FileManager {
             }
             let path = upload_target(&msg);
             let (offset, prefix_sha256) = self
-                .open_upload(&msg.task_id, path.clone(), msg.size, &msg.sha256, msg.restart, Some(generation.clone()))
+                .open_upload(
+                    &msg.task_id,
+                    path.clone(),
+                    msg.size,
+                    &msg.sha256,
+                    msg.restart,
+                    Some(generation.clone()),
+                )
                 .await?;
             tokio::select! {
                 biased;
@@ -429,9 +476,11 @@ impl FileManager {
         // task retains destination ownership until all I/O has settled.
         let result = operation.await;
         rtc.remove_if_current(&msg.task_id, &generation);
-        if let Some(upload) = self.upload_task(&msg.task_id)
-            .filter(|up| up.rtc_closed.as_ref().is_some_and(|owner| owner.same_channel(&generation)))
-        {
+        if let Some(upload) = self.upload_task(&msg.task_id).filter(|up| {
+            up.rtc_closed
+                .as_ref()
+                .is_some_and(|owner| owner.same_channel(&generation))
+        }) {
             self.stop_upload(&msg.task_id, &upload).await;
         }
         if let Err(err) = result {
@@ -458,15 +507,31 @@ impl FileManager {
         rtc: Option<(FileRtcManager, tokio::sync::watch::Receiver<bool>)>,
     ) {
         if data.is_empty() || data.len() > MAX_CHUNK_SIZE {
-            send_transfer_error(&outbound, task_id, Path::new(""), anyhow!("invalid upload chunk size")).await;
+            send_transfer_error(
+                &outbound,
+                task_id,
+                Path::new(""),
+                anyhow!("invalid upload chunk size"),
+            )
+            .await;
             return;
         }
         let Some(task) = self.upload_task(task_id) else {
-            send_transfer_error(&outbound, task_id, Path::new(""), anyhow!("upload not found")).await;
+            send_transfer_error(
+                &outbound,
+                task_id,
+                Path::new(""),
+                anyhow!("upload not found"),
+            )
+            .await;
             return;
         };
         if rtc.as_ref().is_some_and(|(_, generation)| {
-            *generation.borrow() || !task.rtc_closed.as_ref().is_some_and(|owner| owner.same_channel(generation))
+            *generation.borrow()
+                || !task
+                    .rtc_closed
+                    .as_ref()
+                    .is_some_and(|owner| owner.same_channel(generation))
         }) {
             return;
         }
@@ -474,14 +539,22 @@ impl FileManager {
         let result = async {
             task.check_active()?;
             let state = io.as_mut().ok_or_else(|| anyhow!("upload not found"))?;
-            if offset != state.offset { return Err(anyhow!("unexpected offset {offset}, want {}", state.offset)); }
-            let next = state.offset.checked_add(data.len() as i64).ok_or_else(|| anyhow!("upload size overflow"))?;
-            if next > state.size { return Err(anyhow!("upload exceeds declared size")); }
+            if offset != state.offset {
+                return Err(anyhow!("unexpected offset {offset}, want {}", state.offset));
+            }
+            let next = state
+                .offset
+                .checked_add(data.len() as i64)
+                .ok_or_else(|| anyhow!("upload size overflow"))?;
+            if next > state.size {
+                return Err(anyhow!("upload exceeds declared size"));
+            }
             state.file.write_all(&data).await?;
             state.offset = next;
             task.check_active()?;
             Ok::<_, anyhow::Error>(next)
-        }.await;
+        }
+        .await;
         let mut failed_path = None;
         if result.is_err() {
             task.cancel();
@@ -499,16 +572,27 @@ impl FileManager {
                         rtc.remove_if_current(task_id, &generation);
                     }
                 } else {
-                    let _ = outbound.send(OutboundEvent::BinaryOffset {
-                        typ: BIN_FILE_UPLOAD_ACK, id: task_id.to_string(), offset: next, payload: Vec::new(),
-                    }).await;
+                    let _ = outbound
+                        .send(OutboundEvent::BinaryOffset {
+                            typ: BIN_FILE_UPLOAD_ACK,
+                            id: task_id.to_string(),
+                            offset: next,
+                            payload: Vec::new(),
+                        })
+                        .await;
                 }
             }
             Err(err) => {
                 if let Some((rtc, generation)) = rtc {
                     rtc.remove_if_current(task_id, &generation);
                 }
-                send_transfer_error(&outbound, task_id, failed_path.as_deref().unwrap_or_else(|| Path::new("")), err).await;
+                send_transfer_error(
+                    &outbound,
+                    task_id,
+                    failed_path.as_deref().unwrap_or_else(|| Path::new("")),
+                    err,
+                )
+                .await;
             }
         }
     }
@@ -516,16 +600,36 @@ impl FileManager {
     pub async fn upload_end(&self, msg: Message, outbound: mpsc::Sender<OutboundEvent>) {
         let task_id = msg.task_id.clone();
         let Some(task) = self.upload_task(&task_id) else {
-            send_transfer_error(&outbound, &task_id, Path::new(&msg.path), anyhow!("upload not found")).await;
+            send_transfer_error(
+                &outbound,
+                &task_id,
+                Path::new(&msg.path),
+                anyhow!("upload not found"),
+            )
+            .await;
             return;
         };
         let mut io = task.io.lock().await;
         let Some(state) = io.take() else {
             drop(io);
-            send_transfer_error(&outbound, &task_id, Path::new(&msg.path), anyhow!("upload not found")).await;
+            send_transfer_error(
+                &outbound,
+                &task_id,
+                Path::new(&msg.path),
+                anyhow!("upload not found"),
+            )
+            .await;
             return;
         };
-        let UploadState { mut file, path, part_path, meta_path, size, offset, sha256 } = state;
+        let UploadState {
+            mut file,
+            path,
+            part_path,
+            meta_path,
+            size,
+            offset,
+            sha256,
+        } = state;
         let result = async {
             // Even on cancellation flush before releasing the target reservation.
             file.flush().await?;
@@ -545,12 +649,19 @@ impl FileManager {
             }
             // Linearize cancellation against commit without holding any shared
             // lock over rename. Occupancy remains reserved until rename settles.
-            task.phase.compare_exchange(UPLOAD_ACTIVE, UPLOAD_COMMITTING, Ordering::AcqRel, Ordering::Acquire)
+            task.phase
+                .compare_exchange(
+                    UPLOAD_ACTIVE,
+                    UPLOAD_COMMITTING,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                )
                 .map_err(|_| anyhow!("upload canceled"))?;
             fs::rename(&part_path, &path).await?;
             let _ = fs::remove_file(&meta_path).await;
             Ok::<_, anyhow::Error>(())
-        }.await;
+        }
+        .await;
         task.phase.store(UPLOAD_FINISHED, Ordering::Release);
         // Complete only this RTC generation before making the task ID reusable.
         if let (Some(rtc), Some(generation)) = (self.rtc(), task.rtc_closed.as_ref()) {
@@ -565,11 +676,17 @@ impl FileManager {
         self.invalidate_listings();
         match result {
             Ok(()) => {
-                let _ = outbound.send(OutboundEvent::Message(Message {
-                    ty: Some(MessageType::FileTransferEnd), task_id,
-                    path: path.to_string_lossy().to_string(), size: offset,
-                    success: true, sha256, ..Default::default()
-                })).await;
+                let _ = outbound
+                    .send(OutboundEvent::Message(Message {
+                        ty: Some(MessageType::FileTransferEnd),
+                        task_id,
+                        path: path.to_string_lossy().to_string(),
+                        size: offset,
+                        success: true,
+                        sha256,
+                        ..Default::default()
+                    }))
+                    .await;
             }
             Err(err) => send_transfer_error(&outbound, &task_id, &path, err).await,
         }
@@ -660,10 +777,14 @@ impl FileManager {
         }
         let uploads: Vec<_> = {
             let registry = self.uploads.lock().unwrap();
-            registry.tasks.iter().map(|(id, task)| {
-                task.cancel();
-                (id.clone(), task.clone())
-            }).collect()
+            registry
+                .tasks
+                .iter()
+                .map(|(id, task)| {
+                    task.cancel();
+                    (id.clone(), task.clone())
+                })
+                .collect()
         };
         for (id, task) in uploads {
             self.stop_upload(&id, &task).await;
@@ -761,11 +882,15 @@ impl FileManager {
         restart: bool,
         rtc_closed: Option<tokio::sync::watch::Receiver<bool>>,
     ) -> Result<(i64, String)> {
-        if !(0..=MAX_TRANSFER_SIZE).contains(&size) { return Err(anyhow!("invalid upload size")); }
+        if !(0..=MAX_TRANSFER_SIZE).contains(&size) {
+            return Err(anyhow!("invalid upload size"));
+        }
         let expected_sha256 = validate_hash(expected_sha256)?;
         let task = Arc::new(UploadTask {
-            io: tokio::sync::Mutex::new(None), phase: AtomicU8::new(UPLOAD_ACTIVE),
-            target: OnceLock::new(), rtc_closed,
+            io: tokio::sync::Mutex::new(None),
+            phase: AtomicU8::new(UPLOAD_ACTIVE),
+            target: OnceLock::new(),
+            rtc_closed,
         });
         task.check_active()?;
         // Reserve the task before the first await so cancel/close_all also see
@@ -774,7 +899,9 @@ impl FileManager {
         {
             let mut registry = self.uploads.lock().unwrap();
             if registry.tasks.contains_key(task_id) {
-                return Err(anyhow!("upload already active for this task or destination"));
+                return Err(anyhow!(
+                    "upload already active for this task or destination"
+                ));
             }
             registry.tasks.insert(task_id.to_string(), task.clone());
         }
@@ -785,38 +912,80 @@ impl FileManager {
             let absolute = std::path::absolute(&path)?;
             let parent = absolute.parent().ok_or_else(|| anyhow!("missing parent"))?;
             fs::create_dir_all(parent).await?;
-            let path = fs::canonicalize(parent).await?.join(absolute.file_name().ok_or_else(|| anyhow!("missing filename"))?);
-            let key = if cfg!(windows) { PathBuf::from(path.to_string_lossy().to_lowercase()) } else { path.clone() };
+            let path = fs::canonicalize(parent).await?.join(
+                absolute
+                    .file_name()
+                    .ok_or_else(|| anyhow!("missing filename"))?,
+            );
+            let key = if cfg!(windows) {
+                PathBuf::from(path.to_string_lossy().to_lowercase())
+            } else {
+                path.clone()
+            };
             {
                 let mut registry = self.uploads.lock().unwrap();
                 task.check_active()?;
                 if registry.targets.contains_key(&key) {
-                    return Err(anyhow!("upload already active for this task or destination"));
+                    return Err(anyhow!(
+                        "upload already active for this task or destination"
+                    ));
                 }
                 task.target.set(key.clone()).unwrap();
                 registry.targets.insert(key, task.clone());
             }
             let part_path = part_path_for(&path);
             let meta_path = PathBuf::from(format!("{}.meta", part_path.to_string_lossy()));
-            let file = OpenOptions::new().create(true).truncate(false).read(true).write(true).open(&part_path).await?;
+            let file = OpenOptions::new()
+                .create(true)
+                .truncate(false)
+                .read(true)
+                .write(true)
+                .open(&part_path)
+                .await?;
             // Keep the handle in the task throughout setup and error cleanup.
-            *io = Some(UploadState { path, part_path, meta_path, file, size, offset: 0, sha256: expected_sha256 });
+            *io = Some(UploadState {
+                path,
+                part_path,
+                meta_path,
+                file,
+                size,
+                offset: 0,
+                sha256: expected_sha256,
+            });
             let state = io.as_mut().unwrap();
             task.check_active()?;
             let mut offset = state.file.metadata().await?.len();
             let binding = match fs::metadata(&state.meta_path).await {
-                Ok(meta) if meta.len() <= 4096 => fs::read(&state.meta_path).await.ok().and_then(|raw| serde_json::from_slice::<Sidecar>(&raw).ok()),
+                Ok(meta) if meta.len() <= 4096 => fs::read(&state.meta_path)
+                    .await
+                    .ok()
+                    .and_then(|raw| serde_json::from_slice::<Sidecar>(&raw).ok()),
                 _ => None,
             };
-            let resume = !restart && binding.as_ref().is_some_and(|b| b.sha256 == state.sha256 && b.size == size) && offset <= size as u64;
-            if !resume { state.file.set_len(0).await?; offset = 0; }
-            write_sidecar(&state.meta_path, &Sidecar { sha256: state.sha256.clone(), size }).await?;
+            let resume = !restart
+                && binding
+                    .as_ref()
+                    .is_some_and(|b| b.sha256 == state.sha256 && b.size == size)
+                && offset <= size as u64;
+            if !resume {
+                state.file.set_len(0).await?;
+                offset = 0;
+            }
+            write_sidecar(
+                &state.meta_path,
+                &Sidecar {
+                    sha256: state.sha256.clone(),
+                    size,
+                },
+            )
+            .await?;
             state.file.seek(std::io::SeekFrom::Start(offset)).await?;
             state.offset = offset as i64;
             let prefix = hash_prefix(&state.part_path, state.offset).await?;
             task.check_active()?;
             Ok((state.offset, prefix))
-        }.await;
+        }
+        .await;
         if result.is_err() {
             task.cancel();
             if let Some(mut state) = io.take() {
@@ -828,14 +997,27 @@ impl FileManager {
     }
 }
 #[derive(serde::Serialize, serde::Deserialize)]
-struct Sidecar { sha256: String, size: i64 }
+struct Sidecar {
+    sha256: String,
+    size: i64,
+}
 
-fn to_hex(bytes: &[u8]) -> String { bytes.iter().map(|b| format!("{b:02x}")).collect() }
-fn part_path_for(path: &Path) -> PathBuf { PathBuf::from(format!("{}.rdevpart", path.to_string_lossy())) }
+fn to_hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+fn part_path_for(path: &Path) -> PathBuf {
+    PathBuf::from(format!("{}.rdevpart", path.to_string_lossy()))
+}
 
 fn validate_hash(value: &str) -> Result<String> {
-    if value.len() != 64 || !value.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()) {
-        return Err(anyhow!("sha256 must be 64 lowercase hexadecimal characters"));
+    if value.len() != 64
+        || !value
+            .bytes()
+            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+    {
+        return Err(anyhow!(
+            "sha256 must be 64 lowercase hexadecimal characters"
+        ));
     }
     Ok(value.to_owned())
 }
@@ -844,7 +1026,13 @@ async fn hash_file(path: &Path) -> Result<String> {
     let mut file = File::open(path).await?;
     let mut hash = Sha256::new();
     let mut buffer = [0u8; 64 * 1024];
-    loop { let n = file.read(&mut buffer).await?; if n == 0 { break; } hash.update(&buffer[..n]); }
+    loop {
+        let n = file.read(&mut buffer).await?;
+        if n == 0 {
+            break;
+        }
+        hash.update(&buffer[..n]);
+    }
     Ok(to_hex(&hash.finalize()))
 }
 
@@ -856,54 +1044,99 @@ async fn hash_prefix(path: &Path, length: i64) -> Result<String> {
     while remaining > 0 {
         let capacity = buffer.len().min(remaining as usize);
         let n = file.read(&mut buffer[..capacity]).await?;
-        if n == 0 { return Err(anyhow!("partial file shorter than resume offset")); }
-        hash.update(&buffer[..n]); remaining -= n as u64;
+        if n == 0 {
+            return Err(anyhow!("partial file shorter than resume offset"));
+        }
+        hash.update(&buffer[..n]);
+        remaining -= n as u64;
     }
     Ok(to_hex(&hash.finalize()))
 }
 
-static DOWNLOAD_FINGERPRINTS: LazyLock<Mutex<HashMap<PathBuf, DownloadFingerprint>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+static DOWNLOAD_FINGERPRINTS: LazyLock<Mutex<HashMap<PathBuf, DownloadFingerprint>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 
 async fn hash_open_file(file: &mut File) -> Result<String> {
     let saved = file.seek(std::io::SeekFrom::Current(0)).await?;
     file.seek(std::io::SeekFrom::Start(0)).await?;
     let mut hash = Sha256::new();
     let mut buffer = [0u8; 64 * 1024];
-    loop { let n = file.read(&mut buffer).await?; if n == 0 { break; } hash.update(&buffer[..n]); }
+    loop {
+        let n = file.read(&mut buffer).await?;
+        if n == 0 {
+            break;
+        }
+        hash.update(&buffer[..n]);
+    }
     file.seek(std::io::SeekFrom::Start(saved)).await?;
     Ok(to_hex(&hash.finalize()))
 }
 
-async fn download_fingerprint(path: &Path, file: &mut File, meta: &std::fs::Metadata) -> Result<String> {
+async fn download_fingerprint(
+    path: &Path,
+    file: &mut File,
+    meta: &std::fs::Metadata,
+) -> Result<String> {
     let version = metadata_version(meta);
     let cache = &*DOWNLOAD_FINGERPRINTS;
     if let Some(cached) = cache.lock().unwrap().get(path) {
-        if cached.size == meta.len() && cached.version == version && cached.at.elapsed() < FINGERPRINT_TTL {
+        if cached.size == meta.len()
+            && cached.version == version
+            && cached.at.elapsed() < FINGERPRINT_TTL
+        {
             return Ok(cached.sha256.clone());
         }
     }
     let sha256 = hash_open_file(file).await?;
     let after = file.metadata().await?;
-    if metadata_version(&after) != version { return Err(anyhow!("download source changed while hashing")); }
+    if metadata_version(&after) != version {
+        return Err(anyhow!("download source changed while hashing"));
+    }
     {
         let mut entries = cache.lock().unwrap();
         entries.retain(|_, value| value.at.elapsed() < FINGERPRINT_TTL);
         while entries.len() >= 64 {
-            let oldest = entries.iter().min_by_key(|(_, value)| value.at).map(|(path, _)| path.clone());
-            if let Some(path) = oldest { entries.remove(&path); } else { break; }
+            let oldest = entries
+                .iter()
+                .min_by_key(|(_, value)| value.at)
+                .map(|(path, _)| path.clone());
+            if let Some(path) = oldest {
+                entries.remove(&path);
+            } else {
+                break;
+            }
         }
-        entries.insert(path.to_path_buf(), DownloadFingerprint { size: meta.len(), version, sha256: sha256.clone(), at: Instant::now() });
+        entries.insert(
+            path.to_path_buf(),
+            DownloadFingerprint {
+                size: meta.len(),
+                version,
+                sha256: sha256.clone(),
+                at: Instant::now(),
+            },
+        );
     }
     Ok(sha256)
 }
 async fn write_sidecar(path: &Path, sidecar: &Sidecar) -> Result<()> {
     static NEXT: AtomicU64 = AtomicU64::new(0);
-    let temp = path.with_extension(format!("meta.tmp.{}.{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
-    let mut file = OpenOptions::new().write(true).create_new(true).open(&temp).await?;
+    let temp = path.with_extension(format!(
+        "meta.tmp.{}.{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temp)
+        .await?;
     file.write_all(&serde_json::to_vec(sidecar)?).await?;
     file.sync_all().await?;
     drop(file);
-    if let Err(error) = fs::rename(&temp, path).await { let _ = fs::remove_file(&temp).await; return Err(error.into()); }
+    if let Err(error) = fs::rename(&temp, path).await {
+        let _ = fs::remove_file(&temp).await;
+        return Err(error.into());
+    }
     Ok(())
 }
 
@@ -937,7 +1170,9 @@ async fn download_task_inner(
         if !msg.sha256.is_empty() && msg.sha256 != source_sha256 {
             return Err(anyhow!("download source SHA-256 changed"));
         }
-        if msg.length > MAX_TRANSFER_SIZE { return Err(anyhow!("download range too large")); }
+        if msg.length > MAX_TRANSFER_SIZE {
+            return Err(anyhow!("download range too large"));
+        }
         let mut offset = msg.offset.clamp(0, size);
         let length = if msg.length > 0 {
             (size - offset).min(msg.length)
@@ -1409,19 +1644,52 @@ mod tests {
         let old_hash = to_hex(&Sha256::digest(b"OLD!"));
         let new_hash = to_hex(&Sha256::digest(b"bbbbbbbb"));
         fs::write(&part, b"OLD!").await.unwrap();
-        write_sidecar(&meta, &Sidecar { sha256: old_hash, size: 4 }).await.unwrap();
+        write_sidecar(
+            &meta,
+            &Sidecar {
+                sha256: old_hash,
+                size: 4,
+            },
+        )
+        .await
+        .unwrap();
 
         let manager = FileManager::new();
         let (tx, mut rx) = mpsc::channel(8);
-        manager.upload_start(Message { task_id: "new-source".into(), path: path.to_string_lossy().into_owned(), size: 8, sha256: new_hash.clone(), ..Default::default() }, tx.clone()).await;
-        let Some(OutboundEvent::Message(ready)) = rx.recv().await else { panic!("missing ready") };
+        manager
+            .upload_start(
+                Message {
+                    task_id: "new-source".into(),
+                    path: path.to_string_lossy().into_owned(),
+                    size: 8,
+                    sha256: new_hash.clone(),
+                    ..Default::default()
+                },
+                tx.clone(),
+            )
+            .await;
+        let Some(OutboundEvent::Message(ready)) = rx.recv().await else {
+            panic!("missing ready")
+        };
         assert_eq!(ready.offset, 0);
         assert_eq!(ready.sha256, new_hash);
         assert_eq!(ready.prefix_sha256, to_hex(&Sha256::digest(b"")));
-        manager.upload_chunk("new-source", 0, b"bbbbbbbb".to_vec(), tx.clone()).await;
+        manager
+            .upload_chunk("new-source", 0, b"bbbbbbbb".to_vec(), tx.clone())
+            .await;
         let _ = rx.recv().await;
-        manager.upload_end(Message { task_id: "new-source".into(), ..Default::default() }, tx.clone()).await;
-        let Some(OutboundEvent::Message(end)) = rx.recv().await else { panic!("missing end") };
+        manager
+            .upload_end(
+                Message {
+                    task_id: "new-source".into(),
+                    ..Default::default()
+                },
+                tx.clone(),
+            )
+            .await;
+        let Some(OutboundEvent::Message(end)) = rx.recv().await else {
+            panic!("missing end")
+        };
         assert!(end.success, "{}", end.error);
         assert_eq!(end.sha256, new_hash);
         assert_eq!(fs::read(path).await.unwrap(), b"bbbbbbbb");
@@ -1487,13 +1755,37 @@ mod concurrency_tests {
         let dir = tempfile::tempdir().unwrap();
         let target = dir.path().join("file");
         let (a, b) = tokio::join!(
-            manager.open_upload("a", target.clone(), 10, "0000000000000000000000000000000000000000000000000000000000000000", false, None),
-            manager.open_upload("b", target.clone(), 10, "0000000000000000000000000000000000000000000000000000000000000000", false, None)
+            manager.open_upload(
+                "a",
+                target.clone(),
+                10,
+                "0000000000000000000000000000000000000000000000000000000000000000",
+                false,
+                None
+            ),
+            manager.open_upload(
+                "b",
+                target.clone(),
+                10,
+                "0000000000000000000000000000000000000000000000000000000000000000",
+                false,
+                None
+            )
         );
         assert_ne!(a.is_ok(), b.is_ok());
         let owner = if a.is_ok() { "a" } else { "b" };
         manager.cancel(owner).await;
-        manager.open_upload("next", target, 10, "0000000000000000000000000000000000000000000000000000000000000000", false, None).await.unwrap();
+        manager
+            .open_upload(
+                "next",
+                target,
+                10,
+                "0000000000000000000000000000000000000000000000000000000000000000",
+                false,
+                None,
+            )
+            .await
+            .unwrap();
         manager.close_all().await;
     }
     #[tokio::test]
@@ -1504,7 +1796,14 @@ mod concurrency_tests {
         let target = dir.path().join("canceled");
         closed.send_replace(true);
         let result = manager
-            .open_upload("canceled-task", target, 10, "0000000000000000000000000000000000000000000000000000000000000000", false, Some(generation))
+            .open_upload(
+                "canceled-task",
+                target,
+                10,
+                "0000000000000000000000000000000000000000000000000000000000000000",
+                false,
+                Some(generation),
+            )
             .await;
         assert!(result.is_err());
         assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
@@ -1518,11 +1817,25 @@ mod concurrency_tests {
         fs::create_dir(dir.path().join("actual")).await.unwrap();
         std::os::unix::fs::symlink(dir.path().join("actual"), dir.path().join("alias")).unwrap();
         manager
-            .open_upload("a", dir.path().join("actual/file"), 1, "0000000000000000000000000000000000000000000000000000000000000000", false, None)
+            .open_upload(
+                "a",
+                dir.path().join("actual/file"),
+                1,
+                "0000000000000000000000000000000000000000000000000000000000000000",
+                false,
+                None,
+            )
             .await
             .unwrap();
         assert!(manager
-            .open_upload("b", dir.path().join("alias/file"), 1, "0000000000000000000000000000000000000000000000000000000000000000", false, None)
+            .open_upload(
+                "b",
+                dir.path().join("alias/file"),
+                1,
+                "0000000000000000000000000000000000000000000000000000000000000000",
+                false,
+                None
+            )
             .await
             .is_err());
         manager.close_all().await;
@@ -1550,8 +1863,22 @@ mod concurrency_tests {
         let old_hash = hash_file(&path).await.unwrap();
         fs::write(&path, b"different source").await.unwrap();
         let (tx, mut rx) = mpsc::channel(4);
-        download_task(Message { task_id: "changed-range".into(), path: path.to_string_lossy().into_owned(), offset: 0, length: 4, sha256: old_hash, ..Default::default() }, tx, None).await;
-        let Some(OutboundEvent::Message(error)) = rx.recv().await else { panic!("missing source-change error") };
+        download_task(
+            Message {
+                task_id: "changed-range".into(),
+                path: path.to_string_lossy().into_owned(),
+                offset: 0,
+                length: 4,
+                sha256: old_hash,
+                ..Default::default()
+            },
+            tx,
+            None,
+        )
+        .await;
+        let Some(OutboundEvent::Message(error)) = rx.recv().await else {
+            panic!("missing source-change error")
+        };
         assert_eq!(error.ty, Some(MessageType::FileTransferError));
         assert_eq!(error.error, "download source SHA-256 changed");
         assert!(rx.recv().await.is_none());
@@ -1669,27 +1996,48 @@ mod concurrency_tests {
 
     fn upload_message(id: &str, path: &Path, bytes: &[u8]) -> Message {
         Message {
-            task_id: id.into(), path: path.to_string_lossy().into_owned(),
-            size: bytes.len() as i64, sha256: to_hex(&Sha256::digest(bytes)),
+            task_id: id.into(),
+            path: path.to_string_lossy().into_owned(),
+            size: bytes.len() as i64,
+            sha256: to_hex(&Sha256::digest(bytes)),
             ..Default::default()
         }
     }
 
     async fn receive(rx: &mut mpsc::Receiver<OutboundEvent>) -> OutboundEvent {
-        tokio::time::timeout(Duration::from_secs(5), rx.recv()).await.unwrap().unwrap()
+        tokio::time::timeout(Duration::from_secs(5), rx.recv())
+            .await
+            .unwrap()
+            .unwrap()
     }
 
-    async fn ready(manager: &FileManager, msg: Message, tx: &mpsc::Sender<OutboundEvent>, rx: &mut mpsc::Receiver<OutboundEvent>) {
+    async fn ready(
+        manager: &FileManager,
+        msg: Message,
+        tx: &mpsc::Sender<OutboundEvent>,
+        rx: &mut mpsc::Receiver<OutboundEvent>,
+    ) {
         let id = msg.task_id.clone();
         manager.upload_start(msg, tx.clone()).await;
         assert!(matches!(receive(rx).await, OutboundEvent::Message(msg)
             if msg.ty == Some(MessageType::FileUploadReady) && msg.task_id == id));
     }
 
-    async fn chunk(manager: &FileManager, id: &str, offset: i64, bytes: &[u8], tx: &mpsc::Sender<OutboundEvent>, rx: &mut mpsc::Receiver<OutboundEvent>) {
-        manager.upload_chunk(id, offset, bytes.to_vec(), tx.clone()).await;
-        assert!(matches!(receive(rx).await, OutboundEvent::BinaryOffset { typ: BIN_FILE_UPLOAD_ACK, id: ack_id, offset: next, .. }
-            if ack_id == id && next == offset + bytes.len() as i64));
+    async fn chunk(
+        manager: &FileManager,
+        id: &str,
+        offset: i64,
+        bytes: &[u8],
+        tx: &mpsc::Sender<OutboundEvent>,
+        rx: &mut mpsc::Receiver<OutboundEvent>,
+    ) {
+        manager
+            .upload_chunk(id, offset, bytes.to_vec(), tx.clone())
+            .await;
+        assert!(
+            matches!(receive(rx).await, OutboundEvent::BinaryOffset { typ: BIN_FILE_UPLOAD_ACK, id: ack_id, offset: next, .. }
+            if ack_id == id && next == offset + bytes.len() as i64)
+        );
     }
 
     fn pause(manager: &FileManager, id: &str, finalizing: bool) -> Arc<UploadPause> {
@@ -1703,7 +2051,8 @@ mod concurrency_tests {
         std::future::poll_fn(|cx| {
             assert!(future.as_mut().poll(cx).is_pending());
             std::task::Poll::Ready(())
-        }).await;
+        })
+        .await;
     }
 
     #[tokio::test]
@@ -1717,22 +2066,28 @@ mod concurrency_tests {
             ready(&manager, start.clone(), &tx, &mut rx).await;
             let task = manager.upload_task("queued").unwrap();
             let io = task.io.lock().await;
-            let mut first = Box::pin(manager.upload_chunk("queued", 0, b"abc".to_vec(), tx.clone()));
-            let mut second = Box::pin(manager.upload_chunk("queued", 3, b"def".to_vec(), tx.clone()));
+            let mut first =
+                Box::pin(manager.upload_chunk("queued", 0, b"abc".to_vec(), tx.clone()));
+            let mut second =
+                Box::pin(manager.upload_chunk("queued", 3, b"def".to_vec(), tx.clone()));
             poll_pending(first.as_mut()).await;
             poll_pending(second.as_mut()).await;
             drop(io);
             tokio::join!(first, second);
             for expected in [3, 6] {
-                assert!(matches!(receive(&mut rx).await, OutboundEvent::BinaryOffset {
+                assert!(
+                    matches!(receive(&mut rx).await, OutboundEvent::BinaryOffset {
                     typ: BIN_FILE_UPLOAD_ACK, offset, ..
-                } if offset == expected));
+                } if offset == expected)
+                );
             }
             manager.upload_end(start, tx).await;
             assert!(matches!(receive(&mut rx).await, OutboundEvent::Message(msg)
                 if msg.ty == Some(MessageType::FileTransferEnd) && msg.success));
             assert_eq!(fs::read(target).await.unwrap(), b"abcdef");
-        }).await.unwrap();
+        })
+        .await
+        .unwrap();
     }
 
     #[tokio::test]
@@ -1792,15 +2147,22 @@ mod concurrency_tests {
         chunk(&manager, "old", 0, b"abc", &tx, &mut rx).await;
         let pause = pause(&manager, "old", true);
         let end = tokio::spawn({
-            let manager = manager.clone(); let tx = tx.clone();
+            let manager = manager.clone();
+            let tx = tx.clone();
             async move { manager.upload_end(start, tx).await }
         });
         pause.entered.notified().await;
         let mut stop = Box::pin(async {
-            if disconnect { manager.close_all().await } else { manager.cancel("old").await }
+            if disconnect {
+                manager.close_all().await
+            } else {
+                manager.cancel("old").await
+            }
         });
         poll_pending(stop.as_mut()).await;
-        manager.upload_start(upload_message("blocked", &target, b"new"), tx.clone()).await;
+        manager
+            .upload_start(upload_message("blocked", &target, b"new"), tx.clone())
+            .await;
         assert!(matches!(receive(&mut rx).await, OutboundEvent::Message(msg)
             if msg.ty == Some(MessageType::FileTransferError) && msg.task_id == "blocked"));
         pause.resume.notify_one();
@@ -1823,12 +2185,16 @@ mod concurrency_tests {
 
     #[tokio::test]
     async fn pause_during_finalize_preserves_partial_and_cannot_overwrite_replacement() {
-        tokio::time::timeout(Duration::from_secs(5), cancel_during_finalize(false)).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(5), cancel_during_finalize(false))
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
     async fn disconnect_during_finalize_preserves_partial_and_cannot_overwrite_replacement() {
-        tokio::time::timeout(Duration::from_secs(5), cancel_during_finalize(true)).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(5), cancel_during_finalize(true))
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
@@ -1841,12 +2207,21 @@ mod concurrency_tests {
                 let (tx, mut rx) = mpsc::channel(8);
                 let pause = pause(&manager, "old", false);
                 let start = tokio::spawn({
-                    let manager = manager.clone(); let target = target.clone();
-                    async move { manager.upload_start(upload_message("old", &target, b"a"), tx).await }
+                    let manager = manager.clone();
+                    let target = target.clone();
+                    async move {
+                        manager
+                            .upload_start(upload_message("old", &target, b"a"), tx)
+                            .await
+                    }
                 });
                 pause.entered.notified().await;
                 let mut stop = Box::pin(async {
-                    if disconnect { manager.close_all().await } else { manager.cancel("old").await }
+                    if disconnect {
+                        manager.close_all().await
+                    } else {
+                        manager.cancel("old").await
+                    }
                 });
                 poll_pending(stop.as_mut()).await;
                 pause.resume.notify_one();
@@ -1858,7 +2233,9 @@ mod concurrency_tests {
                 assert!(!part_path_for(&target).exists());
                 assert!(manager.uploads.lock().unwrap().tasks.is_empty());
             }
-        }).await.unwrap();
+        })
+        .await
+        .unwrap();
     }
 
     #[tokio::test]
@@ -1870,8 +2247,21 @@ mod concurrency_tests {
             let (closed, generation) = tokio::sync::watch::channel(false);
             let pause = pause(&manager, "rtc", false);
             let start = tokio::spawn({
-                let manager = manager.clone(); let target = target.clone(); let generation = generation.clone();
-                async move { manager.open_upload("rtc", target, 1, &to_hex(&Sha256::digest(b"a")), false, Some(generation)).await }
+                let manager = manager.clone();
+                let target = target.clone();
+                let generation = generation.clone();
+                async move {
+                    manager
+                        .open_upload(
+                            "rtc",
+                            target,
+                            1,
+                            &to_hex(&Sha256::digest(b"a")),
+                            false,
+                            Some(generation),
+                        )
+                        .await
+                }
             });
             pause.entered.notified().await;
             let old = manager.upload_task("rtc").unwrap();
@@ -1889,6 +2279,8 @@ mod concurrency_tests {
             assert!(matches!(receive(&mut rx).await, OutboundEvent::Message(msg)
                 if msg.ty == Some(MessageType::FileTransferEnd) && msg.success));
             assert_eq!(fs::read(target).await.unwrap(), b"b");
-        }).await.unwrap();
+        })
+        .await
+        .unwrap();
     }
 }

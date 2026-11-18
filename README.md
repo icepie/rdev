@@ -373,6 +373,8 @@ CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -o rdev-client.exe ./cmd/rdev-c
 CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o rdev-client-arm64 ./cmd/rdev-client
 ```
 
+发布标签前应通过 Rust 的格式检查、Clippy、单元测试及 `make rust-client-gpu-smoke`；GPU 发布流程要求这些检查和跨平台构建、Windows 包启动检查全部成功。文件传输冒烟使用必需的 SHA-256 上传摘要，并核对上传完成及下载元数据中的摘要。已发布标签不重写；发布检查修复使用新的补丁版本。
+
 ### 特性版（cgo，可选软件 H.264 客户端）
 
 默认 `rdev-client`（兼容版）保持 `CGO_ENABLED=0`，仅提供 MJPEG。特性版

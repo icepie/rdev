@@ -35,10 +35,10 @@ pub struct Args {
 
     #[arg(long = "instance-id", env = "RDEV_INSTANCE_ID")]
     pub instance_id: Option<String>,
-	#[arg(skip)]
-	pub device_identity: String,
-	#[arg(skip)]
-	pub reconnect_proof: String,
+    #[arg(skip)]
+    pub device_identity: String,
+    #[arg(skip)]
+    pub reconnect_proof: String,
 
     #[arg(long = "reconnect-delay", env = "RDEV_RECONNECT_DELAY", default_value = "2s", value_parser = parse_duration)]
     pub reconnect_delay: std::time::Duration,

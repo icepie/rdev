@@ -69,7 +69,12 @@ fn resolve_redirect(current: &str, location: &str) -> Result<String> {
         other => return Err(anyhow!("unsupported websocket redirect scheme: {other}")),
     }
     if base.query_pairs().any(|(key, _)| key == "reconnectProof") {
-        anyhow::ensure!(base.scheme() == next.scheme() && base.host_str() == next.host_str() && base.port_or_known_default() == next.port_or_known_default(), "refusing cross-origin device credential redirect");
+        anyhow::ensure!(
+            base.scheme() == next.scheme()
+                && base.host_str() == next.host_str()
+                && base.port_or_known_default() == next.port_or_known_default(),
+            "refusing cross-origin device credential redirect"
+        );
     }
     Ok(next.to_string())
 }
@@ -92,8 +97,16 @@ mod tests {
 
     #[test]
     fn device_proof_redirects_stay_on_the_same_secure_origin() {
-        assert!(resolve_redirect("wss://a.example/tunnel?reconnectProof=secret", "wss://b.example/tunnel").is_err());
-        assert!(resolve_redirect("wss://a.example/tunnel?reconnectProof=secret", "ws://a.example/tunnel").is_err());
+        assert!(resolve_redirect(
+            "wss://a.example/tunnel?reconnectProof=secret",
+            "wss://b.example/tunnel"
+        )
+        .is_err());
+        assert!(resolve_redirect(
+            "wss://a.example/tunnel?reconnectProof=secret",
+            "ws://a.example/tunnel"
+        )
+        .is_err());
         assert!(resolve_redirect("wss://a.example/tunnel?reconnectProof=secret", "/other").is_ok());
     }
 }
