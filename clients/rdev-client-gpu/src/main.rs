@@ -141,6 +141,31 @@ impl ModuleRuntimes {
     }
 }
 
+fn registration_message(args: &Args, instance_id: &str) -> Message {
+    Message {
+        ty: Some(MessageType::Register),
+        client_id: args.id.clone(),
+        instance_id: instance_id.to_string(),
+        device_identity: args.device_identity.clone(),
+        reconnect_proof: args.reconnect_proof.clone(),
+        client_version: version::client_version(),
+        // The server uses GOOS values for both icons and OS-specific commands.
+        client_os: if cfg!(target_os = "macos") {
+            "darwin"
+        } else {
+            std::env::consts::OS
+        }
+        .to_string(),
+        password: args.password.clone(),
+        file_rtc: true,
+        terminal_rtc: true,
+        file_operations: ["create", "mkdir", "delete", "rename", "rename_directory"]
+            .map(str::to_owned)
+            .to_vec(),
+        ..Default::default()
+    }
+}
+
 #[cfg(not(all(target_os = "macos", feature = "cua-native")))]
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -352,21 +377,7 @@ async fn run_once(
     let _terminal_rtc_cleanup = TerminalRtcCleanup(terminal_rtc.clone());
     let mut registered = false;
 
-    let register = Message {
-        ty: Some(MessageType::Register),
-        client_id: args.id.clone(),
-        instance_id: instance_id.to_string(),
-        device_identity: args.device_identity.clone(),
-        reconnect_proof: args.reconnect_proof.clone(),
-        client_version: version::client_version(),
-        password: args.password.clone(),
-        file_rtc: true,
-        terminal_rtc: true,
-        file_operations: ["create", "mkdir", "delete", "rename", "rename_directory"]
-            .map(str::to_owned)
-            .to_vec(),
-        ..Default::default()
-    };
+    let register = registration_message(args, instance_id);
     write
         .send(WsMessage::Text(protocol::encode_message(&register)?.into()))
         .await?;
@@ -555,21 +566,7 @@ async fn run_once_stream(
     let terminal_rtc = rdev_client_gpu::terminal_rtc::TerminalRtcManager::new(sessions.clone());
     let _terminal_rtc_cleanup = TerminalRtcCleanup(terminal_rtc.clone());
     let mut registered = false;
-    let register = Message {
-        ty: Some(MessageType::Register),
-        client_id: args.id.clone(),
-        instance_id: instance_id.to_string(),
-        device_identity: args.device_identity.clone(),
-        reconnect_proof: args.reconnect_proof.clone(),
-        client_version: version::client_version(),
-        password: args.password.clone(),
-        file_rtc: true,
-        terminal_rtc: true,
-        file_operations: ["create", "mkdir", "delete", "rename", "rename_directory"]
-            .map(str::to_owned)
-            .to_vec(),
-        ..Default::default()
-    };
+    let register = registration_message(args, instance_id);
     stream_frame::write_frame(
         &mut write_half,
         stream_frame::KIND_JSON,
@@ -1082,6 +1079,21 @@ fn kcp_config() -> KcpConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn registration_reports_os_without_desktop() {
+        let args = Args::try_parse_from(["rdev-client-gpu", "--no-desktop"]).unwrap();
+        let wire = protocol::encode_message(&registration_message(&args, "test-instance")).unwrap();
+        let message: serde_json::Value = serde_json::from_str(&wire).unwrap();
+        let expected = if cfg!(target_os = "macos") {
+            "darwin"
+        } else {
+            std::env::consts::OS
+        };
+        assert_eq!(message["clientOS"], expected);
+        assert!(message.get("clientOs").is_none());
+        assert!(message.get("desktop").is_none());
+    }
 
     #[test]
     fn builds_websocket_urls() {
