@@ -22,6 +22,12 @@ RUN set -eux; \
     if command -v apt-get >/dev/null 2>&1; then \
       pipewire_deps=""; \
       case "$DISTRO" in debian13|ubuntu*) pipewire_deps="libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev gstreamer1.0-pipewire gstreamer1.0-plugins-base gstreamer1.0-plugins-good pipewire xdg-desktop-portal" ;; esac; \
+      if [ "$DISTRO" = debian11 ]; then \
+        printf '%s\n' \
+          'deb [check-valid-until=no] http://archive.debian.org/debian bullseye main' \
+          'deb [check-valid-until=no] http://archive.debian.org/debian-security bullseye-security main' \
+          > /etc/apt/sources.list; \
+      fi; \
       apt-get update; \
       apt-get install -y --no-install-recommends \
         ca-certificates curl git build-essential pkg-config nasm yasm python3 make \
