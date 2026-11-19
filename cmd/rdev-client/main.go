@@ -20,6 +20,7 @@ func main() {
 	var (
 		serverURL      string
 		clientID       string
+		displayName    string
 		password       string
 		shell          string
 		autoUpdate     = true
@@ -38,6 +39,11 @@ func main() {
 		case "--id", "-i":
 			if i+1 < len(os.Args) {
 				clientID = os.Args[i+1]
+				i++
+			}
+		case "--display-name":
+			if i+1 < len(os.Args) {
+				displayName = os.Args[i+1]
 				i++
 			}
 		case "--password", "-p":
@@ -87,6 +93,7 @@ func main() {
 Options:
   --server, -s    Server URL(s), comma-separated fallback list (e.g. tcp://1.2.3.4:8081,kcp://1.2.3.4:8082,ws://1.2.3.4:8080)
   --id, -i        Client/Device ID (default: persistent short ID)
+  --display-name  Device display name (default: hostname; does not change ID)
   --password, -p  Password for SSH auth (optional, enables password login)
   --shell, -S     Shell to use (default: $SHELL or /bin/sh or cmd.exe)
   --no-auto-update Disable built-in GitHub release auto-update
@@ -106,6 +113,7 @@ Environment variables:
   RDEV_SHELL    Shell to use (overrides --shell flag)
   RDEV_SERVER   Server URL (overrides --server flag)
   RDEV_ID       Client ID (overrides --id flag)
+  RDEV_DISPLAY_NAME Display name (used unless --display-name is supplied)
   RDEV_AUTO_UPDATE true/false (default true)
   RDEV_UPDATE_INTERVAL duration like 5m or 1h
   RDEV_RECONNECT_MIN minimum reconnect delay (default 1s)
@@ -183,6 +191,7 @@ Environment variables:
 	fmt.Println()
 
 	c := client.NewClient(serverURL, clientID, password, shell)
+	c.SetDisplayName(displayName)
 	c.SetVersion("go/" + version)
 	c.SetReconnectDelays(reconnectMin, reconnectMax)
 

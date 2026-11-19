@@ -201,6 +201,7 @@ type Client struct {
 
 	serverURL            string
 	clientID             string
+	displayName          string
 	requestedID          string
 	instanceID           string
 	deviceIdentity       string
@@ -300,9 +301,14 @@ func (t *streamClientTransport) Close(reason string) error {
 // NewClient creates a new client
 func NewClient(serverURL, clientID, password, shell string) *Client {
 	savedIdentity, _, identityErr := loadClientIdentity(serverURL, clientID)
+	displayName := strings.TrimSpace(os.Getenv("RDEV_DISPLAY_NAME"))
+	if displayName == "" {
+		displayName, _ = os.Hostname()
+	}
 	c := &Client{
 		serverURL:       serverURL,
 		clientID:        clientID,
+		displayName:     displayName,
 		requestedID:     clientID,
 		instanceID:      newClientInstanceID(),
 		deviceIdentity:  savedIdentity.DeviceIdentity,
@@ -342,6 +348,31 @@ func (c *Client) SetReconnectDelays(minDelay, maxDelay time.Duration) {
 // SetVersion sets the version string reported during registration.
 func (c *Client) SetVersion(version string) {
 	c.version = version
+}
+
+// SetDisplayName sets presentation metadata before Run; it never changes identity.
+func (c *Client) SetDisplayName(name string) {
+	if name = strings.TrimSpace(name); name != "" {
+		c.displayName = name
+	}
+}
+
+func (c *Client) registrationMessage() *protocol.Message {
+	return &protocol.Message{
+		Type:                protocol.MsgRegister,
+		ClientID:            c.requestedID,
+		DisplayName:         c.displayName,
+		InstanceID:          c.instanceID,
+		DeviceIdentity:      c.deviceIdentity,
+		ReconnectProof:      c.reconnectProof,
+		ClientVersion:       c.version,
+		ClientOS:            runtime.GOOS,
+		Password:            c.password,
+		DesktopCapabilities: desktopCapabilities(),
+		FileOperations:      []string{"create", "mkdir", "delete", "rename", "rename_directory"},
+		FileRTC:             true,
+		ConfinedDownloads:   true,
+	}
 }
 
 func newClientInstanceID() string {
@@ -409,20 +440,7 @@ func (h *wsEventHandler) OnOpen(socket *gws.Conn) {
 		socket.WriteClose(1011, []byte("identity credentials unavailable"))
 		return
 	}
-	if err := h.client.send(&protocol.Message{
-		Type:                protocol.MsgRegister,
-		ClientID:            h.client.requestedID,
-		InstanceID:          h.client.instanceID,
-		DeviceIdentity:      h.client.deviceIdentity,
-		ReconnectProof:      h.client.reconnectProof,
-		ClientVersion:       h.client.version,
-		ClientOS:            runtime.GOOS,
-		Password:            h.client.password,
-		DesktopCapabilities: desktopCapabilities(),
-		FileOperations:      []string{"create", "mkdir", "delete", "rename", "rename_directory"},
-		FileRTC:             true,
-		ConfinedDownloads:   true,
-	}); err != nil {
+	if err := h.client.send(h.client.registrationMessage()); err != nil {
 		log.Printf("register send error: %v", err)
 		return
 	}
@@ -823,20 +841,7 @@ func (c *Client) connectStream(kind, endpoint string) error {
 	c.conn = nil
 	c.activeWSBase = ""
 	c.mu.Unlock()
-	if err := c.send(&protocol.Message{
-		Type:                protocol.MsgRegister,
-		ClientID:            c.requestedID,
-		InstanceID:          c.instanceID,
-		DeviceIdentity:      c.deviceIdentity,
-		ReconnectProof:      c.reconnectProof,
-		ClientVersion:       c.version,
-		ClientOS:            runtime.GOOS,
-		Password:            c.password,
-		DesktopCapabilities: desktopCapabilities(),
-		FileOperations:      []string{"create", "mkdir", "delete", "rename", "rename_directory"},
-		FileRTC:             true,
-		ConfinedDownloads:   true,
-	}); err != nil {
+	if err := c.send(c.registrationMessage()); err != nil {
 		conn.Close()
 		return err
 	}

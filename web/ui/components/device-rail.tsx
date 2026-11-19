@@ -26,8 +26,10 @@ export function DeviceRail({
   const deviceRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const [searchOpen, setSearchOpen] = useState(false);
   const [query, setQuery] = useState("");
+  const search = query.trim().toLocaleLowerCase();
   const visibleDevices = devices.filter((device) =>
-    device.id.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()),
+    device.id.toLocaleLowerCase().includes(search) ||
+    device.displayName?.toLocaleLowerCase().includes(search),
   );
   const selectedOffline = Boolean(
     selectedDevice && !loading && !error && !devices.some((device) => device.id === selectedDevice),
@@ -98,7 +100,7 @@ export function DeviceRail({
             type="button"
             draggable
             aria-pressed={d.id === selectedDevice}
-            title={d.id}
+            title={d.displayName && d.displayName !== d.id ? `${d.displayName} (${d.id})` : d.id}
             onDragStart={(e) => {
               e.dataTransfer.setData(DEVICE_DRAG_MIME, d.id);
               e.dataTransfer.effectAllowed = "copy";
@@ -127,7 +129,7 @@ export function DeviceRail({
               os={d.os}
               className="size-3.5 shrink-0 text-subtle-foreground"
             />
-            <span className="min-w-0 flex-1 truncate">{d.id}</span>
+            <span className="min-w-0 flex-1 truncate">{d.displayName && d.displayName !== d.id ? `${d.displayName} (${d.id})` : d.id}</span>
             <span
               className="size-1.5 shrink-0 rounded-full bg-success"
               aria-hidden="true"

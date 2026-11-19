@@ -96,7 +96,7 @@ func (t *connectedDevicesTool) Execute(context.Context, json.RawMessage) (string
 				}
 			}
 		}
-		devices = append(devices, map[string]any{"device": client.ID, "os": client.OS, "online": true, "requiresAdmin": requiresAdmin, "tools": tools})
+		devices = append(devices, map[string]any{"device": client.ID, "displayName": clientDisplayName(client), "os": clientOS(client), "online": true, "requiresAdmin": requiresAdmin, "tools": tools})
 	}
 	return marshalJobResult(devices)
 }

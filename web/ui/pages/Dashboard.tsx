@@ -41,8 +41,6 @@ import { OsIcon } from "../components/os-icon";
 import { CodeBlock } from "../components/code-block";
 import { useCopy } from "../lib/clipboard";
 import { COARSE_POINTER_HEADER_ICON_BUTTON_CLASS } from "../components/coarse-pointer-sizing";
-import { HealthPanel } from "../components/health-panel";
-import { IdentityManagement } from "../components/identity-management";
 
 /* ── Server endpoint helpers (ported from web/index.html) ── */
 
@@ -441,8 +439,6 @@ export function DashboardPage() {
         </p>
       </div>
 
-      <HealthPanel />
-      <IdentityManagement />
 
       {/* Stats */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -513,9 +509,12 @@ export function DashboardPage() {
                     </span>
                   </TableCell>
                   <TableCell className="col-start-1 row-start-1 block min-w-0 font-semibold md:table-cell" aria-label={t("index.deviceId")}>
-                    <span className="inline-flex max-w-full items-center gap-1.5 md:max-w-48" title={d.id}>
+                    <span className="inline-flex max-w-full items-center gap-1.5 md:max-w-48" title={d.displayName && d.displayName !== d.id ? `${d.displayName} (${d.id})` : d.id}>
                       <OsIcon os={d.os} className="size-4 shrink-0 text-muted-foreground" />
-                      <span className="truncate">{d.id}</span>
+                      <span className="min-w-0">
+                        <span className="block truncate">{d.displayName || d.id}</span>
+                        {d.displayName && d.displayName !== d.id && <span className="block truncate text-xs font-normal text-muted-foreground">{d.id}</span>}
+                      </span>
                     </span>
                   </TableCell>
                   <TableCell className="hidden text-muted-foreground md:table-cell">

@@ -285,7 +285,7 @@ func TestHistoryCleanupDoesNotRaceNewDeviceWrites(t *testing.T) {
 func TestAgentOutcomeSurvivesReopenRewriteAndReset(t *testing.T) {
 	st := newTestStore(t)
 	for _, outcome := range []string{"error", "stopped", "done", "running"} {
-		st.saveOutcome("device", "thread", "fixture", outcome, "2026-11-08T01:00:00.123456789Z")
+		st.saveOutcome("device", "thread", "fixture", outcome, "2026-11-08T01:00:00.123456789Z", nil)
 		reopened := newAgentSessionStore(st.dir, time.Hour)
 		metas := reopened.listThreads("device")
 		if len(metas) != 1 || metas[0].Outcome != outcome || metas[0].OutcomeAt != "2026-11-08T01:00:00.123456789Z" {
@@ -432,7 +432,7 @@ func TestAgentHistoryAllWritersPreserveUnloadedCorruption(t *testing.T) {
 		"replace":  func(st *agentSessionStore) { st.replace("d", "t", "m", nil) },
 		"title":    func(st *agentSessionStore) { st.setTitle("d", "t", "new", nil) },
 		"cwd":      func(st *agentSessionStore) { st.setCwd("d", "t", "/new", nil) },
-		"outcome":  func(st *agentSessionStore) { st.saveOutcome("d", "t", "m", "done", "now") },
+		"outcome":  func(st *agentSessionStore) { st.saveOutcome("d", "t", "m", "done", "now", nil) },
 		"autonomy": func(st *agentSessionStore) { st.saveAutonomy("d", "t", "m", nil, nil) },
 		"clear":    func(st *agentSessionStore) { st.clear("d", "t") },
 		"cleanup":  func(st *agentSessionStore) { st.cleanup() },
@@ -484,7 +484,7 @@ func TestAgentHistoryCheckpointCompactionPreservesTranscriptAndCursor(t *testing
 				t.Fatal(err)
 			}
 			if kind == "outcome" {
-				st.saveOutcome("d", "t", "m", "stopped", "stamp")
+				st.saveOutcome("d", "t", "m", "stopped", "stamp", nil)
 			} else {
 				st.saveAutonomy("d", "t", "m", &agentGoal{Status: "paused"}, nil)
 			}
@@ -600,7 +600,7 @@ func TestAgentHistoryClearAndCleanupInvalidateAppendCursor(t *testing.T) {
 			if _, ok := st.saved["d/t"]; ok {
 				t.Fatal("stale append cursor")
 			}
-			st.saveOutcome("d", "t", "m", "running", "")
+			st.saveOutcome("d", "t", "m", "running", "", nil)
 			st.save("d", "t", "m", history)
 			got, _, _, _ := st.load("d", "t")
 			if !reflect.DeepEqual(got, history) {
@@ -758,7 +758,7 @@ func TestAgentHistoryAppendsAfterUnterminatedFinalRecord(t *testing.T) {
 				history = append(history, agent.Message{Role: "assistant", Content: "next"})
 				st.save("d", "t", "m", history)
 			case "outcome":
-				st.saveOutcome("d", "t", "m", "done", "stamp")
+				st.saveOutcome("d", "t", "m", "done", "stamp", nil)
 			case "autonomy":
 				st.saveAutonomy("d", "t", "m", &agentGoal{Status: "paused"}, nil)
 			}

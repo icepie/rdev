@@ -145,6 +145,7 @@ fn registration_message(args: &Args, instance_id: &str) -> Message {
     Message {
         ty: Some(MessageType::Register),
         client_id: args.id.clone(),
+        display_name: args.display_name.trim().to_string(),
         instance_id: instance_id.to_string(),
         device_identity: args.device_identity.clone(),
         reconnect_proof: args.reconnect_proof.clone(),
@@ -1093,6 +1094,29 @@ mod tests {
         assert_eq!(message["clientOS"], expected);
         assert!(message.get("clientOs").is_none());
         assert!(message.get("desktop").is_none());
+    }
+
+    #[test]
+    fn registration_display_name_preserves_identity() {
+        let mut args = Args::try_parse_from([
+            "rdev-client-gpu",
+            "--id",
+            "stable-id",
+            "--display-name",
+            "Office Mac",
+        ])
+        .unwrap();
+        args.device_identity = "identity".into();
+        args.reconnect_proof = "proof".into();
+        for name in ["Office Mac", "Renamed Mac"] {
+            args.display_name = name.into();
+            let wire = protocol::encode_message(&registration_message(&args, "instance")).unwrap();
+            let message: serde_json::Value = serde_json::from_str(&wire).unwrap();
+            assert_eq!(message["displayName"], name);
+            assert_eq!(message["clientId"], "stable-id");
+            assert_eq!(message["deviceIdentity"], "identity");
+            assert_eq!(message["reconnectProof"], "proof");
+        }
     }
 
     #[test]

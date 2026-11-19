@@ -69,3 +69,38 @@ it("keeps the selected device visible as offline after a settled refresh", async
   expect(status?.textContent).toContain("rail.selectedOffline");
   expect(document.querySelectorAll("button[draggable]")).toHaveLength(0);
 });
+
+it("shows names and IDs while preserving selection, drag identity, and keyed rows across renames", async () => {
+  state = { devices: [{ id: "host/one", displayName: "Build host" }, { id: "host/two", displayName: "Build host" }, { id: "legacy" }], error: "", loading: false };
+  const picked = vi.fn();
+  const { root } = setup();
+  const render = () => root.render(createElement(DeviceRail, { selectedDevice: "host/one", onPick: picked }));
+  try {
+    await act(render);
+    const rows = [...document.querySelectorAll("button[draggable]")];
+    expect(rows.map(row => row.textContent)).toEqual(["Build host (host/one)", "Build host (host/two)", "legacy"]);
+    expect(rows[0].getAttribute("aria-pressed")).toBe("true");
+    await act(() => rows[1].click());
+    expect(picked).toHaveBeenCalledWith("host/two");
+    const dataTransfer = { setData: vi.fn(), effectAllowed: "" };
+    const event = new window.Event("dragstart", { bubbles: true });
+    Object.defineProperty(event, "dataTransfer", { value: dataTransfer });
+    await act(() => rows[0].dispatchEvent(event));
+    expect(dataTransfer.setData).toHaveBeenCalledWith("application/x-rdev-device", "host/one");
+    state = { ...state, devices: state.devices.map(d => d.id === "host/one" ? { ...d, displayName: "Renamed host" } : d) };
+    await act(render);
+    expect(document.querySelector("button[draggable]")).toBe(rows[0]);
+    expect(rows[0].textContent).toBe("Renamed host (host/one)");
+    expect(rows[0].getAttribute("aria-pressed")).toBe("true");
+    await act(() => document.querySelector('[aria-label="rail.search"]').click());
+    const input = document.querySelector("input");
+    const propsKey = Object.keys(input).find(key => key.startsWith("__reactProps$"));
+    for (const query of ["RENAMED", "host/one"]) {
+      await act(() => input[propsKey].onChange({ target: { value: query } }));
+      expect([...document.querySelectorAll("button[draggable]")].map(row => row.textContent)).toEqual(["Renamed host (host/one)"]);
+    }
+  } finally {
+    await act(() => root.unmount());
+    window.close();
+  }
+});

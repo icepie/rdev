@@ -15,6 +15,7 @@ public class DeepLinkConfigTest {
         assertEquals("phone-01", config.id);
         assertEquals("a&b", config.password);
         assertTrue(config.connect);
+        assertEquals("", config.displayName);
     }
 
     @Test public void acceptsShortAliasesAndFillAction() {
@@ -24,6 +25,26 @@ public class DeepLinkConfigTest {
         assertEquals("wss://r.feidu.fit", config.server);
         assertEquals("phone-02", config.id);
         assertEquals("", config.password);
+        assertFalse(config.connect);
+    }
+
+    @Test public void displayNameDoesNotReplaceIdentityOrCredentials() {
+        MainActivity.DeepLinkConfig config = MainActivity.DeepLinkConfig.parse(
+            "rdev://connect?server=wss%3A%2F%2Fr.feidu.fit&id=stable-phone-id&displayName=%20Office%20Phone%20%E6%89%8B%E6%9C%BA%20&password=secret"
+        );
+        assertEquals("Office Phone 手机", config.displayName);
+        assertEquals("stable-phone-id", config.id);
+        assertEquals("wss://r.feidu.fit", config.server);
+        assertEquals("secret", config.password);
+        assertTrue(config.connect);
+    }
+
+    @Test public void blankDisplayNameSelectsSystemDefault() {
+        MainActivity.DeepLinkConfig config = MainActivity.DeepLinkConfig.parse(
+            "rdev://connect?server=wss%3A%2F%2Fr.feidu.fit&id=stable-phone-id&displayName=%20%20&action=fill"
+        );
+        assertEquals("", config.displayName);
+        assertEquals("stable-phone-id", config.id);
         assertFalse(config.connect);
     }
 

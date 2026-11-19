@@ -635,6 +635,7 @@ mod tests {
             version: false,
             server: "tcp://127.0.0.1:8081,ws://127.0.0.1:8080".to_string(),
             id: "dev".to_string(),
+            display_name: "Test device".to_string(),
             password: String::new(),
             shell: None,
             instance_id: None,

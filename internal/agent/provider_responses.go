@@ -110,19 +110,22 @@ type responseEvent struct {
 func readResponsesStream(body io.Reader, scope string, onText, onReasoning func(string), poke func()) (assistant Message, usage Usage, err error) {
 	assistant.Role = "assistant"
 	pending := map[int]*ToolCall{}
+	var text, reasoning strings.Builder
 	appendText := func(delta string) {
-		assistant.Content += delta
+		text.WriteString(delta)
 		if onText != nil && delta != "" {
 			onText(delta)
 		}
 	}
 	appendReasoning := func(delta string) {
-		assistant.Reasoning += delta
+		reasoning.WriteString(delta)
 		if onReasoning != nil && delta != "" {
 			onReasoning(delta)
 		}
 	}
 	defer func() {
+		assistant.Content = text.String()
+		assistant.Reasoning = reasoning.String()
 		if err != nil {
 			// Preserve progress for retry classification, not executable tool calls.
 			keys := make([]int, 0, len(pending))
@@ -176,10 +179,18 @@ func readResponsesStream(body io.Reader, scope string, onText, onReasoning func(
 			if detail == "" {
 				detail = event.Response.Incomplete.Reason
 			}
-			if strings.EqualFold(detail, "content_filter") {
-				return false, ErrContentFiltered
+			reason := event.Response.Incomplete.Reason
+			if reason == "" {
+				reason = event.Response.Error.Code
 			}
-			return false, fmt.Errorf("agent: %s: %s", event.Type, detail)
+			if reason == "" && (strings.EqualFold(detail, "content_filter") || strings.EqualFold(detail, "content_filte")) {
+				reason = detail
+			}
+			failure := finishReasonError(reason)
+			if failure == nil {
+				failure = fmt.Errorf("agent: %s: %s", event.Type, detail)
+			}
+			return false, finishDiagnostic(failure, reason, "")
 		case "error":
 			return false, providerStreamError("Responses error", providerErrorDetail{Code: event.Code, Message: event.Message})
 		case "response.completed":
@@ -187,6 +198,7 @@ func readResponsesStream(body io.Reader, scope string, onText, onReasoning func(
 				return false, fmt.Errorf("agent: unexpected Responses status %q", event.Response.Status)
 			}
 			final := Message{Role: "assistant"}
+			var finalText, finalReasoning strings.Builder
 			for _, raw := range event.Response.Output {
 				var item responseItem
 				if e := json.Unmarshal(raw, &item); e != nil {
@@ -197,16 +209,16 @@ func readResponsesStream(body io.Reader, scope string, onText, onReasoning func(
 					for _, part := range item.Content {
 						switch part.Type {
 						case "output_text":
-							final.Content += part.Text
+							finalText.WriteString(part.Text)
 						case "refusal":
-							final.Content += part.Refusal
+							finalText.WriteString(part.Refusal)
 						default:
 							return false, fmt.Errorf("agent: unsupported Responses content %q", part.Type)
 						}
 					}
 				case "reasoning":
 					for _, part := range item.Summary {
-						final.Reasoning += part.Text
+						finalReasoning.WriteString(part.Text)
 					}
 				case "function_call":
 					if item.CallID == "" || item.Name == "" || !json.Valid([]byte(item.Arguments)) {
@@ -217,13 +229,14 @@ func readResponsesStream(body io.Reader, scope string, onText, onReasoning func(
 					return false, fmt.Errorf("agent: unsupported Responses output %q", item.Type)
 				}
 			}
+			final.Content, final.Reasoning = finalText.String(), finalReasoning.String()
 			// A provider may send only final items. Fill missing suffixes, but never
 			// silently replace text already streamed to the UI with different text.
-			if !strings.HasPrefix(final.Content, assistant.Content) || !strings.HasPrefix(final.Reasoning, assistant.Reasoning) {
+			if !strings.HasPrefix(final.Content, text.String()) || !strings.HasPrefix(final.Reasoning, reasoning.String()) {
 				return false, fmt.Errorf("agent: Responses final output differs from streamed output")
 			}
-			appendText(strings.TrimPrefix(final.Content, assistant.Content))
-			appendReasoning(strings.TrimPrefix(final.Reasoning, assistant.Reasoning))
+			appendText(strings.TrimPrefix(final.Content, text.String()))
+			appendReasoning(strings.TrimPrefix(final.Reasoning, reasoning.String()))
 			final.Responses = &ResponseReplay{Scope: scope, Items: event.Response.Output}
 			assistant = final
 			usage = Usage{InputTokens: event.Response.Usage.Input, OutputTokens: event.Response.Usage.Output}

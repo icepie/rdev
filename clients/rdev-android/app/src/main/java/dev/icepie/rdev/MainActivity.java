@@ -33,6 +33,7 @@ public class MainActivity extends Activity {
     private static final int REQUEST_MEDIA_PROJECTION = 1001;
     private EditText serverField;
     private EditText idField;
+    private EditText displayNameField;
     private EditText passwordField;
     private TextView statusView;
     private SharedPreferences prefs;
@@ -58,6 +59,7 @@ public class MainActivity extends Activity {
         if (config == null) return;
         serverField.setText(config.server);
         idField.setText(config.id);
+        displayNameField.setText(config.displayName);
         passwordField.setText(config.password);
         saveConfig(false);
         if (config.connect) {
@@ -72,12 +74,14 @@ public class MainActivity extends Activity {
     static final class DeepLinkConfig {
         final String server;
         final String id;
+        final String displayName;
         final String password;
         final boolean connect;
 
-        DeepLinkConfig(String server, String id, String password, boolean connect) {
+        DeepLinkConfig(String server, String id, String displayName, String password, boolean connect) {
             this.server = server;
             this.id = id;
+            this.displayName = displayName;
             this.password = password;
             this.connect = connect;
         }
@@ -95,11 +99,14 @@ public class MainActivity extends Activity {
                 String server = firstNonEmpty(query.get("server"), query.get("s"));
                 String id = firstNonEmpty(query.get("id"), query.get("device"));
                 if (server == null || id == null) return null;
+                String displayName = query.get("displayName");
+                if (displayName == null) displayName = query.get("name");
+                if (displayName == null) displayName = "";
                 String password = query.containsKey("password") ? query.get("password") : query.get("p");
                 if (password == null) password = "";
                 String action = query.get("action");
                 boolean connect = action == null || action.length() == 0 || "connect".equalsIgnoreCase(action) || "start".equalsIgnoreCase(action);
-                return new DeepLinkConfig(server.trim(), id.trim(), password, connect);
+                return new DeepLinkConfig(server.trim(), id.trim(), displayName.trim(), password, connect);
             } catch (Exception ignored) {
                 return null;
             }
@@ -148,6 +155,8 @@ public class MainActivity extends Activity {
         LinearLayout config = card("连接配置", "保存后启动在线服务，空密码表示开放模式。", colors);
         serverField = addInput(config, "服务器", "例如 wss://rdev.singzer.cn（可用 rdev:// 链接填充）", prefs.getString("server", ""), false, colors);
         idField = addInput(config, "设备 ID", "例如 PDA3109", prefs.getString("id", defaultDeviceId()), false, colors);
+        displayNameField = addInput(config, "显示名称", "留空使用系统设备名称或型号（不改变设备 ID）", prefs.getString("displayName", ""), false, colors);
+        displayNameField.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_WORDS);
         passwordField = addInput(config, "访问密码", "留空为无密码", prefs.getString("password", ""), true, colors);
         root.addView(config, sectionParams());
 
@@ -325,6 +334,7 @@ public class MainActivity extends Activity {
         prefs.edit()
             .putString("server", serverField.getText().toString().trim())
             .putString("id", idField.getText().toString().trim())
+            .putString("displayName", displayNameField.getText().toString().trim())
             .putString("password", passwordField.getText().toString())
             .apply();
         if (showStatus) setStatus("配置已保存");
@@ -335,9 +345,11 @@ public class MainActivity extends Activity {
         Uri.Builder builder = new Uri.Builder().scheme("rdev").authority("connect");
         String server = serverField.getText().toString().trim();
         String id = idField.getText().toString().trim();
+        String displayName = displayNameField.getText().toString().trim();
         String password = passwordField.getText().toString();
         if (server.length() > 0) builder.appendQueryParameter("server", server);
         if (id.length() > 0) builder.appendQueryParameter("id", id);
+        if (displayName.length() > 0) builder.appendQueryParameter("displayName", displayName);
         builder.appendQueryParameter("password", password);
         builder.appendQueryParameter("action", "connect");
         String link = builder.build().toString();

@@ -563,3 +563,27 @@ it('keeps older loaded pages and detached scroll through a send and recent50 ter
   await frame({op:'thread_peeked',history:[{role:'user',messageId:'other',text:'other thread'}],historyBefore:'other',historyHasMore:false});
   expect(sink.state.items.map(item=>item.messageId)).toEqual(['other']);
 });
+
+it('restores bounded failure details without fabricating transcript tools or duplicating notices', async () => {
+  const diagnostic = { code: 'provider_content_filter', message: 'Provider filtering stopped this response.', provider: 'fixture', model: 'model', api: 'openai-responses', finishReason: 'content_filter', rawFinishReason: 'content_filte', requestId: 'req-restart', textStarted: true, reasoningStarted: false, toolCallStarted: true };
+  const snapshot = { op: 'thread_peeked', running: false, history: [{ role: 'user', messageId: 'u', text: 'request' }, { role: 'assistant', messageId: 'a', text: 'partial' }], diagnostic };
+  await frame(snapshot);
+  await frame(snapshot);
+  const notices = sink.state.items.filter(item => item.kind === 'system');
+  expect(notices).toHaveLength(1);
+  expect(notices[0].text).toContain('rawFinishReason: content_filte');
+  expect(notices[0].text).toContain('requestId: req-restart');
+  expect(notices[0].text).toContain('toolCallStarted: yes');
+  expect(sink.state.items.find(item => item.kind === 'turn')).toMatchObject({ text: 'partial', tools: [] });
+  await frame({ ...snapshot, running: true });
+  expect(sink.state.items.filter(item => item.kind === 'system')).toHaveLength(0);
+});
+
+it('shows live structured filtering diagnostics with the preserved partial answer', async () => {
+  await frame({ op: 'turn_start', text: 'request' });
+  await act(async () => sink.ops.appendDelta('partial'));
+  await frame({ op: 'error', code: 'provider_content_filter', diagnostic: { message: 'Provider filtering stopped this response.', requestId: 'req-live', toolCallStarted: true } });
+  expect(sink.state.items.some(item => item.kind === 'turn' && item.text === 'partial')).toBe(true);
+  expect(sink.state.items.some(item => item.kind === 'system' && item.text.includes('requestId: req-live'))).toBe(true);
+  expect(sink.state.running).toBe(false);
+});

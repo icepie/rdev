@@ -594,6 +594,7 @@ func (s *Server) HandleBatchDevicesAPI(w http.ResponseWriter, r *http.Request) {
 
 	type deviceInfo struct {
 		ID          string `json:"id"`
+		DisplayName string `json:"displayName"`
 		ConnectedAt string `json:"connectedAt"`
 		OS          string `json:"os,omitempty"`
 		HasPassword bool   `json:"hasPassword"`
@@ -603,6 +604,7 @@ func (s *Server) HandleBatchDevicesAPI(w http.ResponseWriter, r *http.Request) {
 	for _, c := range s.clients {
 		devices = append(devices, deviceInfo{
 			ID:          c.ID,
+			DisplayName: clientDisplayName(c),
 			ConnectedAt: c.ConnectedAt.Format(time.RFC3339),
 			OS:          clientOS(c),
 			HasPassword: c.Password != "",

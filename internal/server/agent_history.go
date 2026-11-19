@@ -58,29 +58,30 @@ type agentHistoryToolCall struct {
 
 // agentHistoryLine is one JSONL record: meta (t=="meta") or message (t=="msg").
 type agentHistoryLine struct {
-	MessageID     string                 `json:"messageId,omitempty"`
-	ContextOnly   bool                   `json:"contextOnly,omitempty"`
-	Goal          *agentGoal             `json:"goal,omitempty"`
-	Loop          *agentLoop             `json:"loop,omitempty"`
-	Anthropic     *agent.ProviderReplay  `json:"anthropic,omitempty"`
-	Responses     *agent.ResponseReplay  `json:"responses,omitempty"`
-	OutcomeAt     string                 `json:"outcomeAt,omitempty"`
-	Outcome       string                 `json:"outcome,omitempty"`
-	Display       json.RawMessage        `json:"display,omitempty"`
-	ImagePreviews []string               `json:"imagePreviews,omitempty"`
-	T             string                 `json:"t"`
-	V             int                    `json:"v,omitempty"`
-	Device        string                 `json:"device,omitempty"`
-	Thread        string                 `json:"thread,omitempty"`
-	Model         string                 `json:"model,omitempty"`
-	Cwd           string                 `json:"cwd,omitempty"`
-	Title         string                 `json:"title,omitempty"`
-	Updated       string                 `json:"updated,omitempty"`
-	Role          string                 `json:"role,omitempty"`
-	Content       string                 `json:"content,omitempty"`
-	Reasoning     string                 `json:"reasoning,omitempty"`
-	ToolCalls     []agentHistoryToolCall `json:"tool_calls,omitempty"`
-	ToolCallID    string                 `json:"tool_call_id,omitempty"`
+	MessageID     string                   `json:"messageId,omitempty"`
+	ContextOnly   bool                     `json:"contextOnly,omitempty"`
+	Goal          *agentGoal               `json:"goal,omitempty"`
+	Loop          *agentLoop               `json:"loop,omitempty"`
+	Anthropic     *agent.ProviderReplay    `json:"anthropic,omitempty"`
+	Responses     *agent.ResponseReplay    `json:"responses,omitempty"`
+	OutcomeAt     string                   `json:"outcomeAt,omitempty"`
+	Outcome       string                   `json:"outcome,omitempty"`
+	Diagnostic    *agent.FailureDiagnostic `json:"diagnostic,omitempty"`
+	Display       json.RawMessage          `json:"display,omitempty"`
+	ImagePreviews []string                 `json:"imagePreviews,omitempty"`
+	T             string                   `json:"t"`
+	V             int                      `json:"v,omitempty"`
+	Device        string                   `json:"device,omitempty"`
+	Thread        string                   `json:"thread,omitempty"`
+	Model         string                   `json:"model,omitempty"`
+	Cwd           string                   `json:"cwd,omitempty"`
+	Title         string                   `json:"title,omitempty"`
+	Updated       string                   `json:"updated,omitempty"`
+	Role          string                   `json:"role,omitempty"`
+	Content       string                   `json:"content,omitempty"`
+	Reasoning     string                   `json:"reasoning,omitempty"`
+	ToolCalls     []agentHistoryToolCall   `json:"tool_calls,omitempty"`
+	ToolCallID    string                   `json:"tool_call_id,omitempty"`
 	// Images holds the file names of a user message's image attachments;
 	// the image data itself is never persisted.
 	Images []string `json:"images,omitempty"`
@@ -109,10 +110,11 @@ type agentHistoryTool struct {
 
 // agentThreadMeta describes one persisted thread of a device.
 type agentThreadMeta struct {
-	OutcomeAt string
-	Outcome   string
-	ID        string
-	Title     string // explicit meta title if set, else derived from the first user message
+	OutcomeAt  string
+	Outcome    string
+	Diagnostic *agent.FailureDiagnostic
+	ID         string
+	Title      string // explicit meta title if set, else derived from the first user message
 	// MetaTitle is the explicit title stored in the meta line ("" when the
 	// thread was never renamed).
 	MetaTitle string
@@ -139,12 +141,13 @@ type agentSessionStore struct {
 // agentThreadExtras are the meta-line fields (besides the model) carried
 // through rewrites: the thread's working directory and explicit title.
 type agentThreadExtras struct {
-	Goal      *agentGoal
-	Loop      *agentLoop
-	OutcomeAt string
-	Outcome   string
-	Cwd       string
-	Title     string
+	Goal       *agentGoal
+	Loop       *agentLoop
+	OutcomeAt  string
+	Outcome    string
+	Diagnostic *agent.FailureDiagnostic
+	Cwd        string
+	Title      string
 }
 
 func newAgentSessionStore(dir string, ttl time.Duration) *agentSessionStore {
@@ -280,14 +283,15 @@ func (st *agentSessionStore) listThreads(deviceID string) []agentThreadMeta {
 			title = threadTitle(msgs)
 		}
 		metas = append(metas, agentThreadMeta{
-			ID:        threadID,
-			Title:     title,
-			MetaTitle: metaTitle,
-			Model:     model,
-			Cwd:       cwd,
-			UpdatedAt: updated,
-			Outcome:   st.extras[deviceID+"/"+threadID].Outcome,
-			OutcomeAt: st.extras[deviceID+"/"+threadID].OutcomeAt,
+			ID:         threadID,
+			Title:      title,
+			MetaTitle:  metaTitle,
+			Model:      model,
+			Cwd:        cwd,
+			UpdatedAt:  updated,
+			Outcome:    st.extras[deviceID+"/"+threadID].Outcome,
+			OutcomeAt:  st.extras[deviceID+"/"+threadID].OutcomeAt,
+			Diagnostic: st.extras[deviceID+"/"+threadID].Diagnostic.Safe(),
 		})
 	}
 	sort.Slice(metas, func(i, j int) bool { return metas[i].UpdatedAt.After(metas[j].UpdatedAt) })
@@ -398,6 +402,7 @@ func (st *agentSessionStore) loadPathLocked(deviceID, threadID, path string) (ms
 			st.extras[deviceID+"/"+threadID] = agentThreadExtras{Cwd: cwd, Title: title, Outcome: validatedAgentOutcome(line.Outcome), OutcomeAt: line.OutcomeAt}
 			x := st.extras[deviceID+"/"+threadID]
 			x.Goal, x.Loop = line.Goal, line.Loop
+			x.Diagnostic = outcomeDiagnostic(x.Outcome, line.Diagnostic)
 			st.extras[deviceID+"/"+threadID] = x
 		case "autonomy":
 			key := deviceID + "/" + threadID
@@ -410,6 +415,7 @@ func (st *agentSessionStore) loadPathLocked(deviceID, threadID, path string) (ms
 				extras := st.extras[key]
 				extras.Outcome = outcome
 				extras.OutcomeAt = line.OutcomeAt
+				extras.Diagnostic = outcomeDiagnostic(outcome, line.Diagnostic)
 				st.extras[key] = extras
 			}
 		case "msg":
@@ -682,7 +688,8 @@ func (st *agentSessionStore) rewriteLocked(deviceID, threadID, model string, msg
 		T: "meta", V: agentHistoryVersion, Device: deviceID, Thread: threadID, Model: model,
 		Goal: extras.Goal, Loop: extras.Loop,
 		Cwd: extras.Cwd, Title: extras.Title, Outcome: extras.Outcome, OutcomeAt: extras.OutcomeAt,
-		Updated: time.Now().UTC().Format(time.RFC3339),
+		Diagnostic: extras.Diagnostic,
+		Updated:    time.Now().UTC().Format(time.RFC3339),
 	})
 	if err != nil {
 		return err
@@ -840,6 +847,7 @@ func (st *agentSessionStore) clear(deviceID, threadID string) {
 	extras := st.extras[key]
 	extras.Outcome = ""
 	extras.OutcomeAt = ""
+	extras.Diagnostic = nil
 	extras.Goal, extras.Loop = nil, nil
 	st.extras[key] = extras
 	// st.extras is kept: a reset thread lives on in memory and its next save
@@ -1050,7 +1058,7 @@ func validatedAgentOutcome(outcome string) string {
 // A small append record preserves the outcome even when a command failed
 // before producing history. Normal saves remain incremental, not full rewrites.
 // The caller holds the thread persistence lock to serialize reset/deletion.
-func (st *agentSessionStore) saveOutcome(deviceID, threadID, model, outcome, outcomeAt string) {
+func (st *agentSessionStore) saveOutcome(deviceID, threadID, model, outcome, outcomeAt string, diagnostic *agent.FailureDiagnostic) {
 	outcome = validatedAgentOutcome(outcome)
 	if outcome == "" {
 		return
@@ -1065,7 +1073,8 @@ func (st *agentSessionStore) saveOutcome(deviceID, threadID, model, outcome, out
 		outcomeAt = extras.OutcomeAt
 	}
 	extras.Outcome, extras.OutcomeAt = outcome, outcomeAt
-	st.appendCheckpointLocked(deviceID, threadID, model, agentHistoryLine{T: "outcome", Outcome: outcome, OutcomeAt: outcomeAt}, extras)
+	extras.Diagnostic = outcomeDiagnostic(outcome, diagnostic)
+	st.appendCheckpointLocked(deviceID, threadID, model, agentHistoryLine{T: "outcome", Outcome: outcome, OutcomeAt: outcomeAt, Diagnostic: extras.Diagnostic}, extras)
 }
 
 // A running marker read from disk has no surviving foreground process after
@@ -1075,4 +1084,11 @@ func restoredAgentOutcome(outcome string) string {
 		return "stopped"
 	}
 	return validatedAgentOutcome(outcome)
+}
+
+func outcomeDiagnostic(outcome string, diagnostic *agent.FailureDiagnostic) *agent.FailureDiagnostic {
+	if outcome != "error" && outcome != "stopped" {
+		return nil
+	}
+	return diagnostic.Safe()
 }

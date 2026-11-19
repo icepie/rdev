@@ -22,6 +22,10 @@ pub struct Args {
     #[arg(short = 'i', long = "id", env = "RDEV_ID", default_value = "")]
     pub id: String,
 
+    /// Device label, independent of the stable ID (defaults to hostname).
+    #[arg(long = "display-name", env = "RDEV_DISPLAY_NAME", default_value = "", value_parser = parse_display_name)]
+    pub display_name: String,
+
     #[arg(
         short = 'p',
         long = "password",
@@ -150,6 +154,40 @@ pub struct Args {
     pub gpu_desktop_windows_capture_source: String,
 }
 
+fn parse_display_name(value: &str) -> Result<String, String> {
+    let value = value.trim();
+    Ok(if value.is_empty() {
+        default_display_name()
+    } else {
+        value.to_owned()
+    })
+}
+
+fn default_display_name() -> String {
+    #[cfg(unix)]
+    {
+        let mut name = [0u8; 256];
+        if unsafe { libc::gethostname(name.as_mut_ptr().cast(), name.len()) } == 0 {
+            let len = name.iter().position(|&b| b == 0).unwrap_or(name.len());
+            return String::from_utf8_lossy(&name[..len]).into_owned();
+        }
+    }
+    #[cfg(windows)]
+    use windows_sys::Win32::System::SystemInformation::{
+        ComputerNameDnsHostname, GetComputerNameExW,
+    };
+    #[cfg(windows)]
+    {
+        let mut name = [0u16; 256];
+        let mut len = name.len() as u32;
+        if unsafe { GetComputerNameExW(ComputerNameDnsHostname, name.as_mut_ptr(), &mut len) } != 0
+        {
+            return String::from_utf16_lossy(&name[..len as usize]);
+        }
+    }
+    String::new()
+}
+
 pub fn parse_duration(value: &str) -> Result<std::time::Duration, String> {
     let trimmed = value.trim();
     if let Some(ms) = trimmed.strip_suffix("ms") {
@@ -188,6 +226,27 @@ pub fn parse_bool(value: &str) -> Result<bool, String> {
 mod tests {
     use super::*;
     use clap::Parser;
+
+    #[test]
+    fn blank_display_name_uses_hostname_without_changing_id() {
+        for value in ["", " \t", "办公室电脑"] {
+            let args = Args::try_parse_from([
+                "rdev-client-gpu",
+                "--id",
+                "stable-device",
+                "--display-name",
+                value,
+            ])
+            .unwrap();
+            let expected = if value.trim().is_empty() {
+                default_display_name()
+            } else {
+                value.to_owned()
+            };
+            assert_eq!(args.display_name, expected);
+            assert_eq!(args.id, "stable-device");
+        }
+    }
 
     #[test]
     fn parses_duration_units() {

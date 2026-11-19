@@ -23,10 +23,10 @@ export function PanelDevice({ device, onChange, children }: {
         <SelectContent>
           {target && !available.some(d => d.id === target) && <SelectItem value={target} disabled>{target} · {t("common.disconnected")}</SelectItem>}
           {available.map(d => (
-            <SelectItem key={d.id} value={d.id} textValue={d.id} className="[&>span:last-child]:min-w-0 [&>span:last-child]:flex-1">
+            <SelectItem key={d.id} value={d.id} textValue={d.displayName && d.displayName !== d.id ? `${d.displayName} (${d.id})` : d.id} className="[&>span:last-child]:min-w-0 [&>span:last-child]:flex-1">
               <span className="flex min-w-0 items-center gap-2">
                 <DeviceIcon device={d.id} os={d.os} />
-                <span className="min-w-0 truncate">{d.id}</span>
+                <span className="min-w-0 truncate">{d.displayName && d.displayName !== d.id ? `${d.displayName} (${d.id})` : d.id}</span>
               </span>
             </SelectItem>
           ))}

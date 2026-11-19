@@ -9,7 +9,7 @@ function Pane({kind,device,onOpenFile}) {
   return createElement("div", {"data-pane":kind,"data-device":device,"data-agent-preview":!!onOpenFile});
 }
 vi.mock("../ui/lib/i18n",()=>({useI18n:()=>({t})}));
-vi.mock("../ui/lib/devices",()=>({useDevices:()=>({devices:[{id:"one"},{id:"two"}]})}));
+vi.mock("../ui/lib/devices",()=>({useDevices:()=>({devices:[{id:"one",displayName:"Build host"},{id:"two",displayName:"Build host"}]})}));
 vi.mock("../ui/lib/server-capabilities",()=>({useServerCapabilities:()=>({browserEnabled:true,loading:false})}));
 vi.mock("../ui/components/icon",()=>({Icon:()=>null}));
 vi.mock("../ui/components/select",()=>({
@@ -41,6 +41,7 @@ it("keeps independent device targets and multiple workspaces in a server convers
    await act(()=>[...host.querySelectorAll("button")].find(b=>b.textContent===label).click());
    const select=[...host.querySelectorAll("select")].find(s=>s.value==="");
    expect(select).toBeTruthy();
+   expect([...select.options].map(option=>option.textContent)).toEqual(["Choose", "Build host (one)", "Build host (two)"]);
    await act(()=>{select.value="two";select.dispatchEvent(new Event("change",{bubbles:true}));});
   }
   expect(host.querySelectorAll('[data-pane="files"]')).toHaveLength(2);

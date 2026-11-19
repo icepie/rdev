@@ -118,6 +118,7 @@ type Message struct {
 	TerminalRTC    bool        `json:"terminalRTC,omitempty"`
 	Type           MessageType `json:"type"`
 	ClientID       string      `json:"clientId,omitempty"`
+	DisplayName    string      `json:"displayName,omitempty"` // presentation only; never a routing or identity key
 	SessionID      string      `json:"sessionId,omitempty"`
 	ClientVersion  string      `json:"clientVersion,omitempty"`
 	ClientOS       string      `json:"clientOS,omitempty"` // GOOS, sent at registration

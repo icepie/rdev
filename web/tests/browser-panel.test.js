@@ -6,7 +6,7 @@ const apiFetch = vi.fn();
 const t = key => key;
 vi.mock("../ui/lib/api", () => ({ apiFetch: (...args) => apiFetch(...args), getDevicePassword: () => "" }));
 vi.mock("../ui/lib/i18n", () => ({ useI18n: () => ({ t }) }));
-vi.mock("../ui/lib/devices", () => ({ useDevices: () => ({ devices: [{ id: "laptop" }] }) }));
+vi.mock("../ui/lib/devices", () => ({ useDevices: () => ({ devices: [{ id: "laptop", displayName: "Travel workstation" }] }) }));
 vi.mock("../ui/components/icon", () => ({ Icon: () => null }));
 const { BrowserPanel } = await import("../ui/components/browser-panel");
 
@@ -26,6 +26,7 @@ it.each(["inline", "sidebar"])("%s selection starts the chosen device, connects 
   await act(() => root.render(createElement(BrowserPanel,{device:"laptop",deviceSelection})));
   expect(apiFetch).not.toHaveBeenCalled();
   expect(!!document.querySelector('[role="combobox"]')).toBe(deviceSelection === "inline");
+  expect(document.body.textContent).toContain("Travel workstation (laptop)");
   expect(document.querySelector('input[type="password"]')).toBeNull();
   await act(async () => document.querySelector("form").dispatchEvent(new dom.window.Event("submit",{bubbles:true,cancelable:true})));
 	  expect(JSON.parse(apiFetch.mock.calls[0][1].body)).toEqual({device:"laptop",password:"",lang:"en"});

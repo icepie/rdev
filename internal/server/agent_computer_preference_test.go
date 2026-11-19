@@ -341,3 +341,34 @@ func TestComputerCuaCoordinateCapabilityBoundaries(t *testing.T) {
 		})
 	}
 }
+
+func TestComputerCuaCanonicalPlatformModifiers(t *testing.T) {
+	for _, tc := range []struct {
+		platform string
+		modifier string
+	}{
+		{"macos", "cmd"},
+		{"Win32", "win"},
+	} {
+		t.Run(tc.platform, func(t *testing.T) {
+			client := &ClientConn{Desktop: &protocol.DesktopCapabilities{Platform: tc.platform}}
+			called := false
+			request := func(_ context.Context, value any) (json.RawMessage, error) {
+				v := value.(map[string]any)
+				if v["action"] == "tools" {
+					return computerCuaTestInventory(), nil
+				}
+				called = true
+				args := v["arguments"].(map[string]any)
+				if v["name"] != "press_key" || strings.Join(args["modifiers"].([]string), ",") != tc.modifier {
+					t.Fatalf("canonical modifier missing: %#v", v)
+				}
+				return json.RawMessage(`{"content":[],"isError":false}`), nil
+			}
+			_, handled, err := preferComputerCua(context.Background(), request, client, computerAction{Action: "key", Key: "v", Meta: true}, json.RawMessage(`{"action":"key","key":"v","meta":true}`), 0, 0)
+			if err != nil || !handled || !called {
+				t.Fatalf("handled=%v called=%v err=%v", handled, called, err)
+			}
+		})
+	}
+}

@@ -57,52 +57,53 @@ type agentMsg struct {
 	TokenBudget    *int64             `json:"tokenBudget,omitempty"`
 	Participants   []agentParticipant `json:"participants,omitempty"`
 
-	Automation         *automationView     `json:"automation,omitempty"`
-	Pinned             bool                `json:"pinned,omitempty"`
-	Offline            bool                `json:"offline,omitempty"`
-	OfflineConfirmed   bool                `json:"offlineConfirmed,omitempty"`
-	Type               string              `json:"type,omitempty"`
-	Command            string              `json:"command,omitempty"`
-	Success            *bool               `json:"success,omitempty"`
-	Error              string              `json:"error,omitempty"`
-	Code               string              `json:"code,omitempty"`
-	Data               json.RawMessage     `json:"data,omitempty"`
-	RPC                bool                `json:"-"`
-	Display            json.RawMessage     `json:"display,omitempty"`
-	ImagePreviews      []string            `json:"imagePreviews,omitempty"`
-	Compacted          bool                `json:"compacted,omitempty"`
-	Op                 string              `json:"op"`
-	Password           string              `json:"password,omitempty"`
-	Text               string              `json:"text,omitempty"`
-	Device             string              `json:"device,omitempty"`
-	Model              string              `json:"model,omitempty"`
-	ModelName          string              `json:"modelName,omitempty"`
-	Models             []map[string]any    `json:"models,omitempty"`
-	Message            string              `json:"message,omitempty"`
-	History            []agentHistoryEntry `json:"history,omitempty"`
-	Running            bool                `json:"running,omitempty"`
-	HistoryError       string              `json:"historyError,omitempty"`
-	ID                 string              `json:"id,omitempty"`
-	JobID              string              `json:"jobId,omitempty"`
-	Recovered          int                 `json:"recovered,omitempty"`
-	SubagentID         string              `json:"subagentId,omitempty"`
-	CustomInstructions string              `json:"customInstructions,omitempty"`
-	FromByte           *int64              `json:"fromByte,omitempty"`
-	SessionFile        string              `json:"sessionFile,omitempty"`
-	Name               string              `json:"name,omitempty"`
-	Args               string              `json:"args,omitempty"`
-	Result             string              `json:"result,omitempty"`
-	IsError            bool                `json:"isError,omitempty"`
-	Usage              *agentUsage         `json:"usage,omitempty"`
-	Summary            string              `json:"summary,omitempty"`
-	Diff               string              `json:"diff,omitempty"`
-	Reasoning          string              `json:"reasoning,omitempty"`
-	Thread             string              `json:"thread,omitempty"`
-	Threads            []agentThreadInfo   `json:"threads,omitempty"`
-	Todos              []todoItem          `json:"todos,omitempty"`
-	QueueModes         []string            `json:"queueModes,omitempty"`
-	QueueIDs           []string            `json:"queueIds,omitempty"`
-	Queue              []string            `json:"queue,omitempty"`
+	Automation         *automationView          `json:"automation,omitempty"`
+	Pinned             bool                     `json:"pinned,omitempty"`
+	Offline            bool                     `json:"offline,omitempty"`
+	OfflineConfirmed   bool                     `json:"offlineConfirmed,omitempty"`
+	Type               string                   `json:"type,omitempty"`
+	Command            string                   `json:"command,omitempty"`
+	Success            *bool                    `json:"success,omitempty"`
+	Error              string                   `json:"error,omitempty"`
+	Code               string                   `json:"code,omitempty"`
+	Diagnostic         *agent.FailureDiagnostic `json:"diagnostic,omitempty"`
+	Data               json.RawMessage          `json:"data,omitempty"`
+	RPC                bool                     `json:"-"`
+	Display            json.RawMessage          `json:"display,omitempty"`
+	ImagePreviews      []string                 `json:"imagePreviews,omitempty"`
+	Compacted          bool                     `json:"compacted,omitempty"`
+	Op                 string                   `json:"op"`
+	Password           string                   `json:"password,omitempty"`
+	Text               string                   `json:"text,omitempty"`
+	Device             string                   `json:"device,omitempty"`
+	Model              string                   `json:"model,omitempty"`
+	ModelName          string                   `json:"modelName,omitempty"`
+	Models             []map[string]any         `json:"models,omitempty"`
+	Message            string                   `json:"message,omitempty"`
+	History            []agentHistoryEntry      `json:"history,omitempty"`
+	Running            bool                     `json:"running,omitempty"`
+	HistoryError       string                   `json:"historyError,omitempty"`
+	ID                 string                   `json:"id,omitempty"`
+	JobID              string                   `json:"jobId,omitempty"`
+	Recovered          int                      `json:"recovered,omitempty"`
+	SubagentID         string                   `json:"subagentId,omitempty"`
+	CustomInstructions string                   `json:"customInstructions,omitempty"`
+	FromByte           *int64                   `json:"fromByte,omitempty"`
+	SessionFile        string                   `json:"sessionFile,omitempty"`
+	Name               string                   `json:"name,omitempty"`
+	Args               string                   `json:"args,omitempty"`
+	Result             string                   `json:"result,omitempty"`
+	IsError            bool                     `json:"isError,omitempty"`
+	Usage              *agentUsage              `json:"usage,omitempty"`
+	Summary            string                   `json:"summary,omitempty"`
+	Diff               string                   `json:"diff,omitempty"`
+	Reasoning          string                   `json:"reasoning,omitempty"`
+	Thread             string                   `json:"thread,omitempty"`
+	Threads            []agentThreadInfo        `json:"threads,omitempty"`
+	Todos              []todoItem               `json:"todos,omitempty"`
+	QueueModes         []string                 `json:"queueModes,omitempty"`
+	QueueIDs           []string                 `json:"queueIds,omitempty"`
+	Queue              []string                 `json:"queue,omitempty"`
 	// Live carries the marshaled frames of the in-flight turn in auth_ok and
 	// thread_switched so the browser replays mid-turn UI state; each element
 	// is a complete tagged frame (turn_start/delta/tool_*/approval_request…).
@@ -285,15 +286,16 @@ type agentWorking struct {
 
 // agentThreadInfo is one thread in a thread_list / auth_ok broadcast.
 type agentThreadInfo struct {
-	PinnedAt       int64  `json:"pinnedAt,omitempty"`
-	OutcomeAt      string `json:"outcomeAt,omitempty"`
-	Outcome        string `json:"outcome,omitempty"`
-	BackgroundJobs int    `json:"backgroundJobs,omitempty"`
-	ID             string `json:"id"`
-	Title          string `json:"title"`
-	UpdatedAt      string `json:"updatedAt"`
-	Running        bool   `json:"running"`
-	Waiting        string `json:"waiting,omitempty"`
+	PinnedAt       int64                    `json:"pinnedAt,omitempty"`
+	OutcomeAt      string                   `json:"outcomeAt,omitempty"`
+	Outcome        string                   `json:"outcome,omitempty"`
+	Diagnostic     *agent.FailureDiagnostic `json:"diagnostic,omitempty"`
+	BackgroundJobs int                      `json:"backgroundJobs,omitempty"`
+	ID             string                   `json:"id"`
+	Title          string                   `json:"title"`
+	UpdatedAt      string                   `json:"updatedAt"`
+	Running        bool                     `json:"running"`
+	Waiting        string                   `json:"waiting,omitempty"`
 	// Model is the thread's canonical "provider/model".
 	Model string `json:"model,omitempty"`
 	// Tool is the currently executing tool name; only set while running.
@@ -420,6 +422,7 @@ type agentThread struct {
 	workingSince time.Time              // current turn start
 	outcomeAt    string
 	lastOutcome  string // latest foreground turn: done, error, stopped
+	diagnostic   *agent.FailureDiagnostic
 	workingTool  string // currently executing tool name
 	updatedAt    time.Time
 	// lastUsage is the token accounting of the most recent completed turn,
@@ -891,6 +894,7 @@ func (s *Server) agentSessionFor(deviceID string, client *ClientConn) (*agentSes
 			th.updatedAt = meta.UpdatedAt
 			th.lastOutcome = restoredAgentOutcome(meta.Outcome)
 			th.outcomeAt = meta.OutcomeAt
+			th.diagnostic = meta.Diagnostic
 			// Per-thread model: a thread restored with a different model
 			// keeps it instead of being retargeted to the entry default.
 			if savedModel != "" && savedModel != th.model {
@@ -1088,14 +1092,15 @@ func agentThreadListLocked(entry *agentSessionEntry) []agentThreadInfo {
 			title = threadTitle(th.session.History())
 		}
 		info := agentThreadInfo{
-			ID:        th.id,
-			PinnedAt:  th.pinnedAt,
-			Title:     title,
-			UpdatedAt: th.updatedAt.UTC().Format(time.RFC3339),
-			Running:   th.running,
-			Outcome:   th.lastOutcome,
-			OutcomeAt: th.outcomeAt,
-			Model:     th.model,
+			ID:         th.id,
+			PinnedAt:   th.pinnedAt,
+			Title:      title,
+			UpdatedAt:  th.updatedAt.UTC().Format(time.RFC3339),
+			Running:    th.running,
+			Outcome:    th.lastOutcome,
+			OutcomeAt:  th.outcomeAt,
+			Diagnostic: th.diagnostic,
+			Model:      th.model,
 		}
 		if th.jobs != nil {
 			info.BackgroundJobs = th.jobs.RunningCount()
@@ -1163,12 +1168,13 @@ func (s *Server) collectAllThreads() []agentDeviceThreads {
 		threads := make([]agentThreadInfo, 0, len(metas))
 		for _, m := range metas {
 			threads = append(threads, agentThreadInfo{
-				ID:        m.ID,
-				PinnedAt:  prefs.Pinned[m.ID],
-				Outcome:   restoredAgentOutcome(m.Outcome),
-				OutcomeAt: m.OutcomeAt,
-				Title:     m.Title,
-				UpdatedAt: m.UpdatedAt.UTC().Format(time.RFC3339),
+				ID:         m.ID,
+				PinnedAt:   prefs.Pinned[m.ID],
+				Outcome:    restoredAgentOutcome(m.Outcome),
+				OutcomeAt:  m.OutcomeAt,
+				Diagnostic: m.Diagnostic,
+				Title:      m.Title,
+				UpdatedAt:  m.UpdatedAt.UTC().Format(time.RFC3339),
 			})
 		}
 		out = append(out, agentDeviceThreads{Device: dirID, OS: os, Threads: threads})
@@ -1346,6 +1352,7 @@ type agentThreadSnapshot struct {
 	historyHasMore bool
 	historyBefore  string
 	historyError   string
+	diagnostic     *agent.FailureDiagnostic
 	todos          []todoItem
 	queue          []string
 	queueIDs       []string
@@ -1369,6 +1376,7 @@ func (s *Server) threadSnapshotLocked(entry *agentSessionEntry, th *agentThread)
 		queueModes: queueModes(th),
 		running:    th.running,
 		usage:      th.lastUsage,
+		diagnostic: th.diagnostic,
 	}
 	if th.deviceScope != nil {
 		snap.participants = th.deviceScope.snapshot()
@@ -1477,6 +1485,7 @@ func (h *agentWSHandler) establish(ac *agentConn, client *ClientConn) {
 		ModelName:      modelName,
 		Models:         h.srv.Agent.Models(),
 		HistoryError:   snap.historyError,
+		Diagnostic:     snap.diagnostic,
 		History:        snap.history,
 		HistoryHasMore: snap.historyHasMore, HistoryBefore: snap.historyBefore,
 		Running:        snap.running,
@@ -1710,6 +1719,8 @@ func (h *agentWSHandler) OnMessage(socket *gws.Conn, message *gws.Message) {
 		h.handleWorktree(ac, msg)
 	case "switch_thread":
 		h.handleSwitchThread(ac, msg.Thread)
+	case "peek_thread":
+		h.handlePeekThread(ac, msg.Thread)
 	case "recover_history":
 		h.handleRecoverHistory(ac, msg.Thread)
 	case "delete_thread":
@@ -2088,6 +2099,7 @@ func (h *agentWSHandler) handleReset(ac *agentConn, threadRef string) {
 	th.lastUsage = nil
 	th.lastOutcome = ""
 	th.outcomeAt = ""
+	th.diagnostic = nil
 	th.alwaysAllow = make(map[string]bool)
 	th.branch = ""
 	th.live.Reset()
@@ -2185,6 +2197,7 @@ func (h *agentWSHandler) handleSwitchThread(ac *agentConn, threadID string) {
 		Thread:         threadID,
 		Model:          model,
 		History:        snap.history,
+		Diagnostic:     snap.diagnostic,
 		HistoryHasMore: snap.historyHasMore, HistoryBefore: snap.historyBefore,
 		Todos:        snap.todos,
 		Queue:        snap.queue,
@@ -2235,6 +2248,7 @@ func (snap agentThreadSnapshot) peekMessage(threadID string) agentMsg {
 		History:        snap.history,
 		HistoryHasMore: snap.historyHasMore, HistoryBefore: snap.historyBefore,
 		HistoryError: snap.historyError,
+		Diagnostic:   snap.diagnostic,
 		Todos:        snap.todos,
 		Queue:        snap.queue,
 		QueueIDs:     snap.queueIDs,
@@ -2289,6 +2303,7 @@ func (h *agentWSHandler) handleRecoverHistory(ac *agentConn, threadID string) {
 		th.session.SetHistory(messages)
 		th.goal, th.loop = goal, loop
 		th.lastOutcome, th.outcomeAt = restoredAgentOutcome(extras.Outcome), extras.OutcomeAt
+		th.diagnostic = extras.Diagnostic
 		th.turnHistory = nil
 		th.live.Reset()
 	}
@@ -2439,6 +2454,7 @@ func (h *agentWSHandler) handleDeleteThread(ac *agentConn, threadID string) {
 				Thread:         switchedTo,
 				Model:          switchModel,
 				History:        snap.history,
+				Diagnostic:     snap.diagnostic,
 				HistoryHasMore: snap.historyHasMore, HistoryBefore: snap.historyBefore,
 				Todos:        snap.todos,
 				Queue:        snap.queue,
@@ -2990,6 +3006,7 @@ func (s *Server) startAgentTurnLocked(entry *agentSessionEntry, th *agentThread,
 	command, _ := splitAgentCommand(text)
 	th.turnCommand = isAgentSessionCommand(command)
 	th.lastOutcome = ""
+	th.diagnostic = nil
 	th.turnFiles = nil
 	th.toolPaths = make(map[string]string)
 	th.workingSince = time.Now()
@@ -3125,7 +3142,7 @@ func (s *Server) runAgentTurn(entry *agentSessionEntry, th *agentThread, turn ag
 	s.agentSessionsMu.Unlock()
 	if admitted {
 		if store := s.agentStore(); store != nil {
-			store.saveOutcome(entry.deviceID, th.id, turnModel, "running", "")
+			store.saveOutcome(entry.deviceID, th.id, turnModel, "running", "", nil)
 		}
 	}
 	th.persistMu.Unlock()
@@ -3201,7 +3218,7 @@ func (s *Server) runAgentTurn(entry *agentSessionEntry, th *agentThread, turn ag
 			} else {
 				store.save(entry.deviceID, th.id, turnModel, sess.History())
 			}
-			store.saveOutcome(entry.deviceID, th.id, turnModel, outcome, outcomeAt)
+			store.saveOutcome(entry.deviceID, th.id, turnModel, outcome, outcomeAt, agent.Diagnostic(runErr))
 			if fault := store.historyFault(entry.deviceID, th.id); fault != "" && runErr == nil {
 				runErr = fmt.Errorf("history persistence: %s", fault)
 				outcome = "error"
@@ -3240,10 +3257,17 @@ func (s *Server) runAgentTurn(entry *agentSessionEntry, th *agentThread, turn ag
 	case "stopped":
 		terminal = agentMsg{Op: "stopped", Thread: th.id, Canceled: true}
 	default:
-		terminal = agentMsg{Op: "error", Thread: th.id, Message: runErr.Error()}
-		if errors.Is(runErr, agent.ErrContentFiltered) {
-			terminal.Code = "provider_content_filter"
+		terminal = agentMsg{Op: "error", Thread: th.id, Diagnostic: agent.Diagnostic(runErr)}
+		terminal.Code = terminal.Diagnostic.Code
+		terminal.Message = terminal.Diagnostic.Summary()
+		if terminal.Code == "agent_error" {
+			// Preserve actionable local-command errors live; never persist their
+			// arbitrary text in the diagnostic checkpoint.
+			terminal.Message = runErr.Error()
 		}
+	}
+	if outcome == "stopped" {
+		terminal.Diagnostic = agent.Diagnostic(runErr)
 	}
 	terminal.Compacted = historyReplaced
 	page, pageErr := s.completedTranscriptPageLocked(entry, th)
@@ -3267,6 +3291,7 @@ func (s *Server) runAgentTurn(entry *agentSessionEntry, th *agentThread, turn ag
 	var terminalData []byte
 	th.lastOutcome = terminal.Op
 	th.outcomeAt = outcomeAt
+	th.diagnostic = terminal.Diagnostic
 	if data, err := json.Marshal(terminal); err == nil {
 		terminalData = data
 		th.live.Append(terminal, data)

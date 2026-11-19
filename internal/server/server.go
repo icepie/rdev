@@ -82,6 +82,7 @@ var (
 // ClientConn represents a connected client device
 type ClientConn struct {
 	ID                string
+	DisplayName       string
 	RequestedID       string
 	InstanceID        string
 	DeviceIdentity    string
@@ -103,20 +104,31 @@ type ClientConn struct {
 	mu                sync.Mutex
 }
 
-// clientOS reports the device's operating system as sent at registration,
-// falling back to the desktop capability platform for clients that predate
-// the clientOS field (e.g. the Android APK).
+// clientOS reports a canonical GOOS name, falling back to desktop metadata
+// for clients that predate the clientOS registration field.
 func clientOS(c *ClientConn) string {
 	if c == nil {
 		return ""
 	}
-	if c.OS != "" {
-		return c.OS
+	osName := strings.TrimSpace(c.OS)
+	if osName == "" && c.Desktop != nil {
+		osName = strings.TrimSpace(c.Desktop.Platform)
 	}
-	if c.Desktop != nil {
-		return c.Desktop.Platform
+	switch osName = strings.ToLower(osName); osName {
+	case "macos", "mac", "osx", "mac os x":
+		return "darwin"
+	case "win32", "win64", "win":
+		return "windows"
+	default:
+		return osName
 	}
-	return ""
+}
+
+func clientDisplayName(c *ClientConn) string {
+	if name := strings.TrimSpace(c.DisplayName); name != "" {
+		return name
+	}
+	return c.ID
 }
 
 type DeviceTransport interface {
@@ -621,12 +633,12 @@ type Server struct {
 	agentWG             sync.WaitGroup // server-owned agent goroutines (turns/probes)
 
 	// Public config (set by main) for API/UI
-	SSHPort      string // e.g. "2222"
-	HTTPHost     string // e.g. "192.168.1.100:8080"
-	PublicServer string // explicit client endpoint list; avoids deriving from HTTP Host
-	TunnelBase   string // optional ws(s):// base advertised for tcp-tunnel dial-backs
-	TCPPort      string
-	KCPPort      string
+	SSHPort          string // e.g. "2222"
+	HTTPHost         string // e.g. "192.168.1.100:8080"
+	PublicServer     string // explicit client endpoint list; avoids deriving from HTTP Host
+	TunnelBase       string // optional ws(s):// base advertised for tcp-tunnel dial-backs
+	TCPPort          string
+	KCPPort          string
 	AdminToken       string // optional token for web APIs and browser WebSockets
 	VNCAddr          string // optional VNC/RFB listen address
 	ProxyAddr        string // optional HTTP/SOCKS5 proxy listen address
@@ -854,6 +866,7 @@ func (h *wsHandler) handleRegister(socket *gws.Conn, msg *protocol.Message) {
 	instanceID := strings.TrimSpace(msg.InstanceID)
 	client := &ClientConn{
 		ID:                clientID,
+		DisplayName:       strings.TrimSpace(msg.DisplayName),
 		RequestedID:       clientID,
 		InstanceID:        instanceID,
 		DeviceIdentity:    identity,
@@ -1179,6 +1192,7 @@ func (s *Server) registerStreamClient(transport DeviceTransport, msg *protocol.M
 	instanceID := strings.TrimSpace(msg.InstanceID)
 	client := &ClientConn{
 		ID:                clientID,
+		DisplayName:       strings.TrimSpace(msg.DisplayName),
 		RequestedID:       clientID,
 		InstanceID:        instanceID,
 		DeviceIdentity:    identity,
@@ -1587,6 +1601,7 @@ func (s *Server) HandleAPI(w http.ResponseWriter, r *http.Request) {
 
 	type clientInfo struct {
 		ID             string                        `json:"id"`
+		DisplayName    string                        `json:"displayName"`
 		RequestedID    string                        `json:"requestedId,omitempty"`
 		InstanceID     string                        `json:"instanceId,omitempty"`
 		Version        string                        `json:"version,omitempty"`
@@ -1614,6 +1629,7 @@ func (s *Server) HandleAPI(w http.ResponseWriter, r *http.Request) {
 		c.mu.Unlock()
 		info := clientInfo{
 			ID:             c.ID,
+			DisplayName:    clientDisplayName(c),
 			RequestedID:    c.RequestedID,
 			InstanceID:     c.InstanceID,
 			Version:        c.Version,
@@ -2195,6 +2211,7 @@ func (s *Server) HandleTerminalAPI(w http.ResponseWriter, r *http.Request) {
 
 	type deviceInfo struct {
 		ID             string                        `json:"id"`
+		DisplayName    string                        `json:"displayName"`
 		RequestedID    string                        `json:"requestedId,omitempty"`
 		ConnectedAt    string                        `json:"connectedAt"`
 		Version        string                        `json:"version,omitempty"`
@@ -2209,6 +2226,7 @@ func (s *Server) HandleTerminalAPI(w http.ResponseWriter, r *http.Request) {
 	for _, c := range s.clients {
 		devices = append(devices, deviceInfo{
 			ID:             c.ID,
+			DisplayName:    clientDisplayName(c),
 			RequestedID:    c.RequestedID,
 			ConnectedAt:    c.ConnectedAt.Format(time.RFC3339),
 			Version:        c.Version,

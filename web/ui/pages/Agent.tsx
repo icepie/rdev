@@ -225,7 +225,7 @@ const SIDEBAR_SORTS: { id: SidebarView["sort"]; label: string }[] = [
 export function AgentPage() {
   const { t } = useI18n();
   const { devices: connectedDevices } = useDevices();
-  const devices = useMemo(() => [{ id: SERVER_AGENT_ID, hostname: t("agent.server"), hasPassword: false, connectedAt: "" }, ...connectedDevices], [connectedDevices, t]);
+  const devices = useMemo(() => [{ id: SERVER_AGENT_ID, displayName: undefined, hostname: t("agent.server"), hasPassword: false, connectedAt: "" }, ...connectedDevices], [connectedDevices, t]);
   const [copiedId, copy] = useCopy();
   const [searchParams] = useSearchParams();
   const { threadId } = useParams();
@@ -1734,12 +1734,14 @@ export function AgentPage() {
    * history; historical-only devices remain visible but disabled. */
   const sidebarDevices: {
     id: string;
+    displayName?: string;
     os?: string;
     online: boolean;
     count?: number;
   }[] = useMemo(() => {
     const merged = new Map<string, {
       id: string;
+      displayName?: string;
       os?: string;
       online: boolean;
       count?: number;
@@ -1756,6 +1758,7 @@ export function AgentPage() {
       const previous = merged.get(d.id);
       merged.set(d.id, {
         id: d.id,
+        displayName: d.displayName,
         os: d.os ?? previous?.os,
         online: true,
         count: previous?.count,
@@ -2703,11 +2706,11 @@ export function AgentPage() {
               )}
             />
             <DropdownMenu>
-              <DropdownMenuTrigger asChild><button type="button" className="flex min-w-0 flex-1 items-center gap-1 rounded px-1 py-1 text-left hover:bg-state-hover"><span className="min-w-0 flex-1 truncate">{device === SERVER_AGENT_ID ? t("agent.server") : device || t("agent.selectDeviceShort")}</span><Icon name="ChevronDown" className="size-3 shrink-0" /></button></DropdownMenuTrigger>
+              <DropdownMenuTrigger asChild><button type="button" className="flex min-w-0 flex-1 items-center gap-1 rounded px-1 py-1 text-left hover:bg-state-hover"><span className="min-w-0 flex-1 truncate">{device === SERVER_AGENT_ID ? t("agent.server") : currentDevice?.displayName && currentDevice.displayName !== device ? `${currentDevice.displayName} (${device})` : device || t("agent.selectDeviceShort")}</span><Icon name="ChevronDown" className="size-3 shrink-0" /></button></DropdownMenuTrigger>
               <DropdownMenuContent side="top" align="start">
                 <DropdownMenuItem onSelect={() => updateSidebarView({ deviceFilter: "" })}>{t("agent.allThreads")}</DropdownMenuItem>
                 <DropdownMenuSeparator />
-                {sidebarDevices.map((d) => <DropdownMenuItem key={d.id} onSelect={() => { updateSidebarView({ deviceFilter: "" }); setDevice(d.id); }}><DeviceIcon device={d.id} os={d.os} /><span className="max-w-64 truncate">{d.id === SERVER_AGENT_ID ? t("agent.server") : d.id}</span>{d.id === device && <Icon name="Check" className="size-3.5" />}</DropdownMenuItem>)}
+                {sidebarDevices.map((d) => <DropdownMenuItem key={d.id} onSelect={() => { updateSidebarView({ deviceFilter: "" }); setDevice(d.id); }}><DeviceIcon device={d.id} os={d.os} /><span className="max-w-64 truncate">{d.id === SERVER_AGENT_ID ? t("agent.server") : d.displayName && d.displayName !== d.id ? `${d.displayName} (${d.id})` : d.id}</span>{d.id === device && <Icon name="Check" className="size-3.5" />}</DropdownMenuItem>)}
               </DropdownMenuContent>
             </DropdownMenu>
           </div>

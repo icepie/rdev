@@ -57,6 +57,10 @@ export function Participants({
   const [editing, setEditing] = useState("");
   const [password, setPassword] = useState("");
   const [cwd, setCwd] = useState("");
+  const deviceLabel = (id: string) => {
+    const name = devices.find((d) => d.id === id)?.displayName;
+    return name && name !== id ? `${name} (${id})` : id;
+  };
   const members = rows.length
     ? rows
     : [
@@ -97,7 +101,7 @@ export function Participants({
             os={devices.find((d) => d.id === primary)?.os}
             className="size-3"
           />
-          <span className="truncate">{primary}</span>
+          <span className="truncate">{deviceLabel(primary)}</span>
           <span className="shrink-0">
             {members.length > 1 ? `+${members.length - 1}` : "+"}
           </span>
@@ -127,7 +131,7 @@ export function Participants({
               />
               <div className="min-w-0 flex-1">
                 <div className="truncate">
-                  {row.device}
+                  {deviceLabel(row.device)}
                   {row.primary && (
                     <span className="ml-1 text-muted-foreground">
                       {t("agent.primaryDevice")}
@@ -180,7 +184,8 @@ export function Participants({
               .filter(
                 (d) =>
                   !members.some((m) => m.device === d.id) &&
-                  d.id.toLowerCase().includes(query.toLowerCase()),
+                  (d.id.toLowerCase().includes(query.toLowerCase()) ||
+                    d.displayName?.toLowerCase().includes(query.toLowerCase())),
               )
               .map((d) => (
                 <button
@@ -190,7 +195,7 @@ export function Participants({
                   className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs hover:bg-state-hover"
                 >
                   <DeviceIcon device={d.id} os={d.os} />
-                  <span className="truncate">{d.id}</span>
+                  <span className="truncate">{deviceLabel(d.id)}</span>
                   <Icon name="Plus" className="ml-auto size-3.5" />
                 </button>
               ))}
@@ -205,7 +210,7 @@ export function Participants({
               setPassword("");
             }}
           >
-            <p className="truncate text-xs font-medium">{editing}</p>
+            <p className="truncate text-xs font-medium">{deviceLabel(editing)}</p>
             {!devicePasswordInputsHidden && devices.find((d) => d.id === editing)?.hasPassword && (
               <Input
                 type="password"

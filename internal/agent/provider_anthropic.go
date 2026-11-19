@@ -227,6 +227,7 @@ type anthropicUsage struct {
 
 type anthropicEvent struct {
 	Type         string                     `json:"type"`
+	RequestID    string                     `json:"request_id"`
 	Index        *int                       `json:"index"`
 	ContentBlock map[string]json.RawMessage `json:"content_block"`
 	Message      struct {
@@ -265,6 +266,18 @@ func readAnthropicStream(body io.Reader, scope string, onText, onReasoning func(
 	var blocks []*anthropicPendingBlock
 	started := false
 	finish := ""
+	defer func() {
+		if err != nil {
+			d := Diagnostic(finishDiagnostic(err, finish, ""))
+			for _, block := range blocks {
+				if block.kind == "tool_use" {
+					d.ToolCallStarted = true
+					break
+				}
+			}
+			err = &diagnosticError{cause: err, diagnostic: *d}
+		}
+	}()
 	var input, cacheRead, cacheCreation int
 	applyUsage := func(u anthropicUsage) {
 		if u.Input != nil {
@@ -300,7 +313,7 @@ func readAnthropicStream(body io.Reader, scope string, onText, onReasoning func(
 		switch finish {
 		case "end_turn", "stop_sequence", "tool_use", "refusal":
 		case "max_tokens":
-			return false, fmt.Errorf("agent: Anthropic response truncated (max_tokens)")
+			return false, fmt.Errorf("agent: Anthropic response truncated (max_tokens): %w", errResponseLength)
 		default:
 			return false, fmt.Errorf("agent: unsupported Anthropic stop reason %q", finish)
 		}
@@ -353,6 +366,7 @@ func readAnthropicStream(body io.Reader, scope string, onText, onReasoning func(
 			return false, nil
 		}
 		if event.Type == "error" {
+			event.Error.RequestID = event.RequestID
 			return false, providerStreamError("Anthropic error", event.Error)
 		}
 		if event.Type == "message_start" {

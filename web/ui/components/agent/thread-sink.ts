@@ -55,6 +55,24 @@ export interface AgentJob {
   cancelRequested?: boolean;
 }
 
+// Structured diagnostics contain identifiers and a server-generated summary,
+// never the provider's response body, prompt or unfinished tool arguments.
+function failureNotice(value: unknown): string {
+  if (!value || typeof value !== "object") return "";
+  const diagnostic = value as Record<string, unknown>;
+  const summary = asString(diagnostic.message).slice(0, 512);
+  if (!summary) return "";
+  const details = ["code", "provider", "model", "api", "finishReason", "rawFinishReason", "nativeFinishReason", "requestId"]
+    .flatMap(key => {
+      const text = asString(diagnostic[key]);
+      return text && text.length <= 160 ? [`${key}: ${text}`] : [];
+    });
+  const progress = ["textStarted", "reasoningStarted", "toolCallStarted"]
+    .filter(key => typeof diagnostic[key] === "boolean")
+    .map(key => `${key}: ${diagnostic[key] ? "yes" : "no"}`);
+  return [summary, ...details, ...progress].join("\n");
+}
+
 function parseJob(value: unknown): AgentJob | null {
   if (!value || typeof value !== "object") return null;
   const job = value as Record<string, unknown>;
@@ -193,6 +211,10 @@ export function useThreadSink(): ThreadSink {
   const scrollAnchor = useRef<{ element: HTMLDivElement; top: number; follow: boolean } | null>(null);
   const restoreHistory = useCallback((frame: Record<string, unknown>, mode: "snapshot" | "before" | "around" | "refresh") => {
     const restored = replayHistory(Array.isArray(frame.history) ? frame.history : []);
+    if (mode === "snapshot" && frame.running !== true) {
+      const notice = failureNotice(frame.diagnostic);
+      if (notice) restored.push({ kind: "system", key: nextKey(), text: notice });
+    }
     const live = new Set(liveMessageIDs.current);
     setItems(previous => mode === "snapshot" ? restored : mergeHistory(previous, restored, mode, live));
     if (mode !== "refresh") {
@@ -785,7 +807,7 @@ export function applyScopedMessage(
     }
     case "error": {
       if (msg.code === "provider_content_filter") {
-        const notice = t("agent.providerContentFilter");
+        const notice = failureNotice(msg.diagnostic) || t("agent.providerContentFilter");
         if (ops.turnOpen.current) ops.finishTurn({ display: msg.display, unfinishedToolResult: notice });
         if (Array.isArray(msg.history)) ops.restoreHistory(msg, "refresh");
         ops.liveMessageIDs.current.clear();
@@ -794,7 +816,7 @@ export function applyScopedMessage(
         ops.resetTransient();
         return;
       }
-      const message = asString(msg.message) || t("common.error");
+      const message = (msg.code === "agent_error" ? asString(msg.message) : failureNotice(msg.diagnostic)) || asString(msg.message) || t("common.error");
       if (message === "agent is busy" || message === "agent is busy; stop first") {
         // A rejected command does not end the already-running turn.
         ops.setItems((prev) => [

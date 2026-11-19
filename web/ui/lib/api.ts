@@ -122,6 +122,7 @@ export function forgetDevicePassword(deviceId: string) {
 export interface DeviceInfo {
   fileOperations?: string[];
   id: string;
+  displayName?: string;
   hostname?: string;
   os?: string;
   arch?: string;

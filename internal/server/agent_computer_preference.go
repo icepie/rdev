@@ -130,7 +130,7 @@ func preferComputerCua(ctx context.Context, request computerCuaRequest, client *
 		if a.Key == "" {
 			return "", true, fmt.Errorf("key is required")
 		}
-		key, modifiers, ok := computerCuaKey(a, client.OS)
+		key, modifiers, ok := computerCuaKey(a, clientOS(client))
 		if !ok {
 			return "", false, nil
 		}

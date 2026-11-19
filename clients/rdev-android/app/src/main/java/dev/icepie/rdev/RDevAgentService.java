@@ -16,6 +16,7 @@ import android.net.wifi.WifiManager;
 import android.os.Build;
 import android.os.IBinder;
 import android.os.PowerManager;
+import android.provider.Settings;
 import android.util.Log;
 
 import org.json.JSONArray;
@@ -327,6 +328,19 @@ public class RDevAgentService extends Service {
         return baseMs - spread + reconnectRandom.nextInt(spread * 2 + 1);
     }
 
+    private String resolveDisplayName(SharedPreferences prefs) {
+        String name = prefs.getString("displayName", "");
+        if (name != null && !name.trim().isEmpty()) return name.trim();
+        try {
+            name = Settings.Global.getString(getContentResolver(), "device_name");
+            if (name != null && !name.trim().isEmpty()) return name.trim();
+        } catch (SecurityException ignored) {
+            // Some device policies restrict access to the system device name.
+        }
+        name = Build.MODEL;
+        return name == null || name.trim().isEmpty() ? "Android" : name.trim();
+    }
+
     private void sendRegister() {
         SharedPreferences prefs = getSharedPreferences("rdev", MODE_PRIVATE);
         try {
@@ -345,6 +359,7 @@ public class RDevAgentService extends Service {
 			JSONObject msg = new JSONObject()
 				.put("type", "register")
 				.put("clientId", identityClientId)
+				.put("displayName", resolveDisplayName(prefs))
 				.put("clientVersion", "android/" + BuildConfig.VERSION_NAME)
 				.put("instanceId", instanceId)
 				.put("deviceIdentity", deviceIdentity)

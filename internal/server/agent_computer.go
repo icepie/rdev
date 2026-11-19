@@ -444,8 +444,8 @@ func (t *computerTool) Execute(ctx context.Context, raw json.RawMessage) (string
 			}
 			a.Key = "v"
 			a.Code = "KeyV"
-			a.Ctrl = client.OS != "darwin"
-			a.Meta = client.OS == "darwin"
+			a.Ctrl = clientOS(client) != "darwin"
+			a.Meta = clientOS(client) == "darwin"
 		}
 		if a.Key == "" {
 			return "", fmt.Errorf("key is required")

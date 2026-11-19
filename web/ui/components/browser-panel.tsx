@@ -31,6 +31,8 @@ export function BrowserPanel({ device, visible = true, deviceSelection = "inline
   const [targetError, setTargetError] = useState("");
   const [languageError, setLanguageError] = useState("");
   const online = devices.some(d => d.id === exitDevice);
+  const currentDevice = devices.find(d => d.id === exitDevice);
+  const deviceLabel = currentDevice?.displayName && currentDevice.displayName !== exitDevice ? `${currentDevice.displayName} (${exitDevice})` : exitDevice;
   const attachedAutomation = useRef(false);
   const recoveryAttempted = useRef(new Set<string>());
   useEffect(() => {
@@ -168,7 +170,7 @@ export function BrowserPanel({ device, visible = true, deviceSelection = "inline
   return <div className="flex min-h-0 min-w-0 w-full flex-1 flex-col overflow-hidden bg-background">
     <div className="flex min-h-11 shrink-0 flex-wrap items-center gap-2 border-b border-border-seam px-3 py-2 text-xs">
       <Icon name="Globe" className="size-4 text-muted-foreground" />
-      <span className="min-w-0 max-w-48 truncate">{t("nav.browser")}{exitDevice && ` · ${exitDevice}`}</span>
+      <span className="min-w-0 max-w-48 truncate">{t("nav.browser")}{exitDevice && ` · ${deviceLabel}`}</span>
       {base && <>
         <Button variant="ghost" size="sm" disabled={busy || !!automation} onClick={() => void newTab()} aria-label={t("agent.newTabLabel")}><Icon name="Plus" className="size-4" /></Button>
         <Select value={selected} onValueChange={value => { setSelected(value); setAddress(targets.find(target => target.id === value)?.url ?? ""); }} disabled={targets.length === 0 || !!automation}>
@@ -198,7 +200,7 @@ export function BrowserPanel({ device, visible = true, deviceSelection = "inline
       {deviceSelection === "sidebar" ? (
         exitDevice ? <div className="flex min-w-0 items-center gap-2 text-sm">
           <DeviceIcon device={exitDevice} os={devices.find(d => d.id === exitDevice)?.os} />
-          <span className="min-w-0 truncate" title={exitDevice}>{exitDevice}</span>
+          <span className="min-w-0 truncate" title={deviceLabel}>{deviceLabel}</span>
         </div> : <p className="text-sm text-muted-foreground">{t("browser.selectFromSidebar")}</p>
       ) : <label className="flex flex-col gap-1 text-xs">{t("browser.exitDevice")}
         <Select disabled={busy} value={exitDevice} onValueChange={value => { setExitDevice(value); setPassword(getDevicePassword(value)); }}>
@@ -206,7 +208,7 @@ export function BrowserPanel({ device, visible = true, deviceSelection = "inline
             <SelectValue placeholder={t("agent.selectDeviceShort")} />
           </SelectTrigger>
           <SelectContent>
-            {devices.map(d => <SelectItem key={d.id} value={d.id}>{d.id}</SelectItem>)}
+            {devices.map(d => <SelectItem key={d.id} value={d.id}>{d.displayName && d.displayName !== d.id ? `${d.displayName} (${d.id})` : d.id}</SelectItem>)}
           </SelectContent>
         </Select>
       </label>}

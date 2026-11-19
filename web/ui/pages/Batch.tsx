@@ -35,6 +35,7 @@ import { OsIcon } from "../components/os-icon";
 
 interface BatchDevice {
   id: string;
+  displayName?: string;
   connectedAt: string;
   os?: string;
   hasPassword: boolean;
@@ -641,7 +642,7 @@ export function BatchPage() {
                       <span className="size-1.5 shrink-0 rounded-full bg-success shadow-[0_0_5px_var(--success)]" />
                       <span className="flex min-w-0 items-center gap-1.5">
                         <OsIcon os={d.os} className="text-muted-foreground" />
-                        <span className="truncate">{d.id}</span>
+                        <span className="truncate" title={d.id}>{d.displayName && d.displayName !== d.id ? `${d.displayName} (${d.id})` : d.id}</span>
                         {d.hasPassword && (
                           <Icon
                             name="Lock"

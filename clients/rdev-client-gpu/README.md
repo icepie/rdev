@@ -84,6 +84,7 @@ From the repository root, after `make rust-client-gpu`:
 Useful flags:
 
 - `--shell /bin/bash` selects the shell used for exec/shell sessions.
+- `--display-name 'Office PC'` sets a friendly device label (or use `RDEV_DISPLAY_NAME`); defaults to the hostname. This does not change `--id`, credentials, connection URLs, or history ownership.
 - `--instance-id <id>` pins the process-instance marker for tests; it is not a reconnect credential.
 - `--no-desktop` registers without staged desktop capabilities and disables the GPU desktop tunnel.
 - `--gpu-desktop-local 127.0.0.1:1701` selects where the embedded RDev-compatible desktop service listens.

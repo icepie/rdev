@@ -200,6 +200,7 @@ func resolveDevicePath(goos, cwd, path string) string {
 type cappedBuffer struct {
 	onWrite   func(string)
 	buf       []byte
+	start     int // oldest byte once the buffer is full
 	cap       int
 	truncated bool
 }
@@ -208,18 +209,48 @@ func (b *cappedBuffer) Write(p []byte) {
 	if b.onWrite != nil {
 		b.onWrite(string(p))
 	}
-	b.buf = append(b.buf, p...)
-	if len(b.buf) > b.cap {
-		b.buf = append([]byte(nil), b.buf[len(b.buf)-b.cap:]...)
+	if len(p) == 0 {
+		return
+	}
+	if b.cap <= 0 {
+		b.truncated = true
+		return
+	}
+	if b.buf == nil {
+		b.buf = make([]byte, 0, b.cap)
+	}
+	if len(p) >= b.cap {
+		b.truncated = b.truncated || len(b.buf) > 0 || len(p) > b.cap
+		b.buf = b.buf[:b.cap]
+		copy(b.buf, p[len(p)-b.cap:])
+		b.start = 0
+		return
+	}
+	if len(b.buf) < b.cap {
+		n := min(b.cap-len(b.buf), len(p))
+		b.buf = append(b.buf, p[:n]...)
+		p = p[n:]
+	}
+	if len(p) > 0 {
+		n := copy(b.buf[b.start:], p)
+		copy(b.buf, p[n:])
+		b.start = (b.start + len(p)) % b.cap
 		b.truncated = true
 	}
 }
 
 func (b *cappedBuffer) String() string {
-	if b.truncated {
-		return fmt.Sprintf("[truncated, last %d bytes shown]\n%s", b.cap, b.buf)
+	if !b.truncated {
+		return string(b.buf)
 	}
-	return string(b.buf)
+	var out strings.Builder
+	out.Grow(len(b.buf) + 48)
+	out.WriteString("[truncated, last ")
+	out.WriteString(strconv.Itoa(b.cap))
+	out.WriteString(" bytes shown]\n")
+	out.Write(b.buf[b.start:])
+	out.Write(b.buf[:b.start])
+	return out.String()
 }
 
 // drainAgentOutput collects output already accepted before a session closed.
@@ -671,7 +702,9 @@ func (t *readFileTool) download(ctx context.Context, path string, maxBytes int64
 		if len(c.payload) == 0 || c.offset < 0 || int64(len(c.payload)) > size-c.offset || c.offset > size || received > maxBytes-int64(len(c.payload)) {
 			return fmt.Errorf("read %q: chunk exceeds download bounds", path)
 		}
-		if _, exists := parts[c.offset]; exists { return fmt.Errorf("read %q: duplicate download offset", path) }
+		if _, exists := parts[c.offset]; exists {
+			return fmt.Errorf("read %q: duplicate download offset", path)
+		}
 		parts[c.offset] = c.payload
 		received += int64(len(c.payload))
 		return nil
@@ -1166,8 +1199,8 @@ func (t *grepTool) Execute(ctx context.Context, raw json.RawMessage) (string, er
 	}
 
 	var cmd string
-	if t.shell.client.OS == "windows" {
-		cmd = fmt.Sprintf(`findstr /s /n /c:"%s" %s\*`, args.Pattern, args.Path)
+	if clientOS(t.shell.client) == "windows" {
+		cmd = windowsSearchCommand(args.Pattern, args.Path, true)
 	} else {
 		var b strings.Builder
 		b.WriteString("grep -rnE")
@@ -1231,8 +1264,8 @@ func (t *globTool) Execute(ctx context.Context, raw json.RawMessage) (string, er
 	}
 
 	var cmd string
-	if t.shell.client.OS == "windows" {
-		cmd = fmt.Sprintf(`dir /s /b %s\%s`, args.Path, args.Pattern)
+	if clientOS(t.shell.client) == "windows" {
+		cmd = windowsSearchCommand(args.Pattern, args.Path, false)
 	} else {
 		cmd = fmt.Sprintf("find %s -name %s", shellQuote(args.Path), shellQuote(args.Pattern))
 	}

@@ -220,6 +220,8 @@ Go/Rust 默认使用系统配置目录下的 `rdev/identity-*.json`：Linux `$XD
 
 Go/Rust 未指定 `--id` 或 `RDEV_ID` 时，默认 ID 为 `rdev-` 加 12 位十六进制字符，来源于同一服务端入口及身份目录下持久保存的默认身份，重启不会重新随机命名；显式 ID 的凭证隔离规则不变。默认身份文件损坏或不可写时启动失败，不生成临时替代身份。升级前使用默认主机名的设备若要保留原身份，应显式传入原 ID（如 `--id 原主机名`），并保留原身份目录；直接采用新的短 ID 会注册为新身份。
 
+设备显示名与稳定 ID 分开：Go/Rust 默认显示主机名，可用 `--display-name '办公室电脑'` 或 `RDEV_DISPLAY_NAME` 覆盖（命令行优先）；Android 在连接设置中单独填写显示名，留空使用系统设备名或机型。修改显示名不更换身份凭据，也不改变 SSH 用户名、连接地址或历史归属；页面在名称与 ID 不同时同时显示两者，旧客户端回退显示 ID。Android 连接链接可携带 `displayName`（别名 `name`），仍需保留原 `id`。
+
 服务端配置持久数据目录后，将注册、替换、重命名和撤销写入 `identity-registry.json`；未配置目录时重启会丢失注册与撤销记录。存储错误拒绝新的身份准入；撤销写盘失败会断开当前设备并返回错误，但重启后的撤销状态必须在修复持久化后确认。`GET /api/identity` 提供不含凭证的清单/审计，`POST /api/identity/rename`（JSON `deviceIdentity`、`newClientId`）修改设备 ID；在线设备会断开并按新 ID 自动重连。`POST /api/identity/revoke`（JSON `deviceIdentity`）永久撤销并断开控制连接和桌面隧道。
 
 例如：`curl -X POST -H "X-RDev-Token: $RDEV_ADMIN_TOKEN" -H 'Content-Type: application/json' -d '{"deviceIdentity":"<64位身份>","newClientId":"rdev-office"}' https://server.example/api/identity/rename`。目标 ID 必须符合 `[A-Za-z0-9._-]{1,64}` 且不能与其他身份重复，包括已撤销身份保留的 ID。
@@ -228,7 +230,7 @@ Go/Rust 未指定 `--id` 或 `RDEV_ID` 时，默认 ID 为 `rdev-` 加 12 位十
 
 ### 运行健康与指标
 
-Dashboard 展示运行健康、历史存储故障、定时任务状态和传输失败计数。`GET /healthz` 是不带运行信息的公开存活检查；`GET /readyz`、`GET /api/health`、`GET /metrics` 使用管理 API 鉴权（`X-RDev-Token`）。已知历史/身份/定时任务存储故障或调度器停止时，readiness 返回 503，存活检查仍返回 200。
+服务端通过 `GET /healthz` 提供不带运行信息的公开存活检查；`GET /readyz`、`GET /api/health`、`GET /metrics` 使用管理 API 鉴权（`X-RDev-Token`）。已知历史/身份/定时任务存储故障或调度器停止时，readiness 返回 503，存活检查仍返回 200。
 
 指标采用 Prometheus 文本格式；失败计数仅分 device/transport，进程重启后归零。健康查询不启动懒加载子系统、不扫描磁盘；正常状态仅代表已初始化子系统和已访问历史没有已知故障，不是全盘完整性保证。历史故障应通过 Agent 的显式恢复操作保留原件后恢复；调度器存储故障需先修复存储再重启，不能删除 manifest 绕过。
 
@@ -313,7 +315,8 @@ Web UI 是 React 19 + Tailwind CSS v4 + Radix UI 单页应用，组件/设计令
 - 源码 `web/ui/`（页面 `pages/`、bb 组件 `components/`、主题令牌 `styles/app.css`、i18n `lib/dictionaries.ts` 中英双语），入口 `web/app.html`。
 - 路由保持原有 URL：`/`、`/terminal`、`/remote-desktop`、`/batch`、`/sessions`、`/files`、`/agent`；`?token=` 管理令牌与 `rdev.devicePassword.<id>` 设备密码 localStorage 契约不变。
 - 明暗主题：右上角切换 自动/浅色/深色，持久化在 `rdevTheme`，自动模式跟随系统。
-- 构建顺序：`bun run build`（vite → `internal/server/static/`，go:embed）必须在 `go build` 之前。
+- 构建顺序：`bun run build`（vite → `internal/server/static/`，go:embed）必须在 `go build` 之前。`internal/server/static/` 是被 `.gitignore` 忽略的生成目录，不能作为源码手工编辑；安装器源文件只维护在 `web/public/`，构建会同步 `run.sh`、`run.ps1` 和 `mustreademe.md`。
+- 前端构建会先清空并重新生成整个嵌入目录；不要与 `go test`、`go vet` 或 `go build` 并发执行，否则 Go 可能在资源被替换的中间状态读取 `go:embed` 文件并失败。CI 与 `make build` 按前端构建完成后再运行 Go 检查。
 - 构建时生成 Brotli/gzip 静态资源；服务端按 `Accept-Encoding` 协商并设置 `Vary`，不在请求中压缩。带构建哈希的资源缓存一年且 `immutable`；HTML、安装脚本和缺失资源不使用不可变缓存。
 - Dashboard 不再预加载 Markdown 渲染器及完整扩展图标集；进入相关功能时才加载。
 - HTTP 请求头超时 5 秒、keep-alive 空闲超时 60 秒；不设置整次请求的读写时限，以保留长时间文件传输、SSE 和 WebSocket。

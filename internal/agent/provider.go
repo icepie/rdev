@@ -173,6 +173,8 @@ func marshalChatRequest(cfg Config, history []Message) ([]byte, error) {
 // delta was observed before the result (or error), so the caller can safely
 // retry error rounds that emitted nothing.
 func streamChatOnce(ctx context.Context, cfg Config, payload []byte, onDelta, onReasoning func(string)) (assistant Message, usage Usage, progress bool, err error) {
+	var requestID string
+	defer func() { err = providerDiagnostic(err, cfg, assistant, requestID) }()
 	// Idle watchdog: any stall longer than streamIdleTimeout (no response
 	// headers or no SSE payload) cancels the request so a wedged gateway
 	// cannot hang the agent turn forever. Reset on every payload line.
@@ -209,6 +211,10 @@ func streamChatOnce(ctx context.Context, cfg Config, payload []byte, onDelta, on
 		return Message{}, Usage{}, false, fmt.Errorf("agent: chat request: %w", err)
 	}
 	defer resp.Body.Close()
+	requestID = resp.Header.Get("x-request-id")
+	if requestID == "" {
+		requestID = resp.Header.Get("request-id")
+	}
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, errorBodyLimit))
 		return Message{}, Usage{}, false, &providerHTTPError{status: resp.StatusCode, detail: strings.TrimSpace(string(body))}
@@ -309,8 +315,12 @@ func readStreamWithFinish(body io.Reader, onDelta, onReasoning func(string), pok
 				if choice.FinishReason != "" {
 					finish = choice.FinishReason
 					terminalSeen = true
-					if terminalErr == nil {
-						terminalErr = finishReasonError(finish)
+					finishErr := finishReasonError(finish)
+					if terminalErr == nil || errors.Is(finishErr, ErrContentFiltered) {
+						terminalErr = finishErr
+					}
+					if terminalErr != nil {
+						terminalErr = finishDiagnostic(terminalErr, finish, nativeReason)
 					}
 				}
 				if terminalSeen && onFinish != nil {
