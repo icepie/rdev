@@ -368,7 +368,7 @@ function global:RDev {
     Server URL or comma-separated URL group (e.g. tcp://1.2.3.4:8081,kcp://1.2.3.4:8082,wss://example.com)
 
     .PARAMETER Id
-    Device ID (default: hostname)
+    Device ID (default: short random ID)
 
     .PARAMETER Password
     Password for SSH auth

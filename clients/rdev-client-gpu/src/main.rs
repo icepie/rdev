@@ -203,10 +203,10 @@ async fn run(mut args: Args) -> Result<()> {
         println!("{}", version::VERSION);
         return Ok(());
     }
-    if args.id.trim().is_empty() {
-        args.id = default_device_id();
-    }
     args.server = normalize_server_url(&args.server);
+    if args.id.trim().is_empty() {
+        args.id = identity::default_client_id(&args.server)?;
+    }
     print_startup_summary(&args);
     updater::start(updater::Config {
         version: version::VERSION,
@@ -827,16 +827,6 @@ fn install_default_tls_provider() {
 
 #[cfg(windows)]
 fn install_default_tls_provider() {}
-
-fn default_device_id() -> String {
-    std::env::var("RDEV_ID")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-        .or_else(|| std::env::var("HOSTNAME").ok())
-        .or_else(|| std::env::var("COMPUTERNAME").ok())
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| "rdev-client-gpu".to_string())
-}
 
 fn print_startup_summary(args: &Args) {
     println!();

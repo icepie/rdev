@@ -86,7 +86,7 @@ func main() {
 
 Options:
   --server, -s    Server URL(s), comma-separated fallback list (e.g. tcp://1.2.3.4:8081,kcp://1.2.3.4:8082,ws://1.2.3.4:8080)
-  --id, -i        Client/Device ID (default: hostname)
+  --id, -i        Client/Device ID (default: persistent short ID)
   --password, -p  Password for SSH auth (optional, enables password login)
   --shell, -S     Shell to use (default: $SHELL or /bin/sh or cmd.exe)
   --no-auto-update Disable built-in GitHub release auto-update
@@ -153,11 +153,10 @@ Environment variables:
 	serverURL = normalizeServerListForDisplay(serverURL)
 
 	if clientID == "" {
-		hostname, err := os.Hostname()
+		var err error
+		clientID, err = client.DefaultClientID(serverURL)
 		if err != nil {
-			clientID = "unknown"
-		} else {
-			clientID = hostname
+			log.Fatalf("client error: %v", err)
 		}
 	}
 

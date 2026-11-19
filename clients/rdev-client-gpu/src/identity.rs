@@ -96,6 +96,15 @@ pub fn load_device_identity(server: &str, client_id: &str) -> Result<(String, St
     load_identity_at(&identity_root()?, server, client_id)
 }
 
+pub fn default_client_id(server: &str) -> Result<String> {
+    default_client_id_at(&identity_root()?, server)
+}
+
+fn default_client_id_at(root: &Path, server: &str) -> Result<String> {
+    let (device_identity, _) = load_identity_at(root, server, "")?;
+    Ok(format!("rdev-{}", &device_identity[..12]))
+}
+
 fn load_identity_at(root: &Path, server: &str, client_id: &str) -> Result<(String, String)> {
     let endpoint = server.split(',').next().unwrap_or(server).trim();
     let endpoint = match url::Url::parse(endpoint) {
@@ -213,5 +222,33 @@ mod tests {
         std::fs::write(&path, b"{invalid").unwrap();
         assert!(load_identity_at(root.path(), "wss://example.test", "device").is_err());
         assert_eq!(std::fs::read(&path).unwrap(), b"{invalid");
+    }
+
+    #[test]
+    fn default_client_id_reuses_empty_scope_identity() {
+        let root = tempfile::tempdir().unwrap();
+        let first = default_client_id_at(root.path(), "wss://example.test/Agent").unwrap();
+        let second = default_client_id_at(root.path(), "wss://EXAMPLE.test:443/Agent/").unwrap();
+        assert_eq!(first, second);
+        assert!(first.starts_with("rdev-"));
+        assert_eq!(first.len(), 17);
+
+        let other_root = tempfile::tempdir().unwrap();
+        let other = default_client_id_at(other_root.path(), "wss://example.test/Agent").unwrap();
+        assert_ne!(first, other);
+    }
+
+    #[test]
+    fn corrupt_default_identity_fails_closed() {
+        let root = tempfile::tempdir().unwrap();
+        let _ = default_client_id_at(root.path(), "wss://example.test").unwrap();
+        let path = std::fs::read_dir(root.path())
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        std::fs::write(&path, b"{invalid").unwrap();
+        assert!(default_client_id_at(root.path(), "wss://example.test").is_err());
     }
 }

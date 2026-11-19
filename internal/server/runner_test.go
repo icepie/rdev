@@ -50,6 +50,27 @@ func TestRunnerDefaults(t *testing.T) {
 	}
 }
 
+func TestRunnerUsesExplicitPublicServer(t *testing.T) {
+	s := NewServer()
+	s.PublicServer = "wss://r.niceaigc.cn"
+	for _, tc := range []struct {
+		path, marker string
+	}{
+		{"/run.sh", "RDEV_SERVER='wss://r.niceaigc.cn'"},
+		{"/run.ps1", "[object]$Server = 'wss://r.niceaigc.cn'"},
+	} {
+		w := httptest.NewRecorder()
+		s.StaticHandler().ServeHTTP(w, httptest.NewRequest("GET", "http://127.0.0.1:18485"+tc.path, nil))
+		body := w.Body.String()
+		if w.Code != http.StatusOK || !strings.Contains(body, tc.marker) {
+			t.Fatalf("%s did not use explicit public endpoint: status=%d", tc.path, w.Code)
+		}
+		if strings.Contains(body, "127.0.0.1:18485") {
+			t.Fatalf("%s leaked request Host into explicit endpoint", tc.path)
+		}
+	}
+}
+
 func TestRunnerWindowsAndMethods(t *testing.T) {
 	s := NewServer()
 	for _, path := range []string{"/run.sh", "/run.ps1"} {

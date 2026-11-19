@@ -122,6 +122,116 @@ func TestIdentityLongNameCollisionSurvivesRestart(t *testing.T) {
 	}
 }
 
+func TestIdentityRenamePersistsAndDisconnectsOnlineClient(t *testing.T) {
+	s := NewServer()
+	s.DataDir = t.TempDir()
+	s.AdminToken = "admin"
+	identity := strings.Repeat("1", 64)
+	proof := strings.Repeat("2", 64)
+	if assigned, _, _, err := s.authenticateRegistration(identity, "old-device", proof); err != nil || assigned != "old-device" {
+		t.Fatalf("enrollment = %q, %v", assigned, err)
+	}
+	transport := &fakeDeviceTransport{}
+	s.clients["old-device"] = &ClientConn{
+		ID:             "old-device",
+		RequestedID:    "old-device",
+		DeviceIdentity: identity,
+		Transport:      transport,
+		Sessions:       make(map[string]*ProxySession),
+		Forwards:       make(map[string]*ProxyForward),
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/identity/rename", strings.NewReader(`{"deviceIdentity":"`+identity+`","newClientId":"new-device"}`))
+	req.Header.Set("Authorization", "Bearer admin")
+	res := httptest.NewRecorder()
+	s.HandleIdentityAPI(res, req)
+	if res.Code != http.StatusNoContent {
+		t.Fatalf("rename status = %d: %s", res.Code, res.Body.String())
+	}
+	if _, ok := s.clients["old-device"]; ok {
+		t.Fatal("renamed client remained under old ID")
+	}
+	if assigned, _, resumed, err := s.authenticateRegistration(identity, "old-device", proof); err != nil || !resumed || assigned != "new-device" {
+		t.Fatalf("renamed reconnect = %q, resumed=%v, err=%v", assigned, resumed, err)
+	}
+	restarted := NewServer()
+	restarted.DataDir = s.DataDir
+	if assigned, _, resumed, err := restarted.authenticateRegistration(identity, "old-device", proof); err != nil || !resumed || assigned != "new-device" {
+		t.Fatalf("renamed restart reconnect = %q, resumed=%v, err=%v", assigned, resumed, err)
+	}
+}
+
+func TestIdentityRenameRejectsReservedNames(t *testing.T) {
+	for _, revoked := range []bool{false, true} {
+		name := "active"
+		if revoked {
+			name = "revoked"
+		}
+		t.Run(name, func(t *testing.T) {
+			s := NewServer()
+			s.DataDir = t.TempDir()
+			identity, proof := strings.Repeat("1", 64), strings.Repeat("2", 64)
+			other, otherProof := strings.Repeat("3", 64), strings.Repeat("4", 64)
+			if _, _, _, err := s.authenticateRegistration(identity, "device", proof); err != nil {
+				t.Fatal(err)
+			}
+			if _, _, _, err := s.authenticateRegistration(other, "reserved", otherProof); err != nil {
+				t.Fatal(err)
+			}
+			if revoked {
+				res := httptest.NewRecorder()
+				s.HandleIdentityAPI(res, httptest.NewRequest(http.MethodPost, "/api/identity/revoke", strings.NewReader(`{"deviceIdentity":"`+other+`"}`)))
+				if res.Code != http.StatusNoContent {
+					t.Fatalf("revoke status = %d: %s", res.Code, res.Body.String())
+				}
+			}
+			res := httptest.NewRecorder()
+			s.HandleIdentityAPI(res, httptest.NewRequest(http.MethodPost, "/api/identity/rename", strings.NewReader(`{"deviceIdentity":"`+identity+`","newClientId":"reserved"}`)))
+			if res.Code != http.StatusConflict {
+				t.Fatalf("rename status = %d: %s", res.Code, res.Body.String())
+			}
+			restarted := NewServer()
+			restarted.DataDir = s.DataDir
+			if assigned, _, resumed, err := restarted.authenticateRegistration(identity, "device", proof); err != nil || !resumed || assigned != "device" {
+				t.Fatalf("restart reconnect = %q, resumed=%v, err=%v", assigned, resumed, err)
+			}
+			if restarted.validateReconnectProof(other, otherProof) == revoked {
+				t.Fatal("reserved identity revocation changed")
+			}
+		})
+	}
+}
+
+func TestIdentityRenamePersistenceFailureKeepsOnlineDevice(t *testing.T) {
+	s := NewServer()
+	s.DataDir = t.TempDir()
+	identity, proof := strings.Repeat("1", 64), strings.Repeat("2", 64)
+	if _, _, _, err := s.authenticateRegistration(identity, "device", proof); err != nil {
+		t.Fatal(err)
+	}
+	client := &ClientConn{ID: "device", DeviceIdentity: identity}
+	s.clients[client.ID] = client
+	originalDir := s.DataDir
+	// A regular file cannot serve as the registry's parent directory.
+	s.DataDir = filepath.Join(originalDir, "identity-registry.json")
+	res := httptest.NewRecorder()
+	s.HandleIdentityAPI(res, httptest.NewRequest(http.MethodPost, "/api/identity/rename", strings.NewReader(`{"deviceIdentity":"`+identity+`","newClientId":"new-device"}`)))
+	if res.Code != http.StatusServiceUnavailable {
+		t.Fatalf("rename status = %d: %s", res.Code, res.Body.String())
+	}
+	if s.clientByID("device") != client || s.clientByID("new-device") != nil {
+		t.Fatal("failed rename changed online device routing")
+	}
+	reg := s.identityRegistry()
+	if reg.records[identity].ClientID != "device" || reg.audit[len(reg.audit)-1].Action != "registered" {
+		t.Fatal("failed rename changed in-memory identity or audit")
+	}
+	restarted := NewServer()
+	restarted.DataDir = originalDir
+	if assigned, _, resumed, err := restarted.authenticateRegistration(identity, "device", proof); err != nil || !resumed || assigned != "device" {
+		t.Fatalf("restart reconnect = %q, resumed=%v, err=%v", assigned, resumed, err)
+	}
+}
+
 func TestIdentityAPIProtectsVerifierAndRejectsForeignOrigin(t *testing.T) {
 	s := NewServer()
 	s.AdminToken = "admin"

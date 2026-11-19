@@ -621,11 +621,12 @@ type Server struct {
 	agentWG             sync.WaitGroup // server-owned agent goroutines (turns/probes)
 
 	// Public config (set by main) for API/UI
-	SSHPort          string // e.g. "2222"
-	HTTPHost         string // e.g. "192.168.1.100:8080"
-	TunnelBase       string // optional ws(s):// base advertised for tcp-tunnel dial-backs
-	TCPPort          string
-	KCPPort          string
+	SSHPort      string // e.g. "2222"
+	HTTPHost     string // e.g. "192.168.1.100:8080"
+	PublicServer string // explicit client endpoint list; avoids deriving from HTTP Host
+	TunnelBase   string // optional ws(s):// base advertised for tcp-tunnel dial-backs
+	TCPPort      string
+	KCPPort      string
 	AdminToken       string // optional token for web APIs and browser WebSockets
 	VNCAddr          string // optional VNC/RFB listen address
 	ProxyAddr        string // optional HTTP/SOCKS5 proxy listen address

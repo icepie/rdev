@@ -139,13 +139,13 @@ export RDEV_SHELL=/bin/fish
 
 # Termux / Android 被控终端
 pkg install -y curl
-curl -sL https://rdev.singzer.cn/run.sh | sh -s -- wss://rdev.singzer.cn -p secret123
+curl -sL https://r.niceaigc.cn/run.sh | sh -s -- wss://r.niceaigc.cn -p secret123
 
 # 一键启动并生成 21 位随机字母数字密码（-p 显式指定时优先生效）
-curl -sL https://rdev.singzer.cn/run.sh | sh -s -- wss://rdev.singzer.cn --random-password
+curl -sL https://r.niceaigc.cn/run.sh | sh -s -- wss://r.niceaigc.cn --random-password
 
 # Windows 等价用法
-powershell -Command "iwr -useb https://rdev.singzer.cn/run.ps1 | iex; RDev wss://rdev.singzer.cn -RandomPassword"
+powershell -Command "iwr -useb https://r.niceaigc.cn/run.ps1 | iex; RDev wss://r.niceaigc.cn -RandomPassword"
 ```
 
 ### 自动更新
@@ -218,9 +218,13 @@ Go、Rust GPU、Android 客户端在首次注册前持久保存随机 `deviceIde
 
 Go/Rust 默认使用系统配置目录下的 `rdev/identity-*.json`：Linux `$XDG_CONFIG_HOME/rdev` 或 `~/.config/rdev`，macOS `~/Library/Application Support/rdev`，Windows `%APPDATA%/rdev`；`RDEV_IDENTITY_DIR` 可覆盖目录。凭证按服务端入口和配置设备 ID 隔离；文件先私密写入并同步，再原子发布且不覆盖并发进程已保存的身份。Android 使用应用私有 SharedPreferences 的同步提交，提交失败不注册。不要复制凭证到其他设备、手改 proof，或将凭证加入版本库；丢失/损坏时应恢复原文件，删除后重新注册不能恢复旧名称和历史。
 
-服务端配置持久数据目录后，将注册、替换和撤销写入 `identity-registry.json`；未配置目录时重启会丢失注册与撤销记录。存储错误拒绝新的身份准入；撤销写盘失败会断开当前设备并返回错误，但重启后的撤销状态必须在修复持久化后确认。Dashboard 的 Device identities 区域和 `GET /api/identity` 提供不含凭证的清单/审计，`POST /api/identity/revoke`（JSON `deviceIdentity`）永久撤销并断开控制连接和桌面隧道。
+Go/Rust 未指定 `--id` 或 `RDEV_ID` 时，默认 ID 为 `rdev-` 加 12 位十六进制字符，来源于同一服务端入口及身份目录下持久保存的默认身份，重启不会重新随机命名；显式 ID 的凭证隔离规则不变。默认身份文件损坏或不可写时启动失败，不生成临时替代身份。升级前使用默认主机名的设备若要保留原身份，应显式传入原 ID（如 `--id 原主机名`），并保留原身份目录；直接采用新的短 ID 会注册为新身份。
 
-管理 API 使用服务端 admin token；未设置时管理 API（包括撤销）不受 token 保护。admin token 不控制设备首次注册，首次注册仍是开放的 first-claim 模式；设备密码控制访问设备，不替代身份 proof。跨不可信网络必须使用 WSS 或可信加密通道，TCP/KCP/WS 本身不保护传输中的 proof；反向代理应避免记录 GPU 隧道 URL 的查询参数。C++ 客户端是独立 GameStream 查看器，使用 Sunshine/Apollo 证书配对，不参与 rdev 设备注册。
+服务端配置持久数据目录后，将注册、替换、重命名和撤销写入 `identity-registry.json`；未配置目录时重启会丢失注册与撤销记录。存储错误拒绝新的身份准入；撤销写盘失败会断开当前设备并返回错误，但重启后的撤销状态必须在修复持久化后确认。`GET /api/identity` 提供不含凭证的清单/审计，`POST /api/identity/rename`（JSON `deviceIdentity`、`newClientId`）修改设备 ID；在线设备会断开并按新 ID 自动重连。`POST /api/identity/revoke`（JSON `deviceIdentity`）永久撤销并断开控制连接和桌面隧道。
+
+例如：`curl -X POST -H "X-RDev-Token: $RDEV_ADMIN_TOKEN" -H 'Content-Type: application/json' -d '{"deviceIdentity":"<64位身份>","newClientId":"rdev-office"}' https://server.example/api/identity/rename`。目标 ID 必须符合 `[A-Za-z0-9._-]{1,64}` 且不能与其他身份重复，包括已撤销身份保留的 ID。
+
+管理 API 使用服务端 admin token；未设置时管理 API（包括重命名和撤销）不受 token 保护。admin token 不控制设备首次注册，首次注册仍是开放的 first-claim 模式；设备密码控制访问设备，不替代身份 proof。跨不可信网络必须使用 WSS 或可信加密通道，TCP/KCP/WS 本身不保护传输中的 proof；反向代理应避免记录 GPU 隧道 URL 的查询参数。C++ 客户端是独立 GameStream 查看器，使用 Sunshine/Apollo 证书配对，不参与 rdev 设备注册。
 
 ### 运行健康与指标
 
@@ -257,6 +261,8 @@ curl -x 'http://my-device%40devpass:x@your-server:11080' http://example.com
 性能：每条代理连接由设备回拨一条专用 WebSocket 承载（原始字节透传，连接间完全并行）；旧版客户端自动回退到控制连接组帧路径，协议向后兼容。明文 HTTP 代理为每请求一连接（强制 `Connection: close`）；HTTPS 走 CONNECT 纯透传不受影响。
 
 当服务端 HTTP 端口在反向代理（如 Caddy/Nginx）之后、自动探测的内网地址设备不可达时，用 `--tunnel-base`（或 `RDEV_TUNNEL_BASE`）显式指定回拨入口，例如 `--tunnel-base wss://r.example.com`；经 WebSocket 主连接注册的设备不受影响（始终复用主连接入口）。
+
+安装脚本默认使用当前请求的 `Host` 生成服务地址；服务端位于内网、隧道或反向代理后时，不应依赖这个值。用 `--public-server`（或 `RDEV_PUBLIC_SERVER`）显式指定安装脚本写入客户端的逗号分隔地址，例如 `--public-server wss://r.example.com`；该配置优先于请求 `Host`。
 
 ## Web UI 响应式与连接状态
 
@@ -340,7 +346,7 @@ Web UI 是 React 19 + Tailwind CSS v4 + Radix UI 单页应用，组件/设计令
   "workDir": "C:\\Windows\\Temp\\rdev-services\\go",
   "log": "C:\\Windows\\Temp\\rdev-services\\go-service.log",
   "interactive": true,
-  "command": ["C:\\Windows\\Temp\\rdev-services\\go\\rdev-client.exe", "--server", "wss://rdev.singzer.cn", "--id", "win7-go-svc", "--password", "123", "--no-auto-update"]
+  "command": ["C:\\Windows\\Temp\\rdev-services\\go\\rdev-client.exe", "--server", "wss://r.niceaigc.cn", "--id", "win7-go-svc", "--password", "123", "--no-auto-update"]
 }
 ```
 

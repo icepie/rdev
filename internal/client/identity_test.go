@@ -89,3 +89,135 @@ func TestClientIdentityCanonicalScopeAndPrivateFile(t *testing.T) {
 		t.Fatal("case-sensitive endpoint path conflated")
 	}
 }
+
+func TestDefaultClientIDPersistsAcrossInitialization(t *testing.T) {
+	t.Setenv("RDEV_IDENTITY_DIR", t.TempDir())
+	const server = "wss://example.test/Agent"
+	id, err := DefaultClientID(server)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seed, seedPath, err := loadClientIdentity(server, "")
+	if err != nil || id != "rdev-"+seed.DeviceIdentity[:12] {
+		t.Fatalf("default ID = %q, seed = %#v, err = %v", id, seed, err)
+	}
+	first := NewClient(server, id, "", "")
+	if first.identityErr != nil {
+		t.Fatal(first.identityErr)
+	}
+	credentialPath, err := clientIdentityPath(server, id)
+	if err != nil || credentialPath == seedPath {
+		t.Fatalf("enrollment must use the derived ID scope: %q, %v", credentialPath, err)
+	}
+	for range 3 {
+		reloadedID, err := DefaultClientID("wss://EXAMPLE.test:443/Agent/,tcp://backup:1700")
+		if err != nil || reloadedID != id {
+			t.Fatalf("reloaded ID = %q, want %q: %v", reloadedID, id, err)
+		}
+		reloaded := NewClient(server, reloadedID, "", "")
+		if reloaded.identityErr != nil || reloaded.requestedID != id || reloaded.deviceIdentity != first.deviceIdentity || reloaded.reconnectProof != first.reconnectProof {
+			t.Fatalf("reinitialization changed enrollment: %v", reloaded.identityErr)
+		}
+	}
+}
+
+func TestDefaultClientIDUsesSavedScope(t *testing.T) {
+	firstRoot, secondRoot := t.TempDir(), t.TempDir()
+	for _, tc := range []struct {
+		root   string
+		server string
+		digit  string
+	}{
+		{firstRoot, "wss://example.test/Agent", "a"},
+		{firstRoot, "wss://example.test/agent", "b"},
+		{firstRoot, "wss://other.test/Agent", "c"},
+		{secondRoot, "wss://example.test/Agent", "d"},
+	} {
+		t.Setenv("RDEV_IDENTITY_DIR", tc.root)
+		path, err := clientIdentityPath(tc.server, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		seed := savedIdentity{DeviceIdentity: strings.Repeat(tc.digit, 64), ReconnectProof: strings.Repeat("e", 64)}
+		if err := saveClientIdentity(path, seed); err != nil {
+			t.Fatal(err)
+		}
+		for range 2 {
+			got, err := DefaultClientID(tc.server)
+			want := "rdev-" + strings.Repeat(tc.digit, 12)
+			if err != nil || got != want {
+				t.Fatalf("DefaultClientID(%q) in %q = %q, %v; want %q", tc.server, tc.root, got, err, want)
+			}
+		}
+	}
+	t.Setenv("RDEV_IDENTITY_DIR", firstRoot)
+	if got, err := DefaultClientID("wss://EXAMPLE.test:443/Agent/,tcp://backup:1700"); err != nil || got != "rdev-aaaaaaaaaaaa" {
+		t.Fatalf("original canonical scope changed: %q, %v", got, err)
+	}
+}
+
+func TestDefaultClientIDRejectsCorruptStorage(t *testing.T) {
+	t.Setenv("RDEV_IDENTITY_DIR", t.TempDir())
+	const server = "wss://example.test/Agent"
+	path, err := clientIdentityPath(server, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, content := range []string{
+		`{`,
+		`{"deviceIdentity":"short","reconnectProof":"` + strings.Repeat("b", 64) + `"}`,
+		`{"deviceIdentity":"` + strings.Repeat("a", 64) + `"}`,
+	} {
+		if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if got, err := DefaultClientID(server); err == nil || got != "" {
+			t.Fatalf("corrupt default identity returned %q, %v", got, err)
+		}
+		if got, err := os.ReadFile(path); err != nil || string(got) != content {
+			t.Fatalf("corrupt default identity overwritten: %q, %v", got, err)
+		}
+	}
+	// Explicit IDs never consult the default scope, even when it is corrupt.
+	const explicitID = "configured-device"
+	first := NewClient(server, explicitID, "", "")
+	second := NewClient(server, explicitID, "", "")
+	if first.identityErr != nil || second.identityErr != nil {
+		t.Fatalf("explicit enrollment failed: %v, %v", first.identityErr, second.identityErr)
+	}
+	if first.requestedID != explicitID || second.requestedID != explicitID || first.deviceIdentity != second.deviceIdentity || first.reconnectProof != second.reconnectProof {
+		t.Fatal("explicit ID or credentials changed")
+	}
+}
+
+func TestDefaultClientIDRejectsPersistenceFailure(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "not-a-directory")
+	if err := os.WriteFile(root, []byte("blocked"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("RDEV_IDENTITY_DIR", root)
+	if got, err := DefaultClientID("wss://example.test/Agent"); err == nil || got != "" {
+		t.Fatalf("persistence failure returned %q, %v", got, err)
+	}
+}
+
+func TestDefaultClientIDConcurrentInitialization(t *testing.T) {
+	t.Setenv("RDEV_IDENTITY_DIR", t.TempDir())
+	const count = 16
+	ids := make([]string, count)
+	errs := make([]error, count)
+	var wg sync.WaitGroup
+	for i := range ids {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			ids[i], errs[i] = DefaultClientID("wss://example.test/Agent")
+		}(i)
+	}
+	wg.Wait()
+	for i, id := range ids {
+		if errs[i] != nil || id == "" || id != ids[0] {
+			t.Fatalf("concurrent initialization %d = %q, %v; want %q", i, id, errs[i], ids[0])
+		}
+	}
+}

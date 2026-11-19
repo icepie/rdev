@@ -8,14 +8,14 @@ In Termux:
 
 ```sh
 pkg install -y curl
-curl -sL https://rdev.singzer.cn/run.sh | sh -s -- wss://rdev.singzer.cn -p YOUR_PASSWORD
+curl -sL https://r.niceaigc.cn/run.sh | sh -s -- wss://r.niceaigc.cn -p YOUR_PASSWORD
 ```
 
 Use the Rust performance client without desktop capture:
 
 ```sh
 pkg install -y curl tar
-curl -sL https://rdev.singzer.cn/run.sh | sh -s -- wss://rdev.singzer.cn -p YOUR_PASSWORD --client rs
+curl -sL https://r.niceaigc.cn/run.sh | sh -s -- wss://r.niceaigc.cn -p YOUR_PASSWORD --client rs
 ```
 
 ## Behavior

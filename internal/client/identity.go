@@ -20,6 +20,17 @@ type savedIdentity struct {
 	ReconnectProof string `json:"reconnectProof"`
 }
 
+// DefaultClientID returns the stable short ID for this endpoint and identity directory.
+// The empty requested-ID scope stores its seed; enrollment credentials remain
+// scoped to the resulting requested ID, just like explicitly configured IDs.
+func DefaultClientID(server string) (string, error) {
+	saved, _, err := loadClientIdentity(server, "")
+	if err != nil {
+		return "", fmt.Errorf("initialize default client ID: %w", err)
+	}
+	return "rdev-" + saved.DeviceIdentity[:12], nil
+}
+
 func clientIdentityPath(server, clientID string) (string, error) {
 	root := os.Getenv("RDEV_IDENTITY_DIR")
 	if root == "" {

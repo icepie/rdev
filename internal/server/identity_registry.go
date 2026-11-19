@@ -27,11 +27,17 @@ type identityRecord struct {
 }
 
 type identityAuditRecord struct {
-	At       time.Time `json:"at"`
-	Action   string    `json:"action"`
-	Identity string    `json:"identity"`
-	ClientID string    `json:"clientId"`
+	At               time.Time `json:"at"`
+	Action           string    `json:"action"`
+	Identity         string    `json:"identity"`
+	ClientID         string    `json:"clientId"`
+	PreviousClientID string    `json:"previousClientId,omitempty"`
 }
+
+var (
+	errIdentityNotFound = errors.New("identity not found")
+	errClientIDTaken    = errors.New("client ID already in use")
+)
 
 type identityRegistry struct {
 	mu      sync.Mutex
@@ -305,6 +311,65 @@ func (s *Server) authenticateRegistration(identity, requestedID, proof string) (
 	return assigned, "", false, nil
 }
 
+// renameIdentity changes the stable public device ID. Connected clients are
+// disconnected after the durable update so they reconnect through the normal
+// registration path and all ID-keyed server state is rebuilt consistently.
+func (s *Server) renameIdentity(identity, newClientID string) (*ClientConn, error) {
+	if !isLowerHex(identity) || len(identity) != 64 {
+		return nil, errIdentityNotFound
+	}
+	if !validClientID(newClientID) {
+		return nil, errors.New("invalid client ID")
+	}
+	reg := s.identityRegistry()
+	reg.mu.Lock()
+	defer reg.mu.Unlock()
+	if err := s.loadIdentityLocked(reg); err != nil {
+		return nil, err
+	}
+	rec, ok := reg.records[identity]
+	if !ok || rec.Revoked {
+		return nil, errIdentityNotFound
+	}
+	if rec.ClientID == newClientID {
+		return nil, nil
+	}
+	for otherIdentity, other := range reg.records {
+		if otherIdentity != identity && other.ClientID == newClientID {
+			return nil, errClientIDTaken
+		}
+	}
+	s.mu.Lock()
+	if existing := s.clients[newClientID]; existing != nil && existing.DeviceIdentity != identity {
+		s.mu.Unlock()
+		return nil, errClientIDTaken
+	}
+	s.mu.Unlock()
+	oldClientID := rec.ClientID
+	oldAudit := reg.audit
+	rec.ClientID = newClientID
+	now := time.Now().UTC()
+	reg.records[identity] = rec
+	reg.audit = append(reg.audit, identityAuditRecord{At: now, Action: "renamed", Identity: identity, ClientID: newClientID, PreviousClientID: oldClientID})
+	trimIdentityAudit(reg)
+	if err := s.persistIdentityLocked(reg); err != nil {
+		rec.ClientID = oldClientID
+		reg.records[identity] = rec
+		reg.audit = oldAudit
+		return nil, err
+	}
+
+	s.mu.Lock()
+	var client *ClientConn
+	if connected := s.clients[oldClientID]; connected != nil && connected.DeviceIdentity == identity {
+		client = connected
+		delete(s.clients, oldClientID)
+		s.notifyDeviceWatchersLocked()
+	}
+	s.mu.Unlock()
+	return client, nil
+}
+
 func (s *Server) IdentityHealth() IdentityHealthSnapshot {
 	reg := s.identityRegistry()
 	reg.mu.Lock()
@@ -330,11 +395,50 @@ func (s *Server) HandleIdentityAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
-	if r.URL.Path != "/api/identity" && r.URL.Path != "/api/identity/revoke" {
+	if r.URL.Path != "/api/identity" && r.URL.Path != "/api/identity/revoke" && r.URL.Path != "/api/identity/rename" {
 		http.NotFound(w, r)
 		return
 	}
 	reg := s.identityRegistry()
+	if r.URL.Path == "/api/identity/rename" {
+		if r.Method != http.MethodPost {
+			w.Header().Set("Allow", "POST")
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var input struct {
+			DeviceIdentity string `json:"deviceIdentity"`
+			NewClientID    string `json:"newClientId"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&input); err != nil || !isLowerHex(input.DeviceIdentity) || len(input.DeviceIdentity) != 64 || !validClientID(input.NewClientID) {
+			http.Error(w, "invalid request", http.StatusBadRequest)
+			return
+		}
+		client, err := s.renameIdentity(input.DeviceIdentity, input.NewClientID)
+		if errors.Is(err, errIdentityNotFound) {
+			http.Error(w, "identity not found", http.StatusNotFound)
+			return
+		}
+		if errors.Is(err, errClientIDTaken) {
+			http.Error(w, "client ID already in use", http.StatusConflict)
+			return
+		}
+		if err != nil {
+			http.Error(w, "identity registry unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		if client != nil {
+			closeClientResources(s, client)
+			if client.Transport != nil {
+				_ = client.Transport.Close("device ID changed")
+			} else if client.Conn != nil {
+				_ = client.Conn.WriteClose(1000, []byte("device ID changed"))
+			}
+		}
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
 	if r.URL.Path == "/api/identity/revoke" {
 		if r.Method != http.MethodPost {
 			w.Header().Set("Allow", "POST")

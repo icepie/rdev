@@ -40,6 +40,7 @@ func main() {
 		webRTCEnabled        = parseBoolDefault(os.Getenv("RDEV_WEBRTC"), false)
 		webRTCICEServersJSON = ""
 		webRTCICEServersSet  = false
+		publicServer         = ""
 		tunnelBase           = ""
 		autoUpdate           = true
 		updateInterval       = time.Minute
@@ -123,6 +124,11 @@ func main() {
 				proxyAddr = os.Args[i+1]
 				i++
 			}
+		case "--public-server":
+			if i+1 < len(os.Args) {
+				publicServer = os.Args[i+1]
+				i++
+			}
 		case "--tunnel-base":
 			if i+1 < len(os.Args) {
 				tunnelBase = os.Args[i+1]
@@ -198,6 +204,8 @@ Options:
   --webrtc-ice-servers JSON ICE servers array (default public STUN; [] for host-only; env RDEV_WEBRTC_ICE_SERVERS)
   --proxy           HTTP/SOCKS5 proxy listen address; username=deviceId[@password] selects the exit device (optional; env RDEV_PROXY_ADDR)
   --tunnel-base     Public ws(s):// base URL advertised to devices for tcp-tunnel dial-backs when the HTTP endpoint is behind a reverse proxy, e.g. wss://r.example.com (optional; env RDEV_TUNNEL_BASE)
+  --public-server   Explicit comma-separated client endpoint list for runners;
+             avoids deriving addresses from the HTTP Host (env RDEV_PUBLIC_SERVER)
   --no-auto-update Disable built-in GitHub release auto-update
   --auto-update    Enable/disable auto-update explicitly (true/false)
   --update-interval Auto-update polling interval (default 1m)
@@ -250,6 +258,9 @@ Examples:
 	}
 	if env := os.Getenv("RDEV_TUNNEL_BASE"); env != "" {
 		tunnelBase = env
+	}
+	if env := os.Getenv("RDEV_PUBLIC_SERVER"); env != "" {
+		publicServer = env
 	}
 	if env := os.Getenv("RDEV_UPDATE_INTERVAL"); env != "" {
 		if d, err := time.ParseDuration(env); err == nil && d > 0 {
@@ -321,6 +332,7 @@ Examples:
 	srv.ReleaseVersion = version
 	srv.SSHPort = sshPort
 	srv.HTTPHost = outboundIP + ":" + httpPort
+	srv.PublicServer = publicServer
 	srv.TunnelBase = tunnelBase
 	srv.TCPPort = tcpPort
 	srv.KCPPort = kcpPort
@@ -406,6 +418,7 @@ Examples:
 	mux.HandleFunc("/api/health", srv.HandleHealth)
 	mux.HandleFunc("/metrics", srv.HandleMetrics)
 	mux.HandleFunc("/api/identity", srv.HandleIdentityAPI)
+	mux.HandleFunc("/api/identity/rename", srv.HandleIdentityAPI)
 	mux.HandleFunc("/api/identity/revoke", srv.HandleIdentityAPI)
 	defer srv.CloseBrowsers()
 	mux.HandleFunc("/browser", srv.StaticPageHandler("app.html"))

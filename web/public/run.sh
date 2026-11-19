@@ -56,7 +56,7 @@ while [ $# -gt 0 ]; do
             echo ""
             echo "Options:"
             echo "  -s, --server URL     Server URL or comma-separated URL group"
-            echo "  -i, --id ID          Device ID (default: hostname)"
+            echo "  -i, --id ID          Device ID (default: short random ID)"
             echo "  -p, --password PW    Password for SSH auth"
             echo "  -P, --random-password Generate a 21-character alphanumeric password (ignored with -p)"
             echo "  -S, --shell PATH     Shell path (e.g. /bin/bash)"
@@ -545,9 +545,6 @@ else
 fi
 
 # ── Build args & run ───────────────────────────────────────
-if [ "$RDEV_CLIENT" = "rs" ] && [ -z "$RDEV_ID" ]; then
-    RDEV_ID="$(hostname 2>/dev/null || uname -n 2>/dev/null || echo rdev-client-gpu)"
-fi
 
 if [ "$OS" = "android" ] && [ -z "$RDEV_SHELL" ]; then
     if [ -x "${PREFIX:-}/bin/bash" ]; then
