@@ -2,9 +2,9 @@
 # rdev-client one-click runner
 # Download → run, no install needed
 # Compatible with: POSIX sh, bash, dash, ash, zsh, ksh, busybox sh
-# Requires a locally trusted OpenSSL 3.0+ with Ed25519 support.
-# Signatures authenticate assets, not this bootstrap script: obtain it over
-# trusted HTTPS or from a verified checkout. Never download a verifier here.
+# Uses curl or wget; no OpenSSL or external verifier required.
+# Downloads and cached payloads are not authenticated by this script.
+# Obtain this bootstrap and packages from sources you trust.
 #
 # Usage:
 #   curl -sL http://SERVER:PORT/run.sh | sh -s --
@@ -301,40 +301,25 @@ download_ok() {
 }
 
 cache_complete() {
-    [ -f "$1/.complete" ] && [ -s "$1/payload" ] && [ -s "$1/payload.sig" ]
-}
-
-verify_asset() {
-    # SubjectPublicKeyInfo prefix + the same Ed25519 key as internal/updater.
-    printf '%s' 'MCowBQYDK2VwAyEAPa4+y7+NfEePgrARhyqEUxQleTgClgUpelbvcoi77Qk=' | openssl base64 -d -A > "$WORK_DIR/key.der" || return 1
-    tr -d '\r\n\t ' < "$2" > "$WORK_DIR/signature.b64" || return 1
-    [ "$(wc -c < "$WORK_DIR/signature.b64" | tr -d ' ')" = 88 ] || return 1
-    openssl base64 -d -A -in "$WORK_DIR/signature.b64" -out "$WORK_DIR/signature.bin" || return 1
-    [ "$(wc -c < "$WORK_DIR/signature.bin" | tr -d ' ')" = 64 ] || return 1
-    openssl pkeyutl -verify -pubin -inkey "$WORK_DIR/key.der" -keyform DER -rawin -in "$1" -sigfile "$WORK_DIR/signature.bin" >/dev/null 2>&1
-}
-
-download_signed() {
-    download_ok "$1" "$2" && dl "$3" "$2.sig" && verify_asset "$2" "$2.sig"
+    [ -f "$1/.complete" ] && is_binary_file "$1/payload"
 }
 
 load_release() {
     CACHE_DIR="$CACHE_BASE/$1"
     PAYLOAD="$WORK_DIR/$2"
-    if cache_complete "$CACHE_DIR" && cp "$CACHE_DIR/payload" "$PAYLOAD" && cp "$CACHE_DIR/payload.sig" "$PAYLOAD.sig" && verify_asset "$PAYLOAD" "$PAYLOAD.sig"; then
-        echo "  Using verified cached release (${RESOLVED_TAG})." >&2
+    if cache_complete "$CACHE_DIR" && cp "$CACHE_DIR/payload" "$PAYLOAD" && is_binary_file "$PAYLOAD"; then
+        echo "  Using cached release (${RESOLVED_TAG})." >&2
         return
     fi
-    rm -f "$PAYLOAD" "$PAYLOAD.sig"
+    rm -f "$PAYLOAD"
     download_with_fallback "$(release_url "$2")" "$PAYLOAD" "$2" || {
-        echo "Error: no valid Ed25519-signed release; reject missing/bad signatures. Install trusted OpenSSL 3.0+ with Ed25519 support if unavailable." >&2
+        echo "Error: no source supplied a usable release package; check the server address, version, network or mirror settings." >&2
         exit 1
     }
     if cache_lock_acquire "$CACHE_DIR"; then
         rm -rf "$CACHE_DIR.part"
         mkdir -m 700 "$CACHE_DIR.part"
         cp "$PAYLOAD" "$CACHE_DIR.part/payload"
-        cp "$PAYLOAD.sig" "$CACHE_DIR.part/payload.sig"
         : > "$CACHE_DIR.part/.complete"
         rm -rf "$CACHE_DIR"
         mv "$CACHE_DIR.part" "$CACHE_DIR"
@@ -366,14 +351,14 @@ download_with_fallback() {
     proxy_url="$(release_proxy_url "$asset" 2>/dev/null || true)"
     if [ -n "$proxy_url" ]; then
         echo "  Trying RDev server proxy..." >&2
-        if download_signed "$proxy_url" "$out" "$(release_proxy_url "$asset.sig")"; then ok=1; echo "  ok via RDev server proxy" >&2; fi
+        if download_ok "$proxy_url" "$out"; then ok=1; echo "  ok via RDev server proxy" >&2; fi
         [ "$ok" = "1" ] || rm -f "$out" 2>/dev/null
     fi
     for m in $MIRRORS; do
         [ "$ok" = "1" ] && break
         [ -z "$m" ] && continue
         echo "  Trying ${m}..." >&2
-        if download_signed "$(mirror_url "$m" "$url")" "$out" "$(mirror_url "$m" "$url.sig")"; then
+        if download_ok "$(mirror_url "$m" "$url")" "$out"; then
             ok=1
             echo "  ok via ${m}" >&2
             break
@@ -382,7 +367,7 @@ download_with_fallback() {
     done
     if [ "$ok" = "0" ]; then
         echo "  Trying github.com..." >&2
-        if download_signed "$url" "$out" "$url.sig"; then ok=1; echo "  ok via github.com" >&2; fi
+        if download_ok "$url" "$out"; then ok=1; echo "  ok via github.com" >&2; fi
     fi
     [ "$ok" = "1" ]
 }
@@ -455,12 +440,6 @@ extract_zip() {
 
 # ── Resolve asset and download ─────────────────────────────
 TMPBASE="${TMPDIR:-/tmp}"
-command -v openssl >/dev/null 2>&1 || { echo "Error: install trusted OpenSSL 3.0+ with Ed25519 support" >&2; exit 1; }
-OPENSSL_MAJOR="$(openssl version 2>/dev/null | sed -n 's/^OpenSSL \([0-9][0-9]*\)\..*/\1/p')"
-if [ -z "$OPENSSL_MAJOR" ] || [ "$OPENSSL_MAJOR" -lt 3 ]; then
-    echo "Error: install trusted OpenSSL 3.0+; older OpenSSL/LibreSSL cannot verify Ed25519 with pkeyutl -rawin" >&2
-    exit 1
-fi
 umask 077
 WORK_DIR="$(mktemp -d "$TMPBASE/rdev-run.XXXXXXXX")" || exit 1
 trap 'cache_lock_release; rm -rf "$WORK_DIR"' 0

@@ -1,8 +1,8 @@
 # rdev-client one-click runner for Windows
 # Compatible with: PowerShell 2.0+ (Win7/8/8.1/10/11)
-# Requires locally trusted OpenSSL 3.0+ (Ed25519) on PATH, including Win7/PS2.
-# Obtain this bootstrap over trusted HTTPS or from a verified checkout: release
-# signatures do not authenticate the script itself. No verifier is downloaded.
+# Uses built-in Windows/.NET facilities; no OpenSSL or external verifier required.
+# Downloads and cached payloads are not authenticated by this script.
+# Obtain this bootstrap and packages from sources you trust.
 #
 # One-liner:
 #   powershell -Command "iwr -useb http://SERVER/run.ps1 | iex; RDev"
@@ -175,42 +175,11 @@ function Exit-RDevCacheLock([string]$Lock) {
     if ($Lock) { Remove-Item -Recurse -Force $Lock -EA SilentlyContinue }
 }
 
-function Assert-RDevVerifier {
-    $Command = Get-Command openssl -CommandType Application -EA SilentlyContinue | Select-Object -First 1
-    if (-not $Command) { throw 'Install trusted OpenSSL 3.0+ with Ed25519 support and put openssl.exe on PATH. No unsigned verifier will be downloaded.' }
-    $script:OpenSSL = $Command.Definition
-    $Version = & $script:OpenSSL version
-    if ($LASTEXITCODE -ne 0 -or $Version -notmatch '^OpenSSL ([0-9]+)\.' -or [int]$Matches[1] -lt 3) {
-        throw 'Install trusted OpenSSL 3.0+ on PATH; older OpenSSL/LibreSSL cannot verify Ed25519 with pkeyutl -rawin.'
-    }
-}
-
-function Test-RDevSignature([string]$Path, [string]$Signature) {
-    $Scratch = Join-Path $env:TEMP ('rdev-verify-' + [Guid]::NewGuid().ToString('N'))
-    try {
-        New-Item -ItemType Directory -Path $Scratch -ErrorAction Stop | Out-Null
-        $Sig = [Convert]::FromBase64String([IO.File]::ReadAllText($Signature).Trim())
-        if ($Sig.Length -ne 64) { return $false }
-        # DER SubjectPublicKeyInfo wrapping internal/updater/updater.go's key.
-        $Key = [Convert]::FromBase64String('MCowBQYDK2VwAyEAPa4+y7+NfEePgrARhyqEUxQleTgClgUpelbvcoi77Qk=')
-        $KeyPath = Join-Path $Scratch 'key.der'
-        $SigPath = Join-Path $Scratch 'signature.bin'
-        [IO.File]::WriteAllBytes($KeyPath, $Key)
-        [IO.File]::WriteAllBytes($SigPath, $Sig)
-        & $script:OpenSSL pkeyutl -verify -pubin -inkey $KeyPath -keyform DER -rawin -in $Path -sigfile $SigPath 2>&1 | Out-Null
-        return ($LASTEXITCODE -eq 0)
-    } catch { return $false } finally {
-        Remove-Item -Recurse -Force $Scratch -EA SilentlyContinue
-    }
-}
-
-function Test-RDevCache([string]$OutPath, [string]$CacheDir) {
-    # Copy first, then verify exactly the bytes that will be extracted/executed.
-    # Markers and old extracted executable/DLL caches never establish trust.
+function Test-RDevCache([string]$OutPath, [string]$CacheDir, [string]$PackageKind) {
+    # Keep the original package, extracting a fresh runtime on each invocation.
     try {
         Copy-Item (Join-Path $CacheDir 'payload') $OutPath -Force -ErrorAction Stop
-        Copy-Item (Join-Path $CacheDir 'payload.sig') "$OutPath.sig" -Force -ErrorAction Stop
-        return (Test-RDevSignature $OutPath "$OutPath.sig")
+        return (Test-RDevPackage $OutPath $PackageKind)
     } catch { return $false }
 }
 
@@ -222,8 +191,6 @@ function Publish-RDevCache([string]$Payload, [string]$CacheDir) {
         Remove-Item -Recurse -Force $Part -EA SilentlyContinue
         New-Item -ItemType Directory -Path $Part -ErrorAction Stop | Out-Null
         Copy-Item $Payload (Join-Path $Part 'payload') -ErrorAction Stop
-        Copy-Item "$Payload.sig" (Join-Path $Part 'payload.sig') -ErrorAction Stop
-        New-Item -ItemType File -Path (Join-Path $Part '.complete') | Out-Null
         Remove-Item -Recurse -Force $CacheDir -EA SilentlyContinue
         Move-Item $Part $CacheDir -ErrorAction Stop
     } finally {
@@ -296,11 +263,16 @@ function Expand-ZipLegacy([string]$Zip, [string]$Dest) {
 }
 
 function Test-RDevPackage([string]$Path, [string]$PackageKind) {
-    $f = Get-Item $Path -EA SilentlyContinue
-    if (-not $f -or $f.Length -le 0) { return $false }
-    # Signature verification has already authenticated the entire payload.
-    # Check archive contents during extraction, including the PS2 COM path.
-    return $true
+    # Reject empty/error-page downloads. This is a format check, not authentication.
+    try {
+        $Stream = [IO.File]::OpenRead($Path)
+        try {
+            if ($PackageKind -eq 'exe') {
+                return ($Stream.ReadByte() -eq 77 -and $Stream.ReadByte() -eq 90)
+            }
+            return ($Stream.ReadByte() -eq 80 -and $Stream.ReadByte() -eq 75 -and $Stream.ReadByte() -eq 3 -and $Stream.ReadByte() -eq 4)
+        } finally { $Stream.Dispose() }
+    } catch { return $false }
 }
 
 function Install-WinPTYIfRequired([string]$Arch, [string]$Mirror) {
@@ -412,7 +384,6 @@ function global:RDev {
     $Server = $Server.Trim()
     if ($Server.StartsWith('{')) { $Server = '' }
     if (-not $Server) { Write-Error "Server is required"; return }
-    Assert-RDevVerifier
 
     # An explicit -Password always wins.
     if ($RandomPassword -and -not $Password) {
@@ -497,11 +468,6 @@ function global:RDev {
             return $false
         }
     }
-    function Dl-Signed([string]$Url, [string]$SignatureUrl, [string]$Out) {
-        if ((Dl $Url $Out) -and (Dl $SignatureUrl "$Out.sig") -and (Test-RDevSignature $Out "$Out.sig")) { return $true }
-        Remove-Item $Out, "$Out.sig" -Force -EA SilentlyContinue
-        return $false
-    }
 
     # ── Download (RDev server proxy → mirror → github) ───────
     $WorkDir = Join-Path $env:TEMP ('rdev-run-' + [Guid]::NewGuid().ToString('N'))
@@ -521,9 +487,9 @@ function global:RDev {
         $CacheKey = "go-$SafeTag-windows-$Arch-$(Convert-RDevSafeName $Asset)"
     }
     $CacheDir = Join-Path $CacheBase $CacheKey
-    if (Test-RDevCache $OutPath $CacheDir) {
+    if (Test-RDevCache $OutPath $CacheDir $PackageKind) {
         $OK = $true
-        Write-Host "  Using verified cached $ClientName ($ResolvedTag, windows/$Arch)." -ForegroundColor Green
+        Write-Host "  Using cached $ClientName ($ResolvedTag, windows/$Arch)." -ForegroundColor Green
     } else {
     Write-Host "  Downloading $ClientName package (windows/$Arch)..." -ForegroundColor Cyan
 
@@ -532,7 +498,7 @@ function global:RDev {
     $ReleaseUrl = Get-RDevReleaseUrl $Server $Asset $Tag
     if ($ReleaseUrl) {
         Write-Host "  Selecting fastest release source..." -ForegroundColor DarkGray
-        if (Dl-Signed $ReleaseUrl (Get-RDevReleaseUrl $Server "$Asset.sig" $Tag) $OutPath) {
+        if (Dl $ReleaseUrl $OutPath) {
             if (Test-RDevPackage $OutPath $PackageKind) { $OK = $true; Write-Host "  OK via measured release source" -ForegroundColor Green }
         }
         if (-not $OK) { Remove-Item $OutPath -Force -EA SilentlyContinue }
@@ -541,14 +507,14 @@ function global:RDev {
     if ($Mirror -eq 'auto' -and -not $OK) {
         foreach ($M in $script:Mirrors) {
             Write-Host "  Trying $M..." -ForegroundColor DarkGray
-            if (Dl-Signed (Convert-RDevMirrorUrl $M $GH_URL) (Convert-RDevMirrorUrl $M "$GH_URL.sig") $OutPath) {
+            if (Dl (Convert-RDevMirrorUrl $M $GH_URL) $OutPath) {
                 if (Test-RDevPackage $OutPath $PackageKind) { $OK = $true; Write-Host "  OK via $M" -ForegroundColor Green; break }
             }
             Remove-Item $OutPath -Force -EA SilentlyContinue
         }
     } elseif ($Mirror -ne 'none' -and $Mirror -ne '' -and -not $OK) {
         Write-Host "  Trying $Mirror..." -ForegroundColor DarkGray
-        if (Dl-Signed (Convert-RDevMirrorUrl $Mirror $GH_URL) (Convert-RDevMirrorUrl $Mirror "$GH_URL.sig") $OutPath) {
+        if (Dl (Convert-RDevMirrorUrl $Mirror $GH_URL) $OutPath) {
             if (Test-RDevPackage $OutPath $PackageKind) { $OK = $true; Write-Host "  OK via $Mirror" -ForegroundColor Green }
         }
         if (-not $OK) { Remove-Item $OutPath -Force -EA SilentlyContinue }
@@ -560,7 +526,7 @@ function global:RDev {
         $ProxyUrl = Get-RDevProxyUrl $Server $Asset $Tag
         if ($ProxyUrl) {
             Write-Host "  Trying RDev server proxy..." -ForegroundColor DarkGray
-            if (Dl-Signed $ProxyUrl (Get-RDevProxyUrl $Server "$Asset.sig" $Tag) $OutPath) {
+            if (Dl $ProxyUrl $OutPath) {
                 if (Test-RDevPackage $OutPath $PackageKind) { $OK = $true; Write-Host "  OK via RDev server proxy" -ForegroundColor Green }
             }
             if (-not $OK) { Remove-Item $OutPath -Force -EA SilentlyContinue }
@@ -569,12 +535,12 @@ function global:RDev {
 
     if (-not $OK) {
         Write-Host "  Trying github.com..." -ForegroundColor DarkGray
-        if (Dl-Signed $GH_URL "$GH_URL.sig" $OutPath) {
+        if (Dl $GH_URL $OutPath) {
             if (Test-RDevPackage $OutPath $PackageKind) { $OK = $true; Write-Host "  OK via github.com" -ForegroundColor Green }
         }
     }
 
-    if (-not $OK) { throw 'No source supplied a valid Ed25519-signed release. Missing/bad signatures are rejected; install trusted OpenSSL 3.0+ with Ed25519 support if unavailable.' }
+    if (-not $OK) { throw 'No source supplied a usable release package. Check the server address, version, network or mirror settings.' }
     Publish-RDevCache $OutPath $CacheDir
     }
 

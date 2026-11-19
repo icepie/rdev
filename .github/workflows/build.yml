@@ -36,6 +36,9 @@ jobs:
       - name: Test web UI
         run: bun run test:web
 
+      - name: Test POSIX installer without OpenSSL
+        run: node --test scripts/test-runner-downloads.mjs
+
       - name: Build web UI
         run: |
           bun run build
@@ -50,6 +53,18 @@ jobs:
         run: |
           CGO_ENABLED=0 go build -o /dev/null ./cmd/rdev-server
           CGO_ENABLED=0 go build -o /dev/null ./cmd/rdev-client
+
+  test-installers:
+    name: Test Windows installers
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Windows PowerShell without OpenSSL
+        shell: powershell
+        run: ./scripts/test-runner-release.ps1
+      - name: PowerShell 7 without OpenSSL
+        shell: pwsh
+        run: ./scripts/test-runner-release.ps1
 
   # ── Standard builds (linux, darwin) ───────────────────────────
   build:
@@ -439,7 +454,7 @@ jobs:
   # ── Release (only on v* tags) ────────────────────────────────
   release:
     name: Release
-    needs: [test, build, build-client-cgo, build-android, build-windows]
+    needs: [test, test-installers, build, build-client-cgo, build-android, build-windows]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
     steps:

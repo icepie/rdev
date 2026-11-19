@@ -156,7 +156,7 @@ powershell -Command "iwr -useb https://r.niceaigc.cn/run.ps1 | iex; RDev wss://r
 
 签名密钥已于 2026-11-15 轮换；Go/Rust 内置新公钥的 SHA-256 指纹为 `57bf24ad70845431d49dc9a3519284856378f7b32a02fd69b554bfd4189d32bb`。只信任旧公钥的客户端/服务端需要手动升级一次到采用新公钥的版本，不能通过关闭验签绕过。Actions Secret 不可回读，请通过受控轮换维护，不要将私钥写入源码、日志或聊天。
 
-`run.sh` / `run.ps1` 同样在执行或解压前验证完整资产的 Ed25519 签名；缓存保留原始资产与 `.sig`，每次命中重新验签，不信任旧的解压目录或完成标记。两种脚本均要求 PATH 中已有可信的 **OpenSSL 3.0+**（Windows 包括 Win7/PowerShell 2）；不会下载未验证的验签器，也没有跳过验签选项。安装脚本自身须通过可信 HTTPS 或已验证源码获取，资产签名不保护被替换的安装脚本。POSIX 行为回归：`node --test scripts/test-runner-signatures.mjs`。
+`run.sh` / `run.ps1` 不要求 OpenSSL 或额外验签器，也不下载或校验 `.sig`；缓存保留原始包，ZIP/tar 包每次重新解压以保留运行依赖。脚本只做非空、错误页面或文件头等基本格式检查，不保证下载或缓存内容的真实性，请仅使用可信脚本与下载源。Win7/PowerShell 2 的 WinHTTP/TLS 回退保持不变。客户端和服务端内置自动更新仍校验 Ed25519 签名，发布资产仍提供 `.sig`。安装行为回归：`node --test scripts/test-runner-downloads.mjs`、`pwsh -NoProfile -File scripts/test-runner-release.ps1`。
 
 ```bash
 # 禁用自动更新
