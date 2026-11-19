@@ -421,6 +421,9 @@ jobs:
           set -euo pipefail
           mkdir -p "$HOME/.cargo" "$HOME/.rustup" clients/rdev-client-gpu/target
           image="$RDEV_GPU_BUILDER_IMAGE"
+          # An unset `docker run -e NAME` removes the image's ENV default.
+          # Prebuilt builders already contain system dependencies.
+          export RDEV_GPU_INSTALL_DEPS=n
           if ! docker pull "$image"; then
             echo "::warning::prebuilt Linux builder image $image is unavailable; falling back to ${{ matrix.linux_image }}"
             image="${{ matrix.linux_image }}"
