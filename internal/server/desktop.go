@@ -24,6 +24,7 @@ type desktopMsg struct {
 	Height          int                           `json:"height,omitempty"`
 	Format          string                        `json:"format,omitempty"`
 	Codec           string                        `json:"codec,omitempty"`
+	EncoderBackend  string                        `json:"encoderBackend,omitempty"`
 	Description     []byte                        `json:"description,omitempty"`
 	Mode            string                        `json:"mode,omitempty"`
 	Source          string                        `json:"source,omitempty"`
@@ -589,7 +590,7 @@ func (s *Server) handleDesktopMessage(msg *protocol.Message) {
 			route.conn.request.Format = msg.Format
 		}
 		route.conn.inputMu.Unlock()
-		route.conn.writeJSON(desktopMsg{Op: op, Session: msg.SessionID, Width: msg.Width, Height: msg.Height, Format: msg.Format, Codec: msg.Codec, Description: msg.Description, Source: msg.Source, FPS: msg.FPS, InputBackend: msg.InputBackend, Desktop: msg.DesktopCapabilities, Message: msg.Error})
+		route.conn.writeJSON(desktopMsg{Op: op, Session: msg.SessionID, Width: msg.Width, Height: msg.Height, Format: msg.Format, Codec: msg.Codec, Description: msg.Description, EncoderBackend: msg.EncoderBackend, Source: msg.Source, FPS: msg.FPS, InputBackend: msg.InputBackend, Desktop: msg.DesktopCapabilities, Message: msg.Error})
 	case protocol.MsgDesktopClipboard:
 		if route.conn == nil {
 			return
@@ -611,7 +612,7 @@ func (s *Server) handleDesktopMessage(msg *protocol.Message) {
 		if route.conn == nil {
 			return
 		}
-		route.conn.writeJSON(desktopMsg{Op: "closed", Session: msg.SessionID, Format: msg.Format, Message: msg.Error})
+		route.conn.writeJSON(desktopMsg{Op: "closed", Session: msg.SessionID, Format: msg.Format, EncoderBackend: msg.EncoderBackend, Message: msg.Error})
 		route.conn.close()
 	}
 }

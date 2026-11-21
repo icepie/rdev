@@ -14,7 +14,7 @@ import (
 )
 
 func TestGo264DesktopEncoderProducesDecodableAVCCKeyframe(t *testing.T) {
-	encoder, err := newGo264DesktopEncoder(64, 48, 60, 8)
+	encoder, err := newSoftwareGo264DesktopEncoder(64, 48, 60, 8)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +72,7 @@ func TestGo264DesktopStreamDecodesWithFFmpeg(t *testing.T) {
 		t.Skip("ffmpeg is not installed")
 	}
 	const width, height, frameCount = 64, 48, 16
-	encoder, err := newGo264DesktopEncoder(width, height, 60, 8)
+	encoder, err := newSoftwareGo264DesktopEncoder(width, height, 60, 8)
 	if err != nil {
 		t.Fatal(err)
 	}

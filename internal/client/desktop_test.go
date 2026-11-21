@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"image"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -166,12 +167,14 @@ func TestValidateDesktopClipboardItemsRejectsInvalidPayloads(t *testing.T) {
 }
 
 type testDesktopEncoder struct {
-	format  string
-	encoded int
+	format    string
+	codecInfo desktopCodecInfo
+	encoded   int
 }
 
 func (e *testDesktopEncoder) Format() string              { return e.format }
-func (e *testDesktopEncoder) CodecInfo() desktopCodecInfo { return desktopCodecInfo{} }
+func (e *testDesktopEncoder) Backend() string             { return "test" }
+func (e *testDesktopEncoder) CodecInfo() desktopCodecInfo { return e.codecInfo }
 func (e *testDesktopEncoder) Close()                      {}
 func (e *testDesktopEncoder) Encode(_ *image.RGBA, out *bytes.Buffer) error {
 	e.encoded++
@@ -214,6 +217,20 @@ func TestDesktopFrameSenderH264EncodesEveryFrame(t *testing.T) {
 	}
 }
 
+func TestDesktopEncoderReadyWaitsForH264Headers(t *testing.T) {
+	encoder := &testDesktopEncoder{format: desktopFormatH264}
+	if desktopEncoderReady(encoder) {
+		t.Fatal("H264 encoder reported ready without codec headers")
+	}
+	encoder.codecInfo.Codec = "avc1.42C01E"
+	if !desktopEncoderReady(encoder) {
+		t.Fatal("H264 encoder did not report ready after codec headers arrived")
+	}
+	if !desktopEncoderReady(&testDesktopEncoder{format: desktopFormatMJPEG}) {
+		t.Fatal("MJPEG encoder should not wait for codec headers")
+	}
+}
+
 func TestNormalizeDesktopFrameSizeMakesH264DimensionsEven(t *testing.T) {
 	if got := normalizeDesktopFrameSize(desktopFormatH264, image.Pt(1919, 1079)); got != image.Pt(1918, 1078) {
 		t.Fatalf("normalized H264 size = %v, want 1918x1078", got)
@@ -236,5 +253,15 @@ func TestResizeDesktopFrameToSizeReusesMatchingDestination(t *testing.T) {
 	second, err := resizeDesktopFrameToSize(first, source, 2, 2)
 	if err != nil || second != destination {
 		t.Fatalf("second resize = (%p, %v), want reused buffer %p", second, err, destination)
+	}
+}
+
+func TestDesktopVideoCodecsAdvertiseCPUEncoder(t *testing.T) {
+	codecs, backends := desktopVideoCodecs()
+	if !slices.Contains(codecs, desktopFormatH264) || !slices.Contains(codecs, desktopFormatMJPEG) {
+		t.Fatalf("desktop codecs = %v, want h264 and mjpeg", codecs)
+	}
+	if !slices.Contains(backends, "cpu") {
+		t.Fatalf("desktop encoder backends = %v, want cpu fallback", backends)
 	}
 }

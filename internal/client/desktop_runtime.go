@@ -210,24 +210,35 @@ func (c *Client) handleDesktopStart(msg *protocol.Message) {
 	session.setFrame(bounds, size.X, size.Y)
 	encoder := newDesktopEncoder(requestedFormat, size.X, size.Y, quality, fps)
 	defer encoder.Close()
-	codecInfo := encoder.CodecInfo()
 	format := encoder.Format()
+	backend := encoder.Backend()
 	if requestedFormat == desktopFormatH264 && format != desktopFormatH264 {
 		log.Printf("desktop h264 encoder unavailable for source %s, falling back to mjpeg", sourceName)
+	} else {
+		log.Printf("desktop %s encoder backend %s selected for source %s", format, backend, sourceName)
 	}
-	c.send(&protocol.Message{
-		Type:                protocol.MsgDesktopReady,
-		SessionID:           msg.SessionID,
-		DesktopCapabilities: caps,
-		Width:               size.X,
-		Height:              size.Y,
-		Format:              format,
-		Codec:               codecInfo.Codec,
-		Description:         codecInfo.Description,
-		Source:              sourceID,
-		FPS:                 fps,
-		InputBackend:        inputBackend,
-	})
+	readySent := false
+	sendReady := func() {
+		codecInfo := encoder.CodecInfo()
+		c.send(&protocol.Message{
+			Type:                protocol.MsgDesktopReady,
+			SessionID:           msg.SessionID,
+			DesktopCapabilities: caps,
+			Width:               size.X,
+			Height:              size.Y,
+			Format:              format,
+			Codec:               codecInfo.Codec,
+			Description:         codecInfo.Description,
+			EncoderBackend:      backend,
+			Source:              sourceID,
+			FPS:                 fps,
+			InputBackend:        inputBackend,
+		})
+		readySent = true
+	}
+	if desktopEncoderReady(encoder) {
+		sendReady()
+	}
 	sender := newDesktopFrameSender(encoder)
 	var frameScratch *image.RGBA
 	ticker := time.NewTicker(time.Second / time.Duration(fps))
@@ -266,10 +277,19 @@ func (c *Client) handleDesktopStart(msg *protocol.Message) {
 			session.setFrame(bounds, size.X, size.Y)
 			payload, send, err := sender.tick(frame, time.Now())
 			if err != nil {
-				err = fmt.Errorf("desktop %s encode failed for source %s: %w", format, sourceName, err)
+				err = fmt.Errorf("desktop %s encode failed for source %s with %s: %w", format, sourceName, backend, err)
 				log.Printf("%v", err)
-				c.send(&protocol.Message{Type: protocol.MsgDesktopClose, SessionID: msg.SessionID, Format: format, Error: err.Error()})
+				c.send(&protocol.Message{Type: protocol.MsgDesktopClose, SessionID: msg.SessionID, Format: format, EncoderBackend: backend, Error: err.Error()})
 				return
+			}
+			if !readySent {
+				if !desktopEncoderReady(encoder) {
+					err = fmt.Errorf("desktop %s encoder %s produced no codec headers", format, backend)
+					log.Printf("%v", err)
+					c.send(&protocol.Message{Type: protocol.MsgDesktopClose, SessionID: msg.SessionID, Format: format, EncoderBackend: backend, Error: err.Error()})
+					return
+				}
+				sendReady()
 			}
 			if !send {
 				continue

@@ -1,3 +1,8 @@
+export function desktopEncoderRecoveryFormat(format?: string, backend?: string): "h264" | "mjpeg" | null {
+  if (format !== "h264") return null;
+  return backend && backend !== "cpu" ? "h264" : "mjpeg";
+}
+
 // Own the listeners as one stream lifetime. Browser media events may arrive
 // after a socket/decoder has been replaced; never let them bind the new stream.
 export function attachDesktopMediaSource(source: MediaSource, {

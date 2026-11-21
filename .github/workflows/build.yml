@@ -44,14 +44,15 @@ jobs:
           bun run build
 
       - name: Vet
-        run: go vet -tags go264_nohwaccel ./...
+        run: go vet ./...
 
       - name: Test
-        run: go test -tags go264_nohwaccel ./...
+        run: go test ./...
 
       - name: Build check
         run: |
           CGO_ENABLED=0 go build -o /dev/null ./cmd/rdev-server
+          CGO_ENABLED=0 go build -o /dev/null ./cmd/rdev-client
           CGO_ENABLED=0 go build -tags go264_nohwaccel -o /dev/null ./cmd/rdev-client
 
   test-installers:
@@ -122,7 +123,7 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: 0
         run: |
-          go build -tags go264_nohwaccel -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" -o rdev-client-raw ./cmd/rdev-client
+          go build -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" -o rdev-client-raw ./cmd/rdev-client
           upx --best rdev-client-raw -o rdev-client${{ matrix.ext }} || cp rdev-client-raw rdev-client${{ matrix.ext }}
 
       - name: Upload artifacts
@@ -190,7 +191,7 @@ jobs:
           export PATH="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH"
           if [ -n "${{ matrix.goarm }}" ]; then export GOARM="${{ matrix.goarm }}"; fi
           # Pion's anet dependency accesses net.zoneCache on Android; Go 1.23+ requires this opt-in.
-          go build -tags go264_nohwaccel -ldflags "-checklinkname=0 -s -w -X main.version=${GITHUB_REF_NAME}" -o rdev-client ./cmd/rdev-client
+          go build -ldflags "-checklinkname=0 -s -w -X main.version=${GITHUB_REF_NAME}" -o rdev-client ./cmd/rdev-client
           upx --best rdev-client || true
           file rdev-client
 
@@ -254,7 +255,7 @@ jobs:
           mkdir -p dist/windows-amd64
           go build -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" -o rdev-server-raw ./cmd/rdev-server
           upx --best rdev-server-raw -o dist/windows-amd64/rdev-server.exe || cp rdev-server-raw dist/windows-amd64/rdev-server.exe
-          go build -tags go264_nohwaccel -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" -o rdev-client-raw ./cmd/rdev-client
+          go build -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" -o rdev-client-raw ./cmd/rdev-client
           upx --best rdev-client-raw -o dist/windows-amd64/rdev-client.exe || cp rdev-client-raw dist/windows-amd64/rdev-client.exe
 
       - name: Build & compress windows/386 client
@@ -266,7 +267,7 @@ jobs:
         run: |
           export PATH="/home/runner/go-win7/bin:$PATH"
           mkdir -p dist/windows-386
-          go build -tags go264_nohwaccel -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" -o rdev-client-raw ./cmd/rdev-client
+          go build -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" -o rdev-client-raw ./cmd/rdev-client
           upx --best rdev-client-raw -o dist/windows-386/rdev-client.exe || cp rdev-client-raw dist/windows-386/rdev-client.exe
 
       - name: Build & compress windows/arm64
@@ -278,7 +279,7 @@ jobs:
           mkdir -p dist/windows-arm64
           go build -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" -o rdev-server-raw ./cmd/rdev-server
           upx --best rdev-server-raw -o dist/windows-arm64/rdev-server.exe || cp rdev-server-raw dist/windows-arm64/rdev-server.exe
-          go build -tags go264_nohwaccel -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" -o rdev-client-raw ./cmd/rdev-client
+          go build -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" -o rdev-client-raw ./cmd/rdev-client
           upx --best rdev-client-raw -o dist/windows-arm64/rdev-client.exe || cp rdev-client-raw dist/windows-arm64/rdev-client.exe
 
       - name: Upload windows/amd64

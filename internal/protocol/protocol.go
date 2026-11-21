@@ -208,6 +208,7 @@ type Message struct {
 	Height       int          `json:"height,omitempty"`
 	Format       string       `json:"format,omitempty"`
 	Codec        string       `json:"codec,omitempty"`
+	EncoderBackend string       `json:"encoderBackend,omitempty"`
 	Description  []byte       `json:"description,omitempty"`
 	Source       string       `json:"source,omitempty"`
 	Quality      int          `json:"quality,omitempty"`

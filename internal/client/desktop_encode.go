@@ -55,6 +55,7 @@ type desktopCodecInfo struct {
 // desktopEncoder turns captured RGBA frames into stream payloads.
 type desktopEncoder interface {
 	Format() string
+	Backend() string
 	CodecInfo() desktopCodecInfo
 	Encode(frame *image.RGBA, out *bytes.Buffer) error
 	Close()
@@ -63,8 +64,13 @@ type desktopEncoder interface {
 type mjpegEncoder struct{ quality int }
 
 func (e *mjpegEncoder) Format() string              { return desktopFormatMJPEG }
+func (e *mjpegEncoder) Backend() string             { return "jpeg" }
 func (e *mjpegEncoder) CodecInfo() desktopCodecInfo { return desktopCodecInfo{} }
 func (e *mjpegEncoder) Close()                      {}
+
+func desktopEncoderReady(encoder desktopEncoder) bool {
+	return encoder.Format() != desktopFormatH264 || encoder.CodecInfo().Codec != ""
+}
 
 func (e *mjpegEncoder) Encode(frame *image.RGBA, out *bytes.Buffer) error {
 	return jpeg.Encode(out, frame, &jpeg.Options{Quality: e.quality})

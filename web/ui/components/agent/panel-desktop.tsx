@@ -1,4 +1,4 @@
-import { attachDesktopMediaSource } from "../../lib/desktop-media";
+import { attachDesktopMediaSource, desktopEncoderRecoveryFormat } from "../../lib/desktop-media";
 import { desktopOwnsKeyboard } from "../../lib/desktop-input-focus";
 import { writeOwnedClipboard } from "../../lib/clipboard-write";
 import { paintDesktopCanvas, paintDesktopImage } from "../../lib/desktop-frame";
@@ -1503,9 +1503,10 @@ export function PanelDesktop({
         if (remoteInputRef.current && !controlPreferenceSet.current) saveDesktopSettings();
         updateFrameInfo();
         const source = currentSourceRef.current ? ` · ${currentSourceRef.current}` : "";
+        const encoder = msg.encoderBackend ? ` · ${msg.encoderBackend}` : "";
         const w = canvas?.width || 0;
         const h = canvas?.height || 0;
-        setStatus(`${tt("index.desktopReady")} · ${w}×${h}${source}`, "ok");
+        setStatus(`${tt("index.desktopReady")} · ${w}×${h}${source}${encoder}`, "ok");
         setClipboardCapabilities(
           msg.desktop && msg.desktop.clipboard
             ? {
@@ -1522,8 +1523,9 @@ export function PanelDesktop({
         lastCloseMsgRef.current = msg.message || tt("common.error");
         setStatus(lastCloseMsgRef.current, "err");
       } else if (msg.op === "closed") {
-        if (msg.format === "h264") {
-          forcedFormatRef.current = "mjpeg";
+        const recoveryFormat = desktopEncoderRecoveryFormat(msg.format, msg.encoderBackend);
+        if (recoveryFormat) {
+          forcedFormatRef.current = recoveryFormat;
           retryAfterClose = true;
           desktopReconnectDelayRef.current = 1000;
         }

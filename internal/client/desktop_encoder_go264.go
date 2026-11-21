@@ -7,17 +7,21 @@ import (
 	"fmt"
 	"image"
 	"image/color"
+	"sync/atomic"
 
 	h264 "github.com/oops1/go.264"
 )
 
 type go264DesktopEncoder struct {
 	encoder   *h264.Encoder
+	backend   string
 	codecInfo desktopCodecInfo
 	i420      []byte
 	width     int
 	height    int
 }
+
+var go264HardwareDisabled atomic.Bool
 
 func newDesktopEncoder(format string, width, height, quality, fps int) desktopEncoder {
 	if format == desktopFormatH264 {
@@ -29,7 +33,16 @@ func newDesktopEncoder(format string, width, height, quality, fps int) desktopEn
 }
 
 func newGo264DesktopEncoder(width, height, quality, fps int) (*go264DesktopEncoder, error) {
-	encoder, err := h264.NewEncoder(h264.EncoderConfig{
+	return openGo264DesktopEncoder(width, height, quality, fps, false)
+}
+
+func newSoftwareGo264DesktopEncoder(width, height, quality, fps int) (*go264DesktopEncoder, error) {
+	return openGo264DesktopEncoder(width, height, quality, fps, true)
+}
+
+func openGo264DesktopEncoder(width, height, quality, fps int, forceSoftware bool) (*go264DesktopEncoder, error) {
+	forceSoftware = forceSoftware || go264HardwareDisabled.Load()
+	config := h264.EncoderConfig{
 		Width:               width,
 		Height:              height,
 		FPSNum:              fps,
@@ -40,24 +53,31 @@ func newGo264DesktopEncoder(width, height, quality, fps int) (*go264DesktopEncod
 		MotionSearch:        h264.MotionSearchHalf,
 		ModeDecision:        h264.ModeDecisionFast,
 		RepeatParameterSets: true,
-		ForceSoftware:       true,
-	})
+		ForceSoftware:       forceSoftware,
+	}
+	encoder, err := h264.NewEncoder(config)
 	if err != nil {
 		return nil, err
 	}
+	backend := encoder.Backend()
 
+	var codecInfo desktopCodecInfo
 	headers, err := encoder.Headers()
-	if err != nil {
+	if err == nil {
+		codecInfo, err = desktopAVCCodecInfo(headers)
+	} else if errors.Is(err, h264.ErrHeadersUnavailable) {
+		err = nil
+	} else {
 		encoder.Close()
 		return nil, err
 	}
-	codecInfo, err := desktopAVCCodecInfo(headers)
 	if err != nil {
 		encoder.Close()
 		return nil, err
 	}
 	return &go264DesktopEncoder{
 		encoder:   encoder,
+		backend:   backend,
 		codecInfo: codecInfo,
 		i420:      make([]byte, width*height*3/2),
 		width:     width,
@@ -66,8 +86,8 @@ func newGo264DesktopEncoder(width, height, quality, fps int) (*go264DesktopEncod
 }
 
 func (e *go264DesktopEncoder) Format() string              { return desktopFormatH264 }
+func (e *go264DesktopEncoder) Backend() string             { return e.backend }
 func (e *go264DesktopEncoder) CodecInfo() desktopCodecInfo { return e.codecInfo }
-
 func (e *go264DesktopEncoder) Close() {
 	if e.encoder != nil {
 		e.encoder.Close()
@@ -85,9 +105,28 @@ func (e *go264DesktopEncoder) Encode(frame *image.RGBA, out *bytes.Buffer) error
 	rgbaToI420(e.i420, frame)
 	packet, err := e.encoder.Encode(e.i420)
 	if err != nil {
+		e.disableFailedHardware()
 		return err
 	}
+	if e.codecInfo.Codec == "" {
+		headers, headerErr := e.encoder.Headers()
+		if headerErr != nil {
+			e.disableFailedHardware()
+			return headerErr
+		}
+		e.codecInfo, headerErr = desktopAVCCodecInfo(headers)
+		if headerErr != nil {
+			e.disableFailedHardware()
+			return headerErr
+		}
+	}
 	return writeDesktopAVCCPayload(out, packet)
+}
+
+func (e *go264DesktopEncoder) disableFailedHardware() {
+	if e.backend != "" && e.backend != "cpu" {
+		go264HardwareDisabled.Store(true)
+	}
 }
 
 func go264QP(quality int) int {

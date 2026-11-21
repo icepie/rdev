@@ -3,7 +3,7 @@
 BINS = rdev-server rdev-client
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 LDFLAGS = -s -w -X main.version=$(VERSION)
-GO264_TAGS = -tags go264_nohwaccel
+GO264_TAGS ?=
 GO_WIN7 ?= go
 WIN7_SERVICE_DIST = target/win7-service
 RUST_CLIENT_GPU_MANIFEST = clients/rdev-client-gpu/Cargo.toml

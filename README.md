@@ -374,20 +374,21 @@ make cross
 CGO_ENABLED=0 go build -o rdev-server ./cmd/rdev-server
 
 # 交叉编译客户端
-CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -tags go264_nohwaccel -o rdev-client.exe ./cmd/rdev-client
-CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -tags go264_nohwaccel -o rdev-client-arm64 ./cmd/rdev-client
+CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -o rdev-client.exe ./cmd/rdev-client
+CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o rdev-client-arm64 ./cmd/rdev-client
 ```
 
 发布标签前应通过 Rust 的格式检查、Clippy、单元测试及 `make rust-client-gpu-smoke`；GPU 发布流程要求这些检查和跨平台构建、Windows 包启动检查全部成功。文件传输冒烟使用必需的 SHA-256 上传摘要，并核对上传完成及下载元数据中的摘要。已发布标签不重写；发布检查修复使用新的补丁版本。
 
 ### Go 客户端桌面编码
 
-默认 Go 客户端通过 BSD-2-Clause 的 `go.264` 软件编码器提供 H.264
-Baseline/AVCC，并保留 MJPEG 通用回退；项目将上游模块替换为
-`github.com/icepie/go.264 v1.14.1-rdev.1` 维护分支，使编码器可在首帧前直接
-提供 SPS/PPS，避免为初始化 WebCodecs 丢弃一帧。发布构建使用
-`go264_nohwaccel` 标签排除可选 Linux 动态硬件后端，保持 `CGO_ENABLED=0`
-Linux 客户端静态可执行。需要更高帧率、硬件编码或原生 CUA 时使用 Rust GPU 客户端：
+默认 Go 客户端通过 BSD-2-Clause 的 `go.264` 提供 H.264 Baseline/AVCC，
+并保留 MJPEG 通用回退；项目将上游模块替换为
+`github.com/icepie/go.264 v1.14.1-rdev.1` 维护分支。Linux amd64/arm64
+按 NVENC、VA-API、CPU 顺序自动选择，Windows 使用 Media Foundation 后回退 CPU，
+macOS 使用 CPU；全部路径仍为 `CGO_ENABLED=0`，不启动 FFmpeg 等外部进程。
+Linux 硬件后端通过系统动态加载器访问驱动；需要 musl/scratch 兼容的静态客户端时使用
+`GO264_TAGS='-tags go264_nohwaccel' make client`。需要原生 CUA 时使用 Rust GPU 客户端：
 
 ```bash
 curl -sL https://your-server/run.sh | sh -s -- wss://your-server --client rs

@@ -1,5 +1,5 @@
 import { expect, it, vi } from 'vitest';
-import { attachDesktopMediaSource } from '../ui/lib/desktop-media';
+import { attachDesktopMediaSource, desktopEncoderRecoveryFormat } from '../ui/lib/desktop-media';
 function fixture() {
  const buffer=new EventTarget();buffer.mode='segments';
  const source=new EventTarget();source.readyState='open';source.addSourceBuffer=vi.fn(()=>buffer);
@@ -33,4 +33,13 @@ it('reports unsupported media setup without uncaught event exceptions',()=>{
  source.dispatchEvent(new Event('sourceopen'));
  expect(source.addSourceBuffer).toHaveBeenCalledWith('video/mp4');expect(calls.error).toHaveBeenCalledWith(failure);
  expect(calls.update).not.toHaveBeenCalled();cleanup();
+});
+
+it('retries failed hardware streams with CPU H264 before falling back to MJPEG',()=>{
+ expect(desktopEncoderRecoveryFormat('h264','nvenc')).toBe('h264');
+ expect(desktopEncoderRecoveryFormat('h264','vaapi')).toBe('h264');
+ expect(desktopEncoderRecoveryFormat('h264','mediafoundation')).toBe('h264');
+ expect(desktopEncoderRecoveryFormat('h264','cpu')).toBe('mjpeg');
+ expect(desktopEncoderRecoveryFormat('h264')).toBe('mjpeg');
+ expect(desktopEncoderRecoveryFormat('mjpeg','jpeg')).toBeNull();
 });
