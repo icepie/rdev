@@ -203,59 +203,26 @@ func TestDesktopFrameSenderH264EncodesEveryFrame(t *testing.T) {
 	sender := newDesktopFrameSender(encoder)
 	frame := image.NewRGBA(image.Rect(0, 0, 2, 2))
 	now := time.Unix(100, 0)
-	for i := 1; i <= 2; i++ {
-		payload, send, err := sender.tick(frame, now.Add(time.Duration(i)*time.Second))
-		if err != nil || !send || !bytes.Equal(payload, []byte{byte(i)}) {
-			t.Fatalf("tick %d = (%v, %t, %v), want newly encoded frame", i, payload, send, err)
-		}
+
+	first, send, err := sender.tick(frame, now)
+	if err != nil || !send || !bytes.Equal(first, []byte{1}) {
+		t.Fatalf("first tick = (%v, %t, %v), want first access unit", first, send, err)
 	}
-	if encoder.encoded != 2 {
-		t.Fatalf("H264 encoded %d frames, want 2", encoder.encoded)
+	second, send, err := sender.tick(frame, now.Add(time.Second))
+	if err != nil || !send || !bytes.Equal(second, []byte{2}) || encoder.encoded != 2 {
+		t.Fatalf("second tick = (%v, %t, %v), encodes=%d; want new access unit", second, send, err, encoder.encoded)
 	}
 }
 
-func TestNormalizeH264FrameSizeRoundsDownWithoutExceedingLimit(t *testing.T) {
-	for _, test := range []struct {
-		width, height int
-		wantW, wantH  int
-	}{
-		{1600, 1000, 1600, 1000},
-		{1601, 1001, 1600, 1000},
-		{1, 1, 1, 1},
-	} {
-		gotW, gotH := normalizeH264FrameSize(test.width, test.height)
-		if gotW != test.wantW || gotH != test.wantH {
-			t.Fatalf("normalizeH264FrameSize(%d, %d) = %d, %d; want %d, %d", test.width, test.height, gotW, gotH, test.wantW, test.wantH)
-		}
+func TestNormalizeDesktopFrameSizeMakesH264DimensionsEven(t *testing.T) {
+	if got := normalizeDesktopFrameSize(desktopFormatH264, image.Pt(1919, 1079)); got != image.Pt(1918, 1078) {
+		t.Fatalf("normalized H264 size = %v, want 1918x1078", got)
 	}
-}
-
-func TestAnnexBToAVCCHandlesMixedStartCodesAndKeyframes(t *testing.T) {
-	annexB := []byte{
-		0, 0, 0, 1, 0x67, 0x42, 0xC0, 0x1F, 0,
-		0, 0, 1, 0x68, 0xCE, 0x06, 0xE2,
-		0, 0, 0, 1, 0x65, 0x88, 0x84, 0,
+	if got := normalizeDesktopFrameSize(desktopFormatH264, image.Pt(1, 1)); got != image.Pt(2, 2) {
+		t.Fatalf("minimum H264 size = %v, want 2x2", got)
 	}
-	keyframe, avcc, err := annexBToAVCC(annexB)
-	if err != nil {
-		t.Fatalf("annexBToAVCC() error = %v", err)
-	}
-	if !keyframe {
-		t.Fatal("annexBToAVCC() did not identify the IDR NAL as a keyframe")
-	}
-	want := []byte{
-		0, 0, 0, 4, 0x67, 0x42, 0xC0, 0x1F,
-		0, 0, 0, 4, 0x68, 0xCE, 0x06, 0xE2,
-		0, 0, 0, 3, 0x65, 0x88, 0x84,
-	}
-	if !bytes.Equal(avcc, want) {
-		t.Fatalf("AVCC = %x, want %x", avcc, want)
-	}
-}
-
-func TestAnnexBToAVCCRejectsDataWithoutStartCode(t *testing.T) {
-	if _, _, err := annexBToAVCC([]byte{0x65, 0x88, 0x84}); err == nil {
-		t.Fatal("annexBToAVCC() accepted data without an Annex B start code")
+	if got := normalizeDesktopFrameSize(desktopFormatMJPEG, image.Pt(1919, 1079)); got != image.Pt(1919, 1079) {
+		t.Fatalf("MJPEG size = %v, want unchanged", got)
 	}
 }
 
@@ -269,33 +236,5 @@ func TestResizeDesktopFrameToSizeReusesMatchingDestination(t *testing.T) {
 	second, err := resizeDesktopFrameToSize(first, source, 2, 2)
 	if err != nil || second != destination {
 		t.Fatalf("second resize = (%p, %v), want reused buffer %p", second, err, destination)
-	}
-}
-
-// TestResizeDesktopFrameToSizeKeepsEvenH264Geometry guards the encoder
-// contract: after normalizeH264FrameSize rounds a requested size down to even
-// values, frames must still be produced at exactly that size. Re-deriving a
-// proportional size from the normalized target used to shrink the frame
-// (1600x905 -> encoder 1600x904 -> frame 1598x904), which the x264 encoder
-// rejects with "frame size does not match encoder".
-func TestResizeDesktopFrameToSizeKeepsEvenH264Geometry(t *testing.T) {
-	for _, test := range []struct {
-		sourceW, sourceH int
-		maxW, maxH       int
-	}{
-		{1600, 905, 1600, 905},
-		{1600, 904, 1600, 903},
-		{1921, 1081, 1920, 1080},
-		{905, 1600, 905, 1600},
-	} {
-		size := scaledDimension(test.sourceW, test.sourceH, test.maxW, test.maxH)
-		size.X, size.Y = normalizeH264FrameSize(size.X, size.Y)
-		frame, err := resizeDesktopFrameToSize(nil, image.NewRGBA(image.Rect(0, 0, test.sourceW, test.sourceH)), size.X, size.Y)
-		if err != nil {
-			t.Fatalf("source %dx%d -> %dx%d: %v", test.sourceW, test.sourceH, size.X, size.Y, err)
-		}
-		if frame.Bounds().Dx() != size.X || frame.Bounds().Dy() != size.Y {
-			t.Fatalf("source %dx%d -> %dx%d produced frame %v", test.sourceW, test.sourceH, size.X, size.Y, frame.Bounds().Size())
-		}
 	}
 }

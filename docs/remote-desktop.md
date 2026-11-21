@@ -8,9 +8,8 @@ This document describes a cross-platform remote desktop feature for RDev. It is 
 - Phase 2 screen streaming is implemented for Linux X11, Linux framebuffer (`fbdev` root/KMS-console fallback), Linux DRM/KMS linear-scanout fallback, Windows Win32/GDI, and macOS Quartz/CoreGraphics screenshot capture with the default `CGO_ENABLED=0` client build.
 - Capture source selection now supports Auto, all screens, individual monitors, and visible windows on Windows GDI and Linux X11; Linux framebuffer exposes framebuffer screen sources; Linux DRM/KMS exposes active scanout screen/connector sources when available. Legacy `primary`/`virtual` source IDs are accepted only for compatibility and are not shown in the UI.
 - Phase 3 input control is implemented for Windows Win32 mouse/keyboard, optional Windows Touch Injection when available, Linux X11/XTEST mouse/keyboard, optional Linux uinput mouse/keyboard/touch/pen, and macOS Quartz mouse/keyboard through no-cgo dynamic CoreGraphics calls. Wayland portal input and macOS touch/pen semantics remain planned and are not advertised as available in the default no-cgo build.
-- The default stream is JPEG frames over binary WebSocket frames, rendered on a browser Canvas; this is effectively an MJPEG-style transport over the existing relay.
-- Browsers with WebCodecs request an optional H.264/AVCC stream from the separately built `rdev-client-cgo` (feature flavor, published for linux amd64/arm64, darwin arm64, and windows amd64/386/arm64). It embeds x264, encodes Baseline H.264, and the browser decodes it with `VideoDecoder`; unavailable clients, unsupported decoders, and decoder failures fall back to MJPEG. H.264 output dimensions are rounded down to even values because its I420 input requires 4:2:0 chroma pairs.
-- `rdev-client-cgo` statically embeds GPL-2.0-only x264 as a distinct release artifact; RDev does not use it in the default `CGO_ENABLED=0` client. The one-click runners select it with `--client cgo` (`-Client cgo` on Windows).
+- The browser prefers H.264 when WebCodecs is available and falls back to JPEG frames over binary WebSocket frames (an MJPEG-style transport) when H.264 setup or decoding fails.
+- The Go client remains `CGO_ENABLED=0` and advertises H.264 plus MJPEG. H.264 imports the BSD-2-Clause `github.com/oops1/go.264` API through the RDev-maintained `github.com/icepie/go.264` replacement; release builds pass `go264_nohwaccel` so Linux binaries omit optional dynamic hardware backends and stay static. The former `rdev-client-cgo`/x264 flavor remains removed.
 - Browser auto mode requests an adaptive resolution based on viewport size and device pixel ratio; manual mode keeps explicit FPS/quality/max-size controls.
 - Capability discovery is intentionally non-invasive: clients enumerate metadata and sources with lightweight OS APIs/ioctls, but they do not start capture, export PRIME buffers, mmap framebuffer memory, or inject input during registration. Expensive or stateful operations happen only after an authenticated `desktop_start` selects a source.
 - Linux Wayland reports the native `wayland-portal` backend as planned and never shells out to `grim`/`slurp`; root/no-display sessions can fall back to `drm-kms` when active linear scanout metadata is visible, otherwise to `fbdev` when a readable, unblanked framebuffer is present.
@@ -81,13 +80,23 @@ The Rust bridge applies bounded backpressure to its local video stream and cance
 
 Recommended phases:
 
-1. **MVP MJPEG/JPEG stream**: simple, debuggable, works with pure Go image encoders, acceptable for low-FPS support sessions. This remains the universal fallback.
-2. **Optional x264 H.264 stream**: WebCodecs clients request `h264`; the separately built Linux/amd64 `rdev-client-cgo` embeds x264, produces AVCC Baseline H.264, and falls back to MJPEG if either side cannot support the path. VNC always requests MJPEG because its bridge decodes JPEG frames.
-3. **Tile diffing / dirty regions**: keep JPEG/PNG compatibility while avoiding full-frame uploads when only small regions change.
-4. **WASM codec in browser**: decode optimized delta/tile stream in browser without server CPU cost.
-5. **WebRTC optional path**: implemented as a default-off direct DataChannel for existing encoded streams; decode support is unchanged and the server WebSocket remains the fallback and human-control path.
+1. **MVP MJPEG/JPEG stream**: simple, debuggable, works with pure Go image encoders, and remains the universal fallback.
+2. **Pure-Go H.264 stream**: the Go client converts RGBA capture frames to reusable I420 buffers, obtains SPS/PPS without consuming a picture, encodes Baseline Annex B with `go.264`, and sends every AVCC access unit to browser WebCodecs in arrival order. Periodic IDR frames repeat SPS/PPS for recovery; unchanged frames are still encoded so the prediction chain remains valid.
+3. **Accelerated H.264 stream**: the Rust GPU client owns its native FFmpeg/hardware encoder path for higher-frame-rate use. VNC continues to request MJPEG because its bridge decodes JPEG frames.
+4. **Tile diffing / dirty regions**: keep JPEG/PNG compatibility while avoiding full-frame uploads when only small regions change.
+5. **WASM codec in browser**: decode optimized delta/tile streams in browser without server CPU cost.
+6. **WebRTC optional path**: implemented as a default-off direct DataChannel for existing encoded streams; decode support is unchanged and the server WebSocket remains the fallback and human-control path.
 
-For a non-cgo default build, avoid mandatory Go bindings to FFmpeg, GStreamer, VAAPI, MediaFoundation, VideoToolbox, or NVENC. Also avoid making external encoder processes mandatory. If hardware encoding is desired later, expose it as an optional backend behind capability detection.
+The default Go H.264 path forces the software implementation and does not require FFmpeg, GStreamer, VAAPI, MediaFoundation, VideoToolbox, NVENC, external encoder processes, or cgo. Optional acceleration remains isolated in the Rust GPU client.
+
+If H.264 construction fails, the client advertises MJPEG in the initial ready message. If an active H.264 encoder fails later, the client closes that stream with `format: "h264"`; both browser surfaces reconnect once with MJPEG forced instead of retrying the broken encoder indefinitely.
+
+`github.com/icepie/go.264` is maintained as an import-compatible replacement for `github.com/oops1/go.264`. It accepts arbitrary I420 pictures, performs inter-frame motion estimation, exposes SPS/PPS before the first software-encoded picture, emits standards-compatible IDR NAL units, and remains BSD-2-Clause licensed.
+
+`github.com/Eyevinn/hi264` is not used as a desktop encoder. It intentionally
+generates flat-color 16×16 or 8×8 test blocks and P_Skip frames rather than
+encoding arbitrary pixel frames with motion estimation; that quality and bitrate
+model is unsuitable for readable interactive desktop video.
 
 ### GPU client hardware encoder overrides
 
@@ -109,7 +118,7 @@ The embedded desktop encoder in `clients/rdev-client-gpu/vendor/rdev-desktop` de
 - **Linux framebuffer (`fbdev`)**: pure Go root/KMS-console fallback using `/dev/fb0` or `/dev/fb/0` with `FBIOGET_*` ioctls and read-only `mmap`. Registration only probes geometry/format and skips sysfs-blanked framebuffers; capture mmaps the framebuffer only after a desktop session explicitly selects it. It is view-only, requires framebuffer permissions/root, and works only when the kernel exposes a readable, unblanked framebuffer.
 - **Linux DRM/KMS scanout**: pure Go/no-cgo probe and linear scanout mmap fallback using `/dev/dri/card*`, KMS resources, active CRTC framebuffer metadata, `GETFB2`, and PRIME dma-buf export. Registration opens DRM cards read-only and only reports connector/CRTC/framebuffer metadata; PRIME export and mmap are deferred until capture starts. It exposes `drm:<card>:screen:all` and `drm:<card>:connector:<id>` sources when active outputs are visible. This is view-only and best-effort: many accelerated GPU paths expose non-mappable or non-linear scanout buffers, so the backend reports a clear error instead of returning black frames. Full accelerated KMS capture needs an optional native EGL/GBM/DRM-PRIME path.
 - **Linux Wayland**: no external helper process is used. The intended backend is native xdg-desktop-portal + PipeWire; until implemented, Wayland reports a clear unavailable reason unless `drm-kms` or `fbdev` fallback is available.
-- **macOS Quartz/CoreGraphics**: default no-cgo builds use dynamically loaded ApplicationServices/CoreGraphics symbols via purego for basic screenshot capture. It requires Screen Recording permission and currently captures the main display source (`auto`/`screen:all`) as a conservative fallback before a higher-quality ScreenCaptureKit path is added. Mouse/keyboard input uses Quartz `CGEvent` and requires Accessibility permission; touch/pen semantics are not advertised yet.
+- **macOS Quartz/CoreGraphics**: default no-cgo builds use dynamically loaded ApplicationServices/CoreGraphics symbols via purego for basic screenshot capture. It requires Screen Recording permission and currently captures the main display source (`auto`/`screen:all`) as a conservative fallback before a higher-quality ScreenCaptureKit path is added. Mouse/keyboard input uses Quartz `CGEvent` and requires Accessibility permission; the Rust GPU client posts ANSI keycodes directly through CoreGraphics so valid keycode `0` (`A`) is not discarded by the autopilot dependency. Touch/pen semantics are not advertised yet.
 
 ## Default dependency policy
 

@@ -2,7 +2,6 @@ package client
 
 import (
 	"bytes"
-	"encoding/binary"
 	"errors"
 	"hash/crc32"
 	"image"
@@ -31,17 +30,21 @@ func normalizeDesktopFormat(value string) string {
 	}
 }
 
-// normalizeH264FrameSize makes a requested maximum size safe for 4:2:0 H.264
-// without ever exceeding it. A dimension below two cannot represent an H.264
-// frame and is left untouched for the normal request validation to reject.
-func normalizeH264FrameSize(width, height int) (int, int) {
-	if width >= 2 {
-		width &^= 1
+func normalizeDesktopFrameSize(format string, size image.Point) image.Point {
+	if format != desktopFormatH264 {
+		return size
 	}
-	if height >= 2 {
-		height &^= 1
+	if size.X < 2 {
+		size.X = 2
+	} else {
+		size.X &^= 1
 	}
-	return width, height
+	if size.Y < 2 {
+		size.Y = 2
+	} else {
+		size.Y &^= 1
+	}
+	return size
 }
 
 type desktopCodecInfo struct {
@@ -67,91 +70,10 @@ func (e *mjpegEncoder) Encode(frame *image.RGBA, out *bytes.Buffer) error {
 	return jpeg.Encode(out, frame, &jpeg.Options{Quality: e.quality})
 }
 
-// annexBToAVCC converts Annex B NAL units to the AVCC payload format used by
-// WebCodecs. It recognizes an IDR slice as an H.264 keyframe.
-func annexBToAVCC(data []byte) (bool, []byte, error) {
-	var out bytes.Buffer
-	out.Grow(len(data))
-	keyframe, err := appendAnnexBToAVCC(&out, data)
-	if err != nil {
-		return false, nil, err
-	}
-	return keyframe, out.Bytes(), nil
-}
-
-func appendAnnexBToAVCC(out *bytes.Buffer, data []byte) (bool, error) {
-	nals, err := splitAnnexBNALs(data)
-	if err != nil {
-		return false, err
-	}
-	keyframe := false
-	for _, nal := range nals {
-		if nal[0]&0x1f == 5 {
-			keyframe = true
-		}
-		var length [4]byte
-		binary.BigEndian.PutUint32(length[:], uint32(len(nal)))
-		_, _ = out.Write(length[:])
-		_, _ = out.Write(nal)
-	}
-	return keyframe, nil
-}
-
-func splitAnnexBNALs(data []byte) ([][]byte, error) {
-	first, firstLen := annexBStartCode(data, 0)
-	if first < 0 {
-		return nil, errors.New("H.264 access unit has no Annex B start code")
-	}
-	var nals [][]byte
-	for start, prefixLen := first, firstLen; start >= 0; {
-		payloadStart := start + prefixLen
-		next, nextPrefixLen := annexBStartCode(data, payloadStart)
-		payloadEnd := len(data)
-		if next >= 0 {
-			payloadEnd = next
-		}
-		payloadEnd = trimAnnexBTrailingZeros(data, payloadStart, payloadEnd)
-		if payloadStart < payloadEnd {
-			nals = append(nals, data[payloadStart:payloadEnd])
-		}
-		if next < 0 {
-			break
-		}
-		start, prefixLen = next, nextPrefixLen
-	}
-	if len(nals) == 0 {
-		return nil, errors.New("H.264 access unit has no NAL payload")
-	}
-	return nals, nil
-}
-
-func trimAnnexBTrailingZeros(data []byte, start, end int) int {
-	for end > start && data[end-1] == 0 {
-		end--
-	}
-	return end
-}
-
-func annexBStartCode(data []byte, from int) (int, int) {
-	for i := from; i+3 <= len(data); i++ {
-		if data[i] != 0 || data[i+1] != 0 {
-			continue
-		}
-		if data[i+2] == 1 {
-			return i, 3
-		}
-		if i+4 <= len(data) && data[i+2] == 0 && data[i+3] == 1 {
-			return i, 4
-		}
-	}
-	return -1, 0
-}
-
 // desktopFrameSender encodes captured desktop frames and decides when a frame
-// is worth sending. MJPEG frames whose pixels are unchanged are skipped
-// inside the keep-alive window and resent outside it; keep-alive resends
-// reuse the cached JPEG payload instead of re-encoding. H.264 encodes every
-// tick because P-frames must follow the full frame sequence.
+// is worth sending. H.264 receives every frame so its prediction chain stays
+// valid. Unchanged MJPEG frames are skipped inside the keep-alive window and
+// resent outside it using the cached JPEG payload.
 type desktopFrameSender struct {
 	encoder   desktopEncoder
 	encodeBuf bytes.Buffer
@@ -166,11 +88,11 @@ func newDesktopFrameSender(encoder desktopEncoder) *desktopFrameSender {
 }
 
 // tick encodes frame and reports the payload to send and whether a send
-// should happen. Identical MJPEG frames inside the keep-alive window produce
-// (nil, false, nil); identical MJPEG frames outside the window resend the
-// cached payload without re-encoding.
+// should happen. H.264 always produces a new access unit. Identical MJPEG
+// frames inside the keep-alive window produce (nil, false, nil); outside it,
+// the cached payload is resent without re-encoding.
 func (s *desktopFrameSender) tick(frame *image.RGBA, now time.Time) (payload []byte, send bool, err error) {
-	if s.encoder.Format() != desktopFormatMJPEG {
+	if s.encoder.Format() == desktopFormatH264 {
 		s.encodeBuf.Reset()
 		if err := s.encoder.Encode(frame, &s.encodeBuf); err != nil {
 			return nil, false, err

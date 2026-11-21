@@ -1,5 +1,5 @@
 # Run: pwsh -NoProfile -File scripts/test-runner-release.ps1
-# Live metadata + real Windows CGO download: add -Live (does not launch a client).
+# Live metadata + real Windows Go client download: add -Live (does not launch a client).
 param([switch]$Live, [string]$Server = 'https://r.geofun.cn')
 $ErrorActionPreference = 'Stop'
 $OldTemp = $env:TEMP
@@ -13,7 +13,7 @@ try {
     $env:PATH = ''
     if (Get-Command openssl -CommandType Application -ErrorAction SilentlyContinue) { throw 'OpenSSL remains discoverable by the installer' }
     . (Join-Path (Split-Path $PSScriptRoot -Parent) 'web/public/run.ps1')
-    $Asset = 'rdev-client-cgo-windows-amd64.exe'
+    $Asset = 'rdev-client-windows-amd64.exe'
     if ($Live) {
         $Tag = Get-RDevLatestTag $Server $Asset
         $Url = "https://github.com/$script:Repo/releases/download/$Tag/$Asset"
@@ -23,7 +23,7 @@ try {
         try {
             if ($Stream.ReadByte() -ne 77 -or $Stream.ReadByte() -ne 90) { throw 'Downloaded asset lacks Windows PE MZ header' }
         } finally { $Stream.Dispose() }
-        Write-Host "PASS live CGO resolution/download: $Tag $Asset $((Get-Item $Out).Length) bytes"
+        Write-Host "PASS live Go client resolution/download: $Tag $Asset $((Get-Item $Out).Length) bytes"
         return
     }
 
@@ -36,11 +36,11 @@ try {
     function Get-RDevText([string]$Url) {
         $script:Requests += $Url
         if ($Url -like '*/api/release/latest*') {
-            if ($script:MetadataMode -eq 'new-server') { return '{"tag":"v0.2.134","asset":"rdev-client-cgo-windows-amd64.exe","fresh":true}' }
+            if ($script:MetadataMode -eq 'new-server') { return '{"tag":"v0.2.134","asset":"rdev-client-windows-amd64.exe","fresh":true}' }
             return '{"tag":"v0.2.136","fresh":true}'
         }
         if ($script:MetadataMode -eq 'missing') { return '[]' }
-        return '[{"tag_name":"v0.2.137","draft":true,"assets":[{"name":"rdev-client-cgo-windows-amd64.exe"}]},{"tag_name":"v0.2.137-rc1","prerelease":true,"assets":[{"name":"rdev-client-cgo-windows-amd64.exe"}]},{"tag_name":"v0.2.136","assets":[{"name":"rdev-client-gpu-windows-amd64.zip"}]},{"tag_name":"v0.2.134","assets":[{"name":"rdev-client-cgo-windows-amd64.exe"}]}]'
+        return '[{"tag_name":"v0.2.137","draft":true,"assets":[{"name":"rdev-client-windows-amd64.exe"}]},{"tag_name":"v0.2.137-rc1","prerelease":true,"assets":[{"name":"rdev-client-windows-amd64.exe"}]},{"tag_name":"v0.2.136","assets":[{"name":"rdev-client-gpu-windows-amd64.zip"}]},{"tag_name":"v0.2.135","assets":[{"name":"rdev-client-windows-arm64.exe"}]},{"tag_name":"v0.2.134","assets":[{"name":"rdev-client-windows-amd64.exe"}]}]'
     }
     if ((Get-RDevLatestTag $Server $Asset) -ne 'v0.2.134') { throw 'Old server must fall back to exact-asset GitHub metadata' }
     $script:MetadataMode = 'new-server'
@@ -49,7 +49,7 @@ try {
     $script:MetadataMode = 'missing'
     $MissingFailed = $false
     try { Get-RDevLatestTag $Server $Asset | Out-Null } catch { $MissingFailed = $true }
-    if (-not $MissingFailed) { throw 'Missing CGO asset must fail rather than substitute a client' }
+    if (-not $MissingFailed) { throw 'Missing exact asset must fail rather than substitute a client' }
 
     $script:MetadataMode = 'old-server'
     $env:PROCESSOR_ARCHITECTURE = 'AMD64'
@@ -72,27 +72,27 @@ try {
     }
     foreach ($Version in @('', '0.2.133')) {
         $script:DownloadUrl = ''
-        try { RDev -Server $Server -Client cgo -Mirror none -Version $Version } catch {
+        try { RDev -Server $Server -Client go -Mirror none -Version $Version } catch {
             if ($_.Exception.Message -ne 'SMOKE_STOP_BEFORE_LAUNCH') { throw }
         }
         $ExpectedTag = if ($Version) { 'v0.2.133' } else { 'v0.2.134' }
         if ($script:DownloadUrl -notlike "*/download-release?asset=$Asset&tag=$ExpectedTag") {
-            throw "Installer did not pin exact CGO download: $script:DownloadUrl"
+            throw "Installer did not pin exact Go client download: $script:DownloadUrl"
         }
-        $Cache = Join-Path $TempRoot "rdev-cache/cgo-$ExpectedTag-windows-amd64-$Asset"
+        $Cache = Join-Path $TempRoot "rdev-cache/go-$ExpectedTag-windows-amd64-$Asset"
         if (-not (Test-Path (Join-Path $Cache 'payload'))) { throw "Missing pinned cache: $Cache" }
     }
     foreach ($Mode in @('html', 'empty')) {
         $script:DownloadMode = $Mode
         $script:ReachedLaunch = $false
         $Failed = $false
-        try { RDev -Server $Server -Client cgo -Mirror none -Version "2.0.$($Mode.Length)" } catch { $Failed = $true }
+        try { RDev -Server $Server -Client go -Mirror none -Version "2.0.$($Mode.Length)" } catch { $Failed = $true }
         if (-not $Failed -or $script:ReachedLaunch) { throw "Accepted $Mode release" }
     }
     $script:DownloadMode = 'offline'
-    $Cache = Join-Path $TempRoot "rdev-cache/cgo-v0.2.134-windows-amd64-$Asset"
+    $Cache = Join-Path $TempRoot "rdev-cache/go-v0.2.134-windows-amd64-$Asset"
     $script:ReachedLaunch = $false
-    try { RDev -Server $Server -Client cgo -Mirror none } catch {
+    try { RDev -Server $Server -Client go -Mirror none } catch {
         if ($_.Exception.Message -ne 'SMOKE_STOP_BEFORE_LAUNCH') { throw }
     }
     if (-not $script:ReachedLaunch) { throw 'Cached package was not used offline without a signature' }
@@ -105,7 +105,7 @@ try {
         }
         $script:ReachedLaunch = $false
         $Failed = $false
-        try { RDev -Server $Server -Client cgo -Mirror none } catch { $Failed = $true }
+        try { RDev -Server $Server -Client go -Mirror none } catch { $Failed = $true }
         if (-not $Failed -or $script:ReachedLaunch) { throw "Accepted $CacheMode cache" }
     }
     # ZIP payloads are kept and extracted anew on cache hits, including sidecars.

@@ -753,6 +753,18 @@ function DesktopSession({
   };
 
   const drawFrame = (data: ArrayBuffer) => {
+    // H.264 frames form one prediction chain. Feed every access unit in
+    // arrival order; the latest-frame coalescing below is safe only for JPEG.
+    if (videoFormatRef.current === "h264") {
+      if (feedH264Frame(data)) {
+        frameCountRef.current++;
+        frameBytesRef.current += data.byteLength || 0;
+        if (!statsStartedAtRef.current) statsStartedAtRef.current = performance.now();
+        lastFrameAtRef.current = performance.now();
+        updateFrameInfo();
+      }
+      return;
+    }
     pendingFrameRef.current = { data, connection: connSeqRef.current, socket: wsRef.current };
     if (drawingRef.current) return;
     drawingRef.current = true;
@@ -764,15 +776,7 @@ function DesktopSession({
         pending.socket === wsRef.current && videoFormatRef.current === format;
       const frame = current() ? pending?.data : null;
       try {
-        if (format === "h264") {
-          if (frame && feedH264Frame(frame)) {
-            frameCountRef.current++;
-            frameBytesRef.current += frame.byteLength || 0;
-            if (!statsStartedAtRef.current) statsStartedAtRef.current = performance.now();
-            lastFrameAtRef.current = performance.now();
-            updateFrameInfo();
-          }
-        } else if (frame) {
+        if (frame) {
           const blob = new Blob([frame], { type: "image/jpeg" });
           if (await paintDesktopImage(blob, current, paintImage, decodeImage)) {
             frameCountRef.current++;
@@ -1636,6 +1640,11 @@ function DesktopSession({
         lastCloseMsgRef.current = msg.message || tt("common.error");
         setStatus(lastCloseMsgRef.current, "err");
       } else if (msg.op === "closed") {
+        if (msg.format === "h264") {
+          forcedFormatRef.current = "mjpeg";
+          retryAfterClose = true;
+          desktopReconnectDelayRef.current = 1000;
+        }
         lastCloseMsgRef.current = msg.message || tt("desktop.closed");
         setStatus(lastCloseMsgRef.current, msg.message ? "err" : "warn");
       } else if (msg.op === "clipboard_content") {

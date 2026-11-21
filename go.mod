@@ -8,13 +8,14 @@ require (
 	github.com/anmitsu/go-shlex v0.0.0-20200514113438-38f4b401e2be
 	github.com/aymanbagabas/go-pty v0.2.3
 	github.com/ebitengine/purego v0.11.3
-	github.com/gen2brain/x264-go v0.4.0
 	github.com/gliderlabs/ssh v0.3.8
 	github.com/go-git/go-git/v5 v5.19.3
 	github.com/gofrs/flock v0.13.2
 	github.com/iamacarpet/go-winpty v1.0.4
 	github.com/lxzan/gws v1.10.2
 	github.com/minio/selfupdate v0.6.0
+	github.com/oops1/go.264 v1.14.0
+	github.com/pion/stun/v4 v4.0.1
 	github.com/pion/webrtc/v4 v4.2.26
 	github.com/pkg/sftp v1.13.12
 	github.com/robfig/cron/v3 v3.0.1
@@ -61,7 +62,6 @@ require (
 	github.com/pion/sctp v1.12.1 // indirect
 	github.com/pion/sdp/v3 v3.0.20 // indirect
 	github.com/pion/srtp/v3 v3.1.3 // indirect
-	github.com/pion/stun/v4 v4.0.1 // indirect
 	github.com/pion/transport/v5 v5.1.5 // indirect
 	github.com/pion/turn/v5 v5.1.3 // indirect
 	github.com/pjbgf/sha1cd v0.7.0 // indirect
@@ -80,3 +80,5 @@ require (
 )
 
 replace github.com/gliderlabs/ssh => ./internal/sshlib
+
+replace github.com/oops1/go.264 => github.com/icepie/go.264 v1.14.1-rdev.1

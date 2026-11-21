@@ -611,7 +611,7 @@ func (s *Server) handleDesktopMessage(msg *protocol.Message) {
 		if route.conn == nil {
 			return
 		}
-		route.conn.writeJSON(desktopMsg{Op: "closed", Session: msg.SessionID, Message: msg.Error})
+		route.conn.writeJSON(desktopMsg{Op: "closed", Session: msg.SessionID, Format: msg.Format, Message: msg.Error})
 		route.conn.close()
 	}
 }

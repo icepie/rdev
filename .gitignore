@@ -1,16 +1,18 @@
 # Binaries
 /rdev-server
 /rdev-client
-*.exe
-
-# Cross-compiled
 /rdev-server-*
 /rdev-client-*
-/rdev-server-gui
-/rdev-server-nocgo
+*.exe
 
 # Go
 /vendor/
+*.test
+coverage.out
+
+# Build output
+/build/
+/target/
 
 # Web
 node_modules/
@@ -19,18 +21,27 @@ node_modules/
 # Built frontend embedded into the Go binary (vite outDir)
 /internal/server/static/
 
-# Rust
-/clients/rdev-client-gpu/target/
-/clients/rdev-client-gpu/cua-driver-bridge/target/
+# Rust (cargo target dirs, including vendored crates)
+clients/**/target/
 /clients/rdev-client-gpu/dist/
 /internal/client/cua_native/rust-target/
 
+# Local third-party checkouts (submodules live in .gitmodules)
+/third_party/moonlight-web/
 
 # Android
 /clients/rdev-android/local.properties
 /clients/rdev-android/.gradle/
+/clients/rdev-android/.cxx/
+/clients/rdev-android/app/.cxx/
 /clients/rdev-android/build/
 /clients/rdev-android/app/build/
+/clients/rdev-android/captures/
+*.iml
+
+# Python tooling
+__pycache__/
+*.pyc
 
 # OS
 .DS_Store
@@ -42,6 +53,10 @@ Thumbs.db
 *.swp
 *.swo
 
+# Local env overrides
+.env.local
+.env.*.local
+
 # Data (host keys, authorized_keys - generated at runtime)
 *.pem
 host_key
@@ -49,3 +64,4 @@ authorized_keys
 
 # Test artifacts
 /tmp/
+/.*-smoke/

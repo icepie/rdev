@@ -1,8 +1,9 @@
-.PHONY: all build clean cross server client client-cgo client-cgo-native rust-cua-bridge web web-install test vet fmt win7-go-client win7-service-wrapper rust-client-gpu rust-client-gpu-check rust-client-gpu-fmt rust-client-gpu-clippy rust-client-gpu-test rust-client-gpu-smoke rust-client-gpu-linux-desktop-package rust-client-gpu-windows-arm64-package rust-client-gpu-win7-package rust-client-gpu-win7-rdev-desktop-package rust-client-gpu-win7-stage rust-client-gpu-win7-smoke client-cpp
+.PHONY: all build clean cross server client web web-install test vet fmt win7-go-client win7-service-wrapper rust-client-gpu rust-client-gpu-check rust-client-gpu-fmt rust-client-gpu-clippy rust-client-gpu-test rust-client-gpu-smoke rust-client-gpu-linux-desktop-package rust-client-gpu-windows-arm64-package rust-client-gpu-win7-package rust-client-gpu-win7-rdev-desktop-package rust-client-gpu-win7-stage rust-client-gpu-win7-smoke client-cpp
 
-BINS = rdev-server rdev-client rdev-client-cgo
+BINS = rdev-server rdev-client
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 LDFLAGS = -s -w -X main.version=$(VERSION)
+GO264_TAGS = -tags go264_nohwaccel
 GO_WIN7 ?= go
 WIN7_SERVICE_DIST = target/win7-service
 RUST_CLIENT_GPU_MANIFEST = clients/rdev-client-gpu/Cargo.toml
@@ -10,8 +11,6 @@ RUST_CLIENT_GPU_WIN7_DIR = clients/rdev-client-gpu/target/x86_64-pc-windows-gnul
 RUST_CLIENT_GPU_WIN7_DIST = clients/rdev-client-gpu/target/win7-dist
 RUST_CLIENT_GPU_WIN7_RUNTIME_DIR ?= /opt/llvm-mingw/x86_64-w64-mingw32/bin
 RUST_CLIENT_GPU_WIN7_RDEV_DESKTOP_DIST = clients/rdev-client-gpu/target/win7-rdev-desktop-dist
-RUST_CUA_BRIDGE_MANIFEST = clients/rdev-client-gpu/cua-driver-bridge/Cargo.toml
-RUST_CUA_BRIDGE_TARGET = internal/client/cua_native/rust-target
 CPP_CLIENT_BUILD_DIR = target/rdev-client-cpp
 
 all: build
@@ -29,28 +28,21 @@ server: web
 	go build -ldflags "$(LDFLAGS)" -o rdev-server ./cmd/rdev-server
 
 client:
-	go build -ldflags "$(LDFLAGS)" -o rdev-client ./cmd/rdev-client
+	go build $(GO264_TAGS) -ldflags "$(LDFLAGS)" -o rdev-client ./cmd/rdev-client
 
-client-cgo:
-	CGO_ENABLED=1 go build -tags x264cgo -ldflags "$(LDFLAGS)" -o rdev-client-cgo ./cmd/rdev-client
 
 client-cpp:
 	cmake -S clients/rdev-client-cpp -B $(CPP_CLIENT_BUILD_DIR)
 	cmake --build $(CPP_CLIENT_BUILD_DIR) --parallel
 
-rust-cua-bridge:
-	cargo build --release --manifest-path $(RUST_CUA_BRIDGE_MANIFEST) --features cua-native --target-dir $(RUST_CUA_BRIDGE_TARGET)
-
-client-cgo-native: rust-cua-bridge
-	CGO_ENABLED=1 go build -tags 'x264cgo cuanative' -ldflags "$(LDFLAGS)" -o rdev-client-cgo ./cmd/rdev-client
 
 clean:
 	rm -f $(BINS) $(BINS)-*
-	rm -rf clients/rdev-client-gpu/target internal/client/cua_native/rust-target $(WIN7_SERVICE_DIST) $(CPP_CLIENT_BUILD_DIR)
+	rm -rf clients/rdev-client-gpu/target $(WIN7_SERVICE_DIST) $(CPP_CLIENT_BUILD_DIR)
 
 win7-go-client:
 	mkdir -p $(WIN7_SERVICE_DIST)
-	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 $(GO_WIN7) build -ldflags "$(LDFLAGS)" -o $(WIN7_SERVICE_DIST)/rdev-client.exe ./cmd/rdev-client
+	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 $(GO_WIN7) build $(GO264_TAGS) -ldflags "$(LDFLAGS)" -o $(WIN7_SERVICE_DIST)/rdev-client.exe ./cmd/rdev-client
 
 win7-service-wrapper:
 	mkdir -p $(WIN7_SERVICE_DIST)
@@ -125,28 +117,28 @@ rdev-server-linux-%: web
 	CGO_ENABLED=0 GOOS=linux GOARCH=$* go build -ldflags "$(LDFLAGS)" -o $@ ./cmd/rdev-server
 
 rdev-client-linux-%:
-	CGO_ENABLED=0 GOOS=linux GOARCH=$* go build -ldflags "$(LDFLAGS)" -o $@ ./cmd/rdev-client
+	CGO_ENABLED=0 GOOS=linux GOARCH=$* go build $(GO264_TAGS) -ldflags "$(LDFLAGS)" -o $@ ./cmd/rdev-client
 
 rdev-server-darwin-%: web
 	CGO_ENABLED=0 GOOS=darwin GOARCH=$* go build -ldflags "$(LDFLAGS)" -o $@ ./cmd/rdev-server
 
 rdev-client-darwin-%:
-	CGO_ENABLED=0 GOOS=darwin GOARCH=$* go build -ldflags "$(LDFLAGS)" -o $@ ./cmd/rdev-client
+	CGO_ENABLED=0 GOOS=darwin GOARCH=$* go build $(GO264_TAGS) -ldflags "$(LDFLAGS)" -o $@ ./cmd/rdev-client
 
 rdev-server-windows-amd64.exe: web
 	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags "$(LDFLAGS)" -o $@ ./cmd/rdev-server
 
 rdev-client-windows-amd64.exe:
-	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags "$(LDFLAGS)" -o $@ ./cmd/rdev-client
+	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build $(GO264_TAGS) -ldflags "$(LDFLAGS)" -o $@ ./cmd/rdev-client
 
 rdev-client-windows-386.exe:
-	CGO_ENABLED=0 GOOS=windows GOARCH=386 go build -ldflags "$(LDFLAGS)" -o $@ ./cmd/rdev-client
+	CGO_ENABLED=0 GOOS=windows GOARCH=386 go build $(GO264_TAGS) -ldflags "$(LDFLAGS)" -o $@ ./cmd/rdev-client
 
 test:
-	go test ./...
+	go test $(GO264_TAGS) ./...
 
 vet:
-	go vet ./...
+	go vet $(GO264_TAGS) ./...
 
 fmt:
 	gofmt -w .

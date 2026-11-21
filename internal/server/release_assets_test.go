@@ -14,17 +14,17 @@ import (
 )
 
 func TestLatestReleaseAssetSkipsUnrelatedAndUnpublishedReleases(t *testing.T) {
-	const asset = "rdev-client-cgo-windows-amd64.exe"
+	const asset = "rdev-client-windows-amd64.exe"
 	metadata := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Get("page") != "1" || r.URL.Query().Get("per_page") != "100" {
 			t.Errorf("unexpected query: %s", r.URL.RawQuery)
 		}
 		_, _ = w.Write([]byte(`[
-			{"tag_name":"v0.2.137","draft":true,"assets":[{"name":"rdev-client-cgo-windows-amd64.exe"}]},
-			{"tag_name":"v0.2.137-rc1","prerelease":true,"assets":[{"name":"rdev-client-cgo-windows-amd64.exe"}]},
+			{"tag_name":"v0.2.137","draft":true,"assets":[{"name":"rdev-client-windows-amd64.exe"}]},
+			{"tag_name":"v0.2.137-rc1","prerelease":true,"assets":[{"name":"rdev-client-windows-amd64.exe"}]},
 			{"tag_name":"v0.2.136","assets":[{"name":"rdev-client-gpu-windows-amd64.zip"}]},
-			{"tag_name":"v0.2.135","assets":[{"name":"rdev-client-cgo-windows-arm64.exe"}]},
-			{"tag_name":"v0.2.134","assets":[{"name":"rdev-client-cgo-windows-amd64.exe"}]}
+			{"tag_name":"v0.2.135","assets":[{"name":"rdev-client-windows-arm64.exe"}]},
+			{"tag_name":"v0.2.134","assets":[{"name":"rdev-client-windows-amd64.exe"}]}
 		]`))
 	}))
 	defer metadata.Close()
@@ -69,7 +69,7 @@ func TestLatestReleaseAssetMetadataFailure(t *testing.T) {
 }
 
 func TestReleaseAssetLatestLocalEndpoints(t *testing.T) {
-	const asset = "rdev-client-cgo-windows-amd64.exe"
+	const asset = "rdev-client-windows-amd64.exe"
 	s := NewServer()
 	s.ReleaseDir = t.TempDir()
 	for _, tag := range []string{"v0.2.134", "v0.2.136", "v0.2.137-rc1"} {
@@ -78,7 +78,7 @@ func TestReleaseAssetLatestLocalEndpoints(t *testing.T) {
 		}
 	}
 	for _, tag := range []string{"v0.2.134", "v0.2.137-rc1"} {
-		if err := os.WriteFile(filepath.Join(s.ReleaseDir, tag, asset), []byte("MZ-cgo-release"), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(s.ReleaseDir, tag, asset), []byte("MZ-go-release"), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -112,7 +112,7 @@ func TestReleaseAssetLatestLocalEndpoints(t *testing.T) {
 }
 
 func TestReleaseAssetLatestPinsRedirectAndProxyCache(t *testing.T) {
-	const asset, tag = "rdev-client-cgo-windows-amd64.exe", "v0.2.134"
+	const asset, tag = "rdev-client-windows-amd64.exe", "v0.2.134"
 	s := NewServer()
 	s.DataDir = t.TempDir()
 	s.releaseLatestAssets = map[string]releaseAssetTag{asset: {tag: tag, expiresAt: time.Now().Add(time.Minute)}}
@@ -133,12 +133,12 @@ func TestReleaseAssetLatestPinsRedirectAndProxyCache(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(cache), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(cache, []byte("MZ-cached-cgo"), 0o644); err != nil {
+	if err := os.WriteFile(cache, []byte("MZ-cached-go"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	w = httptest.NewRecorder()
 	s.HandleReleaseDownloadProxy(w, httptest.NewRequest(http.MethodGet, "/download-release-proxy?asset="+asset+"&tag=latest", nil))
-	if w.Code != http.StatusOK || w.Body.String() != "MZ-cached-cgo" {
+	if w.Code != http.StatusOK || w.Body.String() != "MZ-cached-go" {
 		t.Fatalf("proxy = %d %q", w.Code, w.Body.String())
 	}
 }

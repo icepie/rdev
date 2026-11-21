@@ -35,7 +35,7 @@
 | 跨平台 | Unix (creack/pty) / Windows (ConPty) / 其他 (pipe) |
 | Terminal Modes | SSH pty-req modes 完整转发 (ECHO, ONLCR, etc.) |
 | Remote Desktop | 已支持浏览器远程屏幕查看与输入控制 MVP（Linux X11/DRM/fbdev、Windows GDI/DXGI、macOS Quartz/CoreGraphics no-cgo 截屏；输入后端含 XTEST、可选 uinput、Win32、可选 Win8+ Touch Injection、macOS Quartz mouse/keyboard；默认 CGO_ENABLED=0）。设计见 `docs/remote-desktop.md` |
-| 客户端版本 | 兼容版 `rdev-client-*`(go，默认，CGO_ENABLED=0)、性能版 `rdev-client-gpu-*`(rs，Rust GPU 硬件编码)、特性版 `rdev-client-cgo-*`(cgo，内置软件 H.264/x264，GPL-2.0-only)。三者均可通过 `run.sh`/`run.ps1` 的 `--client go|rs|cgo` 一键启动 |
+| 客户端版本 | 兼容版 `rdev-client-*`（Go，默认，`CGO_ENABLED=0`，纯 Go H.264 + MJPEG 回退）和性能版 `rdev-client-gpu-*`（Rust，GPU/软件 H.264）。两者均可通过 `run.sh`/`run.ps1` 的 `--client go|rs` 一键启动 |
 | Rust GPU Client | 可选实验版 `clients/rdev-client-gpu`，优先补齐 SSH/session/内置 SFTP/Rsync/TCP/file 基础能力，并提供可选内置 RDev/Weylus 风格 GPU 桌面隧道；Win7 包使用普通 Windows GNU 构建加 PE import patch 和兼容 shim DLL |
 | Android / Termux | 支持 Termux 一键运行 Go 兼容版与 Rust no-desktop 版，Android/Bionic 包使用 Android libc DNS；详见 `docs/android-termux.md` |
 | Android APK | Android 7.0+ 独立被控端，`MediaProjection + MediaCodec` 屏幕流和 Accessibility 输入；单 APK 内嵌真实 AutoJs6 6.8.0 / OpenCV，Agent 可通过 `autojs` 执行设备端脚本；详见 `docs/android-apk.md` |
@@ -326,7 +326,7 @@ Web UI 是 React 19 + Tailwind CSS v4 + Radix UI 单页应用，组件/设计令
 - Windows 10/11 的实验 Rust 客户端优先使用 `portable-pty`/ConPTY，失败后退回 pipe shell。
 - Windows 10 build 17763（1809）之前没有 ConPTY；`run.ps1` 会自动下载 WinPTY 后再启动交互终端。
 - 原生 32 位 Windows 会自动下载 `rdev-client-windows-386.exe`；32 位 PowerShell 运行在 64 位 Windows 上仍会正确下载其原生 `amd64`/`arm64` 客户端。
-- Windows `run.ps1` 的 `RDev -Client cgo` 未指定 `-Version` 时按客户端及架构的精确资产查找最新已发布稳定版本，并将下载地址和缓存固定到同一 tag。仅发布 GPU/APK 的更新不会让 CGO 安装器误取仓库全局 `latest`；不会静默切换客户端。服务端 `/api/release/latest?asset=<文件名>` 及两个下载端点同样按资产解析，指定版本则保持原样、缺少资产时失败。回归：`pwsh -NoProfile -File scripts/test-runner-release.ps1`；加 `-Live` 可查询真实元数据并下载 Windows CGO 包检查 PE 文件头（不启动客户端）。
+- Windows `run.ps1` 未指定 `-Version` 时按所选客户端及架构的精确资产查找最新稳定版本，并将下载地址和缓存固定到同一 tag；不会因仅发布其他客户端而误取仓库全局 `latest`。服务端 `/api/release/latest?asset=<文件名>` 及两个下载端点同样按资产解析，指定版本保持原样、缺少资产时失败。回归：`pwsh -NoProfile -File scripts/test-runner-release.ps1`；加 `-Live` 可查询真实元数据并下载 Windows Go 包检查 PE 文件头（不启动客户端）。
 - Windows 7/8/8.1 的 Go `run.ps1` 会自动下载 WinPTY 运行时，并通过同一套 GitHub 代理前缀重试。
 - Windows 7 的默认 PowerShell 2.0/.NET 2.0 无法通过 `ServicePointManager` 设置 TLS 1.2。首页 Win7 安装命令使用原生 WinHTTP，安装脚本的版本查询和文件下载也提供 WinHTTP 回退，保留证书校验和 HTTPS。系统仍需支持 TLS 1.2（Windows 7 SP1 及相关更新、有效根证书）；未更新的系统不能仅通过修改脚本获得 TLS 支持。
 - Rust `rdev-client-gpu` 的 Win7 包会自动探测并打包 `winpty.dll`/`winpty-agent.exe`；运行时也会从 `RDEV_WINPTY_DIR`、程序目录和 `PATH` 探测 WinPTY。
@@ -334,11 +334,7 @@ Web UI 是 React 19 + Tailwind CSS v4 + Radix UI 单页应用，组件/设计令
 - Win7 运行 Go 客户端请使用 XTLS `go-win7` 工具链构建，例如 `GO_WIN7=/path/to/go-win7/bin/go make win7-go-client win7-service-wrapper`。
 - Windows 服务不要直接托管客户端 EXE；使用 `rdev-service-wrapper.exe`，并在配置中设置 `interactive: true`，让服务在活动登录用户桌面启动客户端，避免桌面截图出现 Session 0 的 `Access is denied`。
 - GPU 桌面采用 RDev/Weylus 风格：`rdev-client-gpu` 可通过 `embedded-rdev-desktop` feature 内置启动 vendored RDev 桌面 HTTP/WS 服务并连接 `/gpu-desktop-tunnel`，服务端通过 `/gpu-desktop/<device>/` 代理浏览器流量；服务端只做鉴权和隧道转发。
-- 原生 CUA 工具：Go cgo-native 与 Rust GPU 客户端均通过顶层 `cua` 工具的 `action=tools` 返回精简工具目录，再用 `action=tools, tool=<工具名>` 按需读取完整输入 schema，最后以 `action=call` 调用，避免整个 SDK 工具目录挤占模型上下文；不再经 `computer.native_tools`。工具范围取决于客户端 Cua Driver 的 `tools/list`。普通 Go 客户端仍使用截图/坐标输入，不链接 Cua SDK。
- `client-cgo-native` 需要 Rust/Cargo 和 C 编译器；SDK 固定为 `0.47.1`，静态链接进客户端，无运行时下载或 MCP 子进程。运行时遵守 Cua 平台支持及辅助功能权限约束；Go 客户端的纯 Go 桌面路径不依赖 SDK。
- Linux 原生构建还需要 `pkg-config` 及 X11、Xi、xkbcommon 开发库（Debian/Ubuntu：`libx11-dev libxi-dev libxkbcommon-dev`）。
-  Windows ARM64 的 Go 原生 CUA 构建在链接前由 `scripts/strip-rust-archive.py` 对普通目标文件执行 LLVM `objcopy --remove-section=.llvmbc --remove-section=.llvmcmd`，原样保留 COFF 短导入成员并重建静态库符号索引。CGO 使用原生目标代码，不启用跨语言 LTO，也不关闭 Go 的链接安全检查。
- Go 原生结果保留 MCP 文本、结构化内容和错误信息；操作仍使用会话级桌面独占控制、人工接管和空闲释放规则。
+- 原生 CUA 工具由 Rust GPU 客户端提供：顶层 `cua` 工具先以 `action=tools` 返回精简目录，再用 `action=tools, tool=<工具名>` 按需读取完整输入 schema，最后以 `action=call` 调用。普通 Go 客户端仅使用截图和坐标输入，不链接 Cua SDK，也不声明 `desktop.nativeCua`。
 - 原生 CUA 桥接会跨单次工具调用错误保留同一桌面会话；`set_agent_cursor_enabled` / `set_agent_cursor_motion` 只有在同会话状态读回匹配后才返回成功，等待超过 5 秒会作为调用错误返回。macOS GPU 客户端在进程主线程运行 AppKit cursor overlay loop，Tokio 客户端运行在后台线程。
 - Rust 客户端在 Linux 上直接调用 `renameat2` 系统调用，兼容 CentOS 7 的旧 glibc；重命名不会覆盖已存在的目标，不支持该系统调用的内核会返回错误而非降级为非原子操作。
 
@@ -378,34 +374,29 @@ make cross
 CGO_ENABLED=0 go build -o rdev-server ./cmd/rdev-server
 
 # 交叉编译客户端
-CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -o rdev-client.exe ./cmd/rdev-client
-CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o rdev-client-arm64 ./cmd/rdev-client
+CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -tags go264_nohwaccel -o rdev-client.exe ./cmd/rdev-client
+CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -tags go264_nohwaccel -o rdev-client-arm64 ./cmd/rdev-client
 ```
 
 发布标签前应通过 Rust 的格式检查、Clippy、单元测试及 `make rust-client-gpu-smoke`；GPU 发布流程要求这些检查和跨平台构建、Windows 包启动检查全部成功。文件传输冒烟使用必需的 SHA-256 上传摘要，并核对上传完成及下载元数据中的摘要。已发布标签不重写；发布检查修复使用新的补丁版本。
 
-### 特性版（cgo，可选软件 H.264 客户端）
+### Go 客户端桌面编码
 
-默认 `rdev-client`（兼容版）保持 `CGO_ENABLED=0`，仅提供 MJPEG。特性版
-`rdev-client-cgo` 内置 x264：浏览器和客户端都支持时，桌面流自动协商 H.264，
-其他场景回退到 MJPEG。
-
-发布资产覆盖 `linux/amd64`、`linux/arm64`、`darwin/arm64`、`windows/amd64`、
-`windows/386`、`windows/arm64`（Windows 386/amd64 使用 go-win7 工具链构建）。
-一键启动：
-
-```bash
-curl -sL https://your-server/run.sh | sh -s -- wss://your-server --client cgo
-```
-
-本地构建：
+默认 Go 客户端通过 BSD-2-Clause 的 `go.264` 软件编码器提供 H.264
+Baseline/AVCC，并保留 MJPEG 通用回退；项目将上游模块替换为
+`github.com/icepie/go.264 v1.14.1-rdev.1` 维护分支，使编码器可在首帧前直接
+提供 SPS/PPS，避免为初始化 WebCodecs 丢弃一帧。发布构建使用
+`go264_nohwaccel` 标签排除可选 Linux 动态硬件后端，保持 `CGO_ENABLED=0`
+Linux 客户端静态可执行。需要更高帧率、硬件编码或原生 CUA 时使用 Rust GPU 客户端：
 
 ```bash
-make client-cgo
-./rdev-client-cgo -s tcp://your-server:8081 -i my-device
+curl -sL https://your-server/run.sh | sh -s -- wss://your-server --client rs
 ```
 
-该二进制静态嵌入 x264，受 GPL-2.0-only 约束；不要将它替换为默认客户端或与不兼容许可证的发布物混合。
+未采用 `github.com/Eyevinn/hi264` 作为远程桌面编码器：该库面向 H.264
+位流处理和测试图生成，只支持 16×16/8×8 平色块的 I_16x16 图像及 P_Skip，
+不接收任意像素执行通用视频编码或运动估计；直接用于桌面会导致文字不可读并在
+动态画面产生不可接受的全 IDR 开销。
 
 ### Agent 与界面规范
 

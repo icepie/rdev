@@ -167,9 +167,6 @@ func (c *Client) handleDesktopStart(msg *protocol.Message) {
 	caps.Clipboard = session.clipboard != nil
 	caps.Reason = ""
 	size := scaledDimension(bounds.Dx(), bounds.Dy(), msg.Width, msg.Height)
-	if normalizeDesktopFormat(msg.Format) == desktopFormatH264 {
-		size.X, size.Y = normalizeH264FrameSize(size.X, size.Y)
-	}
 	session.setFrame(bounds, size.X, size.Y)
 	sourceID := desktopSourceLabel(msg.Source)
 	if reporter, ok := capturer.(desktopSourceReporter); ok {
@@ -209,6 +206,8 @@ func (c *Client) handleDesktopStart(msg *protocol.Message) {
 		return
 	}
 	requestedFormat := normalizeDesktopFormat(msg.Format)
+	size = normalizeDesktopFrameSize(requestedFormat, size)
+	session.setFrame(bounds, size.X, size.Y)
 	encoder := newDesktopEncoder(requestedFormat, size.X, size.Y, quality, fps)
 	defer encoder.Close()
 	codecInfo := encoder.CodecInfo()
@@ -267,8 +266,10 @@ func (c *Client) handleDesktopStart(msg *protocol.Message) {
 			session.setFrame(bounds, size.X, size.Y)
 			payload, send, err := sender.tick(frame, time.Now())
 			if err != nil {
-				log.Printf("desktop encode error for source %s: %v", sourceName, err)
-				continue
+				err = fmt.Errorf("desktop %s encode failed for source %s: %w", format, sourceName, err)
+				log.Printf("%v", err)
+				c.send(&protocol.Message{Type: protocol.MsgDesktopClose, SessionID: msg.SessionID, Format: format, Error: err.Error()})
+				return
 			}
 			if !send {
 				continue
