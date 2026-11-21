@@ -10,15 +10,91 @@ use crate::protocol::{Button, KeyboardEvent, KeyboardEventType, PointerEvent, Wh
 
 use crate::capturable::{Capturable, Geometry};
 
+/// Posts a key event directly through CoreGraphics. autopilot's macOS toggle
+/// skips keycode `0` (`if code != 0`), which is the physical keycode of `A`,
+/// so the letter could never be typed. `0` is a valid CGKeyCode and
+/// `CGEventCreateKeyboardEvent` accepts it.
 #[cfg(target_os = "macos")]
-#[derive(Copy, Clone)]
-struct MacKeyCode(u16);
+fn post_mac_key(keycode: u16, down: bool, flags: &[autopilot::key::Flag]) {
+    use core_graphics::event::{CGEvent, CGEventFlags, CGEventTapLocation};
+    use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
 
-#[cfg(target_os = "macos")]
-impl autopilot::key::KeyCodeConvertible for MacKeyCode {
-    fn code(&self) -> core_graphics::event::CGKeyCode {
-        self.0
+    let Ok(source) = CGEventSource::new(CGEventSourceStateID::HIDSystemState) else {
+        warn!("Could not create CGEventSource for keyboard input");
+        return;
+    };
+    let Ok(event) = CGEvent::new_keyboard_event(source, keycode, down) else {
+        warn!("Could not create keyboard event for keycode {keycode}");
+        return;
+    };
+    let mut event_flags = CGEventFlags::empty();
+    for flag in flags {
+        event_flags |= match flag {
+            autopilot::key::Flag::Shift => CGEventFlags::CGEventFlagShift,
+            autopilot::key::Flag::Control => CGEventFlags::CGEventFlagControl,
+            autopilot::key::Flag::Alt => CGEventFlags::CGEventFlagAlternate,
+            autopilot::key::Flag::Meta => CGEventFlags::CGEventFlagCommand,
+            autopilot::key::Flag::Help => continue,
+        };
     }
+    event.set_flags(event_flags);
+    // HID tap so macOS applies the modifier flags before dispatching the key.
+    event.post(CGEventTapLocation::HID);
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn mac_keycode(code: &str) -> Option<u16> {
+    let keycode = match code {
+        "KeyA" => 0x00,
+        "KeyS" => 0x01,
+        "KeyD" => 0x02,
+        "KeyF" => 0x03,
+        "KeyH" => 0x04,
+        "KeyG" => 0x05,
+        "KeyZ" => 0x06,
+        "KeyX" => 0x07,
+        "KeyC" => 0x08,
+        "KeyV" => 0x09,
+        "KeyB" => 0x0b,
+        "KeyQ" => 0x0c,
+        "KeyW" => 0x0d,
+        "KeyE" => 0x0e,
+        "KeyR" => 0x0f,
+        "KeyY" => 0x10,
+        "KeyT" => 0x11,
+        "KeyO" => 0x1f,
+        "KeyU" => 0x20,
+        "KeyI" => 0x22,
+        "KeyP" => 0x23,
+        "KeyL" => 0x25,
+        "KeyJ" => 0x26,
+        "KeyK" => 0x28,
+        "KeyN" => 0x2d,
+        "KeyM" => 0x2e,
+        "Digit1" => 0x12,
+        "Digit2" => 0x13,
+        "Digit3" => 0x14,
+        "Digit4" => 0x15,
+        "Digit6" => 0x16,
+        "Digit5" => 0x17,
+        "Digit9" => 0x19,
+        "Digit7" => 0x1a,
+        "Digit8" => 0x1c,
+        "Digit0" => 0x1d,
+        "Equal" => 0x18,
+        "Minus" => 0x1b,
+        "BracketRight" => 0x1e,
+        "BracketLeft" => 0x21,
+        "Quote" => 0x27,
+        "Semicolon" => 0x29,
+        "Backslash" => 0x2a,
+        "Comma" => 0x2b,
+        "Slash" => 0x2c,
+        "Period" => 0x2f,
+        "Backquote" => 0x32,
+        _ => return None,
+    };
+    Some(keycode)
 }
 
 pub struct AutoPilotDevice {
@@ -145,60 +221,6 @@ impl InputDevice for AutoPilotDevice {
             }
         }
 
-        #[cfg(target_os = "macos")]
-        fn map_mac_key(code: &str) -> Option<MacKeyCode> {
-            let keycode = match code {
-                "KeyA" => 0x00,
-                "KeyS" => 0x01,
-                "KeyD" => 0x02,
-                "KeyF" => 0x03,
-                "KeyH" => 0x04,
-                "KeyG" => 0x05,
-                "KeyZ" => 0x06,
-                "KeyX" => 0x07,
-                "KeyC" => 0x08,
-                "KeyV" => 0x09,
-                "KeyB" => 0x0b,
-                "KeyQ" => 0x0c,
-                "KeyW" => 0x0d,
-                "KeyE" => 0x0e,
-                "KeyR" => 0x0f,
-                "KeyY" => 0x10,
-                "KeyT" => 0x11,
-                "KeyO" => 0x1f,
-                "KeyU" => 0x20,
-                "KeyI" => 0x22,
-                "KeyP" => 0x23,
-                "KeyL" => 0x25,
-                "KeyJ" => 0x26,
-                "KeyK" => 0x28,
-                "KeyN" => 0x2d,
-                "KeyM" => 0x2e,
-                "Digit1" => 0x12,
-                "Digit2" => 0x13,
-                "Digit3" => 0x14,
-                "Digit4" => 0x15,
-                "Digit6" => 0x16,
-                "Digit5" => 0x17,
-                "Digit9" => 0x19,
-                "Digit7" => 0x1a,
-                "Digit8" => 0x1c,
-                "Digit0" => 0x1d,
-                "Equal" => 0x18,
-                "Minus" => 0x1b,
-                "BracketRight" => 0x1e,
-                "BracketLeft" => 0x21,
-                "Quote" => 0x27,
-                "Semicolon" => 0x29,
-                "Backslash" => 0x2a,
-                "Comma" => 0x2b,
-                "Slash" => 0x2c,
-                "Period" => 0x2f,
-                "Backquote" => 0x32,
-                _ => return None,
-            };
-            Some(MacKeyCode(keycode))
-        }
         let key = map_key(&event.code);
         let mut flags = Vec::new();
         if event.ctrl {
@@ -214,8 +236,8 @@ impl InputDevice for AutoPilotDevice {
             flags.push(autopilot::key::Flag::Shift);
         }
         #[cfg(target_os = "macos")]
-        if let Some(key) = map_mac_key(&event.code) {
-            autopilot::key::toggle(&key, state, &flags, 0);
+        if let Some(keycode) = mac_keycode(&event.code) {
+            post_mac_key(keycode, state, &flags);
             return;
         }
         match key {
@@ -234,5 +256,15 @@ impl InputDevice for AutoPilotDevice {
 
     fn device_type(&self) -> InputDeviceType {
         InputDeviceType::AutoPilotDevice
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::mac_keycode;
+
+    #[test]
+    fn mac_a_keycode_is_valid_zero() {
+        assert_eq!(mac_keycode("KeyA"), Some(0));
     }
 }
