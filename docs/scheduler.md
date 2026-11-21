@@ -59,6 +59,13 @@ Route changes/unmount abort and ignore obsolete responses, even if the transport
 ignores cancellation. Follow-off disables periodic run refresh without clearing
 visible results. Mutation errors remain visible alongside retained data.
 
+The schedule editor exposes recurring and one-time timing as mutually exclusive
+modes. Preview and save normalize the request to exactly one of `cron` or `at`,
+so hidden stale values cannot trigger the server's exclusivity validation. Common
+intervals fill the normal five-field Cron expression; custom Cron remains
+available. Execution defaults match server normalization (`maxWaitSeconds=300`,
+`graceSeconds=1800`), and unattended authorization remains an explicit checkbox.
+
 ## Reproducible checks (not deployment)
 
 Run after all workspace changes are integrated:
