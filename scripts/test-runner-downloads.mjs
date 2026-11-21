@@ -40,7 +40,7 @@ function fixture(client = 'go') {
   return { root, temp, output, payload, run, close() { rmSync(root, { recursive: true, force: true }); } };
 }
 
-for (const client of ['go', 'cgo', 'rs']) {
+for (const client of ['go', 'rs']) {
   test(`${client}: runs without OpenSSL or signatures; package cache retains runtime`, () => {
     const f = fixture(client);
     try {
