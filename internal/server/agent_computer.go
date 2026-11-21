@@ -210,7 +210,7 @@ func (t *computerTool) Execute(ctx context.Context, raw json.RawMessage) (string
 			return t.executeNativeCua(ctx, client, a, raw)
 		}
 		if !t.srv.clientGPUDesktopAvailable(client) {
-			return "", fmt.Errorf("native Cua tools unsupported: use a Cua-capable Go cgo or Rust client; pure-Go Go clients support screenshot/input only")
+			return "", fmt.Errorf("native Cua tools unsupported: use a Rust GPU client; Go clients support screenshot and coordinate input")
 		}
 		return t.executeGPU(ctx, client, a, raw)
 	}

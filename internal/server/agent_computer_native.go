@@ -25,7 +25,7 @@ func (t *computerTool) executeNativeCua(ctx context.Context, client *ClientConn,
 		}
 	}
 	if client.Desktop == nil || !client.Desktop.NativeCua {
-		return "", fmt.Errorf("native Cua requires a Cua-enabled Go cgo client")
+		return "", fmt.Errorf("native Cua requires a Rust GPU client")
 	}
 	if err := t.claim(client.ID); err != nil {
 		return "", err
