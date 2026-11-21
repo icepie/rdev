@@ -81,4 +81,4 @@ require (
 
 replace github.com/gliderlabs/ssh => ./internal/sshlib
 
-replace github.com/oops1/go.264 => github.com/icepie/go.264 v1.14.1-rdev.1
+replace github.com/oops1/go.264 => github.com/icepie/go.264 v1.14.2-rdev.1

@@ -384,10 +384,11 @@ CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o rdev-client-arm64 ./cmd/rdev-c
 
 默认 Go 客户端通过 BSD-2-Clause 的 `go.264` 提供 H.264 Baseline/AVCC，
 并保留 MJPEG 通用回退；项目将上游模块替换为
-`github.com/icepie/go.264 v1.14.1-rdev.1` 维护分支。Linux amd64/arm64
+`github.com/icepie/go.264 v1.14.2-rdev.1` 维护分支。Linux amd64/arm64
 按 NVENC、VA-API、CPU 顺序自动选择，Windows 使用 Media Foundation 后回退 CPU，
-macOS 使用 CPU；全部路径仍为 `CGO_ENABLED=0`，不启动 FFmpeg 等外部进程。
-Linux 硬件后端通过系统动态加载器访问驱动；需要 musl/scratch 兼容的静态客户端时使用
+macOS amd64/arm64 使用系统 VideoToolbox 硬件 H.264 后回退 CPU。全部路径仍为
+`CGO_ENABLED=0`，不启动 FFmpeg 等外部进程。Linux 硬件后端通过系统动态加载器
+访问驱动；需要 musl/scratch 兼容的静态客户端时使用
 `GO264_TAGS='-tags go264_nohwaccel' make client`。需要原生 CUA 时使用 Rust GPU 客户端：
 
 ```bash

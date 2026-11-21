@@ -87,11 +87,11 @@ Recommended phases:
 5. **WASM codec in browser**: decode optimized delta/tile streams in browser without server CPU cost.
 6. **WebRTC optional path**: implemented as a default-off direct DataChannel for existing encoded streams; decode support is unchanged and the server WebSocket remains the fallback and human-control path.
 
-The default Go H.264 path uses NVENC then VA-API on supported Linux hosts, Media Foundation on Windows, and the processor otherwise. Hardware libraries and drivers are opened in-process at run time; the client does not require FFmpeg, GStreamer, external encoder processes, or cgo. A hardware backend that fails while streaming is disabled for the life of the client process, then the browser reconnects to CPU H.264; a CPU failure falls back to MJPEG.
+The default Go H.264 path uses NVENC then VA-API on supported Linux hosts, Media Foundation on Windows, VideoToolbox on macOS amd64/arm64, and the processor otherwise. Hardware libraries, drivers, and Apple frameworks are opened in-process at run time; the client does not require FFmpeg, GStreamer, external encoder processes, or cgo. A hardware backend that fails while streaming is disabled for the life of the client process, then the browser reconnects to CPU H.264; a CPU failure falls back to MJPEG.
 
-Linux hardware builds use the system dynamic loader and therefore glibc. `-tags go264_nohwaccel` removes NVENC/VA-API for musl, `scratch`, and fully static deployments. macOS currently uses the maintained processor encoder; higher-frame-rate VideoToolbox remains available through the Rust GPU client.
+Linux hardware builds use the system dynamic loader and therefore glibc. `-tags go264_nohwaccel` removes NVENC/VA-API for musl, `scratch`, and fully static deployments. The macOS backend requires a real hardware VideoToolbox encoder and falls back to the maintained processor encoder when one is unavailable.
 
-`github.com/icepie/go.264` is maintained as an import-compatible replacement for `github.com/oops1/go.264`. It accepts arbitrary I420 pictures, performs inter-frame motion estimation, exposes SPS/PPS before the first software-encoded picture, emits standards-compatible IDR NAL units, and remains BSD-2-Clause licensed.
+`github.com/icepie/go.264` is maintained as an import-compatible replacement for `github.com/oops1/go.264`. It accepts arbitrary I420 pictures, performs inter-frame motion estimation, exposes SPS/PPS before the first software-encoded picture, uses no-cgo hardware encoders on Linux, Windows, and macOS, emits standards-compatible IDR NAL units, and remains BSD-2-Clause licensed.
 
 `github.com/Eyevinn/hi264` is not used as a desktop encoder. It intentionally
 generates flat-color 16×16 or 8×8 test blocks and P_Skip frames rather than
