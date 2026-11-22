@@ -1,4 +1,4 @@
-name: Rust Client GPU
+name: Rust Client
 
 on:
   push:
