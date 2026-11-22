@@ -12,6 +12,7 @@ function fixture(client = 'go') {
   const root = mkdtempSync(join(tmpdir(), 'rdev-download-test-'));
   const bin = join(root, 'bin'); mkdirSync(bin);
   const temp = join(root, 'tmp'); mkdirSync(temp);
+  const home = join(root, 'home with spaces'); mkdirSync(home);
   const runner = join(root, 'run.sh'); writeFileSync(runner, shell);
   const payload = join(root, 'payload');
   const program = '#!/bin/sh\n' + (client === 'rs' ? 'test "$(cat "$(dirname "$0")/lib/runtime.txt")" = sidecar || exit 91\n' : '') + 'printf "%s\\n" "$@" > "$RDEV_TEST_OUTPUT"\n';
@@ -31,13 +32,13 @@ function fixture(client = 'go') {
     symlinkSync(path, join(bin, tool));
   }
   const output = join(root, 'args');
-  const run = () => {
+  const run = (env = {}) => {
     rmSync(output, { force: true });
     return spawnSync('sh', [runner, '--server', 'ws://fixture.test:8080', '--version', '1.2.3', '--client', client, '--no-mirror', '--id', 'device with spaces', '--password', 'semi;quote"', '--shell', '/a shell', '--ssh-port', '2200'], {
-      env: { ...process.env, ANDROID_ROOT: '', PATH: bin, TMPDIR: temp, RDEV_TEST_ROOT: root, RDEV_TEST_OUTPUT: output }, encoding: 'utf8', timeout: 30000,
+      env: { ...process.env, ANDROID_ROOT: '', PATH: bin, HOME: home, TMPDIR: temp, RDEV_TEST_ROOT: root, RDEV_TEST_OUTPUT: output, ...env }, encoding: 'utf8', timeout: 30000,
     });
   };
-  return { root, temp, output, payload, run, close() { rmSync(root, { recursive: true, force: true }); } };
+  return { root, home, temp, output, payload, run, close() { rmSync(root, { recursive: true, force: true }); } };
 }
 
 for (const client of ['go', 'rs']) {
@@ -81,4 +82,35 @@ for (const client of ['go', 'rs']) {
       } finally { f.close(); }
     });
   }
+}
+
+for (const client of ['go', 'rs']) {
+  test(`${client}: falls back from a real noexec mount and preserves arguments/runtime`, (t) => {
+    if (process.platform !== 'linux' || !existsSync('/dev/shm')) return t.skip('Requires Linux /dev/shm');
+    const blocked = mkdtempSync('/dev/shm/rdev-noexec-test-');
+    const f = fixture(client);
+    try {
+      const probe = join(blocked, 'probe');
+      writeFileSync(probe, '#!/bin/sh\nexit 0\n', { mode: 0o700 });
+      const denied = spawnSync(probe);
+      if (denied.error?.code !== 'EACCES') return t.skip('/dev/shm is not noexec');
+      rmSync(probe);
+      let result = f.run({ TMPDIR: blocked });
+      assert.equal(result.status, 0, result.stderr);
+      assert.deepEqual(readFileSync(f.output, 'utf8').trimEnd().split('\n'), [
+        '-s', 'ws://fixture.test:8080', '-i', 'device with spaces', '-p', 'semi;quote"',
+        client === 'rs' ? '--shell' : '-S', '/a shell', ...(client === 'rs' ? [] : ['--ssh-port', '2200']),
+      ]);
+      assert.deepEqual(readdirSync(blocked), [], 'Rejected work directories must be cleaned');
+      const fallback = join(f.home, '.cache', 'rdev');
+      assert.deepEqual(readdirSync(fallback), ['rdev-cache'], 'Executed runtime must be cleaned');
+      writeFileSync(join(f.root, 'offline'), '');
+      result = f.run({ TMPDIR: blocked });
+      assert.equal(result.status, 0, result.stderr);
+      assert.ok(existsSync(f.output), 'Cached package must also execute outside noexec');
+    } finally {
+      f.close();
+      rmSync(blocked, { recursive: true, force: true });
+    }
+  });
 }

@@ -435,9 +435,32 @@ extract_zip() {
 }
 
 # ── Resolve asset and download ─────────────────────────────
-TMPBASE="${TMPDIR:-/tmp}"
 umask 077
-WORK_DIR="$(mktemp -d "$TMPBASE/rdev-run.XXXXXXXX")" || exit 1
+# chmod succeeds on noexec mounts too; execute a harmless probe before downloads.
+# Keep the complete runtime in the chosen directory (including Rust sidecars).
+WORK_DIR=""
+PROBE_SHELL=/bin/sh
+if [ "$OS" = "android" ]; then
+    PROBE_SHELL="$(command -v sh)"
+fi
+for TMPBASE in "${TMPDIR:-/tmp}" "${HOME:+$HOME/.cache/rdev}" /var/tmp /tmp; do
+    [ -n "$TMPBASE" ] || continue
+    mkdir -p "$TMPBASE" 2>/dev/null || continue
+    WORK_DIR="$(mktemp -d "$TMPBASE/rdev-run.XXXXXXXX" 2>/dev/null)" || continue
+    if printf '#!%s\nexit 0\n' "$PROBE_SHELL" > "$WORK_DIR/exec-probe" &&
+        chmod 700 "$WORK_DIR/exec-probe" &&
+        ("$WORK_DIR/exec-probe") 2>/dev/null; then
+        rm -f "$WORK_DIR/exec-probe"
+        break
+    fi
+    echo "  Cannot execute in $TMPBASE; trying another directory (check noexec/security policy)." >&2
+    rm -rf "$WORK_DIR"
+    WORK_DIR=""
+done
+if [ -z "$WORK_DIR" ]; then
+    echo "Error: no writable, executable temporary directory. Set TMPDIR to an executable filesystem directory and retry." >&2
+    exit 1
+fi
 trap 'cache_lock_release; rm -rf "$WORK_DIR"' 0
 CACHE_BASE="$TMPBASE/rdev-cache"
 mkdir -p "$CACHE_BASE"

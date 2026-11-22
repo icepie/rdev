@@ -158,6 +158,8 @@ powershell -Command "iwr -useb https://r.niceaigc.cn/run.ps1 | iex; RDev wss://r
 
 `run.sh` / `run.ps1` 不要求 OpenSSL 或额外验签器，也不下载或校验 `.sig`；缓存保留原始包，ZIP/tar 包每次重新解压以保留运行依赖。脚本只做非空、错误页面或文件头等基本格式检查，不保证下载或缓存内容的真实性，请仅使用可信脚本与下载源。Win7/PowerShell 2 的 WinHTTP/TLS 回退保持不变。客户端和服务端内置自动更新仍校验 Ed25519 签名，发布资产仍提供 `.sig`。安装行为回归：`node --test scripts/test-runner-downloads.mjs`、`pwsh -NoProfile -File scripts/test-runner-release.ps1`。
 
+`run.sh` 在下载前实际执行无副作用的探针，依次选择可写且可执行的 `${TMPDIR:-/tmp}`、`$HOME/.cache/rdev`（HOME 非空时）、`/var/tmp`、`/tmp`。临时目录挂载为 `noexec` 时自动换目录，Go/CGO/Rust 共用此逻辑，Rust 运行依赖随完整解压目录保留；不修改挂载选项。全部目录不可用时明确报错，可指定可执行文件系统上的 `TMPDIR`。旧版脚本可使用 `mkdir -p "$HOME/.cache/rdev"` 后执行 `curl -fsSL https://r.niceaigc.cn/run.sh | TMPDIR="$HOME/.cache/rdev" sh -s -- -p '你的密码'`。Linux 隔离挂载回归：`unshare -Urnm sh -c 'mount -t tmpfs -o noexec,nosuid,nodev tmpfs /dev/shm && node --test scripts/test-runner-downloads.mjs'`（需允许非特权用户命名空间，不改变宿主机挂载）。
+
 ```bash
 # 禁用自动更新
 ./rdev-server --no-auto-update
