@@ -18,7 +18,7 @@ function fixture(client = 'go') {
   const program = '#!/bin/sh\n' + (client === 'rs' ? 'test "$(cat "$(dirname "$0")/lib/runtime.txt")" = sidecar || exit 91\n' : '') + 'printf "%s\\n" "$@" > "$RDEV_TEST_OUTPUT"\n';
   if (client === 'rs') {
     const runtime = join(root, 'runtime'); mkdirSync(runtime); mkdirSync(join(runtime, 'lib'));
-    writeFileSync(join(runtime, 'rdev-client-gpu'), program, { mode: 0o755 });
+    writeFileSync(join(runtime, 'rdev-client-rs'), program, { mode: 0o755 });
     writeFileSync(join(runtime, 'lib/runtime.txt'), 'sidecar');
     execFileSync('tar', ['-czf', payload, '-C', root, 'runtime']);
   } else { writeFileSync(payload, program); }
@@ -54,7 +54,7 @@ for (const client of ['go', 'rs']) {
       assert.ok(existsSync(f.output));
       // Poison an old extracted executable: it must never be used on a cache hit.
       const cache = join(f.temp, 'rdev-cache', readdirSync(join(f.temp, 'rdev-cache'))[0]);
-      writeFileSync(join(cache, 'rdev-client-gpu'), '#!/bin/sh\nexit 92\n', { mode: 0o755 });
+      writeFileSync(join(cache, 'rdev-client-rs'), '#!/bin/sh\nexit 92\n', { mode: 0o755 });
       result = f.run(); assert.equal(result.status, 0, result.stderr);
       // Reject error-page cache contents when no download source is available.
       writeFileSync(join(cache, 'payload'), '<html>error</html>');

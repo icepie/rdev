@@ -1,4 +1,4 @@
-.PHONY: all build clean cross server client web web-install test vet fmt win7-go-client win7-service-wrapper rust-client-gpu rust-client-gpu-check rust-client-gpu-fmt rust-client-gpu-clippy rust-client-gpu-test rust-client-gpu-smoke rust-client-gpu-linux-desktop-package rust-client-gpu-windows-arm64-package rust-client-gpu-win7-package rust-client-gpu-win7-rdev-desktop-package rust-client-gpu-win7-stage rust-client-gpu-win7-smoke client-cpp
+.PHONY: all build clean cross server client web web-install test vet fmt win7-go-client win7-service-wrapper rust-client-rs rust-client-rs-check rust-client-rs-fmt rust-client-rs-clippy rust-client-rs-test rust-client-rs-smoke rust-client-rs-linux-desktop-package rust-client-rs-windows-arm64-package rust-client-rs-win7-package rust-client-rs-win7-rdev-desktop-package rust-client-rs-win7-stage rust-client-rs-win7-smoke client-cpp
 
 BINS = rdev-server rdev-client
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
@@ -6,11 +6,11 @@ LDFLAGS = -s -w -X main.version=$(VERSION)
 GO264_TAGS ?=
 GO_WIN7 ?= go
 WIN7_SERVICE_DIST = target/win7-service
-RUST_CLIENT_GPU_MANIFEST = clients/rdev-client-gpu/Cargo.toml
-RUST_CLIENT_GPU_WIN7_DIR = clients/rdev-client-gpu/target/x86_64-pc-windows-gnullvm/release
-RUST_CLIENT_GPU_WIN7_DIST = clients/rdev-client-gpu/target/win7-dist
-RUST_CLIENT_GPU_WIN7_RUNTIME_DIR ?= /opt/llvm-mingw/x86_64-w64-mingw32/bin
-RUST_CLIENT_GPU_WIN7_RDEV_DESKTOP_DIST = clients/rdev-client-gpu/target/win7-rdev-desktop-dist
+RUST_CLIENT_RS_MANIFEST = clients/rdev-client-rs/Cargo.toml
+RUST_CLIENT_RS_WIN7_DIR = clients/rdev-client-rs/target/x86_64-pc-windows-gnullvm/release
+RUST_CLIENT_RS_WIN7_DIST = clients/rdev-client-rs/target/win7-dist
+RUST_CLIENT_RS_WIN7_RUNTIME_DIR ?= /opt/llvm-mingw/x86_64-w64-mingw32/bin
+RUST_CLIENT_RS_WIN7_RDEV_DESKTOP_DIST = clients/rdev-client-rs/target/win7-rdev-desktop-dist
 CPP_CLIENT_BUILD_DIR = target/rdev-client-cpp
 
 all: build
@@ -38,7 +38,7 @@ client-cpp:
 
 clean:
 	rm -f $(BINS) $(BINS)-*
-	rm -rf clients/rdev-client-gpu/target $(WIN7_SERVICE_DIST) $(CPP_CLIENT_BUILD_DIR)
+	rm -rf clients/rdev-client-rs/target $(WIN7_SERVICE_DIST) $(CPP_CLIENT_BUILD_DIR)
 
 win7-go-client:
 	mkdir -p $(WIN7_SERVICE_DIST)
@@ -48,51 +48,51 @@ win7-service-wrapper:
 	mkdir -p $(WIN7_SERVICE_DIST)
 	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 $(GO_WIN7) build -ldflags "$(LDFLAGS)" -o $(WIN7_SERVICE_DIST)/rdev-service-wrapper.exe ./cmd/rdev-service-wrapper
 
-rust-client-gpu:
-	RDEV_VERSION=$(VERSION) cargo build --release --manifest-path $(RUST_CLIENT_GPU_MANIFEST) --features embedded-rdev-desktop
+rust-client-rs:
+	RDEV_VERSION=$(VERSION) cargo build --release --manifest-path $(RUST_CLIENT_RS_MANIFEST) --features embedded-rdev-desktop
 
-rust-client-gpu-linux-desktop-package:
-	clients/rdev-client-gpu/scripts/package-linux-desktop.sh linux
+rust-client-rs-linux-desktop-package:
+	clients/rdev-client-rs/scripts/package-linux-desktop.sh linux
 
-rust-client-gpu-windows-arm64-package:
-	RDEV_VERSION=$(VERSION) cargo build --release --manifest-path $(RUST_CLIENT_GPU_MANIFEST) --target aarch64-pc-windows-gnullvm --features embedded-rdev-desktop
+rust-client-rs-windows-arm64-package:
+	RDEV_VERSION=$(VERSION) cargo build --release --manifest-path $(RUST_CLIENT_RS_MANIFEST) --target aarch64-pc-windows-gnullvm --features embedded-rdev-desktop
 
-rust-client-gpu-win7-package:
-	RDEV_VERSION=$(VERSION) cargo build --release --manifest-path $(RUST_CLIENT_GPU_MANIFEST) --target x86_64-pc-windows-gnullvm
-	$(MAKE) rust-client-gpu-win7-stage WIN7_STAGE_DIST=$(RUST_CLIENT_GPU_WIN7_DIST)
+rust-client-rs-win7-package:
+	RDEV_VERSION=$(VERSION) cargo build --release --manifest-path $(RUST_CLIENT_RS_MANIFEST) --target x86_64-pc-windows-gnullvm
+	$(MAKE) rust-client-rs-win7-stage WIN7_STAGE_DIST=$(RUST_CLIENT_RS_WIN7_DIST)
 
-rust-client-gpu-win7-rdev-desktop-package:
-	RDEV_VERSION=$(VERSION) cargo build --release --manifest-path $(RUST_CLIENT_GPU_MANIFEST) --target x86_64-pc-windows-gnullvm --features embedded-rdev-desktop
-	$(MAKE) rust-client-gpu-win7-stage WIN7_STAGE_DIST=$(RUST_CLIENT_GPU_WIN7_RDEV_DESKTOP_DIST)
+rust-client-rs-win7-rdev-desktop-package:
+	RDEV_VERSION=$(VERSION) cargo build --release --manifest-path $(RUST_CLIENT_RS_MANIFEST) --target x86_64-pc-windows-gnullvm --features embedded-rdev-desktop
+	$(MAKE) rust-client-rs-win7-stage WIN7_STAGE_DIST=$(RUST_CLIENT_RS_WIN7_RDEV_DESKTOP_DIST)
 
-rust-client-gpu-win7-stage:
+rust-client-rs-win7-stage:
 	test -n "$(WIN7_STAGE_DIST)"
 	rm -rf $(WIN7_STAGE_DIST)
 	mkdir -p $(WIN7_STAGE_DIST)
-	python3 clients/rdev-client-gpu/win7/patch_imports.py \
-		$(RUST_CLIENT_GPU_WIN7_DIR)/rdev-client-gpu.exe \
-		$(WIN7_STAGE_DIST)/rdev-client-gpu.exe
-	python3 clients/rdev-client-gpu/win7/build_shims.py $(WIN7_STAGE_DIST)
-	python3 clients/rdev-client-gpu/win7/copy_winpty_runtime.py $(WIN7_STAGE_DIST)
-	test -f $(RUST_CLIENT_GPU_WIN7_RUNTIME_DIR)/libunwind.dll
-	cp $(RUST_CLIENT_GPU_WIN7_RUNTIME_DIR)/libunwind.dll $(WIN7_STAGE_DIST)/
+	python3 clients/rdev-client-rs/win7/patch_imports.py \
+		$(RUST_CLIENT_RS_WIN7_DIR)/rdev-client-rs.exe \
+		$(WIN7_STAGE_DIST)/rdev-client-rs.exe
+	python3 clients/rdev-client-rs/win7/build_shims.py $(WIN7_STAGE_DIST)
+	python3 clients/rdev-client-rs/win7/copy_winpty_runtime.py $(WIN7_STAGE_DIST)
+	test -f $(RUST_CLIENT_RS_WIN7_RUNTIME_DIR)/libunwind.dll
+	cp $(RUST_CLIENT_RS_WIN7_RUNTIME_DIR)/libunwind.dll $(WIN7_STAGE_DIST)/
 
-rust-client-gpu-check: rust-client-gpu-fmt rust-client-gpu-clippy rust-client-gpu-test
+rust-client-rs-check: rust-client-rs-fmt rust-client-rs-clippy rust-client-rs-test
 
-rust-client-gpu-fmt:
-	cargo fmt --manifest-path $(RUST_CLIENT_GPU_MANIFEST) --check
+rust-client-rs-fmt:
+	cargo fmt --manifest-path $(RUST_CLIENT_RS_MANIFEST) --check
 
-rust-client-gpu-clippy:
-	cargo clippy --manifest-path $(RUST_CLIENT_GPU_MANIFEST) --all-targets -- -D warnings
+rust-client-rs-clippy:
+	cargo clippy --manifest-path $(RUST_CLIENT_RS_MANIFEST) --all-targets -- -D warnings
 
-rust-client-gpu-test:
-	cargo test --manifest-path $(RUST_CLIENT_GPU_MANIFEST)
+rust-client-rs-test:
+	cargo test --manifest-path $(RUST_CLIENT_RS_MANIFEST)
 
-rust-client-gpu-smoke:
-	clients/rdev-client-gpu/scripts/smoke.sh
+rust-client-rs-smoke:
+	clients/rdev-client-rs/scripts/smoke.sh
 
-rust-client-gpu-win7-smoke:
-	clients/rdev-client-gpu/scripts/win7-smoke.sh
+rust-client-rs-win7-smoke:
+	clients/rdev-client-rs/scripts/win7-smoke.sh
 
 cross: cross-linux cross-darwin cross-windows
 

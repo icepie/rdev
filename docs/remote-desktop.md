@@ -15,7 +15,7 @@ This document describes a cross-platform remote desktop feature for RDev. It is 
 - Linux Wayland reports the native `wayland-portal` backend as planned and never shells out to `grim`/`slurp`; root/no-display sessions can fall back to `drm-kms` when active linear scanout metadata is visible, otherwise to `fbdev` when a readable, unblanked framebuffer is present.
 - Go desktop viewers keep the latest position per pointer under backpressure, flush pending motion before buttons, keys and wheel events, normalize wheel deltas, and release held input on focus/session loss. Input is independent of video FPS. Windows uses `SendInput` physical scan codes and virtual-desktop coordinates; macOS Quartz preserves button drags, click counts, modifier sides and two-axis pixel scrolling.
 - Capture and resize reuse RGBA buffers at stable geometry. Capture, encoding and sending share the frame interval.
-- Optional browser-device WebRTC video transport is implemented for capable Go and Rust GPU clients, behind a default-off server opt-in. Clipboard and human input retain the server relay for authorization and Agent arbitration. Tile diffing remains a future phase.
+- Optional browser-device WebRTC video transport is implemented for capable Go and Rust clients, behind a default-off server opt-in. Clipboard and human input retain the server relay for authorization and Agent arbitration. Tile diffing remains a future phase.
 
 ## Goals
 
@@ -68,7 +68,7 @@ Enable with `rdev-server --webrtc` or `RDEV_WEBRTC=true`; the default is **off**
 
 `/desktop/rtc` preserves admin-token, same-origin and device-password checks and rejects requests when disabled or when the device lacks RTC capability. Device signals are also discarded when disabled. Signaling uses `desktop_rtc_signal` with `sessionId`, `rtcType` and `rtcData`; video uses the ordered `rdev-desktop` DataChannel. The current ICE configuration uses Google's public STUN server and no TURN relay; networks that block direct connectivity fall back to the server relay.
 
-The Rust GPU RTC bridge opens a separate local GPU `/ws` session. On handoff the viewer requests `GetCapturableList` and then sends `Config`/video state to initialize that session and its decoder. The existing server WebSocket stays open with video paused, configured for the same source, so human input and clipboard retain server-side authorization and Agent takeover arbitration. Go desktop metadata, input and clipboard similarly stay on the server WebSocket while frame bytes can use RTC. The Agent desktop panel remains WebSocket-only.
+The Rust RTC bridge opens a separate local GPU `/ws` session. On handoff the viewer requests `GetCapturableList` and then sends `Config`/video state to initialize that session and its decoder. The existing server WebSocket stays open with video paused, configured for the same source, so human input and clipboard retain server-side authorization and Agent takeover arbitration. Go desktop metadata, input and clipboard similarly stay on the server WebSocket while frame bytes can use RTC. The Agent desktop panel remains WebSocket-only.
 The viewer maps the selected relay source name into the fresh RTC source list rather than assuming session-local indices match. Missing or ambiguous names close RTC and retain the relay. RTC's read-only input/clipboard capability messages never replace the relay's interactive capabilities.
 
 Rust-to-browser GPU DataChannel messages use bounded `RDG1` envelopes: four magic bytes, one type byte (`0` binary / `1` UTF-8 text), big-endian u32 total length and u32 offset, followed by payload; the entire chunk is at most 16 KiB. Logical messages are at most 16 MiB and arrive sequentially without interleaving. The viewer rejects malformed, out-of-order or invalid UTF-8 messages and falls back if reassembly takes longer than 15 seconds. Browser-to-Rust messages remain small plain-text video/config commands; Go frame messages retain their existing unwrapped binary format.
@@ -83,7 +83,7 @@ Recommended phases:
 
 1. **MVP MJPEG/JPEG stream**: simple, debuggable, works with pure Go image encoders, and remains the universal fallback.
 2. **Pure-Go H.264 stream**: the Go client converts RGBA capture frames to reusable I420 buffers, obtains SPS/PPS without consuming a picture, encodes Baseline Annex B with `go.264`, and sends every AVCC access unit to browser WebCodecs in arrival order. Periodic IDR frames repeat SPS/PPS for recovery; unchanged frames are still encoded so the prediction chain remains valid.
-3. **Accelerated H.264 stream**: the Rust GPU client owns its native FFmpeg/hardware encoder path for higher-frame-rate use. VNC continues to request MJPEG because its bridge decodes JPEG frames.
+3. **Accelerated H.264 stream**: the Rust client owns its native FFmpeg/hardware encoder path for higher-frame-rate use. VNC continues to request MJPEG because its bridge decodes JPEG frames.
 4. **Tile diffing / dirty regions**: keep JPEG/PNG compatibility while avoiding full-frame uploads when only small regions change.
 5. **WASM codec in browser**: decode optimized delta/tile streams in browser without server CPU cost.
 6. **WebRTC optional path**: implemented as a default-off direct DataChannel for existing encoded streams; decode support is unchanged and the server WebSocket remains the fallback and human-control path.
@@ -101,7 +101,7 @@ model is unsuitable for readable interactive desktop video.
 
 ### GPU client hardware encoder overrides
 
-The embedded desktop encoder in `clients/rdev-client-gpu/vendor/rdev-desktop` defaults to the driver-aware VAAPI rate control (`auto`, resolving to VBR/CBR) with a ~0.1 bit-per-pixel-per-frame bitrate, and falls back to CBR when a driver rejects the requested mode entirely. Runtime overrides:
+The embedded desktop encoder in `clients/rdev-client-rs/vendor/rdev-desktop` defaults to the driver-aware VAAPI rate control (`auto`, resolving to VBR/CBR) with a ~0.1 bit-per-pixel-per-frame bitrate, and falls back to CBR when a driver rejects the requested mode entirely. Runtime overrides:
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
@@ -121,7 +121,7 @@ The embedded desktop encoder in `clients/rdev-client-gpu/vendor/rdev-desktop` de
 - **Linux framebuffer (`fbdev`)**: pure Go root/KMS-console fallback using `/dev/fb0` or `/dev/fb/0` with `FBIOGET_*` ioctls and read-only `mmap`. Registration only probes geometry/format and skips sysfs-blanked framebuffers; capture mmaps the framebuffer only after a desktop session explicitly selects it. It is view-only, requires framebuffer permissions/root, and works only when the kernel exposes a readable, unblanked framebuffer.
 - **Linux DRM/KMS scanout**: pure Go/no-cgo probe and linear scanout mmap fallback using `/dev/dri/card*`, KMS resources, active CRTC framebuffer metadata, `GETFB2`, and PRIME dma-buf export. Registration opens DRM cards read-only and only reports connector/CRTC/framebuffer metadata; PRIME export and mmap are deferred until capture starts. It exposes `drm:<card>:screen:all` and `drm:<card>:connector:<id>` sources when active outputs are visible. This is view-only and best-effort: many accelerated GPU paths expose non-mappable or non-linear scanout buffers, so the backend reports a clear error instead of returning black frames. Full accelerated KMS capture needs an optional native EGL/GBM/DRM-PRIME path.
 - **Linux Wayland**: no external helper process is used. The intended backend is native xdg-desktop-portal + PipeWire; until implemented, Wayland reports a clear unavailable reason unless `drm-kms` or `fbdev` fallback is available.
-- **macOS Quartz/CoreGraphics**: default no-cgo builds use dynamically loaded ApplicationServices/CoreGraphics symbols via purego for basic screenshot capture. It requires Screen Recording permission and currently captures the main display source (`auto`/`screen:all`) as a conservative fallback before a higher-quality ScreenCaptureKit path is added. Mouse/keyboard input uses Quartz `CGEvent` and requires Accessibility permission; the Rust GPU client posts ANSI keycodes directly through CoreGraphics so valid keycode `0` (`A`) is not discarded by the autopilot dependency. Touch/pen semantics are not advertised yet.
+- **macOS Quartz/CoreGraphics**: default no-cgo builds use dynamically loaded ApplicationServices/CoreGraphics symbols via purego for basic screenshot capture. It requires Screen Recording permission and currently captures the main display source (`auto`/`screen:all`) as a conservative fallback before a higher-quality ScreenCaptureKit path is added. Mouse/keyboard input uses Quartz `CGEvent` and requires Accessibility permission; the Rust client posts ANSI keycodes directly through CoreGraphics so valid keycode `0` (`A`) is not discarded by the autopilot dependency. Touch/pen semantics are not advertised yet.
 
 ## Default dependency policy
 

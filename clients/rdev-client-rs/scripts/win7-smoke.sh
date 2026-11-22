@@ -11,7 +11,7 @@ REMOTE_DIR_WIN=${REMOTE_DIR//\//\\}
 DEVICE_ID=${RDEV_GPU_WIN7_DEVICE_ID:-win7-rgpu-smoke}
 DEVICE_PASSWORD=${RDEV_GPU_WIN7_DEVICE_PASSWORD:-smoke}
 ADMIN_TOKEN=${RDEV_GPU_WIN7_ADMIN_TOKEN:-win7-rgpu-smoke-admin}
-BASE=${RDEV_GPU_WIN7_SMOKE_DIR:-/data/tmp/rdev-client-gpu-win7-smoke}
+BASE=${RDEV_GPU_WIN7_SMOKE_DIR:-/data/tmp/rdev-client-rs-win7-smoke}
 SERVER_HOST=${RDEV_GPU_WIN7_SERVER_HOST:-}
 
 require_cmd() {
@@ -82,40 +82,40 @@ mkdir -p "$BASE/data"
 
 stop_remote_client() {
   sshpass -p "$PASSWORD" ssh "${SSH_OPTS[@]}" "$REMOTE" \
-    "C:\\Windows\\System32\\taskkill.exe /F /T /IM rdev-client-gpu.exe" \
+    "C:\\Windows\\System32\\taskkill.exe /F /T /IM rdev-client-rs.exe" \
     >/dev/null 2>&1 || true
   for _ in $(seq 1 40); do
     if ! sshpass -p "$PASSWORD" ssh "${SSH_OPTS[@]}" "$REMOTE" \
-      "C:\\Windows\\System32\\tasklist.exe /FI \"IMAGENAME eq rdev-client-gpu.exe\" | C:\\Windows\\System32\\find.exe /I \"rdev-client-gpu.exe\"" \
+      "C:\\Windows\\System32\\tasklist.exe /FI \"IMAGENAME eq rdev-client-rs.exe\" | C:\\Windows\\System32\\find.exe /I \"rdev-client-rs.exe\"" \
       >/dev/null 2>&1; then
       return 0
     fi
     sleep 0.25
   done
-  echo "remote rdev-client-gpu.exe is still running; refusing to overwrite it" >&2
+  echo "remote rdev-client-rs.exe is still running; refusing to overwrite it" >&2
   return 1
 }
 
 cleanup() {
   kill "${REMOTE_SSH_PID:-}" "${SERVER_PID:-}" 2>/dev/null || true
   wait "${REMOTE_SSH_PID:-}" "${SERVER_PID:-}" 2>/dev/null || true
-  sshpass -p "$PASSWORD" ssh "${SSH_OPTS[@]}" "$REMOTE" "C:\\Windows\\System32\\taskkill.exe /F /T /IM rdev-client-gpu.exe" >/dev/null 2>&1 || true
+  sshpass -p "$PASSWORD" ssh "${SSH_OPTS[@]}" "$REMOTE" "C:\\Windows\\System32\\taskkill.exe /F /T /IM rdev-client-rs.exe" >/dev/null 2>&1 || true
 }
 
 trap cleanup EXIT
 
-make -C "$ROOT" rust-client-gpu-win7-package
+make -C "$ROOT" rust-client-rs-win7-package
 go build -o "$SERVER_BIN" "$ROOT/cmd/rdev-server"
 
 stop_remote_client
 sshpass -p "$PASSWORD" ssh "${SSH_OPTS[@]}" "$REMOTE" "C:\\Windows\\System32\\cmd.exe /c \"if not exist $REMOTE_DIR_WIN mkdir $REMOTE_DIR_WIN & del /q $REMOTE_DIR_WIN\\* 2>nul\"" >/dev/null
-sshpass -p "$PASSWORD" scp -P "$PORT" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$ROOT"/clients/rdev-client-gpu/target/win7-dist/* "$REMOTE:$REMOTE_DIR/" >/dev/null
+sshpass -p "$PASSWORD" scp -P "$PORT" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$ROOT"/clients/rdev-client-rs/target/win7-dist/* "$REMOTE:$REMOTE_DIR/" >/dev/null
 
 "$SERVER_BIN" --http "0.0.0.0:$HTTP_PORT" --ssh "127.0.0.1:$SSH_PORT" --data "$BASE/data" --admin-token "$ADMIN_TOKEN" >"$SERVER_LOG" 2>&1 &
 SERVER_PID=$!
 
 sshpass -p "$PASSWORD" ssh "${SSH_OPTS[@]}" "$REMOTE" \
-  "C:\\Windows\\System32\\cmd.exe /c \"cd /d $REMOTE_DIR_WIN && set RUST_LOG=info && $REMOTE_DIR_WIN\\rdev-client-gpu.exe --server ws://$SERVER_HOST:$HTTP_PORT --id $DEVICE_ID --password $DEVICE_PASSWORD --no-desktop --reconnect-delay 1s > $REMOTE_DIR_WIN\\client.log 2>&1\"" \
+  "C:\\Windows\\System32\\cmd.exe /c \"cd /d $REMOTE_DIR_WIN && set RUST_LOG=info && $REMOTE_DIR_WIN\\rdev-client-rs.exe --server ws://$SERVER_HOST:$HTTP_PORT --id $DEVICE_ID --password $DEVICE_PASSWORD --no-desktop --reconnect-delay 1s > $REMOTE_DIR_WIN\\client.log 2>&1\"" \
   >/dev/null 2>&1 &
 REMOTE_SSH_PID=$!
 
@@ -167,4 +167,4 @@ if grep -q "WinPTY terminal start failed" "$CLIENT_LOG"; then
   exit 1
 fi
 
-echo "rdev-client-gpu Win7 smoke ok"
+echo "rdev-client-rs Win7 smoke ok"

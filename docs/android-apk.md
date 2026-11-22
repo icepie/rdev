@@ -79,7 +79,7 @@ Android APK
 - Exposes a local loopback service inside the APK process, similar to embedded `rdev-desktop` on Rust client packages.
 - The APK connects `/gpu-desktop-tunnel?device=...&instanceId=...` after `/ws` registration succeeds.
 - Server proxies `/gpu-desktop/<device>/...` to this local Android desktop service.
-- This keeps the browser/server side close to the existing Rust GPU desktop model.
+- This keeps the browser/server side close to the existing Rust desktop model.
 
 ### ScreenCapturePipeline
 

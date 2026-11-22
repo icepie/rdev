@@ -2,7 +2,7 @@ use clap::{ArgAction, Parser};
 
 #[derive(Debug, Clone, Parser)]
 #[command(
-    name = "rdev-client-gpu",
+    name = "rdev-client-rs",
     version = crate::version::VERSION,
     disable_version_flag = true,
     about = "GPU-ready RDev client skeleton"
@@ -231,7 +231,7 @@ mod tests {
     fn blank_display_name_uses_hostname_without_changing_id() {
         for value in ["", " \t", "办公室电脑"] {
             let args = Args::try_parse_from([
-                "rdev-client-gpu",
+                "rdev-client-rs",
                 "--id",
                 "stable-device",
                 "--display-name",
@@ -280,11 +280,11 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn parses_optional_bool_flags() {
-        let args = Args::parse_from(["rdev-client-gpu", "--gpu-desktop-vulkan-video"]);
+        let args = Args::parse_from(["rdev-client-rs", "--gpu-desktop-vulkan-video"]);
         assert!(args.gpu_desktop_vulkan_video);
 
         let args = Args::parse_from([
-            "rdev-client-gpu",
+            "rdev-client-rs",
             "--gpu-desktop-vaapi=false",
             "--gpu-desktop-nvenc=false",
             "--gpu-desktop-vulkan-video=false",

@@ -1,4 +1,4 @@
-# rdev-client-gpu
+# rdev-client-rs
 
 Experimental Rust client for the future GPU-friendly RDev desktop path.
 
@@ -21,9 +21,9 @@ The Go `rdev-client` remains the default portable client. Release builds of this
 From the repository root:
 
 ```bash
-make rust-client-gpu
+make rust-client-rs
 # or
-cargo build --release --manifest-path clients/rdev-client-gpu/Cargo.toml
+cargo build --release --manifest-path clients/rdev-client-rs/Cargo.toml
 ```
 
 The regular Cargo build uses current crate releases within the `rust-version` declared in `Cargo.toml`. The release/package targets enable embedded desktop support for the performance client.
@@ -31,15 +31,15 @@ The regular Cargo build uses current crate releases within the `rust-version` de
 To build and stage the Linux release package, run:
 
 ```bash
-make rust-client-gpu-linux-desktop-package
+make rust-client-rs-linux-desktop-package
 ```
 
-The package script installs the native build dependencies for the detected distro, builds vendored FFmpeg/x264/libva from source, and stages the result in `clients/rdev-client-gpu/dist/`. CI reuses one runner per Linux architecture and builds multiple distro-baseline packages in containers: the default `rdev-client-gpu-linux-<arch>.tar.gz` is Debian 13 with VAAPI and Wayland/PipeWire enabled, while `*-debian12`, `*-debian11`, `*-centos8`, and amd64-only `*-centos7` are compatibility packages without VAAPI/PipeWire for older glibc/driver stacks. NVENC remains opt-in with `RDEV_GPU_FEATURES=embedded-rdev-desktop-hw ENABLE_NVENC=y`.
+The package script installs the native build dependencies for the detected distro, builds vendored FFmpeg/x264/libva from source, and stages the result in `clients/rdev-client-rs/dist/`. CI reuses one runner per Linux architecture and builds multiple distro-baseline packages in containers: the default `rdev-client-rs-linux-<arch>.tar.gz` is Debian 13 with VAAPI and Wayland/PipeWire enabled, while `*-debian12`, `*-debian11`, `*-centos8`, and amd64-only `*-centos7` are compatibility packages without VAAPI/PipeWire for older glibc/driver stacks. NVENC remains opt-in with `RDEV_GPU_FEATURES=embedded-rdev-desktop-hw ENABLE_NVENC=y`.
 
 For a direct embedded desktop build without staging:
 
 ```bash
-cargo build --release --manifest-path clients/rdev-client-gpu/Cargo.toml --features embedded-rdev-desktop
+cargo build --release --manifest-path clients/rdev-client-rs/Cargo.toml --features embedded-rdev-desktop
 ```
 
 Windows amd64 CI builds on Linux with GCC MinGW (`x86_64-pc-windows-gnu`) and bundle the required `libgcc_s_seh-1.dll`, `libstdc++-6.dll`, and `libwinpthread-1.dll` runtime files. Windows ARM64 uses MSVC and does not bundle additional runtime DLLs. Windows 7 amd64 uses LLVM MinGW (`x86_64-pc-windows-gnullvm`); the package includes `libc++.dll`, `libunwind.dll`, and `libwinpthread-1.dll`, plus compatibility shims for patched Win8+ imports.
@@ -58,24 +58,24 @@ The native CUA bridge enables QuickJS bindgen only for Windows ARM64 LLVM-MinGW,
 
 ```bash
 rustup target add aarch64-pc-windows-gnullvm
-make rust-client-gpu-windows-arm64-package
+make rust-client-rs-windows-arm64-package
 ```
 
 For a Windows 7-compatible amd64 artifact, install an LLVM MinGW toolchain that provides `x86_64-w64-mingw32-clang`, then run:
 
 ```bash
 rustup target add x86_64-pc-windows-gnullvm
-make rust-client-gpu-win7-package
+make rust-client-rs-win7-package
 ```
 
-This uses the normal `x86_64-pc-windows-gnullvm` release build, patches known Win8+ PE import names, builds the required compatibility shim DLLs, includes the imported LLVM-MinGW runtime DLLs (`libc++.dll`, `libunwind.dll`, and `libwinpthread-1.dll`), auto-copies optional WinPTY runtime files when available, and stages the result in `clients/rdev-client-gpu/target/win7-dist/`. Set `RUST_CLIENT_GPU_WIN7_RUNTIME_DIR` if the LLVM-MinGW runtime directory differs from `/opt/llvm-mingw/x86_64-w64-mingw32/bin`.
+This uses the normal `x86_64-pc-windows-gnullvm` release build, patches known Win8+ PE import names, builds the required compatibility shim DLLs, includes the imported LLVM-MinGW runtime DLLs (`libc++.dll`, `libunwind.dll`, and `libwinpthread-1.dll`), auto-copies optional WinPTY runtime files when available, and stages the result in `clients/rdev-client-rs/target/win7-dist/`. Set `RUST_CLIENT_RS_WIN7_RUNTIME_DIR` if the LLVM-MinGW runtime directory differs from `/opt/llvm-mingw/x86_64-w64-mingw32/bin`.
 
 ## Run
 
-From the repository root, after `make rust-client-gpu`:
+From the repository root, after `make rust-client-rs`:
 
 ```bash
-./clients/rdev-client-gpu/target/release/rdev-client-gpu \
+./clients/rdev-client-rs/target/release/rdev-client-rs \
   --server wss://r.feidu.fit \
   --id my-device \
   --password ''
@@ -97,19 +97,19 @@ Device enrollment persists a private `deviceIdentity`/`reconnectProof` pair befo
 ## Validation
 
 ```bash
-make rust-client-gpu-check
-make rust-client-gpu-smoke
+make rust-client-rs-check
+make rust-client-rs-smoke
 ```
 
 The smoke test starts a local Go `rdev-server`, connects this Rust client, then validates SSH exec, PTY, SCP, rsync-over-SSH, embedded SFTP, Web file manager list/upload/download, and local TCP forwarding. It requires `ssh`, `scp`, `sftp`, `sshpass`, `rsync`, `curl`, `go`, `cargo`, and `python3`.
 
 Windows 7 notes:
 
-- Use the normal `x86_64-pc-windows-gnullvm` release build, then package with `make rust-client-gpu-win7-package`.
-- Deploy all files from `target/win7-dist` into the same directory: `rdev-client-gpu.exe`, required LLVM-MinGW runtime DLLs (`libc++.dll`, `libunwind.dll`, `libwinpthread-1.dll`), `rdev-waitonaddress-shim.dll`, `rdev-bcprng.dll`, `rdevws.dll`, and optional `winpty.dll`/`winpty-agent.exe`.
+- Use the normal `x86_64-pc-windows-gnullvm` release build, then package with `make rust-client-rs-win7-package`.
+- Deploy all files from `target/win7-dist` into the same directory: `rdev-client-rs.exe`, required LLVM-MinGW runtime DLLs (`libc++.dll`, `libunwind.dll`, `libwinpthread-1.dll`), `rdev-waitonaddress-shim.dll`, `rdev-bcprng.dll`, `rdevws.dll`, and optional `winpty.dll`/`winpty-agent.exe`.
 - Packaging auto-detects WinPTY from `RDEV_WINPTY_DIR`, `WINPTY_DIR`, common local Node/Git-Bash locations, and `PATH`; missing WinPTY only warns because pipe fallback remains available.
 - Runtime PTY order is Win7/Win8: WinPTY then pipe fallback; Win10/Win11: `portable-pty`/ConPTY then pipe fallback.
-- Use `make rust-client-gpu-win7-smoke` for real Win7 E2E validation; set `RDEV_GPU_WIN7_HOST`, `RDEV_GPU_WIN7_PASSWORD`, and optional `RDEV_GPU_WIN7_PORT`/`RDEV_GPU_WIN7_USER` first.
+- Use `make rust-client-rs-win7-smoke` for real Win7 E2E validation; set `RDEV_GPU_WIN7_HOST`, `RDEV_GPU_WIN7_PASSWORD`, and optional `RDEV_GPU_WIN7_PORT`/`RDEV_GPU_WIN7_USER` first.
 - Use `ws://` for direct client-server tests. `wss://` is configured to use Windows Schannel instead of Rustls on Windows, but older Win7 TLS root/cipher support can still vary by host patch level.
 
 ## GPU desktop direction
@@ -120,7 +120,7 @@ The server does not decode desktop video. It opens `/gpu-desktop/<device>/` for 
 
 The `Rust Client GPU` GitHub Actions workflow publishes artifacts on normal pushes and uploads them to GitHub Releases on `v*` tags.
 
-- Public `rdev-client-gpu-*` packages are the performance flavor and include embedded desktop support by default, including Windows amd64, Windows ARM64, and Windows 7 amd64.
+- Public `rdev-client-rs-*` packages are the performance flavor and include embedded desktop support by default, including Windows amd64, Windows ARM64, and Windows 7 amd64.
 - Linux packages use VAAPI+x264 by default and can opt into NVENC for dedicated NVIDIA builds.
 - Linux release packages are built in distro environments to avoid accidentally requiring the newest runner glibc.
 

@@ -309,8 +309,8 @@ load_release() {
     fi
     rm -f "$PAYLOAD"
     download_with_fallback "$(release_url "$2")" "$PAYLOAD" "$2" || {
-        echo "Error: no source supplied a usable release package; check the server address, version, network or mirror settings." >&2
-        exit 1
+        rm -f "$PAYLOAD"
+        return 1
     }
     if cache_lock_acquire "$CACHE_DIR"; then
         rm -rf "$CACHE_DIR.part"
@@ -471,21 +471,21 @@ RUN_BIN=""
 CLIENT_LABEL="rdev-client"
 
 if [ "$RDEV_CLIENT" = "rs" ]; then
-    CLIENT_LABEL="rdev-client-gpu"
+    CLIENT_LABEL="rdev-client-rs"
     case "$OS/$ARCH" in
         linux/amd64|linux/arm64)
-            ASSET="rdev-client-gpu-${OS}-${ARCH}$(linux_rs_asset_suffix).tar.gz"
+            ASSET="rdev-client-rs-${OS}-${ARCH}$(linux_rs_asset_suffix).tar.gz"
             ;;
         android/amd64|android/arm64|android/armv7|android/386)
             ASSET_ARCH="$ARCH"
             [ "$ARCH" = "386" ] && ASSET_ARCH="x86"
-            ASSET="rdev-client-gpu-${OS}-${ASSET_ARCH}.tar.gz"
+            ASSET="rdev-client-rs-${OS}-${ASSET_ARCH}.tar.gz"
             ;;
         darwin/amd64|darwin/arm64)
-            ASSET="rdev-client-gpu-${OS}-${ARCH}.tar.gz"
+            ASSET="rdev-client-rs-${OS}-${ARCH}.tar.gz"
             ;;
         windows/amd64|windows/arm64)
-            ASSET="rdev-client-gpu-windows-${ARCH}.zip"
+            ASSET="rdev-client-rs-windows-${ARCH}.zip"
             ;;
         *)
             echo "Error: performance Rust client is not published for ${OS}/${ARCH}" >&2
@@ -493,7 +493,15 @@ if [ "$RDEV_CLIENT" = "rs" ]; then
             ;;
     esac
     CACHE_KEY="rs-${SAFE_TAG}-${OS}-${ARCH}-$(safe_name "$ASSET")"
-    load_release "$CACHE_KEY" "$ASSET"
+    if ! load_release "$CACHE_KEY" "$ASSET"; then
+        # Releases up to v0.2.151 named this package rdev-client-gpu-*.
+        ASSET="rdev-client-gpu-${ASSET#rdev-client-rs-}"
+        CACHE_KEY="rs-${SAFE_TAG}-${OS}-${ARCH}-$(safe_name "$ASSET")"
+        load_release "$CACHE_KEY" "$ASSET" || {
+            echo "Error: no source supplied a usable release package; check the server address, version, network or mirror settings." >&2
+            exit 1
+        }
+    fi
     ARCHIVE="$PAYLOAD"
     EXTRACT_DIR="$WORK_DIR/runtime"
     mkdir "$EXTRACT_DIR"
@@ -501,14 +509,14 @@ if [ "$RDEV_CLIENT" = "rs" ]; then
         *.tar.gz)
             command -v tar >/dev/null 2>&1 || { echo "Error: tar is required for Rust client package" >&2; exit 1; }
             tar -xzf "$ARCHIVE" -C "$EXTRACT_DIR"
-            RUN_BIN="$(find "$EXTRACT_DIR" -type f -name rdev-client-gpu | head -1)"
+            RUN_BIN="$(find "$EXTRACT_DIR" -type f \( -name rdev-client-rs -o -name rdev-client-gpu \) | head -1)"
             ;;
         *.zip)
             extract_zip "$ARCHIVE" "$EXTRACT_DIR" || { echo "Error: need unzip, bsdtar, 7z, or PowerShell to extract Rust client package" >&2; exit 1; }
-            RUN_BIN="$(find "$EXTRACT_DIR" -type f -name rdev-client-gpu.exe | head -1)"
+            RUN_BIN="$(find "$EXTRACT_DIR" -type f \( -name rdev-client-rs.exe -o -name rdev-client-gpu.exe \) | head -1)"
             ;;
     esac
-    [ -n "$RUN_BIN" ] || { echo "Error: rdev-client-gpu binary not found in package" >&2; exit 1; }
+    [ -n "$RUN_BIN" ] || { echo "Error: Rust client binary not found in package" >&2; exit 1; }
     chmod +x "$RUN_BIN" 2>/dev/null || true
     # Execute the freshly extracted package in place, preserving every runtime
     # sidecar. Cached extracted files are never trusted or executed.
@@ -524,7 +532,10 @@ else
     BINARY="rdev-client-${OS}-${ASSET_ARCH}"
     [ "$OS" = "windows" ] && BINARY="${BINARY}.exe"
     CACHE_KEY="go-${SAFE_TAG}-${OS}-${ASSET_ARCH}-$(safe_name "$BINARY")"
-    load_release "$CACHE_KEY" "$BINARY"
+    load_release "$CACHE_KEY" "$BINARY" || {
+        echo "Error: no source supplied a usable release package; check the server address, version, network or mirror settings." >&2
+        exit 1
+    }
     RUN_BIN="$PAYLOAD"
     chmod +x "$RUN_BIN"
 fi

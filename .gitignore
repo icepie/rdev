@@ -23,7 +23,7 @@ node_modules/
 
 # Rust (cargo target dirs, including vendored crates)
 clients/**/target/
-/clients/rdev-client-gpu/dist/
+/clients/rdev-client-rs/dist/
 /internal/client/cua_native/rust-target/
 
 # Local third-party checkouts (submodules live in .gitmodules)

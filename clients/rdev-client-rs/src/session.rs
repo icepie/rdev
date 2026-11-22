@@ -90,7 +90,7 @@ impl SessionManager {
                     .send(OutboundEvent::Binary {
                         typ: BIN_STDERR,
                         id: session_id.clone(),
-                        payload: format!("rdev-client-gpu: {err:#}\n").into_bytes(),
+                        payload: format!("rdev-client-rs: {err:#}\n").into_bytes(),
                     })
                     .await;
                 send_close(&outbound, &session_id).await;

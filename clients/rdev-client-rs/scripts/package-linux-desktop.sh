@@ -2,11 +2,11 @@
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)
-CRATE_DIR="$ROOT/clients/rdev-client-gpu"
+CRATE_DIR="$ROOT/clients/rdev-client-rs"
 DISTRO=${1:-${RDEV_GPU_LINUX_DISTRO:-linux}}
 TARGET=${RDEV_GPU_TARGET:-x86_64-unknown-linux-gnu}
 ARCH=${RDEV_GPU_ARCH:-$(uname -m)}
-ASSET=${RDEV_GPU_ASSET:-rdev-client-gpu-${DISTRO}-${ARCH}}
+ASSET=${RDEV_GPU_ASSET:-rdev-client-rs-${DISTRO}-${ARCH}}
 DIST_DIR=${RDEV_GPU_DIST:-$CRATE_DIR/dist/$ASSET}
 FEATURES=${RDEV_GPU_FEATURES:-embedded-rdev-desktop}
 RUST_TOOLCHAIN=${RDEV_GPU_RUST_TOOLCHAIN:-stable}
@@ -241,9 +241,9 @@ cargo build \
   --features "$FEATURES" \
   --target "$TARGET"
 
-cp "$CARGO_TARGET_DIR/$TARGET/release/rdev-client-gpu" "$DIST_DIR/rdev-client-gpu"
-chmod +x "$DIST_DIR/rdev-client-gpu"
-"$DIST_DIR/rdev-client-gpu" --version > "$DIST_DIR/VERSION.txt"
+cp "$CARGO_TARGET_DIR/$TARGET/release/rdev-client-rs" "$DIST_DIR/rdev-client-rs"
+chmod +x "$DIST_DIR/rdev-client-rs"
+"$DIST_DIR/rdev-client-rs" --version > "$DIST_DIR/VERSION.txt"
 {
   echo "asset=$ASSET"
   echo "target=$TARGET"
@@ -257,7 +257,7 @@ chmod +x "$DIST_DIR/rdev-client-gpu"
   if command -v ldd >/dev/null 2>&1; then
     echo
     echo "ldd:"
-    ldd "$DIST_DIR/rdev-client-gpu" || true
+    ldd "$DIST_DIR/rdev-client-rs" || true
   fi
 } > "$DIST_DIR/BUILD_INFO.txt"
 

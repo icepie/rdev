@@ -40,7 +40,7 @@ try {
             return '{"tag":"v0.2.136","fresh":true}'
         }
         if ($script:MetadataMode -eq 'missing') { return '[]' }
-        return '[{"tag_name":"v0.2.137","draft":true,"assets":[{"name":"rdev-client-windows-amd64.exe"}]},{"tag_name":"v0.2.137-rc1","prerelease":true,"assets":[{"name":"rdev-client-windows-amd64.exe"}]},{"tag_name":"v0.2.136","assets":[{"name":"rdev-client-gpu-windows-amd64.zip"}]},{"tag_name":"v0.2.135","assets":[{"name":"rdev-client-windows-arm64.exe"}]},{"tag_name":"v0.2.134","assets":[{"name":"rdev-client-windows-amd64.exe"}]}]'
+        return '[{"tag_name":"v0.2.137","draft":true,"assets":[{"name":"rdev-client-windows-amd64.exe"}]},{"tag_name":"v0.2.137-rc1","prerelease":true,"assets":[{"name":"rdev-client-windows-amd64.exe"}]},{"tag_name":"v0.2.136","assets":[{"name":"rdev-client-rs-windows-amd64.zip"}]},{"tag_name":"v0.2.135","assets":[{"name":"rdev-client-windows-arm64.exe"}]},{"tag_name":"v0.2.134","assets":[{"name":"rdev-client-windows-amd64.exe"}]}]'
     }
     if ((Get-RDevLatestTag $Server $Asset) -ne 'v0.2.134') { throw 'Old server must fall back to exact-asset GitHub metadata' }
     $script:MetadataMode = 'new-server'
@@ -112,7 +112,7 @@ try {
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     $Runtime = Join-Path $TempRoot 'runtime'
     New-Item -ItemType Directory $Runtime | Out-Null
-    Copy-Item $Fixture (Join-Path $Runtime 'rdev-client-gpu.exe')
+    Copy-Item $Fixture (Join-Path $Runtime 'rdev-client-rs.exe')
     [IO.File]::WriteAllText((Join-Path $Runtime 'libfixture.dll'), 'runtime sidecar')
     $script:Fixture = Join-Path $TempRoot 'fixture.zip'
     [IO.Compression.ZipFile]::CreateFromDirectory($Runtime, $script:Fixture)

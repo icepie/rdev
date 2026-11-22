@@ -21,7 +21,7 @@ curl -sL https://r.niceaigc.cn/run.sh | sh -s -- wss://r.niceaigc.cn -p YOUR_PAS
 ## Behavior
 
 - Termux is detected as `android`, not generic Linux.
-- The runner downloads Android/Bionic assets such as `rdev-client-android-arm64` or `rdev-client-gpu-android-arm64.tar.gz`. Downloads try the RDev server proxy first, then GitHub mirrors, then GitHub direct.
+- The runner downloads Android/Bionic assets such as `rdev-client-android-arm64` or `rdev-client-rs-android-arm64.tar.gz`. Downloads try the RDev server proxy first, then GitHub mirrors, then GitHub direct.
 - Go Android assets are built with the Android NDK and cgo so DNS uses Android libc instead of Linux `/etc/resolv.conf` assumptions.
 - Android Go builds require `-ldflags "-checklinkname=0"` with Go 1.23+: Pion's `github.com/wlynxg/anet` dependency accesses `net.zoneCache` to support Android network interfaces. This linker opt-in is limited to Android builds; see [anet's build requirements](https://github.com/wlynxg/anet#how-to-build-with-go-1230-or-later).
 - The default shell is `$PREFIX/bin/bash`, then `$PREFIX/bin/sh`, then `/system/bin/sh`.

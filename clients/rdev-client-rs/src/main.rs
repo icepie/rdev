@@ -7,7 +7,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use anyhow::{Context, Result};
 use clap::Parser;
 use futures_util::{SinkExt, StreamExt};
-use rdev_client_gpu::{
+use rdev_client_rs::{
     config::Args,
     desktop, desktop_env,
     fileput::FilePutManager,
@@ -45,11 +45,11 @@ struct ClientRuntime<'a> {
     gpu_tunnel_device_tx: &'a watch::Sender<Option<String>>,
     connect_printed: Arc<AtomicBool>,
     tunnel_base: &'a TunnelBase,
-    rtc: &'a rdev_client_gpu::desktop_rtc::DesktopRtcManager,
-    file_rtc: &'a rdev_client_gpu::file_rtc::FileRtcManager,
-    terminal_rtc: &'a rdev_client_gpu::terminal_rtc::TerminalRtcManager,
+    rtc: &'a rdev_client_rs::desktop_rtc::DesktopRtcManager,
+    file_rtc: &'a rdev_client_rs::file_rtc::FileRtcManager,
+    terminal_rtc: &'a rdev_client_rs::terminal_rtc::TerminalRtcManager,
 }
-struct DesktopRtcCleanup(rdev_client_gpu::desktop_rtc::DesktopRtcManager);
+struct DesktopRtcCleanup(rdev_client_rs::desktop_rtc::DesktopRtcManager);
 
 impl Drop for DesktopRtcCleanup {
     fn drop(&mut self) {
@@ -57,14 +57,14 @@ impl Drop for DesktopRtcCleanup {
     }
 }
 
-struct FileRtcCleanup(rdev_client_gpu::file_rtc::FileRtcManager);
+struct FileRtcCleanup(rdev_client_rs::file_rtc::FileRtcManager);
 
 impl Drop for FileRtcCleanup {
     fn drop(&mut self) {
         self.0.close_all();
     }
 }
-struct TerminalRtcCleanup(rdev_client_gpu::terminal_rtc::TerminalRtcManager);
+struct TerminalRtcCleanup(rdev_client_rs::terminal_rtc::TerminalRtcManager);
 
 impl Drop for TerminalRtcCleanup {
     fn drop(&mut self) {
@@ -202,7 +202,7 @@ fn main() -> Result<()> {
             let code = match runtime.block_on(run(args)) {
                 Ok(()) => 0,
                 Err(error) => {
-                    eprintln!("rdev-client-gpu: {error:#}");
+                    eprintln!("rdev-client-rs: {error:#}");
                     1
                 }
             };
@@ -369,12 +369,12 @@ async fn run_once(
     let forwards = ForwardManager::new();
     let files = FileManager::new();
     let fileputs = FilePutManager::new();
-    let rtc = rdev_client_gpu::file_rtc::FileRtcManager::new();
+    let rtc = rdev_client_rs::file_rtc::FileRtcManager::new();
     let _file_rtc_cleanup = FileRtcCleanup(rtc.clone());
     files.attach_rtc(rtc.clone());
-    let desktop_rtc = rdev_client_gpu::desktop_rtc::DesktopRtcManager::new();
+    let desktop_rtc = rdev_client_rs::desktop_rtc::DesktopRtcManager::new();
     let _rtc_cleanup = DesktopRtcCleanup(desktop_rtc.clone());
-    let terminal_rtc = rdev_client_gpu::terminal_rtc::TerminalRtcManager::new(sessions.clone());
+    let terminal_rtc = rdev_client_rs::terminal_rtc::TerminalRtcManager::new(sessions.clone());
     let _terminal_rtc_cleanup = TerminalRtcCleanup(terminal_rtc.clone());
     let mut registered = false;
 
@@ -559,12 +559,12 @@ async fn run_once_stream(
     let forwards = ForwardManager::new();
     let files = FileManager::new();
     let fileputs = FilePutManager::new();
-    let rtc = rdev_client_gpu::file_rtc::FileRtcManager::new();
+    let rtc = rdev_client_rs::file_rtc::FileRtcManager::new();
     let _file_rtc_cleanup = FileRtcCleanup(rtc.clone());
     files.attach_rtc(rtc.clone());
-    let desktop_rtc = rdev_client_gpu::desktop_rtc::DesktopRtcManager::new();
+    let desktop_rtc = rdev_client_rs::desktop_rtc::DesktopRtcManager::new();
     let _rtc_cleanup = DesktopRtcCleanup(desktop_rtc.clone());
-    let terminal_rtc = rdev_client_gpu::terminal_rtc::TerminalRtcManager::new(sessions.clone());
+    let terminal_rtc = rdev_client_rs::terminal_rtc::TerminalRtcManager::new(sessions.clone());
     let _terminal_rtc_cleanup = TerminalRtcCleanup(terminal_rtc.clone());
     let mut registered = false;
     let register = registration_message(args, instance_id);
@@ -1083,7 +1083,7 @@ mod tests {
 
     #[test]
     fn registration_reports_os_without_desktop() {
-        let args = Args::try_parse_from(["rdev-client-gpu", "--no-desktop"]).unwrap();
+        let args = Args::try_parse_from(["rdev-client-rs", "--no-desktop"]).unwrap();
         let wire = protocol::encode_message(&registration_message(&args, "test-instance")).unwrap();
         let message: serde_json::Value = serde_json::from_str(&wire).unwrap();
         let expected = if cfg!(target_os = "macos") {
@@ -1099,7 +1099,7 @@ mod tests {
     #[test]
     fn registration_display_name_preserves_identity() {
         let mut args = Args::try_parse_from([
-            "rdev-client-gpu",
+            "rdev-client-rs",
             "--id",
             "stable-id",
             "--display-name",

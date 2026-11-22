@@ -4,7 +4,7 @@ version = "0.11.4"
 authors = ["HMH <henry@freedesk.net>"]
 license = "AGPL-3.0-or-later"
 edition = "2021"
-description = "Vendored RDev/Weylus desktop service for rdev-client-gpu."
+description = "Vendored RDev/Weylus desktop service for rdev-client-rs."
 
 [lib]
 name = "rdev_desktop"

@@ -5,7 +5,7 @@ on:
     branches: [main]
     paths:
       - '.github/workflows/rust-linux-builders.yml'
-      - 'clients/rdev-client-gpu/docker/Dockerfile.linux-builder'
+      - 'clients/rdev-client-rs/docker/Dockerfile.linux-builder'
   workflow_dispatch:
 
 permissions:
@@ -108,7 +108,7 @@ jobs:
         uses: docker/build-push-action@v7
         with:
           context: .
-          file: clients/rdev-client-gpu/docker/Dockerfile.linux-builder
+          file: clients/rdev-client-rs/docker/Dockerfile.linux-builder
           platforms: ${{ matrix.platform }}
           push: true
           build-args: |

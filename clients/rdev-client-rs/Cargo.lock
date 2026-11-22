@@ -5456,7 +5456,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "rdev-client-gpu"
+name = "rdev-client-rs"
 version = "0.1.0"
 dependencies = [
  "anyhow",

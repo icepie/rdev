@@ -57,7 +57,7 @@ fn run(cfg: Config) {
         let executable = env::current_exe().ok();
         match check_and_apply(&cfg) {
             Ok(true) => {
-                info!("auto-update applied; restarting rdev-client-gpu");
+                info!("auto-update applied; restarting rdev-client-rs");
                 #[cfg(windows)]
                 if let Some(executable) = executable.as_deref() {
                     restart_self(executable).unwrap_or_else(|err| {
@@ -71,7 +71,7 @@ fn run(cfg: Config) {
                     });
                 }
                 #[cfg(not(any(unix, windows)))]
-                info!("auto-update applied; restart rdev-client-gpu to use the new version");
+                info!("auto-update applied; restart rdev-client-rs to use the new version");
                 return;
             }
             Ok(false) => failures.recovered(),
@@ -276,9 +276,9 @@ fn valid_proxy_prefix(prefix: &str) -> bool {
 
 fn binary_name() -> &'static str {
     if cfg!(windows) {
-        "rdev-client-gpu.exe"
+        "rdev-client-rs.exe"
     } else {
-        "rdev-client-gpu"
+        "rdev-client-rs"
     }
 }
 
@@ -309,12 +309,12 @@ fn release_asset_name() -> Option<String> {
         "windows" => {
             #[cfg(windows)]
             if crate::winpty::is_legacy_windows() {
-                return Some("rdev-client-gpu-windows-win7-amd64.zip".to_string());
+                return Some("rdev-client-rs-windows-win7-amd64.zip".to_string());
             }
-            Some(format!("rdev-client-gpu-windows-{arch}.zip"))
+            Some(format!("rdev-client-rs-windows-{arch}.zip"))
         }
         "linux" | "macos" | "android" => Some(format!(
-            "rdev-client-gpu-{}-{arch}.tar.gz",
+            "rdev-client-rs-{}-{arch}.tar.gz",
             if env::consts::OS == "macos" {
                 "darwin"
             } else {
@@ -474,12 +474,12 @@ mod tests {
     #[test]
     fn strips_package_suffixes() {
         assert_eq!(
-            package_dir_name("rdev-client-gpu-linux-amd64.tar.gz"),
-            "rdev-client-gpu-linux-amd64"
+            package_dir_name("rdev-client-rs-linux-amd64.tar.gz"),
+            "rdev-client-rs-linux-amd64"
         );
         assert_eq!(
-            package_dir_name("rdev-client-gpu-windows-amd64.zip"),
-            "rdev-client-gpu-windows-amd64"
+            package_dir_name("rdev-client-rs-windows-amd64.zip"),
+            "rdev-client-rs-windows-amd64"
         );
     }
 
@@ -500,8 +500,8 @@ mod tests {
     #[test]
     fn builds_github_download_url() {
         assert_eq!(
-            github_download_url("v0.2.98", "rdev-client-gpu-linux-amd64.tar.gz"),
-            "https://github.com/icepie/rdev/releases/download/v0.2.98/rdev-client-gpu-linux-amd64.tar.gz"
+            github_download_url("v0.2.98", "rdev-client-rs-linux-amd64.tar.gz"),
+            "https://github.com/icepie/rdev/releases/download/v0.2.98/rdev-client-rs-linux-amd64.tar.gz"
         );
     }
 

@@ -25,7 +25,7 @@ def candidates():
     repo = Path(__file__).resolve().parents[3]
     roots = [
         repo / "third_party" / "winpty" / "x64",
-        repo / "clients" / "rdev-client-gpu" / "win7" / "winpty" / "x64",
+        repo / "clients" / "rdev-client-rs" / "win7" / "winpty" / "x64",
         Path("/usr/lib/node_modules/@google/gemini-cli/node_modules/node-pty/prebuilds/win32-x64"),
         Path("/data/Projects/pi-fit/node_modules/node-pty/prebuilds/win32-x64"),
         Path("/data/Projects/pi-gui/apps/desktop/resources/git-bash/runtime/x64/usr/bin"),

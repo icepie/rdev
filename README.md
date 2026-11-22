@@ -35,8 +35,8 @@
 | 跨平台 | Unix (creack/pty) / Windows (ConPty) / 其他 (pipe) |
 | Terminal Modes | SSH pty-req modes 完整转发 (ECHO, ONLCR, etc.) |
 | Remote Desktop | 已支持浏览器远程屏幕查看与输入控制 MVP（Linux X11/DRM/fbdev、Windows GDI/DXGI、macOS Quartz/CoreGraphics no-cgo 截屏；输入后端含 XTEST、可选 uinput、Win32、可选 Win8+ Touch Injection、macOS Quartz mouse/keyboard；默认 CGO_ENABLED=0）。设计见 `docs/remote-desktop.md` |
-| 客户端版本 | 兼容版 `rdev-client-*`（Go，默认，`CGO_ENABLED=0`，纯 Go H.264 + MJPEG 回退）和性能版 `rdev-client-gpu-*`（Rust，GPU/软件 H.264）。两者均可通过 `run.sh`/`run.ps1` 的 `--client go|rs` 一键启动 |
-| Rust GPU Client | 可选实验版 `clients/rdev-client-gpu`，优先补齐 SSH/session/内置 SFTP/Rsync/TCP/file 基础能力，并提供可选内置 RDev/Weylus 风格 GPU 桌面隧道；Win7 包使用普通 Windows GNU 构建加 PE import patch 和兼容 shim DLL |
+| 客户端版本 | 兼容版 `rdev-client-*`（Go，默认，`CGO_ENABLED=0`，纯 Go H.264 + MJPEG 回退）和性能版 `rdev-client-rs-*`（Rust，GPU/软件 H.264）。两者均可通过 `run.sh`/`run.ps1` 的 `--client go|rs` 一键启动 |
+| Rust client | 可选实验版 `clients/rdev-client-rs`，优先补齐 SSH/session/内置 SFTP/Rsync/TCP/file 基础能力，并提供可选内置 RDev/Weylus 风格 GPU 桌面隧道；Win7 包使用普通 Windows GNU 构建加 PE import patch 和兼容 shim DLL |
 | Android / Termux | 支持 Termux 一键运行 Go 兼容版与 Rust no-desktop 版，Android/Bionic 包使用 Android libc DNS；详见 `docs/android-termux.md` |
 | Android APK | Android 7.0+ 独立被控端，`MediaProjection + MediaCodec` 屏幕流和 Accessibility 输入；单 APK 内嵌真实 AutoJs6 6.8.0 / OpenCV，Agent 可通过 `autojs` 执行设备端脚本；详见 `docs/android-apk.md` |
 | VNC/RFB Bridge | 服务端可选 `--vnc` 暴露现代 VNC 入口，使用 VeNCrypt Plain 用户名/密码认证，`username=deviceId` 选择设备 |
@@ -79,7 +79,7 @@
 
 文件页与 Agent 文件面板同样支持 WebRTC：服务端启用 `--webrtc`、设备声明 `fileRTC` 且浏览器支持时，上传/下载文件数据走可靠有序的 `rdev-file` DataChannel；目录操作、鉴权、ICE 信令与传输控制仍走服务端。Go 和 Rust 客户端均支持，无需启用远程桌面。健康直连不通过服务端中继文件数据；协商失败或传输中断时取消旧任务，以新任务从已确认的上传偏移/已接收的下载偏移切回中继，不在同一任务内混用两条数据通道。关闭 WebRTC、旧客户端或不支持直连的网络继续使用中继；当前使用 STUN，无 TURN。暂停、取消、关闭面板及控制连接断开会清理对应直连。
 
-Web Terminal 连接支持 `terminalRTC` 的 Rust GPU 客户端时，也可使用可靠有序的 `rdev-terminal` DataChannel 直接传输 PTY 输入/输出；无需启动远程桌面。服务端须启用 `--webrtc`，鉴权、窗口尺寸、退出码与信令仍走服务端。协商失败使用普通中继；已建立的直连断开时，经设备确认后切回**同一个 PTY**，只发送尚未提交的输入，不重放可能已执行的命令，并明确提示在途字节可能丢失。输入排队有界，恢复超时会报错并断开，不静默丢弃后继续。会话监看接入会将该终端切回中继以恢复广播；直连期间的历史输出不保存在服务端。旧客户端、关闭 WebRTC 或不支持 WebRTC 的浏览器继续走中继。ICE 配置沿用 `--webrtc-ice-servers`，包括 TURN 或 `[]` host-only；主控制连接断开会关闭对应 PTY 和直连资源。
+Web Terminal 连接支持 `terminalRTC` 的 Rust 客户端时，也可使用可靠有序的 `rdev-terminal` DataChannel 直接传输 PTY 输入/输出；无需启动远程桌面。服务端须启用 `--webrtc`，鉴权、窗口尺寸、退出码与信令仍走服务端。协商失败使用普通中继；已建立的直连断开时，经设备确认后切回**同一个 PTY**，只发送尚未提交的输入，不重放可能已执行的命令，并明确提示在途字节可能丢失。输入排队有界，恢复超时会报错并断开，不静默丢弃后继续。会话监看接入会将该终端切回中继以恢复广播；直连期间的历史输出不保存在服务端。旧客户端、关闭 WebRTC 或不支持 WebRTC 的浏览器继续走中继。ICE 配置沿用 `--webrtc-ice-servers`，包括 TURN 或 `[]` host-only；主控制连接断开会关闭对应 PTY 和直连资源。
 
 `model-config.json` 示例（容忍 `opencode_npm` 等多余字段，`api_key` 支持 `${ENV_VAR}`）：
 
@@ -118,7 +118,7 @@ Anthropic 原生 Messages 可设置 `"api": "anthropic-messages"`，使用 `/mes
 
 ### 启动客户端
 
-连接地址支持逗号分隔的优先级列表：`tcp://host:8081,kcp://host:8082,ws://host:8080`。裸 `host:port` 默认按 TCP 处理，`udp://` 是 KCP over UDP 的别名；Android APK、Go 客户端和 Rust GPU 客户端均支持 TCP/KCP/UDP/WS。
+连接地址支持逗号分隔的优先级列表：`tcp://host:8081,kcp://host:8082,ws://host:8080`。裸 `host:port` 默认按 TCP 处理，`udp://` 是 KCP over UDP 的别名；Android APK、Go 客户端和 Rust 客户端均支持 TCP/KCP/UDP/WS。
 
 
 ```bash
@@ -150,9 +150,9 @@ powershell -Command "iwr -useb https://r.niceaigc.cn/run.ps1 | iex; RDev wss://r
 
 ### 自动更新
 
-客户端和服务端默认启用自动更新：启动 1 分钟后开始检查 GitHub latest release，之后每 1 分钟轮询一次。Go 客户端/服务端发现新版本后会下载当前平台/架构对应资产，使用 `github.com/minio/selfupdate` 替换当前二进制并重启进程。Rust GPU 客户端同样支持 `--no-auto-update`、`--auto-update`、`--update-interval` 和 `RDEV_UPDATE_PROXY`，会下载对应 `rdev-client-gpu-*` 归档并替换当前可执行文件；归档内的 DLL/sidecar 仍由安装脚本或服务包装器负责部署。
+客户端和服务端默认启用自动更新：启动 1 分钟后开始检查 GitHub latest release，之后每 1 分钟轮询一次。Go 客户端/服务端发现新版本后会下载当前平台/架构对应资产，使用 `github.com/minio/selfupdate` 替换当前二进制并重启进程。Rust 客户端同样支持 `--no-auto-update`、`--auto-update`、`--update-interval` 和 `RDEV_UPDATE_PROXY`，会下载对应 `rdev-client-rs-*` 归档并替换当前可执行文件；归档内的 DLL/sidecar 仍由安装脚本或服务包装器负责部署。
 
-**更新包签名校验**：下载链路经过第三方 GitHub 代理，客户端内置公钥（Go 与 Rust updater 相同）在替换二进制前验证 ed25519 签名，签名缺失或不匹配会拒绝更新。Go、Rust GPU 与 Android 正式发布 CI 使用 `scripts/sign` 为每个资产生成 `<资产名>.sig`；缺少 `RDEV_UPDATE_SIGNING_KEY` 时直接失败，不上传无签名资产。维护者需要在仓库 Secrets 中配置该密钥（base64 编码的 64 字节 ed25519 私钥，可用 `go run ./scripts/sign -generate` 生成密钥对，并将对应公钥同步到 Go/Rust updater）。分支构建不要求发布密钥。Android 的旁路资产签名不代替 APK 自身的安装签名，现有 debug APK 构建类型不变。**未签名的旧 Release 资产不能被启用验签的客户端自动更新接受**。`RDEV_UPDATE_PROXY` 仅接受 `https://` 前缀（仅本地测试允许 loopback 的 `http://`）。
+**更新包签名校验**：下载链路经过第三方 GitHub 代理，客户端内置公钥（Go 与 Rust updater 相同）在替换二进制前验证 ed25519 签名，签名缺失或不匹配会拒绝更新。Go、Rust 与 Android 正式发布 CI 使用 `scripts/sign` 为每个资产生成 `<资产名>.sig`；缺少 `RDEV_UPDATE_SIGNING_KEY` 时直接失败，不上传无签名资产。维护者需要在仓库 Secrets 中配置该密钥（base64 编码的 64 字节 ed25519 私钥，可用 `go run ./scripts/sign -generate` 生成密钥对，并将对应公钥同步到 Go/Rust updater）。分支构建不要求发布密钥。Android 的旁路资产签名不代替 APK 自身的安装签名，现有 debug APK 构建类型不变。**未签名的旧 Release 资产不能被启用验签的客户端自动更新接受**。`RDEV_UPDATE_PROXY` 仅接受 `https://` 前缀（仅本地测试允许 loopback 的 `http://`）。
 
 签名密钥已于 2026-11-15 轮换；Go/Rust 内置新公钥的 SHA-256 指纹为 `57bf24ad70845431d49dc9a3519284856378f7b32a02fd69b554bfd4189d32bb`。只信任旧公钥的客户端/服务端需要手动升级一次到采用新公钥的版本，不能通过关闭验签绕过。Actions Secret 不可回读，请通过受控轮换维护，不要将私钥写入源码、日志或聊天。
 
@@ -164,7 +164,7 @@ powershell -Command "iwr -useb https://r.niceaigc.cn/run.ps1 | iex; RDev wss://r
 # 禁用自动更新
 ./rdev-server --no-auto-update
 ./rdev-client -s tcp://your-server:8081,kcp://your-server:8082,ws://your-server:8080 --no-auto-update
-./rdev-client-gpu -s tcp://your-server:8081,kcp://your-server:8082,ws://your-server:8080 --no-auto-update
+./rdev-client-rs -s tcp://your-server:8081,kcp://your-server:8082,ws://your-server:8080 --no-auto-update
 
 # 调整检查间隔
 ./rdev-server --update-interval 10m
@@ -216,7 +216,7 @@ ssh -R 3000:localhost:3000 my-device@your-server -p 2222
 
 ### 设备身份与撤销
 
-Go、Rust GPU、Android 客户端在首次注册前持久保存随机 `deviceIdentity` 和独立的 `reconnectProof`（各为 64 位小写十六进制）。服务端只保存 proof 的 SHA-256 校验值；公开设备 ID 和 `instanceId` 都不是重连凭证。不同身份申请同名时分配后缀，已有或已撤销身份的名称不会转给新身份。同一有效身份重启后恢复原名称并替换旧连接。
+Go、Rust、Android 客户端在首次注册前持久保存随机 `deviceIdentity` 和独立的 `reconnectProof`（各为 64 位小写十六进制）。服务端只保存 proof 的 SHA-256 校验值；公开设备 ID 和 `instanceId` 都不是重连凭证。不同身份申请同名时分配后缀，已有或已撤销身份的名称不会转给新身份。同一有效身份重启后恢复原名称并替换旧连接。
 
 Go/Rust 默认使用系统配置目录下的 `rdev/identity-*.json`：Linux `$XDG_CONFIG_HOME/rdev` 或 `~/.config/rdev`，macOS `~/Library/Application Support/rdev`，Windows `%APPDATA%/rdev`；`RDEV_IDENTITY_DIR` 可覆盖目录。凭证按服务端入口和配置设备 ID 隔离；文件先私密写入并同步，再原子发布且不覆盖并发进程已保存的身份。Android 使用应用私有 SharedPreferences 的同步提交，提交失败不注册。不要复制凭证到其他设备、手改 proof，或将凭证加入版本库；丢失/损坏时应恢复原文件，删除后重新注册不能恢复旧名称和历史。
 
@@ -331,12 +331,12 @@ Web UI 是 React 19 + Tailwind CSS v4 + Radix UI 单页应用，组件/设计令
 - Windows `run.ps1` 未指定 `-Version` 时按所选客户端及架构的精确资产查找最新稳定版本，并将下载地址和缓存固定到同一 tag；不会因仅发布其他客户端而误取仓库全局 `latest`。服务端 `/api/release/latest?asset=<文件名>` 及两个下载端点同样按资产解析，指定版本保持原样、缺少资产时失败。回归：`pwsh -NoProfile -File scripts/test-runner-release.ps1`；加 `-Live` 可查询真实元数据并下载 Windows Go 包检查 PE 文件头（不启动客户端）。
 - Windows 7/8/8.1 的 Go `run.ps1` 会自动下载 WinPTY 运行时，并通过同一套 GitHub 代理前缀重试。
 - Windows 7 的默认 PowerShell 2.0/.NET 2.0 无法通过 `ServicePointManager` 设置 TLS 1.2。首页 Win7 安装命令使用原生 WinHTTP，安装脚本的版本查询和文件下载也提供 WinHTTP 回退，保留证书校验和 HTTPS。系统仍需支持 TLS 1.2（Windows 7 SP1 及相关更新、有效根证书）；未更新的系统不能仅通过修改脚本获得 TLS 支持。
-- Rust `rdev-client-gpu` 的 Win7 包会自动探测并打包 `winpty.dll`/`winpty-agent.exe`；运行时也会从 `RDEV_WINPTY_DIR`、程序目录和 `PATH` 探测 WinPTY。
+- Rust `rdev-client-rs` 的 Win7 包会自动探测并打包 `winpty.dll`/`winpty-agent.exe`；运行时也会从 `RDEV_WINPTY_DIR`、程序目录和 `PATH` 探测 WinPTY。
 - Win7/Win8 上 Rust PTY 优先 WinPTY，失败后退回 pipe shell；Win10/Win11 上优先 ConPTY，失败后退回 pipe shell。
 - Win7 运行 Go 客户端请使用 XTLS `go-win7` 工具链构建，例如 `GO_WIN7=/path/to/go-win7/bin/go make win7-go-client win7-service-wrapper`。
 - Windows 服务不要直接托管客户端 EXE；使用 `rdev-service-wrapper.exe`，并在配置中设置 `interactive: true`，让服务在活动登录用户桌面启动客户端，避免桌面截图出现 Session 0 的 `Access is denied`。
-- GPU 桌面采用 RDev/Weylus 风格：`rdev-client-gpu` 可通过 `embedded-rdev-desktop` feature 内置启动 vendored RDev 桌面 HTTP/WS 服务并连接 `/gpu-desktop-tunnel`，服务端通过 `/gpu-desktop/<device>/` 代理浏览器流量；服务端只做鉴权和隧道转发。
-- 原生 CUA 工具由 Rust GPU 客户端提供：顶层 `cua` 工具先以 `action=tools` 返回精简目录，再用 `action=tools, tool=<工具名>` 按需读取完整输入 schema，最后以 `action=call` 调用。普通 Go 客户端仅使用截图和坐标输入，不链接 Cua SDK，也不声明 `desktop.nativeCua`。
+- GPU 桌面采用 RDev/Weylus 风格：`rdev-client-rs` 可通过 `embedded-rdev-desktop` feature 内置启动 vendored RDev 桌面 HTTP/WS 服务并连接 `/gpu-desktop-tunnel`，服务端通过 `/gpu-desktop/<device>/` 代理浏览器流量；服务端只做鉴权和隧道转发。
+- 原生 CUA 工具由 Rust 客户端提供：顶层 `cua` 工具先以 `action=tools` 返回精简目录，再用 `action=tools, tool=<工具名>` 按需读取完整输入 schema，最后以 `action=call` 调用。普通 Go 客户端仅使用截图和坐标输入，不链接 Cua SDK，也不声明 `desktop.nativeCua`。
 - 原生 CUA 桥接会跨单次工具调用错误保留同一桌面会话；`set_agent_cursor_enabled` / `set_agent_cursor_motion` 只有在同会话状态读回匹配后才返回成功，等待超过 5 秒会作为调用错误返回。macOS GPU 客户端在进程主线程运行 AppKit cursor overlay loop，Tokio 客户端运行在后台线程。
 - Rust 客户端在 Linux 上直接调用 `renameat2` 系统调用，兼容 CentOS 7 的旧 glibc；重命名不会覆盖已存在的目标，不支持该系统调用的内核会返回错误而非降级为非原子操作。
 
@@ -357,14 +357,14 @@ Web UI 是 React 19 + Tailwind CSS v4 + Radix UI 单页应用，组件/设计令
 # 标准构建
 make build
 
-# 可选 Rust GPU 客户端（实验版，不替代默认 Go 客户端）
-make rust-client-gpu
-make rust-client-gpu-check
-make rust-client-gpu-smoke
+# 可选 Rust 客户端（实验版，不替代默认 Go 客户端）
+make rust-client-rs
+make rust-client-rs-check
+make rust-client-rs-smoke
 # Windows 7-compatible Rust package, requires MinGW gcc
-make rust-client-gpu-win7-package
+make rust-client-rs-win7-package
 # Optional real Win7 E2E smoke; set RDEV_GPU_WIN7_HOST/PASSWORD first
-make rust-client-gpu-win7-smoke
+make rust-client-rs-win7-smoke
 
 # Win7 Go client/service wrapper, requires XTLS go-win7
 GO_WIN7=/path/to/go-win7/bin/go make win7-go-client win7-service-wrapper
@@ -380,7 +380,7 @@ CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -o rdev-client.exe ./cmd/rdev-c
 CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o rdev-client-arm64 ./cmd/rdev-client
 ```
 
-发布标签前应通过 Rust 的格式检查、Clippy、单元测试及 `make rust-client-gpu-smoke`；GPU 发布流程要求这些检查和跨平台构建、Windows 包启动检查全部成功。文件传输冒烟使用必需的 SHA-256 上传摘要，并核对上传完成及下载元数据中的摘要。已发布标签不重写；发布检查修复使用新的补丁版本。
+发布标签前应通过 Rust 的格式检查、Clippy、单元测试及 `make rust-client-rs-smoke`；GPU 发布流程要求这些检查和跨平台构建、Windows 包启动检查全部成功。文件传输冒烟使用必需的 SHA-256 上传摘要，并核对上传完成及下载元数据中的摘要。已发布标签不重写；发布检查修复使用新的补丁版本。
 
 ### Go 客户端桌面编码
 
@@ -392,7 +392,7 @@ macOS amd64/arm64 使用系统 VideoToolbox 硬件 H.264 后回退 CPU。桌面�
 “硬件加速”或“软件编码”及实际编码后端；新会话自动模式默认 30 FPS、画质 75。
 全部路径仍为 `CGO_ENABLED=0`，不启动 FFmpeg 等外部进程。Linux 硬件后端通过系统
 动态加载器访问驱动；需要 musl/scratch 兼容的静态客户端时使用
-`GO264_TAGS='-tags go264_nohwaccel' make client`。需要原生 CUA 时使用 Rust GPU 客户端：
+`GO264_TAGS='-tags go264_nohwaccel' make client`。需要原生 CUA 时使用 Rust 客户端：
 
 ```bash
 curl -sL https://your-server/run.sh | sh -s -- wss://your-server --client rs

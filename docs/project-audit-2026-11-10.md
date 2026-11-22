@@ -6,7 +6,7 @@
 
 | 优先级 | 问题与触发条件 | 代码依据 | 建议与验收 |
 | --- | --- | --- | --- |
-| P1 | Rust/Android 同时向同一路径上传时，任务按 taskId 隔离，但共用目标 `.rdevpart`，可能互相改写。Go 已有路径占用保护。 | `clients/rdev-client-gpu/src/files.rs` 的 `open_upload`；`AndroidFileManager.java` 的 `handleUploadStart`；对照 `internal/client/managed_upload.go` | 统一规范化目标路径和占用租约，重复目标拒绝/明确排队，处理断线释放。测试双会话、路径别名、取消/恢复。此项为源码确认的竞态条件，未进行破坏性真机复现。 |
+| P1 | Rust/Android 同时向同一路径上传时，任务按 taskId 隔离，但共用目标 `.rdevpart`，可能互相改写。Go 已有路径占用保护。 | `clients/rdev-client-rs/src/files.rs` 的 `open_upload`；`AndroidFileManager.java` 的 `handleUploadStart`；对照 `internal/client/managed_upload.go` | 统一规范化目标路径和占用租约，重复目标拒绝/明确排队，处理断线释放。测试双会话、路径别名、取消/恢复。此项为源码确认的竞态条件，未进行破坏性真机复现。 |
 | P1 | 新建文件先列目录，再走普通覆盖式上传，两步之间有竞态；重命名也使用“检查后 rename”，并非原子禁止覆盖。 | `web/ui/components/file-explorer.tsx:354`、`internal/client/file_mutations.go`、Rust `mutate`、Android `handleRename` | 新增明确的 exclusive-create/no-replace 语义，并由客户端原子执行。不能仅依赖前端检查。跨客户端测试并发创建/重命名，已有文件内容不得改变。 |
 | P1 | 文件请求只有前端 30 秒超时，服务端 `fileRequests` 没有对应截止时间。设备不响应且页面保持连接时，失败请求持续累积。 | `web/ui/lib/file-tree-rpc.ts:35`；`internal/server/files.go:312`、`closeFileSocket`、`forwardFileOpResult` | 路由增加设备、截止时间和容量限制；超时/断线立即清理并返回稳定错误码。测试无响应设备、重复刷新和迟到响应。 |
 | P2 | 设备列表的单次 fetch 无应用层超时；请求挂起时 `inFlight` 一直为 true，轮询和 SSE 更新只设置 dirty，无法恢复加载。 | `web/ui/lib/devices.tsx:52`；`web/ui/lib/api.ts:46` | 每次刷新增加 AbortController 和截止时间，卸载取消，保留已加载列表。模拟永不返回的请求，验证后续刷新可以恢复。 |

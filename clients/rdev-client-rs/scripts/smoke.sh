@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)
-BASE=${RDEV_GPU_SMOKE_DIR:-/tmp/rdev-client-gpu-smoke}
+BASE=${RDEV_GPU_SMOKE_DIR:-/tmp/rdev-client-rs-smoke}
 PASSWORD=${RDEV_GPU_SMOKE_PASSWORD:-smoke}
 DEVICE_ID=${RDEV_GPU_SMOKE_ID:-rgpu-smoke}
 ADMIN_TOKEN=${RDEV_GPU_SMOKE_ADMIN_TOKEN:-rgpu-smoke-admin}
@@ -42,13 +42,13 @@ SERVER_LOG="$BASE/server.log"
 CLIENT_LOG="$BASE/client.log"
 KNOWN_HOSTS="$BASE/known_hosts"
 SERVER_BIN="$BASE/rdev-server"
-CLIENT_BIN="$ROOT/clients/rdev-client-gpu/target/release/rdev-client-gpu"
+CLIENT_BIN="$ROOT/clients/rdev-client-rs/target/release/rdev-client-rs"
 
 rm -rf "$BASE"
 mkdir -p "$DATA"
 
 go build -o "$SERVER_BIN" "$ROOT/cmd/rdev-server"
-cargo build --release --manifest-path "$ROOT/clients/rdev-client-gpu/Cargo.toml"
+cargo build --release --manifest-path "$ROOT/clients/rdev-client-rs/Cargo.toml"
 
 "$SERVER_BIN" --http "127.0.0.1:$HTTP_PORT" --ssh "127.0.0.1:$SSH_PORT" --data "$DATA" --admin-token "$ADMIN_TOKEN" >"$SERVER_LOG" 2>&1 &
 SERVER_PID=$!
@@ -349,7 +349,7 @@ sshpass -p "$PASSWORD" ssh -N -L "127.0.0.1:$FWD_PORT:127.0.0.1:$WEB_PORT" "${SS
 FWD_SSH_PID=$!
 for _ in $(seq 1 40); do
   if curl -fsS "http://127.0.0.1:$FWD_PORT/rsync-src/file.txt" 2>/dev/null | grep -q hello-rsync; then
-    echo "rdev-client-gpu smoke ok"
+    echo "rdev-client-rs smoke ok"
     exit 0
   fi
   sleep 0.25

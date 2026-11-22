@@ -434,19 +434,29 @@ function global:RDev {
             return
         }
         if ($WindowsMajor -gt 0 -and $WindowsMajor -lt 10) {
-            $Asset = 'rdev-client-gpu-windows-win7-amd64.zip'
+            $Asset = 'rdev-client-rs-windows-win7-amd64.zip'
         } elseif ($Arch -eq 'arm64') {
-            $Asset = 'rdev-client-gpu-windows-arm64.zip'
+            $Asset = 'rdev-client-rs-windows-arm64.zip'
         } else {
-            $Asset = 'rdev-client-gpu-windows-amd64.zip'
+            $Asset = 'rdev-client-rs-windows-amd64.zip'
         }
         $PackageKind = 'zip'
+        # Releases up to v0.2.151 published this package as rdev-client-gpu-*.
+        $LegacyAsset = $Asset -replace '^rdev-client-rs-', 'rdev-client-gpu-'
     } else {
         $Asset = "rdev-client-windows-$Arch.exe"
         $PackageKind = 'exe'
     }
     if ($Tag -eq 'latest') {
-        try { $Tag = Get-RDevLatestTag $Server $Asset } catch { Write-Error "Release resolution failed: $($_.Exception.Message)"; return }
+        try { $Tag = Get-RDevLatestTag $Server $Asset }
+        catch {
+            if (-not $LegacyAsset) { Write-Error "Release resolution failed: $($_.Exception.Message)"; return }
+            Write-Host "  No rdev-client-rs package published yet; using the legacy rdev-client-gpu package." -ForegroundColor DarkGray
+            $Asset = $LegacyAsset
+            $LegacyAsset = ''
+            try { $Tag = Get-RDevLatestTag $Server $Asset }
+            catch { Write-Error "Release resolution failed: $($_.Exception.Message)"; return }
+        }
     }
     # Downloads and cache must use the same immutable, asset-specific release.
     $ResolvedTag = $Tag
@@ -474,7 +484,7 @@ function global:RDev {
     $OK = $false
 
     if ($Client -eq 'rs') {
-        $ClientName = 'rdev-client-gpu'
+        $ClientName = 'rdev-client-rs'
         $CacheKey = "rs-$SafeTag-windows-$Arch-$(Convert-RDevSafeName $Asset)"
     } else {
         $ClientName = 'rdev-client'
@@ -541,8 +551,8 @@ function global:RDev {
     if ($PackageKind -eq 'zip') {
         $ExtractDir = Join-Path $WorkDir 'runtime'
         if (-not (Expand-ZipLegacy $OutPath $ExtractDir)) { Write-Error "Package unzip failed"; return }
-        $Exe = Get-ChildItem -Path $ExtractDir -Recurse -Filter 'rdev-client-gpu.exe' -EA SilentlyContinue | Select-Object -First 1
-        if (-not $Exe) { Write-Error "rdev-client-gpu.exe not found in package"; return }
+        $Exe = Get-ChildItem -Path $ExtractDir -Recurse -Include 'rdev-client-rs.exe','rdev-client-gpu.exe' -EA SilentlyContinue | Select-Object -First 1
+        if (-not $Exe) { Write-Error "Rust client executable not found in package"; return }
         $RunPath = $Exe.FullName
     } else {
         $RunPath = $OutPath
