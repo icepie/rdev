@@ -639,7 +639,7 @@ func uinputButton(button int) int {
 
 func uinputKeyboardKeys() []int {
 	keys := []int{}
-	for _, key := range []int{1, 14, 15, 28, 29, 42, 54, 56, 57, 58, 87, 88, 97, 100, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 125, 126} {
+	for _, key := range []int{1, 14, 15, 28, 29, 42, 54, 55, 56, 57, 58, 87, 88, 96, 97, 98, 100, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 125, 126} {
 		keys = append(keys, key)
 	}
 	for key := 2; key <= 13; key++ {
@@ -678,8 +678,10 @@ func uinputKeycode(event desktopInputEvent) int {
 		return 14
 	case "Tab":
 		return 15
-	case "Enter", "NumpadEnter":
+	case "Enter":
 		return 28
+	case "NumpadEnter":
+		return 96
 	case "ControlLeft":
 		return 29
 	case "ShiftLeft":
@@ -833,8 +835,10 @@ func x11Keycode(event desktopInputEvent) byte {
 		return 22
 	case "Tab":
 		return 23
-	case "Enter", "NumpadEnter":
+	case "Enter":
 		return 36
+	case "NumpadEnter":
+		return 104
 	case "ControlLeft":
 		return 37
 	case "ShiftLeft":

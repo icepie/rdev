@@ -1,5 +1,13 @@
 import { expect, it, vi } from "vitest";
-import { paintDesktopCanvas, paintDesktopImage } from "../ui/lib/desktop-frame";
+import { acceptDesktopH264Frame, paintDesktopCanvas, paintDesktopImage } from "../ui/lib/desktop-frame";
+
+it("resumes a congested H264 stream at the next keyframe", () => {
+  const needed = { current: false };
+  expect(acceptDesktopH264Frame(false, 3, needed)).toBe(false);
+  expect(acceptDesktopH264Frame(false, 0, needed)).toBe(false);
+  expect(acceptDesktopH264Frame(true, 0, needed)).toBe(true);
+  expect(acceptDesktopH264Frame(false, 1, needed)).toBe(true);
+});
 
 it("drops a decoded bitmap from a replaced stream and still releases it", async () => {
   const previous = Object.getOwnPropertyDescriptor(globalThis, "window");

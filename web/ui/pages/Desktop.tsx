@@ -1,9 +1,10 @@
-import { desktopEncoderRecoveryFormat } from "../lib/desktop-media";
+import { desktopEncoderRecoveryFormat, desktopEncoderStatus, desktopInputShouldDrop, desktopRuntimeEncoderStatus, desktopStreamRates } from "../lib/desktop-media";
 import { connectDesktopRTC, sendGPUDesktopMessage, type DesktopRTCConnection } from "../lib/desktop-webrtc";
 import { desktopOwnsKeyboard } from "../lib/desktop-input-focus";
+import { DesktopHeldInput } from "../lib/desktop-input";
 import { isImeComposing } from "../lib/keyboard";
 import { writeOwnedClipboard } from "../lib/clipboard-write";
-import { paintDesktopImage } from "../lib/desktop-frame";
+import { acceptDesktopH264Frame, paintDesktopImage } from "../lib/desktop-frame";
 import { DisclosureBody } from "../components/disclosure-body";
 import { Icon } from "../components/icon";
 import { useEffect, useRef, useState, type ReactNode } from "react";
@@ -215,11 +216,12 @@ function loadSettings(): Settings {
   const mode = localStorage.getItem(P + "mode");
   const fit = localStorage.getItem(P + "fit");
   const clipboardMode = localStorage.getItem(P + "clipboardSyncMode");
+  const rates = desktopStreamRates(localStorage.getItem(P + "fps"), localStorage.getItem(P + "quality"));
   return {
     mode: mode === "auto" || mode === "manual" ? mode : "auto",
     source: localStorage.getItem(P + "source") || "auto",
-    fps: localStorage.getItem(P + "fps") || "4",
-    quality: localStorage.getItem(P + "quality") || "50",
+    fps: String(rates.fps),
+    quality: String(rates.quality),
     maxWidth: localStorage.getItem(P + "width") || "1600",
     maxHeight: localStorage.getItem(P + "height") || "1000",
     inputBackend: localStorage.getItem(P + "inputBackend") || "auto",
@@ -280,6 +282,7 @@ function DesktopSession({
     cls: "",
   });
   const [frameInfo, setFrameInfo] = useState("");
+  const [gpuEncoderStatus, setGpuEncoderStatus] = useState("");
   const [clipStatus, setClipStatus] = useState("");
   const [clipCaps, setClipCapsState] = useState<ClipCaps | null>(null);
   const [isGpuDevice, setIsGpuDevice] = useState(false);
@@ -357,6 +360,7 @@ function DesktopSession({
   const h264FrameIndexRef = useRef(0);
   const h264FrameDurationUsRef = useRef(125000);
   const h264NeedKeyframeRef = useRef(false);
+  const desktopHeld = useRef(new DesktopHeldInput());
   const videoFormatRef = useRef("");
 
   const gpuMediaSourceRef = useRef<MediaSource | null>(null);
@@ -387,6 +391,7 @@ function DesktopSession({
     setSettingsState(settingsRef.current);
   };
   const settings = settingsState;
+  const autoRates = desktopStreamRates(null, null, true);
 
   const setStatus = (text: string, cls: StatusCls = "") => setStatusState({ text, cls });
 
@@ -412,8 +417,9 @@ function DesktopSession({
     localStorage.setItem(P + "control", String(s.control));
     localStorage.setItem(P + "showCursor", String(s.showCursor));
     localStorage.setItem(P + "clipboardSyncMode", s.clipboardMode);
-    localStorage.setItem(P + "fps", String(clampInt(s.fps, 1, 12, 4)));
-    localStorage.setItem(P + "quality", String(clampInt(s.quality, 25, 90, 50)));
+    const rates = desktopStreamRates(s.fps, s.quality);
+    localStorage.setItem(P + "fps", String(rates.fps));
+    localStorage.setItem(P + "quality", String(rates.quality));
     localStorage.setItem(P + "width", String(clampInt(s.maxWidth, 320, 3840, 1600)));
     localStorage.setItem(P + "height", String(clampInt(s.maxHeight, 240, 2160, 1000)));
   };
@@ -506,8 +512,7 @@ function DesktopSession({
     return {
       mode: s.mode,
       source: s.source,
-      fps: manual ? clampInt(s.fps, 1, 12, 4) : 8,
-      quality: manual ? clampInt(s.quality, 25, 90, 50) : 55,
+      ...desktopStreamRates(s.fps, s.quality, !manual),
       width: manual ? clampInt(s.maxWidth, 320, 3840, 1600) : adaptive.width,
       height: manual ? clampInt(s.maxHeight, 240, 2160, 1000) : adaptive.height,
       inputBackend: s.inputBackend || "auto",
@@ -705,7 +710,7 @@ function DesktopSession({
       videoFormatRef.current = "h264";
       h264FrameIndexRef.current = 0;
       h264NeedKeyframeRef.current = true;
-      h264FrameDurationUsRef.current = Math.max(1000, Math.round(1000000 / (msg.fps || 8)));
+      h264FrameDurationUsRef.current = Math.max(1000, Math.round(1000000 / (msg.fps || 30)));
       return true;
     } catch (e) {
       console.error("h264 configure failed", e);
@@ -717,7 +722,7 @@ function DesktopSession({
     const decoder = h264DecoderRef.current;
     if (!decoder || decoder.state !== "configured" || data.byteLength < 5) return false;
     const keyframe = (new Uint8Array(data, 0, 1)[0] & 1) !== 0;
-    if (h264NeedKeyframeRef.current && !keyframe) return false;
+    if (!acceptDesktopH264Frame(keyframe, decoder.decodeQueueSize, h264NeedKeyframeRef)) return false;
     const chunk = new Uint8Array(data, 1);
     try {
       decoder.decode(
@@ -727,7 +732,6 @@ function DesktopSession({
           data: chunk,
         }),
       );
-      h264NeedKeyframeRef.current = false;
       h264FrameIndexRef.current++;
       return true;
     } catch (e) {
@@ -801,6 +805,7 @@ function DesktopSession({
   /* ── GPU video output (MSE + WebCodecs) ── */
 
   const closeGPUVideo = () => {
+    setGpuEncoderStatus("");
     gpuQueueRef.current = [];
     gpuSourceBufferRef.current = null;
     const ms = gpuMediaSourceRef.current;
@@ -1300,6 +1305,21 @@ function DesktopSession({
     }, delay);
   };
 
+  const desktopReleaseKeyboard = (pointerId?: number) => {
+    const ws = wsRef.current;
+    if (connModeRef.current !== "desktop" || !ws || ws.readyState !== WebSocket.OPEN) {
+      desktopHeld.current.clear();
+      return;
+    }
+    try {
+      const release = (input: Record<string, unknown>) => ws.send(JSON.stringify({ op: "input", ...input }));
+      if (pointerId === undefined) desktopHeld.current.release(release);
+      else desktopHeld.current.releasePointer(pointerId, release);
+    } catch (e) {
+      setStatus(errMessage(e), "err");
+    }
+  };
+
   const gpuReleaseKeyboard = () => {
     const ws = wsRef.current;
     if (connModeRef.current !== "gpu" || !ws || ws.readyState !== WebSocket.OPEN) {
@@ -1316,6 +1336,8 @@ function DesktopSession({
 
   function disconnect() {
     manualDisconnectRef.current = true;
+    desktopReleaseKeyboard();
+    gpuReleaseKeyboard();
     connSeqRef.current++;
     clearTimeout(reconnectTimerRef.current);
     rtcSessionRef.current = "";
@@ -1326,7 +1348,6 @@ function DesktopSession({
       wsRef.current.close();
       wsRef.current = null;
     }
-    gpuReleaseKeyboard();
     closeH264Decoder();
     closeGPUVideo();
     remoteInputRef.current = false;
@@ -1429,12 +1450,14 @@ function DesktopSession({
     };
     ws.onclose = () => {
       if (connID !== connSeqRef.current || wsRef.current !== ws) return;
+      gpuHeldKeysRef.current.clear();
       const rtc = rtcRef.current;
       rtcRef.current = null;
       rtcSessionRef.current = "";
       rtc?.close();
       wsRef.current = null;
       stopClipboardSync();
+      setGpuEncoderStatus("");
       setClipboardCapabilities(null);
       setStatus(
         lastCloseMsgRef.current || tRef.current("desktop.closed"),
@@ -1470,13 +1493,14 @@ function DesktopSession({
         return;
       }
       const msg = JSON.parse(evt.data);
-      if (relayDuringRTC && (msg === "NewVideo" || msg?.AndroidVideoConfig)) return;
+      if (relayDuringRTC && (msg === "NewVideo" || msg?.AndroidVideoConfig || msg?.RuntimeStatus)) return;
       if (rtcDispatchRef.current && (msg?.InputCapabilities || msg?.ClipboardCapabilities || msg?.ClipboardContent)) return;
       if (msg === "NewVideo") {
         gpuStartMedia();
         setGpuEmpty(null);
       } else if (msg && msg.AndroidVideoConfig) {
         gpuStartWebCodecsVideo(msg.AndroidVideoConfig);
+        setGpuEncoderStatus(desktopEncoderStatus({ encoderBackend: "mediacodec-h264", ...msg.AndroidVideoConfig }, tt));
         setGpuEmpty(null);
       } else if (msg === "ConfigOk") {
         setGpuEmpty(null);
@@ -1495,7 +1519,10 @@ function DesktopSession({
       else if (msg && msg.InputCapabilities) gpuSetInputCapabilities(msg.InputCapabilities);
       else if (msg && msg.ClipboardCapabilities) setClipboardCapabilities(msg.ClipboardCapabilities);
       else if (msg && msg.ClipboardContent) handleRemoteClipboard(msg.ClipboardContent);
-      else if (msg && msg.RuntimeStatus) gpuUpdateFrameInfo();
+      else if (msg && msg.RuntimeStatus) {
+        const encoder = desktopRuntimeEncoderStatus(msg.RuntimeStatus, tt);
+        if (encoder !== undefined) setGpuEncoderStatus(encoder);
+      }
       else if (msg && msg.ConfigError) {
         if (rtcDispatchRef.current) {
           rtcRef.current?.close();
@@ -1622,10 +1649,10 @@ function DesktopSession({
         if (remoteInputRef.current && !controlPreferenceSet.current) saveDesktopSettings();
         updateFrameInfo();
         const source = currentSourceRef.current ? ` · ${currentSourceRef.current}` : "";
-        const encoder = msg.encoderBackend ? ` · ${msg.encoderBackend}` : "";
+        const encoder = desktopEncoderStatus(msg, tt);
         const w = canvas?.width || 0;
         const h = canvas?.height || 0;
-        setStatus(`${tt("index.desktopReady")} · ${w}×${h}${source}${encoder}`, "ok");
+        setStatus(`${tt("index.desktopReady")} · ${w}×${h}${source}${encoder ? ` · ${encoder}` : ""}`, "ok");
         setClipboardCapabilities(
           msg.desktop && msg.desktop.clipboard
             ? {
@@ -1662,6 +1689,7 @@ function DesktopSession({
     };
     ws.onclose = () => {
       if (connID !== connSeqRef.current || wsRef.current !== ws) return;
+      desktopHeld.current.clear();
       rtcRef.current?.close();
       rtcRef.current = null;
       rtcSessionRef.current = "";
@@ -1809,14 +1837,18 @@ function DesktopSession({
     return { x, y };
   };
 
-  const sendInput = (input: Record<string, unknown>) => {
-    if (!settingsRef.current.control || !remoteInputRef.current) return;
+  const sendInput = (input: Record<string, unknown>): boolean => {
+    if (!settingsRef.current.control || !remoteInputRef.current) return false;
     const ws = wsRef.current;
-    if (!ws || ws.readyState !== WebSocket.OPEN || ws.bufferedAmount > 512 * 1024) return;
+    if (!ws || ws.readyState !== WebSocket.OPEN || desktopInputShouldDrop(input.inputType, ws.bufferedAmount))
+      return false;
     try {
       ws.send(JSON.stringify({ op: "input", ...input }));
+      desktopHeld.current.sent(input);
+      return true;
     } catch (e) {
       setStatus(errMessage(e), "err");
+      return false;
     }
   };
 
@@ -1861,15 +1893,15 @@ function DesktopSession({
   const sendKey = (type: string, event: KeyboardEvent) => {
     if (!settingsRef.current.control || !remoteInputRef.current) return;
     event.preventDefault();
-    sendInput({
-      inputType: type,
+    const key = {
       key: event.key,
       code: event.code,
       ctrlKey: event.ctrlKey,
       altKey: event.altKey,
       shiftKey: event.shiftKey,
       metaKey: event.metaKey,
-    });
+    };
+    sendInput({ inputType: type, ...key });
   };
 
   const canvasWheel = (e: WheelEvent) => {
@@ -1998,6 +2030,7 @@ function DesktopSession({
     gpuPointerTypes,
     gpuSend,
     gpuReleaseKeyboard,
+    desktopReleaseKeyboard,
     sendMouse,
     sendKey,
     canvasWheel,
@@ -2016,6 +2049,7 @@ function DesktopSession({
     gpuPointerTypes,
     gpuSend,
     gpuReleaseKeyboard,
+    desktopReleaseKeyboard,
     sendMouse,
     sendKey,
     canvasWheel,
@@ -2060,13 +2094,15 @@ function DesktopSession({
           canvas.releasePointerCapture(e.pointerId);
       });
       on(canvas, "pointercancel", (e: PointerEvent) => {
-        apiRef.current.sendMouse("mouse_up", e);
+        apiRef.current.desktopReleaseKeyboard(e.pointerId);
         if (canvas.releasePointerCapture && canvas.hasPointerCapture?.(e.pointerId))
           canvas.releasePointerCapture(e.pointerId);
       });
+      on(canvas, "lostpointercapture", (e: PointerEvent) => apiRef.current.desktopReleaseKeyboard(e.pointerId));
       on(canvas, "wheel", (e: WheelEvent) => apiRef.current.canvasWheel(e), { passive: false });
       on(canvas, "keydown", (e: KeyboardEvent) => apiRef.current.sendKey("key_down", e));
       on(canvas, "keyup", (e: KeyboardEvent) => apiRef.current.sendKey("key_up", e));
+      on(canvas, "blur", () => apiRef.current.desktopReleaseKeyboard());
     }
 
     if (overlay) {
@@ -2123,33 +2159,26 @@ function DesktopSession({
         gpuIgnoreNextTextInputRef.current = false;
       });
       on(overlay, "keydown", (e: KeyboardEvent) => {
-        if (!apiRef.current.gpuInputAllowed()) return;
+        if (!apiRef.current.gpuInputAllowed() || wsRef.current?.readyState !== WebSocket.OPEN) return;
         if (gpuComposingRef.current || e.isComposing || e.key === "Process" || e.keyCode === 229) {
           e.preventDefault();
           e.stopPropagation();
           return;
         }
-        const eventType = e.repeat ? "repeat" : "down";
+        const identity = `${e.code || e.key}:${e.location}`;
+        const eventType = e.repeat && gpuHeldKeysRef.current.has(identity) ? "repeat" : "down";
         const msg = apiRef.current.gpuKeyMessage(e, eventType);
-        if (eventType === "down")
-          gpuHeldKeysRef.current.set(
-            `${msg.KeyboardEvent.code}:${msg.KeyboardEvent.location}`,
-            msg.KeyboardEvent,
-          );
         apiRef.current.gpuSend(msg);
+        if (eventType === "down") gpuHeldKeysRef.current.set(identity, msg.KeyboardEvent);
         e.preventDefault();
         e.stopPropagation();
       });
       on(overlay, "keyup", (e: KeyboardEvent) => {
-        if (!apiRef.current.gpuInputAllowed()) return;
-        if (gpuComposingRef.current || e.isComposing || e.key === "Process" || e.keyCode === 229) {
-          e.preventDefault();
-          e.stopPropagation();
-          return;
-        }
+        const identity = `${e.code || e.key}:${e.location}`;
+        if (!gpuHeldKeysRef.current.has(identity)) return;
         const msg = apiRef.current.gpuKeyMessage(e, "up");
-        gpuHeldKeysRef.current.delete(`${msg.KeyboardEvent.code}:${msg.KeyboardEvent.location}`);
         apiRef.current.gpuSend(msg);
+        gpuHeldKeysRef.current.delete(identity);
         e.preventDefault();
         e.stopPropagation();
       });
@@ -2178,12 +2207,17 @@ function DesktopSession({
     };
     const cleanups = [
       on(window, "focus", () => apiRef.current.pollClipboardSync(), true),
+      on(window, "blur", () => {
+        apiRef.current.desktopReleaseKeyboard();
+        apiRef.current.gpuReleaseKeyboard();
+      }),
       on(
         document,
         "visibilitychange",
         () => {
           if (document.hidden) {
             apiRef.current.gpuReleaseKeyboard();
+            apiRef.current.desktopReleaseKeyboard();
             if (connModeRef.current === "gpu") apiRef.current.gpuSend("PauseVideo");
             return;
           }
@@ -2324,6 +2358,8 @@ function DesktopSession({
   useEffect(
     () => () => {
       manualDisconnectRef.current = true;
+      apiRef.current.desktopReleaseKeyboard();
+      apiRef.current.gpuReleaseKeyboard();
       connSeqRef.current++;
       clearTimeout(reconnectTimerRef.current);
       clearTimeout(resizeTimerRef.current);
@@ -2367,6 +2403,10 @@ function DesktopSession({
 
   const onControlChange = (checked: boolean) => {
     controlPreferenceSet.current = true;
+    if (!checked) {
+      desktopReleaseKeyboard();
+      gpuReleaseKeyboard();
+    }
     updateSettings({ control: checked });
     setControlActive(checked && remoteInputRef.current);
     if (checked) {
@@ -2448,6 +2488,7 @@ function DesktopSession({
           )}
         >
           {status.text || t("desktop.idle")}
+          {connMode === "gpu" && status.cls === "ok" && settings.gpuEnableVideo && gpuEncoderStatus ? ` · ${gpuEncoderStatus}` : ""}
         </span>
       </div>
 
@@ -2510,10 +2551,11 @@ function DesktopSession({
                 <Input
                   type="number"
                   min={1}
-                  max={12}
-                  value={settings.fps}
+                  max={30}
+                  value={settings.mode === "manual" ? settings.fps : autoRates.fps}
                   onChange={(e) => updateSettings({ fps: e.target.value })}
                   onBlur={() => {
+                    updateSettings({ fps: String(desktopStreamRates(settings.fps, settings.quality).fps) });
                     saveDesktopSettings();
                     scheduleReconnectIfActive();
                   }}
@@ -2526,9 +2568,10 @@ function DesktopSession({
                   type="number"
                   min={25}
                   max={90}
-                  value={settings.quality}
+                  value={settings.mode === "manual" ? settings.quality : autoRates.quality}
                   onChange={(e) => updateSettings({ quality: e.target.value })}
                   onBlur={() => {
+                    updateSettings({ quality: String(desktopStreamRates(settings.fps, settings.quality).quality) });
                     saveDesktopSettings();
                     scheduleReconnectIfActive();
                   }}

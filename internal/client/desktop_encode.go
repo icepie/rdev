@@ -68,6 +68,19 @@ func (e *mjpegEncoder) Backend() string             { return "jpeg" }
 func (e *mjpegEncoder) CodecInfo() desktopCodecInfo { return desktopCodecInfo{} }
 func (e *mjpegEncoder) Close()                      {}
 
+// Go's Media Foundation and VideoToolbox implementations require hardware
+// when opening the encoder. The framework name alone is not proof on other clients.
+func desktopEncoderAcceleration(backend string) string {
+	switch backend {
+	case "cpu", "jpeg":
+		return "software"
+	case "nvenc", "vaapi", "mediafoundation", "videotoolbox":
+		return "hardware"
+	default:
+		return ""
+	}
+}
+
 func desktopEncoderReady(encoder desktopEncoder) bool {
 	return encoder.Format() != desktopFormatH264 || encoder.CodecInfo().Codec != ""
 }
@@ -121,6 +134,26 @@ func (s *desktopFrameSender) tick(frame *image.RGBA, now time.Time) (payload []b
 	}
 	s.lastPayload = append(s.lastPayload[:0], s.encodeBuf.Bytes()...)
 	return s.lastPayload, true, nil
+}
+
+// reusableDesktopRGBA returns a zero-origin RGBA frame with the requested
+// geometry. Capture backends overwrite every pixel before publishing it, so
+// retaining one backing buffer avoids a full-frame allocation on every tick.
+func reusableDesktopRGBA(frame *image.RGBA, width, height int) *image.RGBA {
+	if frame == nil || frame.Bounds() != image.Rect(0, 0, width, height) {
+		return image.NewRGBA(image.Rect(0, 0, width, height))
+	}
+	return frame
+}
+func copyDesktopRGBA(dst, src *image.RGBA) *image.RGBA {
+	bounds := src.Bounds()
+	dst = reusableDesktopRGBA(dst, bounds.Dx(), bounds.Dy())
+	for y := 0; y < bounds.Dy(); y++ {
+		sourceOffset := src.PixOffset(bounds.Min.X, bounds.Min.Y+y)
+		destOffset := dst.PixOffset(0, y)
+		copy(dst.Pix[destOffset:destOffset+bounds.Dx()*4], src.Pix[sourceOffset:sourceOffset+bounds.Dx()*4])
+	}
+	return dst
 }
 
 // errResizeNoPixels reports an unusable source image for the resize helpers.

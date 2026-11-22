@@ -1,5 +1,5 @@
 import { expect, it, vi } from 'vitest';
-import { attachDesktopMediaSource, desktopEncoderRecoveryFormat } from '../ui/lib/desktop-media';
+import { attachDesktopMediaSource, desktopEncoderAcceleration, desktopEncoderRecoveryFormat, desktopEncoderStatus, desktopInputShouldDrop, desktopPanelPresets, desktopRuntimeEncoderStatus, desktopStreamRates } from '../ui/lib/desktop-media';
 function fixture() {
  const buffer=new EventTarget();buffer.mode='segments';
  const source=new EventTarget();source.readyState='open';source.addSourceBuffer=vi.fn(()=>buffer);
@@ -42,4 +42,41 @@ it('retries failed hardware streams with CPU H264 before falling back to MJPEG',
  expect(desktopEncoderRecoveryFormat('h264','cpu')).toBe('mjpeg');
  expect(desktopEncoderRecoveryFormat('h264')).toBe('mjpeg');
  expect(desktopEncoderRecoveryFormat('mjpeg','jpeg')).toBeNull();
+});
+
+it('classifies only the active encoder, not the selection or API name', () => {
+  for (const backend of ['h264_mf', 'mediafoundation', 'mediacodec-h264', 'videotoolbox', 'h264_videotoolbox', 'vendor-encoder']) {
+    expect(desktopEncoderAcceleration(backend)).toBe('unknown');
+  }
+  for (const backend of ['cpu', 'jpeg', 'libx264']) expect(desktopEncoderAcceleration(backend)).toBe('software');
+  for (const backend of ['NVENC', 'h264_nvenc', 'va-api', 'h264_vaapi/drm-prime']) expect(desktopEncoderAcceleration(backend)).toBe('hardware');
+  expect(desktopEncoderAcceleration()).toBeNull();
+  const t = key => key;
+  expect(desktopEncoderStatus({encoderBackend: 'mediafoundation', encoderAcceleration: 'hardware'}, t)).toBe('desktop.hardwareAcceleration: mediafoundation');
+  expect(desktopEncoderStatus({encoderBackend: 'c2.android.avc.encoder', encoderAcceleration: 'software'}, t)).toBe('desktop.softwareEncoding: c2.android.avc.encoder');
+  expect(desktopEncoderStatus({encoderBackend: 'h264_mf'}, t)).toBe('desktop.encoderUnverified: h264_mf');
+  expect(desktopEncoderStatus({encoderAcceleration: 'hardware'}, t)).toBe('');
+  expect(desktopRuntimeEncoderStatus({inputBackend: 'uinput'}, t)).toBeUndefined();
+  expect(desktopRuntimeEncoderStatus({encoderBackend: 'mediacodec-h264'}, t)).toBeUndefined();
+  expect(desktopRuntimeEncoderStatus({encoderBackend: '等待视频流'}, t)).toBe('');
+});
+
+it('keeps manual rates and Agent presets distinct from auto defaults', () => {
+  expect(desktopStreamRates('8', '50', true)).toEqual({fps: 30, quality: 75});
+  expect(desktopStreamRates('8', '50')).toEqual({fps: 8, quality: 50});
+  expect(desktopStreamRates('bad', '')).toEqual({fps: 30, quality: 75});
+  expect(desktopStreamRates('60', '10')).toEqual({fps: 30, quality: 25});
+  expect(desktopPanelPresets(null, null)).toEqual({fps: '30', quality: '75'});
+  expect(desktopPanelPresets('20', '50')).toEqual({fps: '20', quality: '50'});
+  expect(desktopPanelPresets('13', 'bad')).toEqual({fps: '30', quality: '75'});
+});
+
+it('drops only coalescable input while the desktop socket is congested',()=>{
+ expect(desktopInputShouldDrop('mouse_move',600*1024)).toBe(true);
+ expect(desktopInputShouldDrop('wheel',600*1024)).toBe(true);
+ expect(desktopInputShouldDrop('key_down',600*1024)).toBe(false);
+ expect(desktopInputShouldDrop('key_up',600*1024)).toBe(false);
+ expect(desktopInputShouldDrop('mouse_down',600*1024)).toBe(false);
+ expect(desktopInputShouldDrop('mouse_up',600*1024)).toBe(false);
+ expect(desktopInputShouldDrop('wheel',128*1024)).toBe(false);
 });

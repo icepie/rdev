@@ -15,7 +15,7 @@ final class AndroidVideoHub {
     }
 
     interface Listener {
-        void onVideoConfig(int width, int height, byte[] sps, byte[] pps);
+        void onVideoConfig(int width, int height, byte[] sps, byte[] pps, String encoderName, String acceleration);
         void onVideoSample(byte[] data, long ptsUs, boolean keyFrame);
     }
 
@@ -28,6 +28,8 @@ final class AndroidVideoHub {
     private static int height;
     private static byte[] sps;
     private static byte[] pps;
+    private static String encoderName;
+    private static String acceleration;
     private static KeyFrameRequester keyFrameRequester;
     private static DemandListener demandListener;
 
@@ -56,7 +58,7 @@ final class AndroidVideoHub {
         boolean becameActive = listeners.isEmpty();
         listeners.add(listener);
         if (becameActive && demandListener != null) demandListener.onVideoDemandChanged(true);
-        if (sps != null && pps != null) listener.onVideoConfig(width, height, sps, pps);
+        if (sps != null && pps != null) listener.onVideoConfig(width, height, sps, pps, encoderName, acceleration);
     }
 
     static synchronized void removeListener(Listener listener) {
@@ -64,12 +66,14 @@ final class AndroidVideoHub {
         if (removed && listeners.isEmpty() && demandListener != null) demandListener.onVideoDemandChanged(false);
     }
 
-    static synchronized void publishConfig(int w, int h, byte[] config0, byte[] config1) {
+    static synchronized void publishConfig(int w, int h, byte[] config0, byte[] config1, String name, String kind) {
         width = w;
         height = h;
         sps = copy(config0);
         pps = copy(config1);
-        for (Listener listener : new ArrayList<>(listeners)) listener.onVideoConfig(width, height, sps, pps);
+        encoderName = name;
+        acceleration = kind;
+        for (Listener listener : new ArrayList<>(listeners)) listener.onVideoConfig(width, height, sps, pps, name, kind);
     }
 
     static synchronized void publishSample(byte[] data, long ptsUs, boolean keyFrame) {
@@ -81,6 +85,8 @@ final class AndroidVideoHub {
         height = 0;
         sps = null;
         pps = null;
+        encoderName = null;
+        acceleration = null;
         keyFrameRequester = null;
     }
 

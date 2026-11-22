@@ -16,18 +16,19 @@ import (
 )
 
 const (
-	dxgiErrorNotFound     = 0x887A0002
-	dxgiErrorWaitTimeout  = 0x887A0027
-	dxgiFormatR8G8B8A8    = 28
-	dxgiFormatB8G8R8A8    = 87
-	dxgiOutputAttached    = 1
-	d3dDriverTypeUnknown  = 0
-	d3d11CreateDeviceBGRA = 0x20
-	d3d11SDKVersion       = 7
-	d3d11UsageStaging     = 3
-	d3d11CPUAccessRead    = 0x20000
-	d3d11MapRead          = 1
-	dxgiAcquireTimeoutMS  = 500
+	dxgiErrorNotFound           = 0x887A0002
+	dxgiErrorWaitTimeout        = 0x887A0027
+	dxgiFormatR16G16B16A16Float = 10
+	dxgiFormatR8G8B8A8          = 28
+	dxgiFormatB8G8R8A8          = 87
+	dxgiOutputAttached          = 1
+	d3dDriverTypeUnknown        = 0
+	d3d11CreateDeviceBGRA       = 0x20
+	d3d11SDKVersion             = 7
+	d3d11UsageStaging           = 3
+	d3d11CPUAccessRead          = 0x20000
+	d3d11MapRead                = 1
+	dxgiAcquireTimeoutMS        = 500
 )
 
 var (
@@ -374,7 +375,12 @@ func (c *dxgiDesktopCapturer) Capture() (image.Image, error) {
 		}
 		return nil, fmt.Errorf("DXGI frame has invalid size")
 	}
-	if desc.Format != dxgiFormatB8G8R8A8 && desc.Format != dxgiFormatR8G8B8A8 {
+	bytesPerPixel := 4
+	switch desc.Format {
+	case dxgiFormatB8G8R8A8, dxgiFormatR8G8B8A8:
+	case dxgiFormatR16G16B16A16Float:
+		bytesPerPixel = 8
+	default:
 		return nil, fmt.Errorf("unsupported DXGI frame format %d", desc.Format)
 	}
 	if err := c.ensureStaging(desc); err != nil {
@@ -387,12 +393,19 @@ func (c *dxgiDesktopCapturer) Capture() (image.Image, error) {
 	}
 	defer d3d11ContextUnmap(c.context, c.staging)
 
+	if uint64(desc.Width)*uint64(bytesPerPixel) > uint64(mapped.RowPitch) {
+		return nil, fmt.Errorf("DXGI row pitch %d too small for %d pixels in format %d", mapped.RowPitch, desc.Width, desc.Format)
+	}
 	width := int(desc.Width)
 	height := int(desc.Height)
-	img := image.NewRGBA(image.Rect(0, 0, width, height))
+	img := reusableDesktopRGBA(c.lastFrame, width, height)
 	for y := 0; y < height; y++ {
-		src := unsafe.Slice((*byte)(unsafe.Pointer(mapped.Data+uintptr(y)*uintptr(mapped.RowPitch))), width*4)
+		src := unsafe.Slice((*byte)(unsafe.Pointer(mapped.Data+uintptr(y)*uintptr(mapped.RowPitch))), width*bytesPerPixel)
 		dst := img.Pix[y*img.Stride : y*img.Stride+width*4]
+		if desc.Format == dxgiFormatR16G16B16A16Float {
+			desktopScRGBRow(dst, src)
+			continue
+		}
 		if desc.Format == dxgiFormatB8G8R8A8 {
 			for x := 0; x < width; x++ {
 				off := x * 4

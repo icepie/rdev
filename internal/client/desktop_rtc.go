@@ -59,6 +59,10 @@ func (c *Client) handleDesktopRTCSignal(msg *protocol.Message) {
 	}
 
 	session.rtcMu.Lock()
+	if session.stopped() {
+		session.rtcMu.Unlock()
+		return
+	}
 	rtc := session.rtc
 	if msg.RTCType == "offer" {
 		if rtc != nil {

@@ -120,7 +120,14 @@ final class VideoEncoderPipeline {
                 if (index == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
                     MediaFormat outputFormat = codec.getOutputFormat();
                     Log.i(TAG, "output format=" + outputFormat);
-                    AndroidVideoHub.publishConfig(width, height, bufferBytes(outputFormat.getByteBuffer("csd-0")), bufferBytes(outputFormat.getByteBuffer("csd-1")));
+                    MediaCodecInfo active = codec.getCodecInfo();
+                    String acceleration = null;
+                    if (Build.VERSION.SDK_INT >= 29) {
+                        if (active.isHardwareAccelerated()) acceleration = "hardware";
+                        else if (active.isSoftwareOnly()) acceleration = "software";
+                    }
+                    AndroidVideoHub.publishConfig(width, height, bufferBytes(outputFormat.getByteBuffer("csd-0")),
+                        bufferBytes(outputFormat.getByteBuffer("csd-1")), active.getName(), acceleration);
                     continue;
                 }
                 if (index < 0) continue;

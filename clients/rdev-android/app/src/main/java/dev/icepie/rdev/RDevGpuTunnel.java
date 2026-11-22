@@ -477,7 +477,7 @@ final class RDevGpuTunnel {
             Log.i(TAG, "video unsubscribed stream=" + id);
         }
 
-        @Override public void onVideoConfig(int width, int height, byte[] sps, byte[] pps) {
+        @Override public void onVideoConfig(int width, int height, byte[] sps, byte[] pps, String encoderName, String acceleration) {
             try {
                 muxer = null;
                 this.sps = ensureStartCode(sps);
@@ -486,7 +486,7 @@ final class RDevGpuTunnel {
                 videoBatchFrames = 0;
                 waitingForKeyFrame = true;
                 lastBatchFlushMs = 0;
-                sendWsText(id, androidVideoConfig(width, height, sps));
+                sendWsText(id, androidVideoConfig(width, height, sps, encoderName, acceleration));
                 AndroidVideoHub.requestKeyFrame();
                 Log.i(TAG, "android video config sent stream=" + id + " " + width + "x" + height);
             } catch (Exception e) {
@@ -523,9 +523,11 @@ final class RDevGpuTunnel {
         }
     }
 
-    private String androidVideoConfig(int width, int height, byte[] sps) throws Exception {
+    private String androidVideoConfig(int width, int height, byte[] sps, String encoderName, String acceleration) throws Exception {
         return new JSONObject().put("AndroidVideoConfig", new JSONObject()
             .put("codec", avcCodecString(sps))
+            .put("encoderBackend", encoderName)
+            .put("encoderAcceleration", acceleration)
             .put("width", width)
             .put("height", height)
             .put("format", "annexb")
@@ -884,7 +886,6 @@ final class RDevGpuTunnel {
     private String runtimeStatus() throws Exception {
         return new JSONObject().put("RuntimeStatus", new JSONObject()
             .put("captureBackend", "android-mediaprojection")
-            .put("encoderBackend", "mediacodec-h264")
             .put("inputBackend", RDevAccessibilityService.isActive() ? "android-accessibility" : "view-only")
             .put("keyboardBackend", RDevInputMethodService.isActive() ? "android-ime" : (RDevAccessibilityService.isActive() ? "android-accessibility" : "view-only"))
             .put("inputReady", RDevAccessibilityService.isActive())

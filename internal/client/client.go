@@ -473,14 +473,14 @@ func (h *wsEventHandler) OnClose(socket *gws.Conn, err error) {
 		close(cancel)
 		delete(h.client.downloads, tid)
 	}
-	for sid, session := range h.client.desktopSessions {
-		close(session.stop)
-		session.closeRTC()
-		delete(h.client.desktopSessions, sid)
-	}
+	desktops := h.client.desktopSessions
+	h.client.desktopSessions = make(map[string]*desktopSession)
 	h.client.conn = nil
 	h.client.transport = nil
 	h.client.mu.Unlock()
+	for _, session := range desktops {
+		session.close()
+	}
 	h.client.closeFileRTCSessions()
 	for _, upload := range uploads {
 		h.client.cancelManagedUpload(upload)
@@ -910,14 +910,14 @@ func (c *Client) closeCurrentTransport(transport clientTransport, conn net.Conn)
 		close(cancel)
 		delete(c.downloads, tid)
 	}
-	for sid, session := range c.desktopSessions {
-		close(session.stop)
-		session.closeRTC()
-		delete(c.desktopSessions, sid)
-	}
+	desktops := c.desktopSessions
+	c.desktopSessions = make(map[string]*desktopSession)
 	c.transport = nil
 	c.conn = nil
 	c.mu.Unlock()
+	for _, session := range desktops {
+		session.close()
+	}
 	c.closeFileRTCSessions()
 	for _, upload := range uploads {
 		c.cancelManagedUpload(upload)
@@ -981,7 +981,7 @@ func (c *Client) handleMessage(msg *protocol.Message) {
 	case protocol.MsgFileTransferCancel:
 		c.handleManagedTransferCancel(msg.TaskID)
 	case protocol.MsgDesktopStart:
-		go c.handleDesktopStart(msg)
+		c.handleDesktopStart(msg)
 	case protocol.MsgDesktopRTCSignal:
 		c.handleDesktopRTCSignal(msg)
 	case protocol.MsgDesktopSnapshot:

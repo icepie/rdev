@@ -14,48 +14,49 @@ import (
 )
 
 type desktopMsg struct {
-	Retryable       bool                          `json:"retryable,omitempty"`
-	Op              string                        `json:"op"`
-	Message         string                        `json:"message,omitempty"`
-	Device          string                        `json:"device,omitempty"`
-	Session         string                        `json:"session,omitempty"`
-	StatusCode      int                           `json:"statusCode,omitempty"`
-	Width           int                           `json:"width,omitempty"`
-	Height          int                           `json:"height,omitempty"`
-	Format          string                        `json:"format,omitempty"`
-	Codec           string                        `json:"codec,omitempty"`
-	EncoderBackend  string                        `json:"encoderBackend,omitempty"`
-	Description     []byte                        `json:"description,omitempty"`
-	Mode            string                        `json:"mode,omitempty"`
-	Source          string                        `json:"source,omitempty"`
-	Quality         int                           `json:"quality,omitempty"`
-	FPS             int                           `json:"fps,omitempty"`
-	InputBackend    string                        `json:"inputBackend,omitempty"`
-	ShowCursor      *bool                         `json:"showCursor,omitempty"`
-	Desktop         *protocol.DesktopCapabilities `json:"desktop,omitempty"`
-	RTCType         string                        `json:"rtcType,omitempty"`
-	RTCData         json.RawMessage               `json:"rtcData,omitempty"`
-	Pass            string                        `json:"password,omitempty"`
-	InputType       string                        `json:"inputType,omitempty"`
-	X               int                           `json:"x,omitempty"`
-	Y               int                           `json:"y,omitempty"`
-	Button          int                           `json:"button,omitempty"`
-	DeltaX          int                           `json:"deltaX,omitempty"`
-	DeltaY          int                           `json:"deltaY,omitempty"`
-	Key             string                        `json:"key,omitempty"`
-	KeyCode         string                        `json:"code,omitempty"`
-	CtrlKey         bool                          `json:"ctrlKey,omitempty"`
-	AltKey          bool                          `json:"altKey,omitempty"`
-	ShiftKey        bool                          `json:"shiftKey,omitempty"`
-	MetaKey         bool                          `json:"metaKey,omitempty"`
-	PointerType     string                        `json:"pointerType,omitempty"`
-	PointerID       int                           `json:"pointerId,omitempty"`
-	Pressure        float64                       `json:"pressure,omitempty"`
-	ClipboardAction string                        `json:"clipboardAction,omitempty"`
-	ClipboardItems  []protocol.ClipboardItem      `json:"clipboardItems,omitempty"`
-	Text            string                        `json:"text,omitempty"`
-	MaxBytes        int                           `json:"maxBytes,omitempty"`
-	Formats         []string                      `json:"formats,omitempty"`
+	Retryable           bool                          `json:"retryable,omitempty"`
+	Op                  string                        `json:"op"`
+	Message             string                        `json:"message,omitempty"`
+	Device              string                        `json:"device,omitempty"`
+	Session             string                        `json:"session,omitempty"`
+	StatusCode          int                           `json:"statusCode,omitempty"`
+	Width               int                           `json:"width,omitempty"`
+	Height              int                           `json:"height,omitempty"`
+	Format              string                        `json:"format,omitempty"`
+	Codec               string                        `json:"codec,omitempty"`
+	EncoderBackend      string                        `json:"encoderBackend,omitempty"`
+	EncoderAcceleration string                        `json:"encoderAcceleration,omitempty"`
+	Description         []byte                        `json:"description,omitempty"`
+	Mode                string                        `json:"mode,omitempty"`
+	Source              string                        `json:"source,omitempty"`
+	Quality             int                           `json:"quality,omitempty"`
+	FPS                 int                           `json:"fps,omitempty"`
+	InputBackend        string                        `json:"inputBackend,omitempty"`
+	ShowCursor          *bool                         `json:"showCursor,omitempty"`
+	Desktop             *protocol.DesktopCapabilities `json:"desktop,omitempty"`
+	RTCType             string                        `json:"rtcType,omitempty"`
+	RTCData             json.RawMessage               `json:"rtcData,omitempty"`
+	Pass                string                        `json:"password,omitempty"`
+	InputType           string                        `json:"inputType,omitempty"`
+	X                   int                           `json:"x,omitempty"`
+	Y                   int                           `json:"y,omitempty"`
+	Button              int                           `json:"button,omitempty"`
+	DeltaX              int                           `json:"deltaX,omitempty"`
+	DeltaY              int                           `json:"deltaY,omitempty"`
+	Key                 string                        `json:"key,omitempty"`
+	KeyCode             string                        `json:"code,omitempty"`
+	CtrlKey             bool                          `json:"ctrlKey,omitempty"`
+	AltKey              bool                          `json:"altKey,omitempty"`
+	ShiftKey            bool                          `json:"shiftKey,omitempty"`
+	MetaKey             bool                          `json:"metaKey,omitempty"`
+	PointerType         string                        `json:"pointerType,omitempty"`
+	PointerID           int                           `json:"pointerId,omitempty"`
+	Pressure            float64                       `json:"pressure,omitempty"`
+	ClipboardAction     string                        `json:"clipboardAction,omitempty"`
+	ClipboardItems      []protocol.ClipboardItem      `json:"clipboardItems,omitempty"`
+	Text                string                        `json:"text,omitempty"`
+	MaxBytes            int                           `json:"maxBytes,omitempty"`
+	Formats             []string                      `json:"formats,omitempty"`
 }
 
 type desktopRoute struct {
@@ -243,14 +244,6 @@ func mergeDesktopRequest(base protocol.Message, msg desktopMsg) protocol.Message
 	if msg.ShowCursor != nil {
 		base.ShowCursor = *msg.ShowCursor
 	}
-	if msg.Mode != "" && msg.Mode != "manual" {
-		base = defaultDesktopRequest()
-		base.Source = msg.Source
-		base.InputBackend = msg.InputBackend
-		if msg.ShowCursor != nil {
-			base.ShowCursor = *msg.ShowCursor
-		}
-	}
 	if msg.Format != "" {
 		base.Format = msg.Format
 	}
@@ -258,7 +251,7 @@ func mergeDesktopRequest(base protocol.Message, msg desktopMsg) protocol.Message
 }
 
 func defaultDesktopRequest() protocol.Message {
-	return protocol.Message{FPS: 4, Quality: 50, Width: 1600, Height: 1000, Source: "auto"}
+	return normalizeDesktopRequest(protocol.Message{})
 }
 
 func normalizeDesktopRequest(request protocol.Message) protocol.Message {
@@ -268,13 +261,13 @@ func normalizeDesktopRequest(request protocol.Message) protocol.Message {
 		request.Format = ""
 	}
 	if request.FPS <= 0 {
-		request.FPS = 4
+		request.FPS = 30
 	}
-	if request.FPS > 12 {
-		request.FPS = 12
+	if request.FPS > 30 {
+		request.FPS = 30
 	}
 	if request.Quality <= 0 {
-		request.Quality = 50
+		request.Quality = 75
 	}
 	if request.Quality > 90 {
 		request.Quality = 90
@@ -590,7 +583,7 @@ func (s *Server) handleDesktopMessage(msg *protocol.Message) {
 			route.conn.request.Format = msg.Format
 		}
 		route.conn.inputMu.Unlock()
-		route.conn.writeJSON(desktopMsg{Op: op, Session: msg.SessionID, Width: msg.Width, Height: msg.Height, Format: msg.Format, Codec: msg.Codec, Description: msg.Description, EncoderBackend: msg.EncoderBackend, Source: msg.Source, FPS: msg.FPS, InputBackend: msg.InputBackend, Desktop: msg.DesktopCapabilities, Message: msg.Error})
+		route.conn.writeJSON(desktopMsg{Op: op, Session: msg.SessionID, Width: msg.Width, Height: msg.Height, Format: msg.Format, Codec: msg.Codec, Description: msg.Description, EncoderBackend: msg.EncoderBackend, EncoderAcceleration: msg.EncoderAcceleration, Source: msg.Source, FPS: msg.FPS, InputBackend: msg.InputBackend, Desktop: msg.DesktopCapabilities, Message: msg.Error})
 	case protocol.MsgDesktopClipboard:
 		if route.conn == nil {
 			return

@@ -35,6 +35,7 @@ type x11DesktopCapturer struct {
 	source      protocol.DesktopSource
 	drawable    xproto.Drawable
 	bounds      image.Rectangle
+	frame       *image.RGBA
 	captureX    int16
 	captureY    int16
 	byteOrder   binary.ByteOrder
@@ -319,7 +320,8 @@ func (c *x11DesktopCapturer) Capture() (image.Image, error) {
 	if err != nil {
 		return nil, fmt.Errorf("X11 get image: %w", err)
 	}
-	img := image.NewRGBA(image.Rect(0, 0, width, height))
+	img := reusableDesktopRGBA(c.frame, width, height)
+	c.frame = img
 	stride := scanlineStride(width, int(c.format.BitsPerPixel), int(c.format.ScanlinePad))
 	parallelDesktopRows(width, height, func(y0, y1 int) {
 		for y := y0; y < y1; y++ {
@@ -462,6 +464,7 @@ type fbdevCapturer struct {
 	data   []byte
 	path   string
 	bounds image.Rectangle
+	frame  *image.RGBA
 	source protocol.DesktopSource
 	vinfo  fbVarScreenInfo
 	finfo  fbFixScreenInfo
@@ -633,7 +636,8 @@ func (c *fbdevCapturer) Capture() (image.Image, error) {
 	if bpp <= 0 || c.stride <= 0 {
 		return nil, fmt.Errorf("invalid framebuffer layout")
 	}
-	img := image.NewRGBA(image.Rect(0, 0, width, height))
+	img := reusableDesktopRGBA(c.frame, width, height)
+	c.frame = img
 	base := int(c.vinfo.Yoffset)*c.stride + int(c.vinfo.Xoffset)*bpp
 	parallelDesktopRows(width, height, func(y0, y1 int) {
 		for y := y0; y < y1; y++ {

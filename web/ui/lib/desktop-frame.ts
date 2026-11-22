@@ -1,3 +1,12 @@
+/** Once a delta is skipped, resume only at a keyframe. Keep the decoder
+ * configured so already queued pictures can finish while the queue drains. */
+export function acceptDesktopH264Frame(keyframe: boolean, queued: number, needKeyframe: { current: boolean }) {
+  if (!keyframe && queued > 2) needKeyframe.current = true;
+  if (needKeyframe.current && !keyframe) return false;
+  needKeyframe.current = false;
+  return true;
+}
+
 /** Decode asynchronously, but paint only while the originating stream owns it. */
 export async function paintDesktopImage(
   blob: Blob,

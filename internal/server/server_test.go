@@ -252,6 +252,19 @@ func TestDesktopRequestNegotiatesKnownFormats(t *testing.T) {
 	}
 }
 
+func TestDesktopAuthPreservesAdaptiveRequest(t *testing.T) {
+	base := desktopRequestFromQuery(httptest.NewRequest(http.MethodGet, "/desktop?fps=30&quality=75&width=1280&height=720&format=h264", nil))
+	for _, mode := range []string{"auto", "manual"} {
+		got := mergeDesktopRequest(base, desktopMsg{Op: "auth", Mode: mode})
+		if got.FPS != 30 || got.Quality != 75 || got.Width != 1280 || got.Height != 720 || got.Format != "h264" {
+			t.Errorf("%s auth lost negotiated stream settings: %+v", mode, got)
+		}
+	}
+	if got := mergeDesktopRequest(base, desktopMsg{FPS: 120}); got.FPS != 30 {
+		t.Errorf("uncapped request FPS: %d", got.FPS)
+	}
+}
+
 func TestVNCDesktopRequestForcesMJPEG(t *testing.T) {
 	s := NewServer()
 	s.vncSettings["device"] = protocol.Message{Format: "h264", FPS: 8, Quality: 60, Width: 1280, Height: 720}

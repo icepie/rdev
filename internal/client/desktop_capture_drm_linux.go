@@ -189,6 +189,7 @@ type drmKMSCapturer struct {
 	fb                drmModeFBCmd2
 	selected          drmCaptureSource
 	bounds            image.Rectangle
+	frame             *image.RGBA
 }
 
 func enumerateDRMSources() []protocol.DesktopSource {
@@ -363,7 +364,8 @@ func (c *drmKMSCapturer) Capture() (image.Image, error) {
 	if width <= 0 || height <= 0 {
 		return nil, fmt.Errorf("invalid DRM/KMS capture bounds")
 	}
-	img := image.NewRGBA(image.Rect(0, 0, width, height))
+	img := reusableDesktopRGBA(c.frame, width, height)
+	c.frame = img
 	bytesPerPixel := drmBytesPerPixel(c.mappedFormat)
 	if bytesPerPixel <= 0 {
 		return nil, fmt.Errorf("unsupported DRM/KMS pixel format %s", drmFourCC(c.mappedFormat))

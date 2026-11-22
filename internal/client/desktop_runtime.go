@@ -27,6 +27,7 @@ type desktopSourceReporter interface {
 
 type desktopSession struct {
 	stop      chan struct{}
+	closeOnce sync.Once
 	snapshot  chan struct{}
 	input     desktopInput
 	clipboard desktopClipboard
@@ -105,8 +106,10 @@ func (c *Client) handleDesktopStart(msg *protocol.Message) {
 	session := &desktopSession{stop: make(chan struct{}), snapshot: make(chan struct{}, 1)}
 	c.desktopSessions[msg.SessionID] = session
 	c.mu.Unlock()
-	defer session.closeRTC()
+	go c.runDesktop(msg, session)
+}
 
+func (c *Client) runDesktop(msg *protocol.Message, session *desktopSession) {
 	defer func() {
 		c.mu.Lock()
 		if current, ok := c.desktopSessions[msg.SessionID]; ok && current == session {
@@ -114,24 +117,20 @@ func (c *Client) handleDesktopStart(msg *protocol.Message) {
 		}
 		c.mu.Unlock()
 	}()
+	defer session.close()
+	if session.stopped() {
+		return
+	}
 
 	availableInputs := desktopInputBackends()
-	inputBackend := chooseDesktopInputBackend(msg.InputBackend, availableInputs)
-	if inputBackend != "" {
-		if input, active := openDesktopInput(inputBackend, availableInputs, newDesktopInput); input != nil {
-			session.inputMu.Lock()
-			session.input = input
-			session.inputMu.Unlock()
-			inputBackend = active
-			defer session.closeInput()
-		} else {
-			inputBackend = ""
-		}
-	}
-	if clipboard, err := newDesktopClipboard(); err == nil {
-		session.clipboard = clipboard
-	} else {
+	preferred := chooseDesktopInputBackend(msg.InputBackend, availableInputs)
+	input, inputBackend := openDesktopInput(preferred, availableInputs, newDesktopInput)
+	clipboard, err := newDesktopClipboard()
+	if err != nil {
 		log.Printf("desktop clipboard unavailable: %v", err)
+	}
+	if !session.installInput(input, clipboard) {
+		return
 	}
 
 	runtime.LockOSThread()
@@ -159,12 +158,12 @@ func (c *Client) handleDesktopStart(msg *protocol.Message) {
 	caps := desktopCapabilities()
 	caps.Supported = true
 	caps.ViewOnly = false
-	caps.Input = session.input != nil
+	caps.Input = input != nil
 	if len(availableInputs) > 0 {
 		caps.InputBackends = append([]string(nil), availableInputs...)
 		caps.InputOptions = desktopInputOptions()
 	}
-	caps.Clipboard = session.clipboard != nil
+	caps.Clipboard = clipboard != nil
 	caps.Reason = ""
 	size := scaledDimension(bounds.Dx(), bounds.Dy(), msg.Width, msg.Height)
 	session.setFrame(bounds, size.X, size.Y)
@@ -177,14 +176,14 @@ func (c *Client) handleDesktopStart(msg *protocol.Message) {
 
 	fps := msg.FPS
 	if fps <= 0 {
-		fps = 2
+		fps = 30
 	}
-	if fps > 12 {
-		fps = 12
+	if fps > 30 {
+		fps = 30
 	}
 	quality := msg.Quality
 	if quality <= 0 {
-		quality = 60
+		quality = 75
 	}
 	if quality > 90 {
 		quality = 90
@@ -230,6 +229,7 @@ func (c *Client) handleDesktopStart(msg *protocol.Message) {
 			Codec:               codecInfo.Codec,
 			Description:         codecInfo.Description,
 			EncoderBackend:      backend,
+			EncoderAcceleration: desktopEncoderAcceleration(backend),
 			Source:              sourceID,
 			FPS:                 fps,
 			InputBackend:        inputBackend,
@@ -241,13 +241,16 @@ func (c *Client) handleDesktopStart(msg *protocol.Message) {
 	}
 	sender := newDesktopFrameSender(encoder)
 	var frameScratch *image.RGBA
-	ticker := time.NewTicker(time.Second / time.Duration(fps))
-	defer ticker.Stop()
-	for {
+	frameInterval := time.Second / time.Duration(fps)
+	timer := time.NewTimer(0)
+	defer timer.Stop()
+	var nextFrame time.Time
+	for ; ; timer.Reset(time.Until(nextFrame)) {
 		select {
 		case <-session.stop:
 			return
-		case <-ticker.C:
+		case <-timer.C:
+			nextFrame = time.Now().Add(frameInterval)
 			img, err := capturer.Capture()
 			if err != nil {
 				err = fmt.Errorf("desktop capture failed for source %s: %w", sourceName, err)
@@ -261,7 +264,7 @@ func (c *Client) handleDesktopStart(msg *protocol.Message) {
 				continue
 			}
 			// Keep the scratch buffer only when the helper allocated it;
-			// the zero-copy path returns the capturer's own image.
+			// the zero-copy path returns the capturer's reusable image.
 			if frame != img {
 				frameScratch = frame
 			}
@@ -270,6 +273,12 @@ func (c *Client) handleDesktopStart(msg *protocol.Message) {
 			}
 			bounds := capturer.Bounds()
 			if msg.ShowCursor {
+				// Cursor composition must not mutate a capturer-owned reusable
+				// frame. DXGI may return that frame again when the desktop is idle.
+				if sourceFrame, ok := img.(*image.RGBA); ok && frame == sourceFrame {
+					frameScratch = copyDesktopRGBA(frameScratch, sourceFrame)
+					frame = frameScratch
+				}
 				if cursor, ok := desktopCursorPosition(session, capturer); ok {
 					overlayDesktopCursor(frame, bounds, cursor)
 				}
@@ -343,6 +352,10 @@ func (c *Client) handleDesktopCua(msg *protocol.Message) {
 		return
 	}
 	session.cuaMu.Lock()
+	if session.stopped() {
+		session.cuaMu.Unlock()
+		return
+	}
 	if session.cua == nil {
 		cua, err := newNativeCuaSession()
 		if err != nil {
@@ -376,13 +389,19 @@ func (c *Client) handleDesktopClipboard(msg *protocol.Message) {
 	c.mu.Lock()
 	session := c.desktopSessions[msg.SessionID]
 	c.mu.Unlock()
-	if session == nil || session.clipboard == nil {
+	if session == nil {
+		return
+	}
+	session.inputMu.Lock()
+	clipboard := session.clipboard
+	session.inputMu.Unlock()
+	if clipboard == nil {
 		return
 	}
 
 	switch msg.ClipboardAction {
 	case "get":
-		items, err := session.clipboard.Get()
+		items, err := clipboard.Get()
 		if err != nil {
 			c.send(&protocol.Message{Type: protocol.MsgDesktopClipboard, SessionID: msg.SessionID, ClipboardAction: "error", Error: err.Error()})
 			return
@@ -393,7 +412,7 @@ func (c *Client) handleDesktopClipboard(msg *protocol.Message) {
 		if len(items) == 0 && msg.Text != "" {
 			items = []protocol.ClipboardItem{{MIME: "text/plain", Data: base64.StdEncoding.EncodeToString([]byte(msg.Text))}}
 		}
-		if err := session.clipboard.Set(items); err != nil {
+		if err := clipboard.Set(items); err != nil {
 			c.send(&protocol.Message{Type: protocol.MsgDesktopClipboard, SessionID: msg.SessionID, ClipboardAction: "error", Error: err.Error()})
 			return
 		}
@@ -469,9 +488,7 @@ func (c *Client) handleDesktopClose(sessionID string) {
 	}
 	c.mu.Unlock()
 	if session != nil {
-		close(session.stop)
-		session.closeRTC()
-		session.closeCua()
+		session.close()
 	}
 }
 
@@ -528,12 +545,42 @@ func (c *Client) handleDesktopSnapshot(msg *protocol.Message) {
 	}
 }
 
-// Idle expiry/disconnect may coincide with the last input command.
-func (s *desktopSession) closeInput() {
+func (s *desktopSession) stopped() bool {
+	select {
+	case <-s.stop:
+		return true
+	default:
+		return false
+	}
+}
+
+// Setup can finish after the viewer has already closed the session.
+func (s *desktopSession) installInput(input desktopInput, clipboard desktopClipboard) bool {
 	s.inputMu.Lock()
 	defer s.inputMu.Unlock()
-	if s.input != nil {
-		_ = s.input.Close()
-		s.input = nil
+	if s.stopped() {
+		if input != nil {
+			_ = input.Close()
+		}
+		return false
 	}
+	s.input, s.clipboard = input, clipboard
+	return true
+}
+
+func (s *desktopSession) close() {
+	s.closeOnce.Do(func() {
+		close(s.stop)
+		s.inputMu.Lock()
+		if s.input != nil {
+			if err := s.input.Close(); err != nil {
+				log.Printf("desktop input cleanup: %v", err)
+			}
+			s.input = nil
+		}
+		s.clipboard = nil
+		s.inputMu.Unlock()
+		s.closeRTC()
+		s.closeCua()
+	})
 }

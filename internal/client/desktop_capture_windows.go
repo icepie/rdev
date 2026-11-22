@@ -107,6 +107,7 @@ type gdiDesktopCapturer struct {
 	bits     unsafe.Pointer
 	stride   int
 	bounds   image.Rectangle
+	frame    *image.RGBA
 	source   protocol.DesktopSource
 }
 
@@ -425,7 +426,8 @@ func (c *gdiDesktopCapturer) Capture() (image.Image, error) {
 	}
 
 	pixels := unsafe.Slice((*byte)(c.bits), c.stride*height)
-	img := image.NewRGBA(image.Rect(0, 0, width, height))
+	img := reusableDesktopRGBA(c.frame, width, height)
+	c.frame = img
 	parallelDesktopRows(width, height, func(y0, y1 int) {
 		for y := y0; y < y1; y++ {
 			src := pixels[y*c.stride : y*c.stride+width*4]

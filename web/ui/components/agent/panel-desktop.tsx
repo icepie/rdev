@@ -1,7 +1,8 @@
-import { attachDesktopMediaSource, desktopEncoderRecoveryFormat } from "../../lib/desktop-media";
+import { attachDesktopMediaSource, desktopEncoderRecoveryFormat, desktopEncoderStatus, desktopFPSPresets, desktopInputShouldDrop, desktopPanelPresets, desktopQualityPresets, desktopRuntimeEncoderStatus } from "../../lib/desktop-media";
 import { desktopOwnsKeyboard } from "../../lib/desktop-input-focus";
+import { DesktopHeldInput } from "../../lib/desktop-input";
 import { writeOwnedClipboard } from "../../lib/clipboard-write";
-import { paintDesktopCanvas, paintDesktopImage } from "../../lib/desktop-frame";
+import { acceptDesktopH264Frame, paintDesktopCanvas, paintDesktopImage } from "../../lib/desktop-frame";
 /* PanelDesktop: one device remote-desktop session inside an agent right-panel
  * tab. Self-contained WS client derived from the Desktop page, preserving both
  * stream modes: the legacy JPEG/H264 canvas stream over /desktop and the GPU
@@ -128,17 +129,7 @@ interface Settings {
 type ConnMode = "" | "desktop" | "gpu";
 type StatusCls = "" | "ok" | "warn" | "err";
 
-/* Compact toolbar presets (legacy stream). */
-const FPS_OPTIONS = ["4", "8", "12"];
-const QUALITY_OPTIONS = ["25", "50", "75", "90"];
-
 /* ── Pure helpers ── */
-
-function clampInt(value: string | number, min: number, max: number, fallback: number): number {
-  const n = parseInt(String(value), 10);
-  if (!Number.isFinite(n)) return fallback;
-  return Math.max(min, Math.min(max, n));
-}
 
 function errMessage(err: unknown): string {
   return err instanceof Error ? err.message || String(err) : String(err);
@@ -214,8 +205,7 @@ function loadSettings(): Settings {
   const clipboardMode = localStorage.getItem(P + "clipboardSyncMode");
   return {
     source: localStorage.getItem(P + "source") || "auto",
-    fps: localStorage.getItem(P + "fps") || "4",
-    quality: localStorage.getItem(P + "quality") || "50",
+    ...desktopPanelPresets(localStorage.getItem(P + "fps"), localStorage.getItem(P + "quality")),
     inputBackend: localStorage.getItem(P + "inputBackend") || "auto",
     fit: fit === "fit" || fit === "actual" ? fit : "fit",
     control: localStorage.getItem(P + "control") === "true",
@@ -276,6 +266,7 @@ export function PanelDesktop({
     { value: "auto", label: "" },
   ]);
   const [connMode, setConnModeState] = useState<ConnMode>("");
+  const [gpuEncoderStatus, setGpuEncoderStatus] = useState("");
   const [canvasShown, setCanvasShown] = useState(false);
   const [gpuDisplay, setGpuDisplay] = useState<"none" | "video" | "canvas">("none");
   const [gpuEmpty, setGpuEmpty] = useState<{ title: string; hint: string } | null>(null);
@@ -338,6 +329,7 @@ export function PanelDesktop({
   const h264FrameIndexRef = useRef(0);
   const h264FrameDurationUsRef = useRef(125000);
   const h264NeedKeyframeRef = useRef(false);
+  const desktopHeld = useRef(new DesktopHeldInput());
   const videoFormatRef = useRef("");
 
   const gpuMediaSourceRef = useRef<MediaSource | null>(null);
@@ -387,8 +379,8 @@ export function PanelDesktop({
     localStorage.setItem(P + "control", String(s.control));
     localStorage.setItem(P + "showCursor", String(s.showCursor));
     localStorage.setItem(P + "clipboardSyncMode", s.clipboardMode);
-    localStorage.setItem(P + "fps", String(clampInt(s.fps, 1, 12, 4)));
-    localStorage.setItem(P + "quality", String(clampInt(s.quality, 25, 90, 50)));
+    localStorage.setItem(P + "fps", s.fps);
+    localStorage.setItem(P + "quality", s.quality);
   };
 
   const saveGpuDesktopSettings = () => {
@@ -473,8 +465,8 @@ export function PanelDesktop({
     return {
       mode: "auto",
       source: s.source,
-      fps: clampInt(s.fps, 1, 12, 4),
-      quality: clampInt(s.quality, 25, 90, 50),
+      fps: Number(s.fps),
+      quality: Number(s.quality),
       width: adaptive.width,
       height: adaptive.height,
       inputBackend: s.inputBackend || "auto",
@@ -670,7 +662,7 @@ export function PanelDesktop({
       videoFormatRef.current = "h264";
       h264FrameIndexRef.current = 0;
       h264NeedKeyframeRef.current = true;
-      h264FrameDurationUsRef.current = Math.max(1000, Math.round(1000000 / (msg.fps || 8)));
+      h264FrameDurationUsRef.current = Math.max(1000, Math.round(1000000 / (msg.fps || 30)));
       return true;
     } catch (e) {
       console.error("h264 configure failed", e);
@@ -682,7 +674,7 @@ export function PanelDesktop({
     const decoder = h264DecoderRef.current;
     if (!decoder || decoder.state !== "configured" || data.byteLength < 5) return false;
     const keyframe = (new Uint8Array(data, 0, 1)[0] & 1) !== 0;
-    if (h264NeedKeyframeRef.current && !keyframe) return false;
+    if (!acceptDesktopH264Frame(keyframe, decoder.decodeQueueSize, h264NeedKeyframeRef)) return false;
     const chunk = new Uint8Array(data, 1);
     try {
       decoder.decode(
@@ -692,7 +684,6 @@ export function PanelDesktop({
           data: chunk,
         }),
       );
-      h264NeedKeyframeRef.current = false;
       h264FrameIndexRef.current++;
       return true;
     } catch (e) {
@@ -765,6 +756,7 @@ export function PanelDesktop({
   /* ── GPU video output (MSE + WebCodecs) ── */
 
   const closeGPUVideo = () => {
+    setGpuEncoderStatus("");
     gpuMediaCleanupRef.current?.();
     gpuMediaCleanupRef.current = null;
     gpuQueueRef.current = [];
@@ -1233,6 +1225,21 @@ export function PanelDesktop({
     }, delay);
   };
 
+  const desktopReleaseKeyboard = (pointerId?: number) => {
+    const ws = wsRef.current;
+    if (connModeRef.current !== "desktop" || !ws || ws.readyState !== WebSocket.OPEN) {
+      desktopHeld.current.clear();
+      return;
+    }
+    try {
+      const release = (input: Record<string, unknown>) => ws.send(JSON.stringify({ op: "input", ...input }));
+      if (pointerId === undefined) desktopHeld.current.release(release);
+      else desktopHeld.current.releasePointer(pointerId, release);
+    } catch (e) {
+      setStatus(errMessage(e), "err");
+    }
+  };
+
   const gpuReleaseKeyboard = () => {
     const ws = wsRef.current;
     if (connModeRef.current !== "gpu" || !ws || ws.readyState !== WebSocket.OPEN) {
@@ -1249,6 +1256,8 @@ export function PanelDesktop({
 
   function disconnect() {
     manualDisconnectRef.current = true;
+    desktopReleaseKeyboard();
+    gpuReleaseKeyboard();
     connSeqRef.current++;
     clearTimeout(reconnectTimerRef.current);
     clearTimeout(resizeTimerRef.current);
@@ -1256,7 +1265,6 @@ export function PanelDesktop({
       wsRef.current.close();
       wsRef.current = null;
     }
-    gpuReleaseKeyboard();
     closeH264Decoder();
     closeGPUVideo();
     remoteInputRef.current = false;
@@ -1318,7 +1326,9 @@ export function PanelDesktop({
     };
     ws.onclose = () => {
       if (connID !== connSeqRef.current || wsRef.current !== ws) return;
+      gpuHeldKeysRef.current.clear();
       wsRef.current = null;
+      setGpuEncoderStatus("");
       stopClipboardSync();
       setClipboardCapabilities(null);
       // A password-protected device rejects a bad ?password= at the HTTP
@@ -1378,6 +1388,7 @@ export function PanelDesktop({
         setGpuEmpty(null);
       } else if (msg && msg.AndroidVideoConfig) {
         gpuStartWebCodecsVideo(msg.AndroidVideoConfig);
+        setGpuEncoderStatus(desktopEncoderStatus({ encoderBackend: "mediacodec-h264", ...msg.AndroidVideoConfig }, tt));
         setGpuEmpty(null);
       } else if (msg === "ConfigOk") {
         setGpuEmpty(null);
@@ -1387,7 +1398,10 @@ export function PanelDesktop({
       else if (msg && msg.InputCapabilities) gpuSetInputCapabilities(msg.InputCapabilities);
       else if (msg && msg.ClipboardCapabilities) setClipboardCapabilities(msg.ClipboardCapabilities);
       else if (msg && msg.ClipboardContent) handleRemoteClipboard(msg.ClipboardContent);
-      else if (msg && msg.RuntimeStatus) gpuUpdateFrameInfo();
+      else if (msg && msg.RuntimeStatus) {
+        const encoder = desktopRuntimeEncoderStatus(msg.RuntimeStatus, tt);
+        if (encoder !== undefined) setGpuEncoderStatus(encoder);
+      }
       else if (msg && msg.ConfigError) {
         lastCloseMsgRef.current = msg.ConfigError;
         setStatus(msg.ConfigError, "err");
@@ -1503,10 +1517,10 @@ export function PanelDesktop({
         if (remoteInputRef.current && !controlPreferenceSet.current) saveDesktopSettings();
         updateFrameInfo();
         const source = currentSourceRef.current ? ` · ${currentSourceRef.current}` : "";
-        const encoder = msg.encoderBackend ? ` · ${msg.encoderBackend}` : "";
+        const encoder = desktopEncoderStatus(msg, tt);
         const w = canvas?.width || 0;
         const h = canvas?.height || 0;
-        setStatus(`${tt("index.desktopReady")} · ${w}×${h}${source}${encoder}`, "ok");
+        setStatus(`${tt("index.desktopReady")} · ${w}×${h}${source}${encoder ? ` · ${encoder}` : ""}`, "ok");
         setClipboardCapabilities(
           msg.desktop && msg.desktop.clipboard
             ? {
@@ -1543,6 +1557,7 @@ export function PanelDesktop({
     };
     ws.onclose = () => {
       if (connID !== connSeqRef.current || wsRef.current !== ws) return;
+      desktopHeld.current.clear();
       wsRef.current = null;
       stopClipboardSync();
       setClipboardCapabilities(null);
@@ -1656,15 +1671,18 @@ export function PanelDesktop({
     return { x, y };
   };
 
-  const sendInput = (input: Record<string, unknown>) => {
+  const sendInput = (input: Record<string, unknown>): boolean => {
     const ws = wsRef.current;
-    if (!ws || ws.readyState !== WebSocket.OPEN || !settingsRef.current.control || !remoteInputRef.current)
-      return;
-    if (ws.bufferedAmount > 512 * 1024) return;
+    if (!visibleRef.current || !ws || ws.readyState !== WebSocket.OPEN || !settingsRef.current.control || !remoteInputRef.current)
+      return false;
+    if (desktopInputShouldDrop(input.inputType, ws.bufferedAmount)) return false;
     try {
       ws.send(JSON.stringify({ op: "input", ...input }));
+      desktopHeld.current.sent(input);
+      return true;
     } catch (e) {
       setStatus(errMessage(e), "err");
+      return false;
     }
   };
 
@@ -1709,15 +1727,15 @@ export function PanelDesktop({
   const sendKey = (type: string, event: KeyboardEvent) => {
     if (!settingsRef.current.control || !remoteInputRef.current) return;
     event.preventDefault();
-    sendInput({
-      inputType: type,
+    const key = {
       key: event.key,
       code: event.code,
       ctrlKey: event.ctrlKey,
       altKey: event.altKey,
       shiftKey: event.shiftKey,
       metaKey: event.metaKey,
-    });
+    };
+    sendInput({ inputType: type, ...key });
   };
 
   const canvasWheel = (e: WheelEvent) => {
@@ -1850,6 +1868,7 @@ export function PanelDesktop({
     gpuPointerTypes,
     gpuSend,
     gpuReleaseKeyboard,
+    desktopReleaseKeyboard,
     sendMouse,
     sendKey,
     canvasWheel,
@@ -1868,6 +1887,7 @@ export function PanelDesktop({
     gpuPointerTypes,
     gpuSend,
     gpuReleaseKeyboard,
+    desktopReleaseKeyboard,
     sendMouse,
     sendKey,
     canvasWheel,
@@ -1911,13 +1931,15 @@ export function PanelDesktop({
           canvas.releasePointerCapture(e.pointerId);
       });
       on(canvas, "pointercancel", (e: PointerEvent) => {
-        apiRef.current.sendMouse("mouse_up", e);
+        apiRef.current.desktopReleaseKeyboard(e.pointerId);
         if (canvas.releasePointerCapture && canvas.hasPointerCapture?.(e.pointerId))
           canvas.releasePointerCapture(e.pointerId);
       });
+      on(canvas, "lostpointercapture", (e: PointerEvent) => apiRef.current.desktopReleaseKeyboard(e.pointerId));
       on(canvas, "wheel", (e: WheelEvent) => apiRef.current.canvasWheel(e), { passive: false });
       on(canvas, "keydown", (e: KeyboardEvent) => apiRef.current.sendKey("key_down", e));
       on(canvas, "keyup", (e: KeyboardEvent) => apiRef.current.sendKey("key_up", e));
+      on(canvas, "blur", () => apiRef.current.desktopReleaseKeyboard());
     }
 
     if (overlay) {
@@ -1974,33 +1996,26 @@ export function PanelDesktop({
         gpuIgnoreNextTextInputRef.current = false;
       });
       on(overlay, "keydown", (e: KeyboardEvent) => {
-        if (!apiRef.current.gpuInputAllowed()) return;
+        if (!apiRef.current.gpuInputAllowed() || wsRef.current?.readyState !== WebSocket.OPEN) return;
         if (gpuComposingRef.current || e.isComposing || e.key === "Process" || e.keyCode === 229) {
           e.preventDefault();
           e.stopPropagation();
           return;
         }
-        const eventType = e.repeat ? "repeat" : "down";
+        const identity = `${e.code || e.key}:${e.location}`;
+        const eventType = e.repeat && gpuHeldKeysRef.current.has(identity) ? "repeat" : "down";
         const msg = apiRef.current.gpuKeyMessage(e, eventType);
-        if (eventType === "down")
-          gpuHeldKeysRef.current.set(
-            `${msg.KeyboardEvent.code}:${msg.KeyboardEvent.location}`,
-            msg.KeyboardEvent,
-          );
         apiRef.current.gpuSend(msg);
+        if (eventType === "down") gpuHeldKeysRef.current.set(identity, msg.KeyboardEvent);
         e.preventDefault();
         e.stopPropagation();
       });
       on(overlay, "keyup", (e: KeyboardEvent) => {
-        if (!apiRef.current.gpuInputAllowed()) return;
-        if (gpuComposingRef.current || e.isComposing || e.key === "Process" || e.keyCode === 229) {
-          e.preventDefault();
-          e.stopPropagation();
-          return;
-        }
+        const identity = `${e.code || e.key}:${e.location}`;
+        if (!gpuHeldKeysRef.current.has(identity)) return;
         const msg = apiRef.current.gpuKeyMessage(e, "up");
-        gpuHeldKeysRef.current.delete(`${msg.KeyboardEvent.code}:${msg.KeyboardEvent.location}`);
         apiRef.current.gpuSend(msg);
+        gpuHeldKeysRef.current.delete(identity);
         e.preventDefault();
         e.stopPropagation();
       });
@@ -2046,12 +2061,17 @@ export function PanelDesktop({
     };
     const cleanups = [
       on(window, "focus", () => apiRef.current.pollClipboardSync(), true),
+      on(window, "blur", () => {
+        apiRef.current.desktopReleaseKeyboard();
+        apiRef.current.gpuReleaseKeyboard();
+      }),
       on(
         document,
         "visibilitychange",
         () => {
           if (document.hidden) {
             apiRef.current.gpuReleaseKeyboard();
+            apiRef.current.desktopReleaseKeyboard();
             if (connModeRef.current === "gpu") apiRef.current.gpuSend("PauseVideo");
             return;
           }
@@ -2181,6 +2201,7 @@ export function PanelDesktop({
     }
     if (!visible) {
       clearTimeout(resizeTimerRef.current);
+      apiRef.current.desktopReleaseKeyboard();
       apiRef.current.gpuReleaseKeyboard();
       if (connModeRef.current === "gpu") apiRef.current.gpuSend("PauseVideo");
       return;
@@ -2217,6 +2238,8 @@ export function PanelDesktop({
   useEffect(
     () => () => {
       manualDisconnectRef.current = true;
+      apiRef.current.desktopReleaseKeyboard();
+      apiRef.current.gpuReleaseKeyboard();
       connSeqRef.current++;
       clearTimeout(reconnectTimerRef.current);
       clearTimeout(resizeTimerRef.current);
@@ -2233,6 +2256,10 @@ export function PanelDesktop({
 
   const onControlChange = (checked: boolean) => {
     controlPreferenceSet.current = true;
+    if (!checked) {
+      desktopReleaseKeyboard();
+      gpuReleaseKeyboard();
+    }
     updateSettings({ control: checked });
     setControlActive(checked && remoteInputRef.current);
     if (checked) {
@@ -2283,8 +2310,10 @@ export function PanelDesktop({
         ? t("desktop.sourceAll")
         : sourceLabel(s));
 
-  const fpsValue = FPS_OPTIONS.includes(settings.fps) ? settings.fps : "4";
-  const qualityValue = QUALITY_OPTIONS.includes(settings.quality) ? settings.quality : "50";
+  const toolbarStatus = [status.text || t("desktop.idle"),
+    connMode === "gpu" && status.cls === "ok" && settings.gpuEnableVideo && gpuEncoderStatus,
+    connMode && frameInfo,
+  ].filter(Boolean).join(" · ");
 
   /* ── Render ── */
 
@@ -2358,7 +2387,7 @@ export function PanelDesktop({
         {!isGpuDevice && (
           <>
             <Select
-              value={fpsValue}
+              value={settings.fps}
               onValueChange={(v) => {
                 updateSettings({ fps: v });
                 saveDesktopSettings();
@@ -2369,7 +2398,7 @@ export function PanelDesktop({
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {FPS_OPTIONS.map((v) => (
+                {desktopFPSPresets.map((v) => (
                   <SelectItem key={v} value={v}>
                     {v} fps
                   </SelectItem>
@@ -2377,7 +2406,7 @@ export function PanelDesktop({
               </SelectContent>
             </Select>
             <Select
-              value={qualityValue}
+              value={settings.quality}
               onValueChange={(v) => {
                 updateSettings({ quality: v });
                 saveDesktopSettings();
@@ -2388,7 +2417,7 @@ export function PanelDesktop({
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {QUALITY_OPTIONS.map((v) => (
+                {desktopQualityPresets.map((v) => (
                   <SelectItem key={v} value={v}>
                     Q{v}
                   </SelectItem>
@@ -2451,10 +2480,9 @@ export function PanelDesktop({
             status.cls === "err" && "text-destructive-text",
             !status.cls && "text-muted-foreground",
           )}
-          title={frameInfo ? `${status.text} · ${frameInfo}` : status.text}
+          title={toolbarStatus}
         >
-          {status.text || t("desktop.idle")}
-          {connMode && frameInfo ? ` · ${frameInfo}` : ""}
+          {toolbarStatus}
         </span>
         {clipStatus && (
           <span className="min-w-0 truncate text-[11px] text-muted-foreground" aria-live="polite">

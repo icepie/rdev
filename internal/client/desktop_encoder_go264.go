@@ -47,7 +47,7 @@ func openGo264DesktopEncoder(width, height, quality, fps int, forceSoftware bool
 		Height:              height,
 		FPSNum:              fps,
 		FPSDen:              1,
-		GOPSize:             max(1, fps*2),
+		GOPSize:             max(1, fps),
 		QP:                  go264QP(quality),
 		RefFrames:           1,
 		MotionSearch:        h264.MotionSearchHalf,

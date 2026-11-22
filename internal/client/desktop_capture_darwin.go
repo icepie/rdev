@@ -26,6 +26,7 @@ type quartzCapturer struct {
 	windowID  uint32
 	kind      string
 	bounds    image.Rectangle
+	frame     *image.RGBA
 	source    protocol.DesktopSource
 }
 
@@ -423,7 +424,11 @@ func (q *quartzCapturer) Capture() (image.Image, error) {
 		}
 	}
 	defer cfRelease(imageRef)
-	return quartzImageToRGBA(imageRef)
+	frame, err := quartzImageToRGBA(q.frame, imageRef)
+	if err == nil {
+		q.frame = frame
+	}
+	return frame, err
 }
 
 func (q *quartzCapturer) captureWindowImage() uintptr {
@@ -434,7 +439,7 @@ func (q *quartzCapturer) captureWindowImage() uintptr {
 	return cgWindowListCreateImage(rect, cgWindowListOptionIncludingWindow, q.windowID, cgWindowImageDefault|cgWindowImageBoundsIgnoreFraming|cgWindowImageBestResolution)
 }
 
-func quartzImageToRGBA(imageRef uintptr) (image.Image, error) {
+func quartzImageToRGBA(dst *image.RGBA, imageRef uintptr) (*image.RGBA, error) {
 	width := int(cgImageGetWidth(imageRef))
 	height := int(cgImageGetHeight(imageRef))
 	stride := int(cgImageGetBytesPerRow(imageRef))
@@ -460,9 +465,9 @@ func quartzImageToRGBA(imageRef uintptr) (image.Image, error) {
 	}
 
 	src := unsafe.Slice((*byte)(unsafe.Pointer(ptr)), length)
-	img := image.NewRGBA(image.Rect(0, 0, width, height))
-	convertQuartzImage(img, src, stride, bitmapInfo)
-	return img, nil
+	dst = reusableDesktopRGBA(dst, width, height)
+	convertQuartzImage(dst, src, stride, bitmapInfo)
+	return dst, nil
 }
 
 func convertQuartzImage(dst *image.RGBA, src []byte, stride int, bitmapInfo uint32) {

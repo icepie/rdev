@@ -135,6 +135,93 @@ func (f fakeDesktopInput) Backend() string               { return f.backend }
 func (f fakeDesktopInput) Apply(desktopInputEvent) error { return nil }
 func (f fakeDesktopInput) Close() error                  { return nil }
 
+type recordingDesktopInput struct {
+	events []desktopInputEvent
+	closed bool
+}
+
+func (r *recordingDesktopInput) Backend() string { return "recording" }
+func (r *recordingDesktopInput) Apply(event desktopInputEvent) error {
+	r.events = append(r.events, event)
+	return nil
+}
+func (r *recordingDesktopInput) Close() error {
+	r.closed = true
+	return nil
+}
+
+func TestStatefulDesktopInputReleasesHeldKeysAndPointersOnClose(t *testing.T) {
+	recorder := &recordingDesktopInput{}
+	input := newStatefulDesktopInput(recorder)
+	if err := input.Apply(desktopInputEvent{Type: "key_down", Code: "ControlLeft", Key: "Control", CtrlKey: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := input.Apply(desktopInputEvent{Type: "mouse_down", X: 10, Y: 20, Button: 2, PointerType: "mouse", PointerID: 7, Pressure: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := input.Apply(desktopInputEvent{Type: "mouse_move", X: 30, Y: 40, PointerType: "mouse", PointerID: 7, Pressure: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := input.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if !recorder.closed {
+		t.Fatal("underlying desktop input was not closed")
+	}
+	var releasedKey, releasedPointer bool
+	for _, event := range recorder.events[3:] {
+		switch event.Type {
+		case "key_up":
+			releasedKey = event.Code == "ControlLeft" && !event.CtrlKey
+		case "mouse_up":
+			releasedPointer = event.Button == 2 && event.X == 30 && event.Y == 40 && event.Pressure == 0
+		}
+	}
+	if !releasedKey || !releasedPointer {
+		t.Fatalf("release events = %#v, want key and pointer releases", recorder.events[3:])
+	}
+}
+
+func TestStatefulDesktopInputTracksPhysicalKeyAcrossModifierChanges(t *testing.T) {
+	recorder := &recordingDesktopInput{}
+	input := newStatefulDesktopInput(recorder)
+	for _, event := range []desktopInputEvent{
+		{Type: "key_down", Code: "KeyA", Key: "A", ShiftKey: true},
+		{Type: "key_down", Code: "KeyA", Key: "a"},
+		{Type: "key_up", Code: "KeyA", Key: "a"},
+		{Type: "key_down", Key: "b"},
+	} {
+		if err := input.Apply(event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := input.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got := recorder.events[4:]; len(got) != 1 || got[0] != (desktopInputEvent{Type: "key_up", Key: "b"}) {
+		t.Fatalf("cleanup events = %+v, want only b up", got)
+	}
+}
+
+func TestDesktopSessionCloseDuringInputSetup(t *testing.T) {
+	// Whether close wins before or after setup, the backend is closed once.
+	for range 50 {
+		session := &desktopSession{stop: make(chan struct{})}
+		recorder := &recordingDesktopInput{}
+		done := make(chan struct{})
+		go func() {
+			session.installInput(recorder, nil)
+			close(done)
+		}()
+		session.close()
+		<-done
+		session.close()
+		if !recorder.closed || session.input != nil {
+			t.Fatalf("closed=%v session.input=%v", recorder.closed, session.input)
+		}
+	}
+}
+
 func TestValidateDesktopClipboardItemsAcceptsSupportedFormats(t *testing.T) {
 	items := []protocol.ClipboardItem{
 		{MIME: "text/plain;charset=utf-8", Data: base64.StdEncoding.EncodeToString([]byte("hello 世界"))},
@@ -253,6 +340,26 @@ func TestResizeDesktopFrameToSizeReusesMatchingDestination(t *testing.T) {
 	second, err := resizeDesktopFrameToSize(first, source, 2, 2)
 	if err != nil || second != destination {
 		t.Fatalf("second resize = (%p, %v), want reused buffer %p", second, err, destination)
+	}
+}
+
+func TestReusableDesktopRGBAReusesMatchingGeometry(t *testing.T) {
+	first := reusableDesktopRGBA(nil, 4, 3)
+	if second := reusableDesktopRGBA(first, 4, 3); second != first {
+		t.Fatalf("matching frame = %p, want reused %p", second, first)
+	}
+	if resized := reusableDesktopRGBA(first, 5, 3); resized == first || resized.Bounds() != image.Rect(0, 0, 5, 3) {
+		t.Fatalf("resized frame = %p %v, want new 5x3 frame", resized, resized.Bounds())
+	}
+}
+
+func TestCopyDesktopRGBADoesNotAliasCaptureFrame(t *testing.T) {
+	source := image.NewRGBA(image.Rect(0, 0, 2, 1))
+	source.Pix[0] = 10
+	copied := copyDesktopRGBA(nil, source)
+	copied.Pix[0] = 99
+	if source.Pix[0] != 10 {
+		t.Fatalf("capture frame changed to %d through cursor scratch copy", source.Pix[0])
 	}
 }
 

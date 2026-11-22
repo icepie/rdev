@@ -229,8 +229,8 @@ func TestVNCStreamKeySharesEquivalentRequests(t *testing.T) {
 	request.Width = 0
 	request.Height = 0
 	normalized := defaultVNCDesktopRequest()
-	normalized.FPS = 4
-	normalized.Quality = 50
+	normalized.FPS = defaultDesktopRequest().FPS
+	normalized.Quality = defaultDesktopRequest().Quality
 	if vncStreamKey("pc", request) != vncStreamKey("pc", normalized) {
 		t.Fatal("equivalent normalized VNC requests should share one stream")
 	}

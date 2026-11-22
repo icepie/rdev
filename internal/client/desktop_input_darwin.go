@@ -287,24 +287,37 @@ func darwinCodeFromKey(key string) string {
 	return ""
 }
 
+var darwinLetterKeycodes = map[byte]uint16{
+	'A': 0x00, 'S': 0x01, 'D': 0x02, 'F': 0x03, 'H': 0x04, 'G': 0x05, 'Z': 0x06, 'X': 0x07, 'C': 0x08, 'V': 0x09, 'B': 0x0b,
+	'Q': 0x0c, 'W': 0x0d, 'E': 0x0e, 'R': 0x0f, 'Y': 0x10, 'T': 0x11, 'O': 0x1f, 'U': 0x20, 'I': 0x22, 'P': 0x23,
+	'L': 0x25, 'J': 0x26, 'K': 0x28, 'N': 0x2d, 'M': 0x2e,
+}
+
+var darwinDigitKeycodes = map[byte]uint16{
+	'1': 0x12, '2': 0x13, '3': 0x14, '4': 0x15, '6': 0x16,
+	'5': 0x17, '9': 0x19, '7': 0x1a, '8': 0x1c, '0': 0x1d,
+}
+
 func darwinKeycode(event desktopInputEvent) uint16 {
 	code := event.Code
 	if code == "" {
 		code = darwinCodeFromKey(event.Key)
 	}
 	if strings.HasPrefix(code, "Key") && len(code) == 4 {
-		return map[byte]uint16{
-			'A': 0x00, 'S': 0x01, 'D': 0x02, 'F': 0x03, 'H': 0x04, 'G': 0x05, 'Z': 0x06, 'X': 0x07, 'C': 0x08, 'V': 0x09, 'B': 0x0b,
-			'Q': 0x0c, 'W': 0x0d, 'E': 0x0e, 'R': 0x0f, 'Y': 0x10, 'T': 0x11, 'O': 0x1f, 'U': 0x20, 'I': 0x22, 'P': 0x23,
-			'L': 0x25, 'J': 0x26, 'K': 0x28, 'N': 0x2d, 'M': 0x2e,
-		}[code[3]]
+		if key, ok := darwinLetterKeycodes[code[3]]; ok {
+			return key
+		}
 	}
 	if strings.HasPrefix(code, "Digit") && len(code) == 6 {
-		return map[byte]uint16{'1': 0x12, '2': 0x13, '3': 0x14, '4': 0x15, '6': 0x16, '5': 0x17, '9': 0x19, '7': 0x1a, '8': 0x1c, '0': 0x1d}[code[5]]
+		if key, ok := darwinDigitKeycodes[code[5]]; ok {
+			return key
+		}
 	}
 	switch code {
-	case "Enter", "NumpadEnter":
+	case "Enter":
 		return 0x24
+	case "NumpadEnter":
+		return 0x4c
 	case "Tab":
 		return 0x30
 	case "Space":
@@ -313,16 +326,24 @@ func darwinKeycode(event desktopInputEvent) uint16 {
 		return 0x33
 	case "Escape":
 		return 0x35
-	case "MetaLeft", "MetaRight":
+	case "MetaLeft":
 		return 0x37
-	case "ShiftLeft", "ShiftRight":
+	case "MetaRight":
+		return 0x36
+	case "ShiftLeft":
 		return 0x38
+	case "ShiftRight":
+		return 0x3c
 	case "CapsLock":
 		return 0x39
-	case "AltLeft", "AltRight":
+	case "AltLeft":
 		return 0x3a
-	case "ControlLeft", "ControlRight":
+	case "AltRight":
+		return 0x3d
+	case "ControlLeft":
 		return 0x3b
+	case "ControlRight":
+		return 0x3e
 	case "ArrowLeft":
 		return 0x7b
 	case "ArrowRight":
@@ -353,6 +374,40 @@ func darwinKeycode(event desktopInputEvent) uint16 {
 		return 0x2f
 	case "Backquote":
 		return 0x32
+	case "Insert":
+		return 0x72
+	case "NumpadDecimal":
+		return 0x41
+	case "NumpadMultiply":
+		return 0x43
+	case "NumpadAdd":
+		return 0x45
+	case "NumpadDivide":
+		return 0x4b
+	case "NumpadSubtract":
+		return 0x4e
+	case "NumpadEqual":
+		return 0x51
+	case "Numpad0":
+		return 0x52
+	case "Numpad1":
+		return 0x53
+	case "Numpad2":
+		return 0x54
+	case "Numpad3":
+		return 0x55
+	case "Numpad4":
+		return 0x56
+	case "Numpad5":
+		return 0x57
+	case "Numpad6":
+		return 0x58
+	case "Numpad7":
+		return 0x59
+	case "Numpad8":
+		return 0x5b
+	case "Numpad9":
+		return 0x5c
 	case "Home":
 		return 0x73
 	case "PageUp":

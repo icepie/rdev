@@ -203,34 +203,35 @@ type Message struct {
 	RTCData             json.RawMessage      `json:"rtcData,omitempty"`
 	// IceServers is present only on authorized RTC offers. A non-nil empty slice
 	// explicitly disables STUN/TURN; absence preserves older clients' defaults.
-	IceServers   *[]IceServer `json:"iceServers,omitempty"`
-	Width        int          `json:"width,omitempty"`
-	Height       int          `json:"height,omitempty"`
-	Format       string       `json:"format,omitempty"`
-	Codec        string       `json:"codec,omitempty"`
-	EncoderBackend string       `json:"encoderBackend,omitempty"`
-	Description  []byte       `json:"description,omitempty"`
-	Source       string       `json:"source,omitempty"`
-	Quality      int          `json:"quality,omitempty"`
-	OnDemand     bool         `json:"onDemand,omitempty"`
-	FPS          int          `json:"fps,omitempty"`
-	InputType    string       `json:"inputType,omitempty"`
-	InputBackend string       `json:"inputBackend,omitempty"`
-	ShowCursor   bool         `json:"showCursor,omitempty"`
-	X            int          `json:"x,omitempty"`
-	Y            int          `json:"y,omitempty"`
-	Button       int          `json:"button,omitempty"`
-	DeltaX       int          `json:"deltaX,omitempty"`
-	DeltaY       int          `json:"deltaY,omitempty"`
-	Key          string       `json:"key,omitempty"`
-	Code         string       `json:"code,omitempty"`
-	CtrlKey      bool         `json:"ctrlKey,omitempty"`
-	AltKey       bool         `json:"altKey,omitempty"`
-	ShiftKey     bool         `json:"shiftKey,omitempty"`
-	MetaKey      bool         `json:"metaKey,omitempty"`
-	PointerType  string       `json:"pointerType,omitempty"`
-	PointerID    int          `json:"pointerId,omitempty"`
-	Pressure     float64      `json:"pressure,omitempty"`
+	IceServers          *[]IceServer `json:"iceServers,omitempty"`
+	Width               int          `json:"width,omitempty"`
+	Height              int          `json:"height,omitempty"`
+	Format              string       `json:"format,omitempty"`
+	Codec               string       `json:"codec,omitempty"`
+	EncoderBackend      string       `json:"encoderBackend,omitempty"`
+	EncoderAcceleration string       `json:"encoderAcceleration,omitempty"` // actual encoder: hardware, software, or omitted when unknown
+	Description         []byte       `json:"description,omitempty"`
+	Source              string       `json:"source,omitempty"`
+	Quality             int          `json:"quality,omitempty"`
+	OnDemand            bool         `json:"onDemand,omitempty"`
+	FPS                 int          `json:"fps,omitempty"`
+	InputType           string       `json:"inputType,omitempty"`
+	InputBackend        string       `json:"inputBackend,omitempty"`
+	ShowCursor          bool         `json:"showCursor,omitempty"`
+	X                   int          `json:"x,omitempty"`
+	Y                   int          `json:"y,omitempty"`
+	Button              int          `json:"button,omitempty"`
+	DeltaX              int          `json:"deltaX,omitempty"`
+	DeltaY              int          `json:"deltaY,omitempty"`
+	Key                 string       `json:"key,omitempty"`
+	Code                string       `json:"code,omitempty"`
+	CtrlKey             bool         `json:"ctrlKey,omitempty"`
+	AltKey              bool         `json:"altKey,omitempty"`
+	ShiftKey            bool         `json:"shiftKey,omitempty"`
+	MetaKey             bool         `json:"metaKey,omitempty"`
+	PointerType         string       `json:"pointerType,omitempty"`
+	PointerID           int          `json:"pointerId,omitempty"`
+	Pressure            float64      `json:"pressure,omitempty"`
 
 	ClipboardAction string          `json:"clipboardAction,omitempty"`
 	Text            string          `json:"text,omitempty"`

@@ -14,6 +14,8 @@ import { PanelDesktop } from "../ui/components/agent/panel-desktop";
 it.each([false, true])("preserves %s GPU desktop connection across folding, and releases it on unmount", async gpuDesktop => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;
   localStorage.clear();
+  localStorage.setItem("rdevDesktop.panel.fps", "20");
+  localStorage.setItem("rdevDesktop.panel.quality", "90");
   const sockets = [];
   class Socket {
     static OPEN = 1;
@@ -35,6 +37,27 @@ it.each([false, true])("preserves %s GPU desktop connection across folding, and 
     await act(() => root.render(createElement(PanelDesktop,{device:"device",visible:true,t})));
     expect(sockets).toHaveLength(1);
     const socket = sockets[0];
+    if (gpuDesktop) {
+      const deliver = data => act(() => socket.onmessage({data: JSON.stringify(data)}));
+      await deliver("ConfigOk");
+      await deliver({EncoderCapabilities: {options: [{value: "nvenc", label: "NVENC"}]}});
+      expect(host.textContent).not.toContain("desktop.hardwareAcceleration:");
+      await deliver({RuntimeStatus: {encoderBackend: "h264_nvenc"}});
+      expect(host.textContent).toContain("desktop.hardwareAcceleration: h264_nvenc");
+      await deliver({RuntimeStatus: {inputBackend: "uinput"}});
+      expect(host.textContent).toContain("desktop.hardwareAcceleration: h264_nvenc");
+      await deliver({RuntimeStatus: {encoderBackend: "libx264"}});
+      expect(host.textContent).toContain("desktop.softwareEncoding: libx264");
+      expect(host.textContent).not.toContain("desktop.hardwareAcceleration:");
+      await deliver({RuntimeStatus: {encoderBackend: "重启中"}});
+      expect(host.textContent).not.toContain("desktop.softwareEncoding:");
+    } else {
+      const query = new URL(socket.url).searchParams;
+      expect(query.get("fps")).toBe("20");
+      expect(query.get("quality")).toBe("90");
+      expect(host.querySelector('[title="desktop.fps"]').textContent).toContain("20");
+      expect(host.querySelector('[title="desktop.quality"]').textContent).toContain("90");
+    }
     for (const visible of [false, true, false, true]) {
       await act(() => root.render(createElement(PanelDesktop,{device:"device",visible,t})));
       expect(sockets).toHaveLength(1);
