@@ -5,6 +5,7 @@ package client
 import (
 	"fmt"
 	"image"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -69,6 +70,7 @@ var (
 	cfStringGetCString                     func(uintptr, *byte, int64, uint32) bool
 	cfDataGetBytePtr                       func(uintptr) uintptr
 	cfDataGetLength                        func(uintptr) uintptr
+	cfRelease                              func(uintptr)
 	quartzCaptureInitErr                   error
 	quartzCaptureInitDone                  bool
 )
@@ -406,8 +408,11 @@ func (q *quartzCapturer) CursorPosition() (image.Point, bool) {
 		return image.Point{}, false
 	}
 	defer cfRelease(event)
-	point := cgEventGetLocation(event)
-	return image.Pt(int(point.X+0.5), int(point.Y+0.5)), true
+	return quartzCursorPoint(cgEventGetLocation(event)), true
+}
+
+func quartzCursorPoint(p cgPoint) image.Point {
+	return image.Pt(int(math.Round(p.X)), int(math.Round(p.Y)))
 }
 
 func (q *quartzCapturer) Capture() (image.Image, error) {

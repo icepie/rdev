@@ -81,7 +81,7 @@ type desktopBrowserConn struct {
 	frameCh        chan []byte
 	frameOnce      sync.Once
 	inputMu        sync.Mutex
-	lastMouseMove  time.Time
+	lastCursorMove time.Time
 	lastInputError time.Time
 	frameWidth     int
 	frameHeight    int
@@ -413,21 +413,17 @@ func (bc *desktopBrowserConn) prepareInput(msg desktopMsg) (*protocol.Message, b
 	}
 	bc.inputMu.Lock()
 	defer bc.inputMu.Unlock()
-	now := time.Now()
 	switch msg.InputType {
 	case "cursor_move":
-		if now.Sub(bc.lastMouseMove) < 16*time.Millisecond {
+		now := time.Now()
+		if now.Sub(bc.lastCursorMove) < 16*time.Millisecond {
 			return nil, false
 		}
-		bc.lastMouseMove = now
+		bc.lastCursorMove = now
 		msg.X, msg.Y = bc.clampPoint(msg.X, msg.Y)
 	case "mouse_move":
 		msg.PointerType = normalizePointerType(msg.PointerType)
 		msg.Pressure = normalizePressure(msg.Pressure)
-		if now.Sub(bc.lastMouseMove) < 16*time.Millisecond {
-			return nil, false
-		}
-		bc.lastMouseMove = now
 		msg.X, msg.Y = bc.clampPoint(msg.X, msg.Y)
 	case "mouse_down", "mouse_up":
 		msg.PointerType = normalizePointerType(msg.PointerType)

@@ -6,37 +6,38 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/ebitengine/purego"
+	"github.com/ebitengine/purego/objc"
 	"rdev/internal/protocol"
 )
 
 const (
-	cgEventLeftMouseDown  = 1
-	cgEventLeftMouseUp    = 2
-	cgEventRightMouseDown = 3
-	cgEventRightMouseUp   = 4
-	cgEventMouseMoved     = 5
-	cgEventKeyDown        = 10
-	cgEventKeyUp          = 11
-	cgEventScrollWheel    = 22
-	cgEventOtherMouseDown = 25
-	cgEventOtherMouseUp   = 26
+	cgEventLeftMouseDown     = 1
+	cgEventLeftMouseUp       = 2
+	cgEventRightMouseDown    = 3
+	cgEventRightMouseUp      = 4
+	cgEventMouseMoved        = 5
+	cgEventLeftMouseDragged  = 6
+	cgEventRightMouseDragged = 7
+	cgEventOtherMouseDown    = 25
+	cgEventOtherMouseUp      = 26
+	cgEventOtherMouseDragged = 27
 
 	cgMouseButtonLeft   = 0
 	cgMouseButtonRight  = 1
 	cgMouseButtonCenter = 2
 
-	cgHIDEventTap              = 0
-	cgAnnotatedSessionEventTap = 2
+	cgHIDEventTap = 0
 
 	cgEventFlagMaskShift     = 0x00020000
 	cgEventFlagMaskControl   = 0x00040000
 	cgEventFlagMaskAlternate = 0x00080000
 	cgEventFlagMaskCommand   = 0x00100000
 
-	cgMouseEventClickState   = 1
-	cgMouseEventButtonNumber = 3
+	cgMouseEventClickState = 1
+	cgScrollEventUnitPixel = 0
 )
 
 type cgPoint struct {
@@ -44,20 +45,45 @@ type cgPoint struct {
 	Y float64
 }
 
-type darwinDesktopInput struct{}
+type darwinDesktopInput struct {
+	api           *darwinInputAPI
+	clickInterval time.Duration
+	lastClick     darwinClick
+	buttonCounts  [5]int64 // nonzero while held; retained through drags and the matching up
+	modifierSides uint64
+}
+
+type darwinClick struct {
+	when   time.Time
+	point  cgPoint
+	button uint32
+	count  int64
+}
+
+func (c darwinClick) near(point cgPoint) bool {
+	const slop = 4 // global display points, independent of Retina backing scale
+	dx, dy := point.X-c.point.X, point.Y-c.point.Y
+	return dx >= -slop && dx <= slop && dy >= -slop && dy <= slop
+}
+
+type darwinInputAPI struct {
+	keyboard    func(uintptr, uint16, bool) uintptr
+	mouse       func(uintptr, uint32, cgPoint, uint32) uintptr
+	wheel       func(uintptr, uint32, uint32, int32, int32, int32) uintptr
+	setLocation func(uintptr, cgPoint)
+	getFlags    func(uintptr) uint64
+	setFlags    func(uintptr, uint64)
+	setInteger  func(uintptr, uint32, int64)
+	post        func(uint32, uintptr)
+	release     func(uintptr)
+}
 
 var (
-	darwinInputOnce sync.Once
-	darwinInputErr  error
-
-	cgEventCreateKeyboardEvent  func(uintptr, uint16, bool) uintptr
-	cgEventCreateMouseEvent     func(uintptr, uint32, cgPoint, uint32) uintptr
-	cgEventSetFlags             func(uintptr, uint64)
-	cgEventSetIntegerValueField func(uintptr, uint32, int64)
-	cgEventPost                 func(uint32, uintptr)
-	cfRelease                   func(uintptr)
-	cgEventCreateScrollWheel    uintptr
+	darwinInputOnce             sync.Once
+	darwinInputErr              error
+	quartzInput                 darwinInputAPI
 	axIsProcessTrusted          func() bool
+	doubleClickIntervalSelector objc.SEL
 )
 
 func platformDesktopInputOptions() []protocol.DesktopInputBackend {
@@ -76,7 +102,8 @@ func newDesktopInput(backend string) (desktopInput, error) {
 		if !darwinInputTrusted() {
 			return nil, fmt.Errorf("macOS Accessibility permission is required for Quartz desktop input")
 		}
-		return darwinDesktopInput{}, nil
+		interval := objc.Send[float64](objc.ID(objc.GetClass("NSEvent")), doubleClickIntervalSelector)
+		return &darwinDesktopInput{api: &quartzInput, clickInterval: time.Duration(interval * float64(time.Second))}, nil
 	default:
 		return nil, fmt.Errorf("unsupported desktop input backend %q", backend)
 	}
@@ -89,14 +116,22 @@ func initDarwinInput() error {
 			darwinInputErr = fmt.Errorf("open ApplicationServices: %w", err)
 			return
 		}
-		purego.RegisterLibFunc(&cgEventCreateKeyboardEvent, appServices, "CGEventCreateKeyboardEvent")
-		purego.RegisterLibFunc(&cgEventCreateMouseEvent, appServices, "CGEventCreateMouseEvent")
-		purego.RegisterLibFunc(&cgEventSetFlags, appServices, "CGEventSetFlags")
-		purego.RegisterLibFunc(&cgEventSetIntegerValueField, appServices, "CGEventSetIntegerValueField")
-		purego.RegisterLibFunc(&cgEventPost, appServices, "CGEventPost")
-		purego.RegisterLibFunc(&cfRelease, appServices, "CFRelease")
+		if _, err := purego.Dlopen("/System/Library/Frameworks/AppKit.framework/AppKit", purego.RTLD_NOW|purego.RTLD_GLOBAL); err != nil {
+			darwinInputErr = fmt.Errorf("open AppKit: %w", err)
+			return
+		}
+		doubleClickIntervalSelector = objc.RegisterName("doubleClickInterval")
+		purego.RegisterLibFunc(&quartzInput.keyboard, appServices, "CGEventCreateKeyboardEvent")
+		purego.RegisterLibFunc(&quartzInput.mouse, appServices, "CGEventCreateMouseEvent")
+		purego.RegisterLibFunc(&quartzInput.setLocation, appServices, "CGEventSetLocation")
+		purego.RegisterLibFunc(&quartzInput.getFlags, appServices, "CGEventGetFlags")
+		purego.RegisterLibFunc(&quartzInput.setFlags, appServices, "CGEventSetFlags")
+		purego.RegisterLibFunc(&quartzInput.setInteger, appServices, "CGEventSetIntegerValueField")
+		purego.RegisterLibFunc(&quartzInput.post, appServices, "CGEventPost")
+		purego.RegisterLibFunc(&quartzInput.release, appServices, "CFRelease")
 		purego.RegisterLibFunc(&axIsProcessTrusted, appServices, "AXIsProcessTrusted")
-		cgEventCreateScrollWheel, _ = purego.Dlsym(appServices, "CGEventCreateScrollWheelEvent")
+		// Unlike the variadic constructor, both signed axes use the ordinary C ABI on Apple Silicon.
+		purego.RegisterLibFunc(&quartzInput.wheel, appServices, "CGEventCreateScrollWheelEvent2")
 	})
 	return darwinInputErr
 }
@@ -105,85 +140,162 @@ func darwinInputTrusted() bool {
 	return axIsProcessTrusted != nil && axIsProcessTrusted()
 }
 
-func (darwinDesktopInput) Backend() string { return "quartz" }
-func (darwinDesktopInput) Close() error    { return nil }
+func (*darwinDesktopInput) Backend() string { return "quartz" }
+func (*darwinDesktopInput) Close() error    { return nil }
 
-func (darwinDesktopInput) Apply(event desktopInputEvent) error {
-	switch event.Type {
+func (d *darwinDesktopInput) Apply(e desktopInputEvent) error {
+	point := cgPoint{X: float64(e.X), Y: float64(e.Y)} // mapPoint already returns global display points
+	flags := darwinEventFlags(e)
+	switch e.Type {
+	case "mouse_down", "mouse_up":
+		if e.Button < 0 || e.Button >= len(d.buttonCounts) {
+			return fmt.Errorf("unsupported Quartz mouse button %d", e.Button)
+		}
+		button := darwinMouseButton(e.Button)
+		down := e.Type == "mouse_down"
+		click := d.lastClick
+		count := d.buttonCounts[button]
+		if down {
+			now := time.Now()
+			count = 1
+			if d.buttonCounts[button] == 0 && click.button == button && click.near(point) && now.Sub(click.when) <= d.clickInterval {
+				count += click.count
+			}
+			click = darwinClick{when: now, point: point, button: button, count: count}
+		}
+		if err := d.mouse(darwinMouseEvent(e.Button, down), point, button, max(1, count), flags); err != nil {
+			return err
+		}
+		if down {
+			d.lastClick = click
+			d.buttonCounts[button] = count
+		} else {
+			d.buttonCounts[button] = 0
+			if !click.near(point) {
+				d.lastClick = darwinClick{}
+			}
+		}
 	case "mouse_move":
-		return postDarwinMouse(cgEventMouseMoved, event, cgMouseButtonLeft)
-	case "mouse_down":
-		return postDarwinMouse(darwinMouseEvent(event.Button, true), event, darwinMouseButton(event.Button))
-	case "mouse_up":
-		return postDarwinMouse(darwinMouseEvent(event.Button, false), event, darwinMouseButton(event.Button))
+		// Pointermove.button identifies a transition, not the button being held.
+		typ, button := uint32(cgEventMouseMoved), uint32(cgMouseButtonLeft)
+		for i, count := range d.buttonCounts {
+			if count != 0 {
+				button = uint32(i)
+				typ = cgEventOtherMouseDragged
+				if i == cgMouseButtonLeft {
+					typ = cgEventLeftMouseDragged
+				} else if i == cgMouseButtonRight {
+					typ = cgEventRightMouseDragged
+				}
+				break
+			}
+		}
+		if err := d.mouse(typ, point, button, d.buttonCounts[button], flags); err != nil {
+			return err
+		}
+		if !d.lastClick.near(point) {
+			d.lastClick = darwinClick{}
+		}
 	case "wheel":
-		return postDarwinWheel(event)
+		if e.DeltaX == 0 && e.DeltaY == 0 {
+			return nil
+		}
+		// DOM positive deltas scroll down/right; Quartz positive deltas scroll up/left.
+		ev := d.api.wheel(0, cgScrollEventUnitPixel, 2, -int32(e.DeltaY), -int32(e.DeltaX), 0)
+		if ev == 0 {
+			return fmt.Errorf("CGEventCreateScrollWheelEvent2 failed")
+		}
+		d.api.setLocation(ev, point)
+		d.post(ev, flags, d.modifierSides)
 	case "key_down", "key_up":
-		key := darwinKeycode(event)
+		key := darwinKeycode(e)
 		if key == 0xff {
 			return nil
 		}
-		return postDarwinKey(key, event.Type == "key_down", darwinEventFlags(event))
+		down := e.Type == "key_down"
+		ev := d.api.keyboard(0, key, down)
+		if ev == 0 {
+			return fmt.Errorf("CGEventCreateKeyboardEvent failed")
+		}
+		sides := d.modifierSides
+		if side := darwinModifierSide(key); down {
+			sides |= side
+		} else {
+			sides &^= side
+		}
+		d.post(ev, flags, sides)
+		d.modifierSides = sides
 	}
 	return nil
 }
 
-func postDarwinKey(key uint16, down bool, flags uint64) error {
-	event := cgEventCreateKeyboardEvent(0, key, down)
-	if event == 0 {
-		return fmt.Errorf("CGEventCreateKeyboardEvent failed")
-	}
-	if flags != 0 {
-		cgEventSetFlags(event, flags)
-	}
-	// Post at the HID tap so macOS updates modifier state before dispatching the
-	// key. Annotated-session events type single keys but can lose combinations.
-	cgEventPost(cgHIDEventTap, event)
-	cfRelease(event)
-	return nil
-}
-
-func postDarwinMouse(eventType uint32, event desktopInputEvent, button uint32) error {
-	cgEvent := cgEventCreateMouseEvent(0, eventType, cgPoint{X: float64(event.X), Y: float64(event.Y)}, button)
-	if cgEvent == 0 {
+func (d *darwinDesktopInput) mouse(typ uint32, point cgPoint, button uint32, count int64, flags uint64) error {
+	ev := d.api.mouse(0, typ, point, button)
+	if ev == 0 {
 		return fmt.Errorf("CGEventCreateMouseEvent failed")
 	}
-	if eventType == cgEventLeftMouseDown || eventType == cgEventLeftMouseUp || eventType == cgEventRightMouseDown || eventType == cgEventRightMouseUp || eventType == cgEventOtherMouseDown || eventType == cgEventOtherMouseUp {
-		cgEventSetIntegerValueField(cgEvent, cgMouseEventClickState, 1)
-		cgEventSetIntegerValueField(cgEvent, cgMouseEventButtonNumber, int64(button))
+	if count != 0 {
+		d.api.setInteger(ev, cgMouseEventClickState, count)
 	}
-	cgEventPost(cgHIDEventTap, cgEvent)
-	cfRelease(cgEvent)
+	d.post(ev, flags, d.modifierSides)
 	return nil
 }
 
-func postDarwinWheel(event desktopInputEvent) error {
-	if cgEventCreateScrollWheel == 0 || (event.DeltaX == 0 && event.DeltaY == 0) {
-		return nil
+// IOLLEvent.h: NX_DEVICE*KEYMASK. Tracking both sides avoids releasing Shift,
+// for example, when only one of two held Shift keys goes up. VNC sends key
+// transitions without aggregate flags; a browser can also send flags alone.
+const (
+	leftControl  = 0x0001
+	leftShift    = 0x0002
+	rightShift   = 0x0004
+	leftCommand  = 0x0008
+	rightCommand = 0x0010
+	leftOption   = 0x0020
+	rightOption  = 0x0040
+	rightControl = 0x2000
+)
+
+func darwinModifierSide(key uint16) uint64 {
+	switch key {
+	case 0x3b:
+		return leftControl
+	case 0x3e:
+		return rightControl
+	case 0x38:
+		return leftShift
+	case 0x3c:
+		return rightShift
+	case 0x37:
+		return leftCommand
+	case 0x36:
+		return rightCommand
+	case 0x3a:
+		return leftOption
+	case 0x3d:
+		return rightOption
 	}
-	wheelY := uintptr(int32(-darwinWheelStep(event.DeltaY)))
-	wheelX := uintptr(int32(darwinWheelStep(event.DeltaX)))
-	r1, _, _ := purego.SyscallN(cgEventCreateScrollWheel, 0, 0, 2, wheelY, wheelX)
-	if r1 == 0 {
-		return nil
-	}
-	cgEventPost(cgHIDEventTap, r1)
-	cfRelease(r1)
-	return nil
+	return 0
 }
 
-func darwinWheelStep(delta int) int {
-	if delta == 0 {
-		return 0
+func (d *darwinDesktopInput) post(ev uintptr, flags, sides uint64) {
+	const modifiers = cgEventFlagMaskShift | cgEventFlagMaskControl | cgEventFlagMaskCommand | cgEventFlagMaskAlternate |
+		leftControl | rightControl | leftShift | rightShift | leftCommand | rightCommand | leftOption | rightOption
+	if sides&(leftShift|rightShift) != 0 {
+		flags |= cgEventFlagMaskShift
 	}
-	step := delta / 120
-	if step == 0 {
-		if delta > 0 {
-			return 1
-		}
-		return -1
+	if sides&(leftControl|rightControl) != 0 {
+		flags |= cgEventFlagMaskControl
 	}
-	return step
+	if sides&(leftOption|rightOption) != 0 {
+		flags |= cgEventFlagMaskAlternate
+	}
+	if sides&(leftCommand|rightCommand) != 0 {
+		flags |= cgEventFlagMaskCommand
+	}
+	// Preserve unrelated native flags such as Caps Lock, Fn and numeric pad.
+	d.api.setFlags(ev, d.api.getFlags(ev)&^modifiers|flags|sides)
+	d.api.post(cgHIDEventTap, ev)
+	d.api.release(ev)
 }
 
 func darwinMouseButton(button int) uint32 {
@@ -277,14 +389,17 @@ func darwinCodeFromKey(key string) string {
 		}
 	}
 	switch key {
-	case "Enter", "Tab", "Backspace", "Escape", "Delete", "Home", "End", "PageUp", "PageDown":
-		return key
-	case " ":
-		return "Space"
-	case "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown":
-		return key
+	case "Shift":
+		return "ShiftLeft"
+	case "Control":
+		return "ControlLeft"
+	case "Alt":
+		return "AltLeft"
+	case "Meta":
+		return "MetaLeft"
+	default:
+		return key // named keys such as Insert, F1 and the arrows already match a DOM code
 	}
-	return ""
 }
 
 var darwinLetterKeycodes = map[byte]uint16{
@@ -300,7 +415,7 @@ var darwinDigitKeycodes = map[byte]uint16{
 
 func darwinKeycode(event desktopInputEvent) uint16 {
 	code := event.Code
-	if code == "" {
+	if code == "" || code == "Unidentified" {
 		code = darwinCodeFromKey(event.Key)
 	}
 	if strings.HasPrefix(code, "Key") && len(code) == 4 {
@@ -366,6 +481,16 @@ func darwinKeycode(event desktopInputEvent) uint16 {
 		return 0x29
 	case "Backslash":
 		return 0x2a
+	case "IntlBackslash":
+		return 0x0a // ISO Section
+	case "IntlYen":
+		return 0x5d
+	case "IntlRo":
+		return 0x5e // JIS Underscore
+	case "Lang1":
+		return 0x68 // JIS Kana
+	case "Lang2":
+		return 0x66 // JIS Eisu
 	case "Comma":
 		return 0x2b
 	case "Slash":
@@ -378,6 +503,10 @@ func darwinKeycode(event desktopInputEvent) uint16 {
 		return 0x72
 	case "NumpadDecimal":
 		return 0x41
+	case "NumpadComma":
+		return 0x5f
+	case "NumLock", "NumpadClear", "Clear":
+		return 0x47 // Apple keyboards have Clear in this position
 	case "NumpadMultiply":
 		return 0x43
 	case "NumpadAdd":
@@ -442,6 +571,22 @@ func darwinKeycode(event desktopInputEvent) uint16 {
 		return 0x67
 	case "F12":
 		return 0x6f
+	case "F13":
+		return 0x69
+	case "F14":
+		return 0x6b
+	case "F15":
+		return 0x71
+	case "F16":
+		return 0x6a
+	case "F17":
+		return 0x40
+	case "F18":
+		return 0x4f
+	case "F19":
+		return 0x50
+	case "F20":
+		return 0x5a
 	}
 	return 0xff
 }

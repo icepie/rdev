@@ -76,21 +76,16 @@ func (s *desktopSession) mapPoint(x, y int) (int, int) {
 	if frameW <= 0 || frameH <= 0 || bounds.Dx() <= 0 || bounds.Dy() <= 0 {
 		return x, y
 	}
-	mappedX := bounds.Min.X + x*bounds.Dx()/frameW
-	mappedY := bounds.Min.Y + y*bounds.Dy()/frameH
-	if mappedX < bounds.Min.X {
-		mappedX = bounds.Min.X
+	return bounds.Min.X + desktopInputOffset(x, frameW, bounds.Dx()), bounds.Min.Y + desktopInputOffset(y, frameH, bounds.Dy())
+}
+
+// Preserve both endpoints so a scaled viewer can reach screen-edge controls.
+func desktopInputOffset(pixel, frame, source int) int {
+	if frame <= 1 || source <= 1 {
+		return 0
 	}
-	if mappedY < bounds.Min.Y {
-		mappedY = bounds.Min.Y
-	}
-	if mappedX >= bounds.Max.X {
-		mappedX = bounds.Max.X - 1
-	}
-	if mappedY >= bounds.Max.Y {
-		mappedY = bounds.Max.Y - 1
-	}
-	return mappedX, mappedY
+	span := int64(frame - 1)
+	return int((int64(max(0, min(pixel, frame-1)))*int64(source-1) + span/2) / span)
 }
 
 func (c *Client) handleDesktopStart(msg *protocol.Message) {
@@ -444,10 +439,8 @@ func (c *Client) handleDesktopInput(msg *protocol.Message) {
 		return
 	}
 	x, y := session.mapPoint(msg.X, msg.Y)
-	if msg.InputType == "mouse_move" || msg.InputType == "mouse_down" || msg.InputType == "mouse_up" || msg.InputType == "wheel" || msg.InputType == "cursor_move" {
-		session.setCursor(x, y)
-	}
 	if msg.InputType == "cursor_move" {
+		session.setCursor(x, y)
 		return
 	}
 	event := desktopInputEvent{
@@ -474,6 +467,10 @@ func (c *Client) handleDesktopInput(msg *protocol.Message) {
 	}
 	if err := session.input.Apply(event); err != nil {
 		log.Printf("desktop input error: %v", err)
+		return
+	}
+	if msg.InputType == "mouse_move" || msg.InputType == "mouse_down" || msg.InputType == "mouse_up" || msg.InputType == "wheel" {
+		session.setCursor(x, y)
 	}
 }
 

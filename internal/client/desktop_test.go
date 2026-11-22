@@ -14,6 +14,21 @@ import (
 	"rdev/internal/protocol"
 )
 
+func TestDesktopPointerMapsScaledMonitorEdges(t *testing.T) {
+	s := &desktopSession{}
+	s.setFrame(image.Rect(-3840, -200, 0, 1960), 800, 450)
+	for from, want := range map[image.Point]image.Point{
+		image.Pt(0, 0):     image.Pt(-3840, -200),
+		image.Pt(799, 449): image.Pt(-1, 1959),
+		image.Pt(-9, 500):  image.Pt(-3840, 1959),
+	} {
+		x, y := s.mapPoint(from.X, from.Y)
+		if got := image.Pt(x, y); got != want {
+			t.Errorf("mapPoint(%v) = %v, want %v", from, got, want)
+		}
+	}
+}
+
 func TestDesktopCursorPositionFallsBackWhenProviderOutOfBounds(t *testing.T) {
 	session := &desktopSession{}
 	session.setCursor(5, 6)

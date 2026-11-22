@@ -1,6 +1,6 @@
-import { attachDesktopMediaSource, desktopEncoderRecoveryFormat, desktopEncoderStatus, desktopFPSPresets, desktopInputShouldDrop, desktopPanelPresets, desktopQualityPresets, desktopRuntimeEncoderStatus } from "../../lib/desktop-media";
+import { attachDesktopMediaSource, desktopEncoderRecoveryFormat, desktopEncoderStatus, desktopFPSPresets, desktopPanelPresets, desktopQualityPresets, desktopRuntimeEncoderStatus } from "../../lib/desktop-media";
 import { desktopOwnsKeyboard } from "../../lib/desktop-input-focus";
-import { DesktopHeldInput } from "../../lib/desktop-input";
+import { DesktopCanvasInput } from "../../lib/desktop-input";
 import { writeOwnedClipboard } from "../../lib/clipboard-write";
 import { acceptDesktopH264Frame, paintDesktopCanvas, paintDesktopImage } from "../../lib/desktop-frame";
 /* PanelDesktop: one device remote-desktop session inside an agent right-panel
@@ -315,7 +315,6 @@ export function PanelDesktop({
   const pendingFrameRef = useRef<{ data: ArrayBuffer; connection: number; socket: WebSocket | null } | null>(null);
   const reconnectTimerRef = useRef<number | undefined>(undefined);
   const resizeTimerRef = useRef<number | undefined>(undefined);
-  const lastMouseSentRef = useRef(0);
   const lastAdaptiveSizeRef = useRef<{ width: number; height: number } | null>(null);
   const desktopReconnectDelayRef = useRef(1000);
 
@@ -329,7 +328,7 @@ export function PanelDesktop({
   const h264FrameIndexRef = useRef(0);
   const h264FrameDurationUsRef = useRef(125000);
   const h264NeedKeyframeRef = useRef(false);
-  const desktopHeld = useRef(new DesktopHeldInput());
+  const [desktopInput] = useState(() => new DesktopCanvasInput());
   const videoFormatRef = useRef("");
 
   const gpuMediaSourceRef = useRef<MediaSource | null>(null);
@@ -1225,16 +1224,15 @@ export function PanelDesktop({
     }, delay);
   };
 
-  const desktopReleaseKeyboard = (pointerId?: number) => {
+  const desktopReleaseKeyboard = () => {
     const ws = wsRef.current;
     if (connModeRef.current !== "desktop" || !ws || ws.readyState !== WebSocket.OPEN) {
-      desktopHeld.current.clear();
+      desktopInput.clear();
       return;
     }
     try {
       const release = (input: Record<string, unknown>) => ws.send(JSON.stringify({ op: "input", ...input }));
-      if (pointerId === undefined) desktopHeld.current.release(release);
-      else desktopHeld.current.releasePointer(pointerId, release);
+      desktopInput.release(release);
     } catch (e) {
       setStatus(errMessage(e), "err");
     }
@@ -1495,6 +1493,7 @@ export function PanelDesktop({
       } else if (msg.op === "starting") {
         setStatus(tt("desktop.starting"));
       } else if (msg.op === "ready") {
+        desktopReleaseKeyboard();
         desktopReconnectDelayRef.current = 1000;
         const canvas = canvasRef.current;
         if (canvas) {
@@ -1537,6 +1536,8 @@ export function PanelDesktop({
         lastCloseMsgRef.current = msg.message || tt("common.error");
         setStatus(lastCloseMsgRef.current, "err");
       } else if (msg.op === "closed") {
+        desktopInput.clear();
+        remoteInputRef.current = false;
         const recoveryFormat = desktopEncoderRecoveryFormat(msg.format, msg.encoderBackend);
         if (recoveryFormat) {
           forcedFormatRef.current = recoveryFormat;
@@ -1557,7 +1558,7 @@ export function PanelDesktop({
     };
     ws.onclose = () => {
       if (connID !== connSeqRef.current || wsRef.current !== ws) return;
-      desktopHeld.current.clear();
+      desktopInput.clear();
       wsRef.current = null;
       stopClipboardSync();
       setClipboardCapabilities(null);
@@ -1649,106 +1650,6 @@ export function PanelDesktop({
     updateSettings({ gpuEnableVideo: next });
     saveGpuDesktopSettings();
     gpuSend(next ? "ResumeVideo" : "PauseVideo");
-  };
-
-  /* ── Legacy canvas input ── */
-
-  const canvasPoint = (event: { clientX: number; clientY: number }) => {
-    const canvas = canvasRef.current;
-    const rect = canvas?.getBoundingClientRect();
-    const cw = canvas?.width || 1;
-    const ch = canvas?.height || 1;
-    const rw = rect?.width || 1;
-    const rh = rect?.height || 1;
-    const x = Math.max(
-      0,
-      Math.min(cw - 1, Math.round(((event.clientX - (rect?.left || 0)) * cw) / rw)),
-    );
-    const y = Math.max(
-      0,
-      Math.min(ch - 1, Math.round(((event.clientY - (rect?.top || 0)) * ch) / rh)),
-    );
-    return { x, y };
-  };
-
-  const sendInput = (input: Record<string, unknown>): boolean => {
-    const ws = wsRef.current;
-    if (!visibleRef.current || !ws || ws.readyState !== WebSocket.OPEN || !settingsRef.current.control || !remoteInputRef.current)
-      return false;
-    if (desktopInputShouldDrop(input.inputType, ws.bufferedAmount)) return false;
-    try {
-      ws.send(JSON.stringify({ op: "input", ...input }));
-      desktopHeld.current.sent(input);
-      return true;
-    } catch (e) {
-      setStatus(errMessage(e), "err");
-      return false;
-    }
-  };
-
-  const sendCursor = (input: Record<string, unknown>) => {
-    const ws = wsRef.current;
-    if (!ws || ws.readyState !== WebSocket.OPEN || !settingsRef.current.showCursor) return;
-    if (ws.bufferedAmount > 128 * 1024) return;
-    try {
-      ws.send(JSON.stringify({ op: "input", inputType: "cursor_move", ...input }));
-    } catch (e) {
-      setStatus(errMessage(e), "err");
-    }
-  };
-
-  const sendMouse = (type: string, event: PointerEvent, extra: Record<string, unknown> = {}) => {
-    const now = performance.now();
-    const ws = wsRef.current;
-    if (type === "mouse_move" && (now - lastMouseSentRef.current < 16 || (ws && ws.bufferedAmount > 128 * 1024)))
-      return;
-    lastMouseSentRef.current = now;
-    const point = canvasPoint(event);
-    if (type === "mouse_move" && (!settingsRef.current.control || !remoteInputRef.current))
-      sendCursor({
-        x: point.x,
-        y: point.y,
-        pointerType: event.pointerType || "mouse",
-        pointerId: event.pointerId || 0,
-        pressure: event.pressure || 0,
-      });
-    sendInput({
-      inputType: type,
-      x: point.x,
-      y: point.y,
-      button: event.button || 0,
-      pointerType: event.pointerType || "mouse",
-      pointerId: event.pointerId || 0,
-      pressure: event.pressure || 0,
-      ...extra,
-    });
-  };
-
-  const sendKey = (type: string, event: KeyboardEvent) => {
-    if (!settingsRef.current.control || !remoteInputRef.current) return;
-    event.preventDefault();
-    const key = {
-      key: event.key,
-      code: event.code,
-      ctrlKey: event.ctrlKey,
-      altKey: event.altKey,
-      shiftKey: event.shiftKey,
-      metaKey: event.metaKey,
-    };
-    sendInput({ inputType: type, ...key });
-  };
-
-  const canvasWheel = (e: WheelEvent) => {
-    if (!settingsRef.current.control || !remoteInputRef.current) return;
-    e.preventDefault();
-    const point = canvasPoint(e);
-    sendInput({
-      inputType: "wheel",
-      x: point.x,
-      y: point.y,
-      deltaX: Math.round(e.deltaX),
-      deltaY: Math.round(e.deltaY),
-    });
   };
 
   /* ── GPU input ── */
@@ -1869,9 +1770,6 @@ export function PanelDesktop({
     gpuSend,
     gpuReleaseKeyboard,
     desktopReleaseKeyboard,
-    sendMouse,
-    sendKey,
-    canvasWheel,
     pollClipboardSync,
     scheduleAdaptiveReconnect,
   });
@@ -1888,9 +1786,6 @@ export function PanelDesktop({
     gpuSend,
     gpuReleaseKeyboard,
     desktopReleaseKeyboard,
-    sendMouse,
-    sendKey,
-    canvasWheel,
     pollClipboardSync,
     scheduleAdaptiveReconnect,
   };
@@ -1914,33 +1809,15 @@ export function PanelDesktop({
       cleanups.push(() => el.removeEventListener(type, listener, opts));
     };
 
-    if (canvas) {
-      on(canvas, "contextmenu", (e: Event) => e.preventDefault());
-      on(canvas, "auxclick", (e: Event) => e.preventDefault());
-      on(canvas, "pointermove", (e: PointerEvent) => apiRef.current.sendMouse("mouse_move", e));
-      on(canvas, "pointerdown", (e: PointerEvent) => {
-        e.preventDefault();
-        canvas.focus();
-        if (canvas.setPointerCapture) canvas.setPointerCapture(e.pointerId);
-        apiRef.current.sendMouse("mouse_down", e);
-      });
-      on(canvas, "pointerup", (e: PointerEvent) => {
-        e.preventDefault();
-        apiRef.current.sendMouse("mouse_up", e);
-        if (canvas.releasePointerCapture && canvas.hasPointerCapture?.(e.pointerId))
-          canvas.releasePointerCapture(e.pointerId);
-      });
-      on(canvas, "pointercancel", (e: PointerEvent) => {
-        apiRef.current.desktopReleaseKeyboard(e.pointerId);
-        if (canvas.releasePointerCapture && canvas.hasPointerCapture?.(e.pointerId))
-          canvas.releasePointerCapture(e.pointerId);
-      });
-      on(canvas, "lostpointercapture", (e: PointerEvent) => apiRef.current.desktopReleaseKeyboard(e.pointerId));
-      on(canvas, "wheel", (e: WheelEvent) => apiRef.current.canvasWheel(e), { passive: false });
-      on(canvas, "keydown", (e: KeyboardEvent) => apiRef.current.sendKey("key_down", e));
-      on(canvas, "keyup", (e: KeyboardEvent) => apiRef.current.sendKey("key_up", e));
-      on(canvas, "blur", () => apiRef.current.desktopReleaseKeyboard());
-    }
+    if (canvas) cleanups.push(desktopInput.attach(canvas, {
+      socket: () => wsRef.current,
+      mode: () => {
+        if (!visibleRef.current || connModeRef.current !== "desktop") return null;
+        if (settingsRef.current.control && remoteInputRef.current) return "control";
+        return settingsRef.current.showCursor ? "cursor" : null;
+      },
+      error: (error) => setStatus(errMessage(error), "err"),
+    }));
 
     if (overlay) {
       on(overlay, "contextmenu", (e: Event) => e.preventDefault());
@@ -2510,10 +2387,12 @@ export function PanelDesktop({
           <canvas
             ref={canvasRef}
             tabIndex={0}
-            className="rounded-lg border border-border-seam bg-black outline-none"
+            aria-label={t("title.desktop")}
+            className="rounded-lg border border-border-seam bg-black outline-none focus-visible:ring-2 focus-visible:ring-ring"
             style={{
               display: canvasShown ? "block" : "none",
               cursor: canvasCursor,
+              touchAction: controlActive ? "none" : undefined,
               width: "auto",
               height: "auto",
               maxWidth: settings.fit === "fit" ? "100%" : "none",

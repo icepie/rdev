@@ -9,28 +9,79 @@ import (
 	"unsafe"
 
 	"golang.org/x/sys/windows"
+	"rdev/internal/protocol"
 )
 
-func TestWindowsKeyFlagsMarksExtendedKeysAndReleases(t *testing.T) {
-	if got := windowsKeyFlags(desktopInputEvent{Code: "ArrowLeft"}, false); got != keyEventExtendedKey {
-		t.Fatalf("ArrowLeft flags = %#x, want extended", got)
-	}
-	if got := windowsKeyFlags(desktopInputEvent{Code: "ControlRight"}, true); got != keyEventExtendedKey|keyEventKeyUp {
-		t.Fatalf("ControlRight release flags = %#x, want extended key-up", got)
-	}
-	if got := windowsKeyFlags(desktopInputEvent{Code: "KeyA"}, true); got != keyEventKeyUp {
-		t.Fatalf("KeyA release flags = %#x, want key-up", got)
+func TestWindowsInputABI(t *testing.T) {
+	var in windowsInput
+	var key windowsKeyboardInput
+	ptr := unsafe.Sizeof(uintptr(0))
+	// INPUT is 28 bytes on 386, 40 on amd64/arm64. Its union starts at 4 or 8.
+	if unsafe.Sizeof(in) != 16+3*ptr || unsafe.Offsetof(in.mouse) != ptr ||
+		unsafe.Offsetof(in.mouse.flags) != 12 || unsafe.Offsetof(in.mouse.extra) != 16+ptr ||
+		unsafe.Offsetof(key.scan) != 2 || unsafe.Offsetof(key.flags) != 4 || unsafe.Offsetof(key.extra) != 8+ptr {
+		t.Fatalf("unexpected INPUT layout: ptr=%d size=%d union=%d mi.extra=%d ki.extra=%d", ptr, unsafe.Sizeof(in), unsafe.Offsetof(in.mouse), unsafe.Offsetof(in.mouse.extra), unsafe.Offsetof(key.extra))
 	}
 }
 
-func TestWindowsVKDistinguishesPhysicalModifiers(t *testing.T) {
-	for code, want := range map[string]byte{
-		"ShiftLeft": 0xa0, "ShiftRight": 0xa1, "ControlLeft": 0xa2, "ControlRight": 0xa3,
-		"AltLeft": 0xa4, "AltRight": 0xa5, "MetaLeft": 0x5b, "MetaRight": 0x5c,
-		"Key?": 0, "DigitX": 0,
+func TestWindowsPhysicalKeys(t *testing.T) {
+	for _, tc := range []struct {
+		code     string
+		scan     uint16
+		extended bool
+	}{
+		{"KeyQ", 0x10, false}, {"IntlBackslash", 0x56, false},
+		{"ShiftLeft", 0x2a, false}, {"ShiftRight", 0x36, false},
+		{"ControlLeft", 0x1d, false}, {"ControlRight", 0x1d, true},
+		{"AltLeft", 0x38, false}, {"AltRight", 0x38, true},
+		{"MetaLeft", 0x5b, true}, {"MetaRight", 0x5c, true},
+		{"Enter", 0x1c, false}, {"NumpadEnter", 0x1c, true},
+		{"Numpad4", 0x4b, false}, {"ArrowLeft", 0x4b, true},
 	} {
-		if got := windowsVK(desktopInputEvent{Code: code}); got != want {
-			t.Errorf("%s = %#x, want %#x", code, got, want)
+		flags := uint32(keyEventScanCode)
+		if tc.extended {
+			flags |= keyEventExtendedKey
+		}
+		for _, typ := range []string{"key_down", "key_up"} {
+			if typ == "key_up" {
+				flags |= keyEventKeyUp
+			}
+			got, ok := windowsKeyInput(desktopInputEvent{Type: typ, Code: tc.code, Key: "A", ShiftKey: true})
+			if !ok || got != (windowsKeyboardInput{scan: tc.scan, flags: flags}) {
+				t.Errorf("%s %s: %+v, want scan %#x flags %#x", typ, tc.code, got, tc.scan, flags)
+			}
+		}
+	}
+	if key, ok := windowsKeyInput(desktopInputEvent{Type: "key_up", Key: "a"}); !ok || key != (windowsKeyboardInput{vk: 'A', flags: keyEventKeyUp}) {
+		t.Fatalf("logical fallback: %+v, ok=%t", key, ok)
+	}
+	if _, ok := windowsKeyInput(desktopInputEvent{Type: "key_down", Code: "Key?"}); ok {
+		t.Fatal("unrecognized key generated input")
+	}
+}
+
+func TestWindowsMouseInputs(t *testing.T) {
+	desktop := protocol.DesktopSource{X: -1920, Y: -200, Width: 3840, Height: 1280}
+	var inputs [3]windowsInput
+	event := desktopInputEvent{Type: "wheel", X: -1000, Y: 1030, DeltaX: 3, DeltaY: 100}
+	n := windowsMouseInputs(&inputs, event, desktop)
+	move := inputs[0].mouse
+	if n != 3 || move.flags != mouseEventMove|mouseEventVirtualDesk|mouseEventAbsolute ||
+		int64(move.dx)*3840/65536 != 920 || int64(move.dy)*1280/65536 != 1230 {
+		t.Fatalf("wheel must move to mapped pixel first: n=%d, move=%+v", n, move)
+	}
+	if inputs[1].mouse.flags != mouseEventWheel || int32(inputs[1].mouse.data) != -100 || inputs[2].mouse.flags != mouseEventHWheel || inputs[2].mouse.data != 3 {
+		t.Fatalf("wheel axis or direction lost: %+v", inputs[1:])
+	}
+	for _, typ := range []string{"mouse_down", "mouse_up"} {
+		event = desktopInputEvent{Type: typ, Button: 4, X: -2000, Y: 1200}
+		n = windowsMouseInputs(&inputs, event, desktop)
+		want := uint32(mouseEventXDown)
+		if typ == "mouse_up" {
+			want = mouseEventXUp
+		}
+		if n != 2 || inputs[0].mouse.dx != 0 || inputs[0].mouse.dy != 65535 || inputs[1].mouse.flags != want || inputs[1].mouse.data != 2 {
+			t.Fatalf("clamped %s for XBUTTON2: %+v", typ, inputs[:n])
 		}
 	}
 }

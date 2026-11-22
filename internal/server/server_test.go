@@ -241,6 +241,20 @@ func TestLocalLatestReleaseTagPicksHighestSemver(t *testing.T) {
 	}
 }
 
+func TestDesktopPointerMovesPreserveFinalPositionAndIndependentContacts(t *testing.T) {
+	bc := &desktopBrowserConn{authOK: true, session: "drag", client: &ClientConn{Desktop: &protocol.DesktopCapabilities{Input: true}}, frameWidth: 800, frameHeight: 600}
+	for i, typ := range []string{"cursor_move", "mouse_down", "mouse_move", "mouse_move", "mouse_move", "mouse_up"} {
+		id := 1
+		if i == 3 {
+			id = 2 // A second contact must not consume the first contact's move.
+		}
+		got, ok := bc.prepareInput(desktopMsg{InputType: typ, PointerType: "touch", PointerID: id, X: 100 * i, Y: i, ShiftKey: true})
+		if !ok || got.InputType != typ || got.PointerID != id || got.X != 100*i || !got.ShiftKey {
+			t.Fatalf("input %d (%s) lost: %+v", i, typ, got)
+		}
+	}
+}
+
 func TestDesktopRequestNegotiatesKnownFormats(t *testing.T) {
 	request := desktopRequestFromQuery(httptest.NewRequest(http.MethodGet, "/desktop?format=h264", nil))
 	if request.Format != "h264" {
