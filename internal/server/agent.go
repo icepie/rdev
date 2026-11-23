@@ -1,23 +1,15 @@
 package server
 
 import (
-	"context"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"log"
-	"net/http"
-	"sort"
-	"strconv"
-	"strings"
-	"sync"
 	"time"
 
-	"github.com/lxzan/gws"
 	"rdev/internal/agent"
-	"rdev/internal/protocol"
+
+	"github.com/lxzan/gws"
 )
 
 // Browser <-> server agent protocol (text JSON frames on /agent?device=<id>).
@@ -368,4 +360,3 @@ func queueTexts(q []agentQueuedChat) []string {
 	}
 	return texts
 }
-

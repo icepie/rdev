@@ -14,42 +14,42 @@ import (
 )
 
 type fileMsg struct {
-	Code       string               `json:"code,omitempty"`
-	Content    string               `json:"content,omitempty"`
-	PreviewURL string               `json:"previewUrl,omitempty"`
-	Encoding   string               `json:"encoding,omitempty"`
-	Mime       string               `json:"mime,omitempty"`
-	Op         string               `json:"op"`
-	DeviceID   string               `json:"deviceId,omitempty"`
-	RequestID  string               `json:"requestId,omitempty"`
-	TaskID     string               `json:"taskId,omitempty"`
-	RTCType    string               `json:"rtcType,omitempty"`
-	RTCData    json.RawMessage      `json:"rtcData,omitempty"`
-	Path       string               `json:"path,omitempty"`
-	From       string               `json:"from,omitempty"`
-	To         string               `json:"to,omitempty"`
-	ParentPath string               `json:"parentPath,omitempty"`
-	Name       string               `json:"name,omitempty"`
-	Size       int64                `json:"size,omitempty"`
-	SHA256     string               `json:"sha256,omitempty"`
-	PrefixSHA256 string             `json:"prefixSha256,omitempty"`
-	Restart    bool                 `json:"restart,omitempty"`
-	Offset     int64                `json:"offset,omitempty"`
-	Length     int64                `json:"length,omitempty"`
-	Limit      int                  `json:"limit,omitempty"`
-	Total      int                  `json:"total,omitempty"`
-	ModTime    string               `json:"modTime,omitempty"`
-	IsDir      bool                 `json:"isDir,omitempty"`
-	Recursive  bool                 `json:"recursive,omitempty"`
-	Password   string               `json:"password,omitempty"`
-	Success    bool                 `json:"success,omitempty"`
-	Message    string               `json:"message,omitempty"`
-	Error      string               `json:"error,omitempty"`
-	Entry      *protocol.FileEntry  `json:"entry,omitempty"`
-	Entries    []protocol.FileEntry `json:"entries,omitempty"`
-	Parent     string               `json:"parent,omitempty"`
-	Home       string               `json:"home,omitempty"`
-	Truncated  bool                 `json:"truncated,omitempty"`
+	Code         string               `json:"code,omitempty"`
+	Content      string               `json:"content,omitempty"`
+	PreviewURL   string               `json:"previewUrl,omitempty"`
+	Encoding     string               `json:"encoding,omitempty"`
+	Mime         string               `json:"mime,omitempty"`
+	Op           string               `json:"op"`
+	DeviceID     string               `json:"deviceId,omitempty"`
+	RequestID    string               `json:"requestId,omitempty"`
+	TaskID       string               `json:"taskId,omitempty"`
+	RTCType      string               `json:"rtcType,omitempty"`
+	RTCData      json.RawMessage      `json:"rtcData,omitempty"`
+	Path         string               `json:"path,omitempty"`
+	From         string               `json:"from,omitempty"`
+	To           string               `json:"to,omitempty"`
+	ParentPath   string               `json:"parentPath,omitempty"`
+	Name         string               `json:"name,omitempty"`
+	Size         int64                `json:"size,omitempty"`
+	SHA256       string               `json:"sha256,omitempty"`
+	PrefixSHA256 string               `json:"prefixSha256,omitempty"`
+	Restart      bool                 `json:"restart,omitempty"`
+	Offset       int64                `json:"offset,omitempty"`
+	Length       int64                `json:"length,omitempty"`
+	Limit        int                  `json:"limit,omitempty"`
+	Total        int                  `json:"total,omitempty"`
+	ModTime      string               `json:"modTime,omitempty"`
+	IsDir        bool                 `json:"isDir,omitempty"`
+	Recursive    bool                 `json:"recursive,omitempty"`
+	Password     string               `json:"password,omitempty"`
+	Success      bool                 `json:"success,omitempty"`
+	Message      string               `json:"message,omitempty"`
+	Error        string               `json:"error,omitempty"`
+	Entry        *protocol.FileEntry  `json:"entry,omitempty"`
+	Entries      []protocol.FileEntry `json:"entries,omitempty"`
+	Parent       string               `json:"parent,omitempty"`
+	Home         string               `json:"home,omitempty"`
+	Truncated    bool                 `json:"truncated,omitempty"`
 }
 
 type fileSocket struct {
@@ -464,7 +464,9 @@ func (s *Server) handleFileManagerMessage(msg *protocol.Message, devices ...stri
 		device = devices[0]
 	}
 	if s.routeAgentFileMsg(msg) {
-		if msg.Type == protocol.MsgFileTransferError { s.recordTransferFailure("device") }
+		if msg.Type == protocol.MsgFileTransferError {
+			s.recordTransferFailure("device")
+		}
 		return
 	}
 	switch msg.Type {

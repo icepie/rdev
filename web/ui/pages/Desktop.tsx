@@ -4,7 +4,40 @@ import { desktopOwnsKeyboard } from "../lib/desktop-input-focus";
 import { DesktopCanvasInput } from "../lib/desktop-input";
 import { isImeComposing } from "../lib/keyboard";
 import { writeOwnedClipboard } from "../lib/clipboard-write";
-import { acceptDesktopH264Frame, paintDesktopImage } from "../lib/desktop-frame";
+import { paintDesktopImage } from "../lib/desktop-frame";
+import { DesktopH264Decoder } from "../lib/desktop-h264";
+import {
+  adaptiveDesktopSize,
+  base64ToBytes,
+  bytesToBase64,
+  clampInt,
+  clipboardFingerprint,
+  clipboardItems,
+  desktopFrameLine,
+  desktopFrameRates,
+  errMessage,
+  formatBytes,
+  gpuDesktopFrameRate,
+  gpuDesktopMaxVideoSize,
+  inputBackendLabel,
+  sourceLabel,
+  type ClipCaps,
+  type ClipItem,
+  type ConnMode,
+  type DesktopCaps,
+  type DesktopDevice,
+  type DesktopSettingsBase,
+  type DesktopSource,
+  type InputOption,
+  type SelectOption,
+  type StatusCls,
+} from "../lib/desktop-model";
+import {
+  gpuKeyMessage,
+  gpuPointerMessage as buildGpuPointerMessage,
+  gpuPointerTypes as readGpuPointerTypes,
+  gpuVideoContentRect as computeGpuVideoContentRect,
+} from "../lib/desktop-gpu-input";
 import { DisclosureBody } from "../components/disclosure-body";
 import { Icon } from "../components/icon";
 import { useEffect, useRef, useState, type ReactNode } from "react";
@@ -44,172 +77,11 @@ const P = "rdevDesktop.";
 const GP = "rdevGpuDesktop.";
 const EMPTY_PARAMS = new URLSearchParams();
 
-/* ── Types ── */
-
-interface DesktopSource {
-  id: string;
-  label?: string;
-  kind?: string;
-  backend?: string;
-  width?: number;
-  height?: number;
-  x?: number;
-  y?: number;
-}
-
-interface InputOption {
-  id?: string;
-  label?: string;
-  kinds?: string[];
-  requires?: string[];
-}
-
-interface DesktopCaps {
-  supported?: boolean;
-  rtc?: boolean;
-  reason?: string;
-  platform?: string;
-  displayServer?: string;
-  sources?: DesktopSource[];
-  inputOptions?: InputOption[];
-  inputBackends?: string[];
-  videoCodecs?: string[];
-  clipboard?: boolean;
-  input?: boolean;
-}
-
-interface DesktopDevice {
-  id: string;
-  hasPassword?: boolean;
-  os?: string;
-  desktop?: DesktopCaps;
-  gpuDesktop?: boolean;
-}
-
-interface ClipCaps {
-  supported?: boolean;
-  read?: boolean;
-  write?: boolean;
-  formats?: string[];
-  maxBytes?: number;
-}
-
-interface ClipItem {
-  mime: string;
-  data: string;
-}
-
-interface SelectOption {
-  value: string;
-  label: string;
-}
-
-interface Settings {
+interface Settings extends DesktopSettingsBase {
   mode: string;
-  source: string;
-  fps: string;
-  quality: string;
   maxWidth: string;
   maxHeight: string;
-  inputBackend: string;
-  fit: string;
-  control: boolean;
-  showCursor: boolean;
-  clipboardMode: string;
-  gpuSource: string;
-  gpuEncoder: string;
   gpuAdvancedOpen: boolean;
-  gpuEnableVideo: boolean;
-  gpuLowLatency: boolean;
-  gpuStretch: boolean;
-  gpuEnableMouse: boolean;
-  gpuEnablePen: boolean;
-  gpuEnableTouch: boolean;
-  gpuScale: string;
-  gpuFrameRate: string;
-  gpuPointerBackend: string;
-  gpuKeyboardBackend: string;
-  gpuMinPressure: string;
-}
-
-type ConnMode = "" | "desktop" | "gpu";
-type StatusCls = "" | "ok" | "warn" | "err";
-
-/* ── Pure helpers ── */
-
-function clampInt(value: string | number, min: number, max: number, fallback: number): number {
-  const n = parseInt(String(value), 10);
-  if (!Number.isFinite(n)) return fallback;
-  return Math.max(min, Math.min(max, n));
-}
-
-function errMessage(err: unknown): string {
-  return err instanceof Error ? err.message || String(err) : String(err);
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes >= 1024 * 1024) return (bytes / 1024 / 1024).toFixed(1) + " MB";
-  if (bytes >= 1024) return (bytes / 1024).toFixed(1) + " KB";
-  return bytes + " B";
-}
-
-function bytesToBase64(bytes: Uint8Array): string {
-  let binary = "";
-  const chunk = 0x8000;
-  for (let offset = 0; offset < bytes.length; offset += chunk)
-    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunk));
-  return btoa(binary);
-}
-
-function base64ToBytes(value: string): Uint8Array {
-  const binary = atob(value || "");
-  const bytes = new Uint8Array(binary.length);
-  for (let index = 0; index < binary.length; index++) bytes[index] = binary.charCodeAt(index);
-  return bytes;
-}
-
-function clipboardItems(event: { items?: ClipItem[]; text?: string }): ClipItem[] {
-  const items =
-    Array.isArray(event?.items) && event.items.length
-      ? event.items
-      : event?.text
-        ? [{ mime: "text/plain", data: bytesToBase64(new TextEncoder().encode(event.text)) }]
-        : [];
-  return items.map((item) => ({
-    mime: String(item.mime || "").split(";", 1)[0].toLowerCase(),
-    data: item.data || "",
-  }));
-}
-
-function clipboardFingerprint(items: ClipItem[]): string {
-  return items.map((item) => `${item.mime}:${item.data}`).sort().join("|");
-}
-
-function inputBackendLabel(backend: InputOption | string): string {
-  const id = typeof backend === "string" ? backend : backend.id || "";
-  const label = (typeof backend === "string" ? backend : backend.label) || id;
-  const kinds =
-    typeof backend !== "string" && backend.kinds && backend.kinds.length
-      ? ` · ${backend.kinds.join("/")}`
-      : "";
-  const requires =
-    typeof backend !== "string" && backend.requires && backend.requires.length
-      ? ` · ${backend.requires.join(", ")}`
-      : "";
-  if (id === "x11-xtest") return `${label}${kinds || " · mouse/keyboard"}${requires}`;
-  if (id === "uinput") return `${label}${kinds || " · mouse/keyboard/touch/pen"}${requires}`;
-  if (id === "win32") return `${label}${kinds || " · mouse/keyboard"}${requires}`;
-  if (id === "win32-touch") return `${label}${kinds || " · mouse/keyboard/touch/pen"}${requires}`;
-  return `${label}${kinds}${requires}`;
-}
-
-function sourceLabel(source: DesktopSource): string {
-  const parts = [source.label || source.id];
-  if (source.kind) parts.push(source.kind);
-  if (source.backend) parts.push(source.backend);
-  if (source.width && source.height)
-    parts.push(`${source.width}×${source.height}${source.x || source.y ? `@${source.x},${source.y}` : ""}`);
-  return parts.join(" · ");
 }
 
 function loadSettings(): Settings {
@@ -355,12 +227,9 @@ function DesktopSession({
   const lastFrameAtRef = useRef(0);
   const currentSourceRef = useRef("");
 
-  const h264DecoderRef = useRef<VideoDecoder | null>(null);
-  const h264FrameIndexRef = useRef(0);
-  const h264FrameDurationUsRef = useRef(125000);
-  const h264NeedKeyframeRef = useRef(false);
+  const h264Ref = useRef<DesktopH264Decoder | null>(null);
+  const h264 = () => (h264Ref.current ??= new DesktopH264Decoder(paintImage, fallbackToMjpeg));
   const [desktopInput] = useState(() => new DesktopCanvasInput());
-  const videoFormatRef = useRef("");
 
   const gpuMediaSourceRef = useRef<MediaSource | null>(null);
   const gpuSourceBufferRef = useRef<SourceBuffer | null>(null);
@@ -642,20 +511,6 @@ function DesktopSession({
 
   /* ── H264 (legacy desktop stream) ── */
 
-  const closeH264Decoder = () => {
-    if (h264DecoderRef.current) {
-      try {
-        h264DecoderRef.current.close();
-      } catch {
-        /* already closed */
-      }
-      h264DecoderRef.current = null;
-    }
-    videoFormatRef.current = "";
-    h264FrameIndexRef.current = 0;
-    h264NeedKeyframeRef.current = false;
-  };
-
   const paintImage = (image: CanvasImageSource, width: number, height: number) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -671,73 +526,13 @@ function DesktopSession({
     if (forcedFormatRef.current === "mjpeg") return;
     forcedFormatRef.current = "mjpeg";
     pendingFrameRef.current = null;
-    closeH264Decoder();
+    h264Ref.current?.close();
     const socket = wsRef.current;
     if (!socket || socket.readyState !== WebSocket.OPEN) return;
     clearTimeout(reconnectTimerRef.current);
     reconnectTimerRef.current = window.setTimeout(() => {
       if (wsRef.current === socket) connect(false);
     }, 150);
-  };
-
-  const setupH264Decoder = (msg: { codec?: string; description?: string; fps?: number }) => {
-    closeH264Decoder();
-    if (typeof VideoDecoder !== "function" || !msg.codec || !msg.description) return false;
-    try {
-      const config: VideoDecoderConfig = {
-        codec: msg.codec,
-        description: base64ToBytes(msg.description) as BufferSource,
-        optimizeForLatency: true,
-      };
-      const decoder = new VideoDecoder({
-        output: (frame) => {
-          try {
-            if (h264DecoderRef.current !== decoder) return;
-            paintImage(frame, frame.displayWidth || frame.codedWidth, frame.displayHeight || frame.codedHeight);
-          } finally {
-            frame.close();
-          }
-        },
-        error: (e) => {
-          if (h264DecoderRef.current !== decoder) return;
-          console.error("h264 decoder error", e);
-          fallbackToMjpeg();
-        },
-      });
-      decoder.configure(config);
-      h264DecoderRef.current = decoder;
-      videoFormatRef.current = "h264";
-      h264FrameIndexRef.current = 0;
-      h264NeedKeyframeRef.current = true;
-      h264FrameDurationUsRef.current = Math.max(1000, Math.round(1000000 / (msg.fps || 30)));
-      return true;
-    } catch (e) {
-      console.error("h264 configure failed", e);
-      return false;
-    }
-  };
-
-  const feedH264Frame = (data: ArrayBuffer): boolean => {
-    const decoder = h264DecoderRef.current;
-    if (!decoder || decoder.state !== "configured" || data.byteLength < 5) return false;
-    const keyframe = (new Uint8Array(data, 0, 1)[0] & 1) !== 0;
-    if (!acceptDesktopH264Frame(keyframe, decoder.decodeQueueSize, h264NeedKeyframeRef)) return false;
-    const chunk = new Uint8Array(data, 1);
-    try {
-      decoder.decode(
-        new EncodedVideoChunk({
-          type: keyframe ? "key" : "delta",
-          timestamp: h264FrameIndexRef.current * h264FrameDurationUsRef.current,
-          data: chunk,
-        }),
-      );
-      h264FrameIndexRef.current++;
-      return true;
-    } catch (e) {
-      console.error("h264 decode feed failed", e);
-      fallbackToMjpeg();
-      return false;
-    }
   };
 
   const decodeImage = (blob: Blob): Promise<HTMLImageElement> => {
@@ -759,8 +554,8 @@ function DesktopSession({
   const drawFrame = (data: ArrayBuffer) => {
     // H.264 frames form one prediction chain. Feed every access unit in
     // arrival order; the latest-frame coalescing below is safe only for JPEG.
-    if (videoFormatRef.current === "h264") {
-      if (feedH264Frame(data)) {
+    if (h264Ref.current?.format === "h264") {
+      if (h264().feed(data)) {
         frameCountRef.current++;
         frameBytesRef.current += data.byteLength || 0;
         if (!statsStartedAtRef.current) statsStartedAtRef.current = performance.now();
@@ -775,9 +570,9 @@ function DesktopSession({
     requestAnimationFrame(async () => {
       const pending = pendingFrameRef.current;
       pendingFrameRef.current = null;
-      const format = videoFormatRef.current;
+      const format = h264Ref.current?.format;
       const current = () => !!pending && pending.connection === connSeqRef.current &&
-        pending.socket === wsRef.current && videoFormatRef.current === format;
+        pending.socket === wsRef.current && h264Ref.current?.format === format;
       const frame = current() ? pending?.data : null;
       try {
         if (frame) {

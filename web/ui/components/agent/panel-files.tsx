@@ -9,10 +9,28 @@ import { createTransferAttempts } from "../../lib/file-transfer-attempts";
 import { uploadChunks } from "../../lib/upload-chunks";
 import { BLOB_LIMIT_MESSAGE, UploadPrefixMismatch, checkBlobDownload, downloadMetadata, hashSource, sourceFingerprint, validateUploadPrefix } from "../../lib/file-integrity";
 import { createFallbackDownloads } from "../../lib/file-download-fallback";
-import { createFileRTCTransfers, FILE_RTC_CHUNK, FILE_RTC_WINDOW, type FileRTCDiagnostics } from "../../lib/file-webrtc";
+import { createFileRTCTransfers, FILE_RTC_CHUNK, FILE_RTC_WINDOW } from "../../lib/file-webrtc";
 import { createDiskDownloads, DOWNLOAD_RANGE, pickDownloadDestination } from "../../lib/file-download-disk";
 import { encodeFrame, decodeFrame } from "../../lib/file-transfer-frame";
-import { availableFileTaskActions, createListingGuard, readListingPage, canResumeUpload, restoreFileTask, uploadResumeRequest } from "../../lib/file-request-state";
+import { availableFileTaskActions, createListingGuard, readListingPage, canResumeUpload, uploadResumeRequest } from "../../lib/file-request-state";
+import {
+  CHUNK,
+  DOWNLOAD_RETRY_MS,
+  FILE_LIST_LIMIT,
+  FRAME_DOWNLOAD_CHUNK,
+  FRAME_DOWNLOAD_END,
+  FRAME_UPLOAD_ACK,
+  FRAME_UPLOAD_CHUNK,
+  fmtBytes,
+  loadPersistedTasks,
+  makeId,
+  persistTasks,
+  statusBadgeClass,
+  updateSpeed,
+  type FileEntry,
+  type FileTask,
+  type ListView,
+} from "../../lib/file-task-model";
 import { isImeComposing } from "../../lib/keyboard";
 /* PanelFiles: one device's file manager inside an agent right-panel tab
  * (scoped port of the standalone Files page). Self-contained /files WS
@@ -43,152 +61,10 @@ import { Icon } from "../icon";
 import { TabAuthOverlay } from "../../pages/Terminal";
 import type { Translator } from "./types";
 
-/* ── Protocol constants (mirrors the Files page) ── */
+/* ── Transfer-task constants (shared model: lib/file-task-model) ── */
 
-const CHUNK = 512 * 1024;
-const FILE_LIST_LIMIT = 100;
 const DOWNLOAD_STALL_MS = 12000;
-const DOWNLOAD_RETRY_MS = 2500;
 const TASKS_KEY_PREFIX = "rdevFileTasks.";
-
-const FRAME_UPLOAD_CHUNK = 0x20;
-const FRAME_UPLOAD_ACK = 0x21;
-const FRAME_DOWNLOAD_CHUNK = 0x22;
-const FRAME_DOWNLOAD_END = 0x23;
-
-
-/* ── Types ── */
-
-interface FileEntry {
-  name: string;
-  path: string;
-  isDir: boolean;
-  size: number;
-  modTime: string;
-}
-
-type TaskStatus =
-  | "queued"
-  | "running"
-  | "saving"
-  | "paused"
-  | "completed"
-  | "failed"
-  | "canceled";
-
-interface FileTask {
-  id: string;
-  dir: "upload" | "download";
-  device: string;
-  name: string;
-  path?: string;
-  parentPath?: string;
-  sha256?: string;
-  restart?: boolean;
-  ready?: Record<string, unknown>;
-  terminal?: boolean;
-  binaryEnd?: number;
-  verifying?: boolean;
-  size: number;
-  done: number;
-  status: TaskStatus;
-  created: number;
-  message?: string;
-  speed?: number;
-  samples?: { t: number; n: number }[];
-  lastProgress?: number;
-  lastRequested?: number;
-  saved?: boolean;
-  blobParts?: ArrayBuffer[];
-  waitAck?: (() => void) | null;
-  uploadAcks?: Map<number, () => void>;
-  sent?: number;
-  diagnostics?: FileRTCDiagnostics;
-  diskDownload?: boolean;
-}
-
-interface ListView {
-  notice?: string;
-  pageError?: string;
-  truncated: boolean;
-  shown: number;
-  total: number;
-}
-
-/* ── Helpers (ported from the Files page) ── */
-
-function makeId() {
-  return (
-    "task-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2)
-  );
-}
-
-function fmtBytes(n: number) {
-  if (!Number.isFinite(n)) return "--";
-  const u = ["B", "KB", "MB", "GB", "TB"];
-  let i = 0;
-  let v = n;
-  while (v >= 1024 && i < u.length - 1) {
-    v /= 1024;
-    i++;
-  }
-  return (i ? v.toFixed(v < 10 ? 1 : 0) : v.toFixed(0)) + " " + u[i];
-}
-
-function updateSpeed(task: FileTask) {
-  const now = Date.now();
-  task.samples = (task.samples || []).filter((p) => now - p.t < 5000);
-  task.samples.push({ t: now, n: task.done || 0 });
-  const first = task.samples[0];
-  const last = task.samples[task.samples.length - 1];
-  task.speed =
-    first && last && last.t > first.t
-      ? Math.max(0, ((last.n - first.n) * 1000) / (last.t - first.t))
-      : 0;
-}
-
-function loadPersistedTasks(device: string, reselectMessage: string): Map<string, FileTask> {
-  try {
-    const raw = JSON.parse(
-      localStorage.getItem(TASKS_KEY_PREFIX + device) || "[]",
-    ) as FileTask[];
-    return new Map(raw.map((task) => [task.id, restoreFileTask(task, reselectMessage)]));
-  } catch {
-    return new Map();
-  }
-}
-
-function persistTasks(device: string, tasks: Map<string, FileTask>) {
-  localStorage.setItem(
-    TASKS_KEY_PREFIX + device,
-    JSON.stringify(
-      [...tasks.values()].map(({ blobParts, samples, waitAck, uploadAcks, ready, verifying, ...rest }) => {
-        void blobParts;
-        void samples;
-        void waitAck;
-        void uploadAcks;
-        void ready;
-        void verifying;
-        return rest;
-      }),
-    ),
-  );
-}
-
-function statusBadgeClass(s: TaskStatus) {
-  switch (s) {
-    case "running":
-      return "border-transparent bg-timeline-accent/15 text-timeline-accent";
-    case "completed":
-      return "border-transparent bg-success/15 text-success";
-    case "failed":
-      return "border-transparent bg-destructive/15 text-destructive-text";
-    case "paused":
-      return "border-transparent bg-attention/15 text-warning-text";
-    default:
-      return "border-transparent bg-muted text-muted-foreground";
-  }
-}
 
 /* ── Panel ── */
 
@@ -230,7 +106,7 @@ export function PanelFiles({
   const reconnectDelayRef = useRef(1000);
   const reconnectTimerRef = useRef(0);
   const tasksRef = useRef<Map<string, FileTask> | null>(null);
-  if (!tasksRef.current) tasksRef.current = loadPersistedTasks(taskStorageKey, t("files.reselect"));
+  if (!tasksRef.current) tasksRef.current = loadPersistedTasks(TASKS_KEY_PREFIX + taskStorageKey, t("files.reselect"));
   const filesByTaskRef = useRef(new Map<string, File>());
   const currentPathRef = useRef("");
   const parentPathRef = useRef("");
@@ -267,7 +143,7 @@ export function PanelFiles({
   const progressDirty = useRef(false);
   const bump = useCallback(() => setTasksTick((n) => n + 1), []);
   const saveTasks = useCallback(
-    () => { fallbackDownloads.current.reconcile(tasksRef.current!); persistTasks(taskStorageRef.current, tasksRef.current!); progressDirty.current = false; },
+    () => { fallbackDownloads.current.reconcile(tasksRef.current!); persistTasks(TASKS_KEY_PREFIX + taskStorageRef.current, tasksRef.current!); progressDirty.current = false; },
     [],
   );
 
@@ -978,7 +854,7 @@ export function PanelFiles({
   useEffect(() => {
     closePreview();
     progressDirty.current = false;
-    tasksRef.current = loadPersistedTasks(taskStorageKey, tRef.current("files.reselect"));
+    tasksRef.current = loadPersistedTasks(TASKS_KEY_PREFIX + taskStorageKey, tRef.current("files.reselect"));
     listingGuard.current.invalidate();
     reselectTaskRef.current = null;
     filesByTaskRef.current.clear();
@@ -1064,7 +940,7 @@ export function PanelFiles({
       fallbackDownloads.current.clear();
       fileRTC.current.clear();
       tasksRef.current!.forEach(task => { stopUpload(task); transferAttempts.current.remove(task.id); });
-      if (progressDirty.current) persistTasks(device, tasksRef.current!);
+      if (progressDirty.current) persistTasks(TASKS_KEY_PREFIX + device, tasksRef.current!);
       progressDirty.current = false;
       listingGuard.current.invalidate();
       window.clearTimeout(reconnectTimerRef.current);

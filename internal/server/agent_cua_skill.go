@@ -12,6 +12,7 @@ import (
 
 	"rdev/internal/agent"
 )
+
 //go:embed cua-skill
 var agentSkillFiles embed.FS
 
@@ -42,7 +43,7 @@ func (*skillTool) Execute(_ context.Context, raw json.RawMessage) (string, error
 	switch args.Action {
 	case "list":
 		if args.Skill == "" {
-            ids := make([]string, 0, len(skillPackages))
+			ids := make([]string, 0, len(skillPackages))
 			for id := range skillPackages {
 				ids = append(ids, id)
 			}

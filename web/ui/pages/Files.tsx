@@ -13,9 +13,28 @@ import { uploadChunks } from "../lib/upload-chunks";
 import { BLOB_LIMIT_MESSAGE, UploadPrefixMismatch, checkBlobDownload, downloadMetadata, hashSource, sourceFingerprint, validateUploadPrefix, type UploadSource } from "../lib/file-integrity";
 import { createRemoteFileSources } from "../lib/file-copy-source";
 import { createFallbackDownloads } from "../lib/file-download-fallback";
-import { createFileRTCTransfers, FILE_RTC_CHUNK, FILE_RTC_WINDOW, type FileRTCDiagnostics } from "../lib/file-webrtc";
+import { createFileRTCTransfers, FILE_RTC_CHUNK, FILE_RTC_WINDOW } from "../lib/file-webrtc";
 import { createDiskDownloads, DOWNLOAD_RANGE, pickDownloadDestination } from "../lib/file-download-disk";
-import { availableFileTaskActions, type FileTaskStatus, canResumeUpload, createListingGuard, readListingPage, restoreFileTask, uploadResumeRequest } from "../lib/file-request-state";
+import { availableFileTaskActions, canResumeUpload, createListingGuard, readListingPage, uploadResumeRequest } from "../lib/file-request-state";
+import {
+  CHUNK,
+  DOWNLOAD_RETRY_MS,
+  FILE_LIST_LIMIT,
+  FRAME_DOWNLOAD_CHUNK,
+  FRAME_DOWNLOAD_END,
+  FRAME_UPLOAD_ACK,
+  FRAME_UPLOAD_CHUNK,
+  fmtBytes,
+  loadPersistedTasks,
+  makeId,
+  persistTasks,
+  statusBadgeClass,
+  updateSpeed,
+  type FileEntry,
+  type FileTask,
+  type ListView,
+  type TaskStatus,
+} from "../lib/file-task-model";
 import {
   useCallback,
   useEffect,
@@ -72,61 +91,9 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../com
 import { Icon } from "../components/icon";
 import { OsIcon } from "../components/os-icon";
 
-/* ── Protocol constants (unchanged from the vanilla page) ── */
+/* ── Shared transfer-task model (see lib/file-task-model) ── */
 
-const CHUNK = 512 * 1024;
-const FILE_LIST_LIMIT = 100;
-const DOWNLOAD_RETRY_MS = 2500;
 const TASKS_KEY = "rdevFileTasks";
-
-const FRAME_UPLOAD_CHUNK = 0x20;
-const FRAME_UPLOAD_ACK = 0x21;
-const FRAME_DOWNLOAD_CHUNK = 0x22;
-const FRAME_DOWNLOAD_END = 0x23;
-
-
-/* ── Types ── */
-
-interface FileEntry {
-  name: string;
-  path: string;
-  isDir: boolean;
-  size: number;
-  modTime: string;
-}
-
-type TaskStatus = FileTaskStatus;
-
-interface FileTask {
-  id: string;
-  dir: "upload" | "download";
-  device: string;
-  name: string;
-  path?: string;
-  parentPath?: string;
-  size: number;
-  sha256?: string;
-  restart?: boolean;
-  ready?: Record<string, unknown>;
-  terminal?: boolean;
-  binaryEnd?: number;
-  verifying?: boolean;
-  done: number;
-  status: TaskStatus;
-  created: number;
-  message?: string;
-  speed?: number;
-  samples?: { t: number; n: number }[];
-  lastProgress?: number;
-  lastRequested?: number;
-  saved?: boolean;
-  blobParts?: ArrayBuffer[];
-  waitAck?: (() => void) | null;
-  uploadAcks?: Map<number, () => void>;
-  sent?: number;
-  diagnostics?: FileRTCDiagnostics;
-  diskDownload?: boolean;
-}
 
 /* Drag payload + inter-pane API for moving files between split panes. */
 export const FILE_DRAG_MIME = "application/x-rdev-pane-file";
@@ -143,86 +110,6 @@ export interface FilesPaneApi {
   transferItemsTo(targetLeaf: number, items: PaneDragItem[]): Promise<void>;
   createDirectory(path: string, device: string): Promise<void>;
   receiveUpload(file: UploadSource & { name: string }, parentDir: string, device: string): void;
-}
-
-interface ListView {
-  notice?: string;
-  truncated: boolean;
-  shown: number;
-  total: number;
-}
-
-/* ── Helpers (ported verbatim from files.html) ── */
-
-function makeId() {
-  return "task-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2);
-}
-
-function fmtBytes(n: number) {
-  if (!Number.isFinite(n)) return "--";
-  const u = ["B", "KB", "MB", "GB", "TB"];
-  let i = 0;
-  let v = n;
-  while (v >= 1024 && i < u.length - 1) {
-    v /= 1024;
-    i++;
-  }
-  return (i ? v.toFixed(v < 10 ? 1 : 0) : v.toFixed(0)) + " " + u[i];
-}
-
-function updateSpeed(task: FileTask) {
-  const now = Date.now();
-  task.samples = (task.samples || []).filter((p) => now - p.t < 5000);
-  task.samples.push({ t: now, n: task.done || 0 });
-  const first = task.samples[0];
-  const last = task.samples[task.samples.length - 1];
-  task.speed =
-    first && last && last.t > first.t
-      ? Math.max(0, ((last.n - first.n) * 1000) / (last.t - first.t))
-      : 0;
-}
-
-function loadPersistedTasks(reselectMessage: string): Map<string, FileTask> {
-  try {
-    const raw = JSON.parse(localStorage.getItem(TASKS_KEY) || "[]") as FileTask[];
-    return new Map(raw.map((task) => [task.id, restoreFileTask(task, reselectMessage)]));
-  } catch {
-    return new Map();
-  }
-}
-
-function persistTasks(tasks: Map<string, FileTask>) {
-  localStorage.setItem(
-    TASKS_KEY,
-    JSON.stringify(
-      [...tasks.values()].map(
-        ({ blobParts, samples, waitAck, uploadAcks, ready, verifying, ...rest }) => {
-          void blobParts;
-          void samples;
-          void waitAck;
-          void uploadAcks;
-          void ready;
-          void verifying;
-          return rest;
-        },
-      ),
-    ),
-  );
-}
-
-function statusBadgeClass(s: TaskStatus) {
-  switch (s) {
-    case "running":
-      return "border-transparent bg-timeline-accent/15 text-timeline-accent";
-    case "completed":
-      return "border-transparent bg-success/15 text-success";
-    case "failed":
-      return "border-transparent bg-destructive/15 text-destructive-text";
-    case "paused":
-      return "border-transparent bg-attention/15 text-warning-text";
-    default:
-      return "border-transparent bg-muted text-muted-foreground";
-  }
 }
 
 function FileIconButton({ label, children, className, ...props }: ComponentProps<typeof Button> & { label: string; children: ReactNode }) {
@@ -291,7 +178,7 @@ export function FilesBrowser({
   const reconnectTimerRef = useRef(0);
   const tasksRef = useRef<Map<string, FileTask> | null>(null);
   if (!tasksRef.current)
-    tasksRef.current = primary ? loadPersistedTasks(t("files.reselect")) : new Map();
+    tasksRef.current = primary ? loadPersistedTasks(TASKS_KEY, t("files.reselect")) : new Map();
   const tasks = tasksRef.current;
   const transferAuth = useRef(new Map<string, string>());
   const transferAttempts = useRef(createTransferAttempts(makeId));
@@ -361,7 +248,7 @@ export function FilesBrowser({
   const bump = useCallback(() => setTasksTick((n) => n + 1), []);
   const saveTasks = useCallback(() => {
     fallbackDownloads.current.reconcile(tasksRef.current!);
-    if (primary) persistTasks(tasksRef.current!);
+    if (primary) persistTasks(TASKS_KEY, tasksRef.current!);
     progressDirty.current = false;
   }, [primary]);
 
