@@ -3,8 +3,8 @@ package client
 import (
 	"bytes"
 	"crypto/sha256"
-	"fmt"
 	"encoding/json"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -50,7 +50,9 @@ func TestManagedUploadDestinationOwnership(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "file.txt")
 	var wg sync.WaitGroup
 	for _, id := range []string{"one", "two"} {
-		wg.Go(func() { c.handleManagedUploadStart(&protocol.Message{TaskID: id, Path: path, Size: 4, SHA256: transferDigest("data")}) })
+		wg.Go(func() {
+			c.handleManagedUploadStart(&protocol.Message{TaskID: id, Path: path, Size: 4, SHA256: transferDigest("data")})
+		})
 	}
 	wg.Wait()
 	replies := []protocol.Message{uploadReply(t, tr), uploadReply(t, tr)}

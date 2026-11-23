@@ -31,8 +31,8 @@ func TestIsGitSmartSSHCommand(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := isGitSmartSSHCommand(tt.command); got != tt.want {
-				t.Fatalf("isGitSmartSSHCommand(%q) = %v, want %v", tt.command, got, tt.want)
+			if _, got := parseGitSmartSSHCommand(tt.command); got != tt.want {
+				t.Fatalf("parseGitSmartSSHCommand(%q) ok = %v, want %v", tt.command, got, tt.want)
 			}
 		})
 	}

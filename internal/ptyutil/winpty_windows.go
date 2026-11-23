@@ -40,21 +40,15 @@ func startWinPTY(cfg *Config) (*Process, error) {
 	}
 	cmdline := quoteWindowsArg(shell)
 	if cfg.Command != "" {
-		cmdline += " " + shellFlag(shell) + " " + quoteWindowsArg(cfg.Command)
+		cmdline += " " + shellFlag() + " " + quoteWindowsArg(cfg.Command)
 	}
 
-	rows, cols := cfg.Rows, cfg.Cols
-	if rows == 0 {
-		rows = 24
-	}
-	if cols == 0 {
-		cols = 80
-	}
-
+	rows, cols := initialSize(cfg)
+	wd, _ := os.Getwd()
 	opts := winpty.Options{
 		DLLPrefix:   dir,
 		Command:     cmdline,
-		Dir:         currentDir(),
+		Dir:         wd,
 		Env:         append(os.Environ(), cfg.Env...),
 		InitialCols: uint32(cols),
 		InitialRows: uint32(rows),
@@ -64,7 +58,7 @@ func startWinPTY(cfg *Config) (*Process, error) {
 		return nil, err
 	}
 	stdout := &readCloser{Reader: wincompat.DecodeOutput(wp.StdOut), Closer: wp.StdOut}
-	return &Process{legacy: &winPTYProcess{wp: wp, stdin: wincompat.NormalizeLineEndings(wp.StdIn), stdout: stdout}, term: cfg.Term}, nil
+	return &Process{legacy: &winPTYProcess{wp: wp, stdin: wincompat.NormalizeLineEndings(wp.StdIn), stdout: stdout}}, nil
 }
 
 func findWinPTYDir() string {
@@ -90,14 +84,6 @@ func findWinPTYDir() string {
 func fileExists(path string) bool {
 	st, err := os.Stat(path)
 	return err == nil && !st.IsDir()
-}
-
-func currentDir() string {
-	wd, err := os.Getwd()
-	if err != nil {
-		return ""
-	}
-	return wd
 }
 
 func quoteWindowsArg(s string) string {

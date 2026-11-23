@@ -95,6 +95,20 @@ func TestDesktopCapabilitiesReportsCurrentPlatform(t *testing.T) {
 	}
 }
 
+func TestApplyDesktopInputCapabilitiesMatchesAdvertisedBackends(t *testing.T) {
+	caps := &protocol.DesktopCapabilities{Input: false, ViewOnly: true}
+	available := applyDesktopInputCapabilities(caps)
+	if caps.Input != available {
+		t.Fatalf("Input = %v, want %v", caps.Input, available)
+	}
+	if len(caps.InputBackends) != len(desktopInputBackends()) {
+		t.Fatalf("InputBackends = %v, want %v", caps.InputBackends, desktopInputBackends())
+	}
+	if caps.Input != (len(caps.InputBackends) > 0) {
+		t.Fatalf("Input = %v with backends %v", caps.Input, caps.InputBackends)
+	}
+}
+
 func TestChooseDesktopInputBackendUsesAdvertisedPreferenceOrder(t *testing.T) {
 	available := []string{"win32-touch", "win32"}
 	if got := chooseDesktopInputBackend("auto", available); got != "win32-touch" {

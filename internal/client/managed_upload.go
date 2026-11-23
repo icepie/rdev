@@ -58,7 +58,11 @@ func (c *Client) finishManagedUpload(up *managedUpload) {
 	c.uploadMu.Unlock()
 }
 func (c *Client) cancelManagedUpload(up *managedUpload) {
-	up.cancelOnce.Do(func() { if up.cancel != nil { close(up.cancel) } })
+	up.cancelOnce.Do(func() {
+		if up.cancel != nil {
+			close(up.cancel)
+		}
+	})
 	up.mu.Lock()
 	defer up.mu.Unlock()
 	c.finishManagedUpload(up)
@@ -109,7 +113,9 @@ func (c *Client) handleManagedUploadStart(msg *protocol.Message) {
 		key = strings.ToLower(key)
 	}
 	up := &managedUpload{id: msg.TaskID, path: target, pathKey: key, partPath: target + ".rdevpart", size: msg.Size, sha256: msg.SHA256, rtc: c.fileRTCFor(msg.TaskID), cancel: make(chan struct{})}
-	if up.rtc != nil { up.rtcCancel = up.rtc.done }
+	if up.rtc != nil {
+		up.rtcCancel = up.rtc.done
+	}
 	up.mu.Lock()
 	defer up.mu.Unlock()
 	// Disconnect snapshots uploads while holding c.mu. Reserve before it, or
@@ -227,13 +233,21 @@ func (c *Client) handleManagedUploadEnd(msg *protocol.Message) {
 			err = fmt.Errorf("upload partial changed during verification")
 		}
 	}
-	if err == nil { err = up.file.Sync() }
+	if err == nil {
+		err = up.file.Sync()
+	}
 	if closeErr := up.file.Close(); err == nil {
 		err = closeErr
 	}
 	up.file = nil
 	if err == nil {
-		select { case <-up.cancel: err = fmt.Errorf("upload canceled"); case <-up.rtcCancel: err = fmt.Errorf("upload canceled"); default: }
+		select {
+		case <-up.cancel:
+			err = fmt.Errorf("upload canceled")
+		case <-up.rtcCancel:
+			err = fmt.Errorf("upload canceled")
+		default:
+		}
 	}
 	if err == nil {
 		err = os.Rename(up.partPath, up.path)

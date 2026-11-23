@@ -130,17 +130,11 @@ type sftpRWC struct {
 
 func (s *sftpRWC) Read(p []byte) (int, error)  { return s.reader.Read(p) }
 func (s *sftpRWC) Write(p []byte) (int, error) { return s.writer.Write(p) }
-func (s *sftpRWC) Close() error {
-	s.closer.Close()
-	return nil
-}
+func (s *sftpRWC) Close() error                { return s.closer.Close() }
 
 // clientSession represents a proxied session on the client device
 type clientSession struct {
-	id        string
-	subsystem string // "", "sftp"
-	command   string
-	pty       bool
+	id string
 
 	// PTY mode
 	ptyProc *ptyutil.Process
@@ -1310,11 +1304,8 @@ func (c *Client) handleNewSession(msg *protocol.Message) {
 
 func (c *Client) startShellExecSession(msg *protocol.Message) (*clientSession, error) {
 	sess := &clientSession{
-		id:        msg.SessionID,
-		subsystem: msg.Subsystem,
-		command:   msg.Command,
-		pty:       msg.Pty,
-		done:      make(chan struct{}),
+		id:   msg.SessionID,
+		done: make(chan struct{}),
 	}
 
 	if msg.Pty {
@@ -1331,7 +1322,6 @@ func (c *Client) startShellExecSession(msg *protocol.Message) (*clientSession, e
 		if ptyErr != nil {
 			// PTY unavailable (e.g. ConPty on Wine, no /dev/pts) → fallback to exec mode
 			log.Printf("session %s: PTY unavailable (%v), falling back to exec mode", msg.SessionID, ptyErr)
-			sess.pty = false
 		} else {
 			sess.ptyProc = proc
 
@@ -1508,11 +1498,6 @@ func (c *Client) startShellExecSession(msg *protocol.Message) (*clientSession, e
 	return sess, nil
 }
 
-func isGitSmartSSHCommand(command string) bool {
-	_, ok := parseGitSmartSSHCommand(command)
-	return ok
-}
-
 func (c *Client) startSFTPSession(sessionID string) (*clientSession, error) {
 	pr1, pw1 := io.Pipe()
 	pr2, pw2 := io.Pipe()
@@ -1521,7 +1506,6 @@ func (c *Client) startSFTPSession(sessionID string) (*clientSession, error) {
 
 	sess := &clientSession{
 		id:         sessionID,
-		subsystem:  "sftp",
 		sftpInput:  pw1,
 		sftpOutput: pr2,
 		done:       make(chan struct{}),

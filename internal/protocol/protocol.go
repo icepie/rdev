@@ -442,17 +442,3 @@ func DecodeBinFilePut(payload []byte) (path string, mode int32, fileData []byte,
 	fileData = payload[2+pathLen+4:]
 	return
 }
-
-// BinFrameHeaderLen returns the header length for a binary frame with given id
-func BinFrameHeaderLen(id string) int {
-	return 2 + len(id)
-}
-
-// MustDecodeBinFrame is like DecodeBinFrame but panics on error (for testing)
-func MustDecodeBinFrame(raw []byte) (byte, string, []byte) {
-	typ, id, payload, err := DecodeBinFrame(raw)
-	if err != nil {
-		panic(err)
-	}
-	return typ, id, payload
-}

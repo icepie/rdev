@@ -20,16 +20,6 @@ type desktopRTCSession struct {
 	closed            bool
 }
 
-func (s *desktopSession) setRTC(rtc *desktopRTCSession) {
-	s.rtcMu.Lock()
-	old := s.rtc
-	s.rtc = rtc
-	s.rtcMu.Unlock()
-	if old != nil && old != rtc {
-		old.close()
-	}
-}
-
 func (s *desktopSession) closeRTC() {
 	s.rtcMu.Lock()
 	rtc := s.rtc

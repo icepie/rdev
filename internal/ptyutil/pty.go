@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"os"
 	"runtime"
-	"sync"
 	"sync/atomic"
 
 	"github.com/aymanbagabas/go-pty"
@@ -30,10 +29,8 @@ type Process struct {
 	legacy ptyBackend
 	pty    pty.Pty
 	cmd    *pty.Cmd
-	term   string
 
-	closed  int32 // atomic: 1 = closed, prevents use-after-close
-	closeMu sync.Mutex
+	closed int32 // atomic: 1 = closed, prevents use-after-close
 }
 
 // Config for creating a PTY process
@@ -49,11 +46,23 @@ type Config struct {
 
 // shellFlag returns the command-line flag for running a command in the shell.
 // Windows cmd.exe uses /c; POSIX shells use -c.
-func shellFlag(shell string) string {
+func shellFlag() string {
 	if runtime.GOOS == "windows" {
 		return "/c"
 	}
 	return "-c"
+}
+
+// initialSize applies the 24x80 default shared by both backends.
+func initialSize(cfg *Config) (rows, cols uint16) {
+	rows, cols = cfg.Rows, cfg.Cols
+	if rows == 0 {
+		rows = 24
+	}
+	if cols == 0 {
+		cols = 80
+	}
+	return rows, cols
 }
 
 // Start creates a new PTY process. On Windows this uses ConPty;
@@ -81,7 +90,7 @@ func Start(cfg *Config) (proc *Process, err error) {
 		shell = detectShell()
 	}
 
-	flag := shellFlag(shell)
+	flag := shellFlag()
 
 	var cmd *pty.Cmd
 	if cfg.Command != "" {
@@ -101,17 +110,9 @@ func Start(cfg *Config) (proc *Process, err error) {
 	cmd.Env = env
 
 	// Resize to initial dimensions
-	rows, cols := cfg.Rows, cfg.Cols
-	if rows == 0 {
-		rows = 24
-	}
-	if cols == 0 {
-		cols = 80
-	}
-	if err := pseudo.Resize(int(cols), int(rows)); err != nil {
-		// Non-fatal: some platforms may not support resize before start
-		_ = err
-	}
+	rows, cols := initialSize(cfg)
+	// Non-fatal: some platforms may not support resize before start.
+	_ = pseudo.Resize(int(cols), int(rows))
 
 	// Apply SSH terminal modes if provided (Unix only, no-op on Windows)
 	if cfg.Modes != nil {
@@ -124,9 +125,8 @@ func Start(cfg *Config) (proc *Process, err error) {
 	}
 
 	return &Process{
-		pty:  pseudo,
-		cmd:  cmd,
-		term: cfg.Term,
+		pty: pseudo,
+		cmd: cmd,
 	}, nil
 }
 
@@ -190,8 +190,6 @@ func (p *Process) Close() error {
 	if !atomic.CompareAndSwapInt32(&p.closed, 0, 1) {
 		return nil // already closed
 	}
-	p.closeMu.Lock()
-	defer p.closeMu.Unlock()
 	if p.legacy != nil {
 		return p.legacy.Close()
 	}
@@ -215,11 +213,6 @@ func (p *Process) Wait() (int, error) {
 		}
 	}
 	return -1, err
-}
-
-// Name returns the PTY name (e.g. /dev/pts/0 on Unix, "windows-pty" on Windows)
-func (p *Process) Name() string {
-	return p.pty.Name()
 }
 
 // detectShell returns the appropriate shell for the current platform

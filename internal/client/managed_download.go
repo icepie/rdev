@@ -15,12 +15,12 @@ import (
 // and checks file identity, size and modification time before and after I/O.
 // Capacity and expiry also bound transfers abandoned without a cancel frame.
 type downloadFingerprint struct {
-	info os.FileInfo
+	info   os.FileInfo
 	sha256 string
-	used time.Time
+	used   time.Time
 }
 type downloadFingerprintCache struct {
-	mu sync.Mutex
+	mu      sync.Mutex
 	entries map[string]downloadFingerprint
 }
 
@@ -34,7 +34,9 @@ func (cache *downloadFingerprintCache) fingerprint(key string, file *os.File, in
 	now := time.Now()
 	cache.mu.Lock()
 	for path, entry := range cache.entries {
-		if now.Sub(entry.used) > 5*time.Minute { delete(cache.entries, path) }
+		if now.Sub(entry.used) > 5*time.Minute {
+			delete(cache.entries, path)
+		}
 	}
 	if entry, ok := cache.entries[key]; ok && sameDownloadVersion(entry.info, info) {
 		entry.used = now
@@ -44,18 +46,28 @@ func (cache *downloadFingerprintCache) fingerprint(key string, file *os.File, in
 	}
 	cache.mu.Unlock()
 	digest, err := filePrefixSHA256Cancelable(file, info.Size(), cancel, nil)
-	if err != nil { return "", err }
+	if err != nil {
+		return "", err
+	}
 	after, err := file.Stat()
-	if err != nil { return "", err }
-	if !sameDownloadVersion(info, after) { return "", fmt.Errorf("file changed while computing download SHA-256") }
+	if err != nil {
+		return "", err
+	}
+	if !sameDownloadVersion(info, after) {
+		return "", fmt.Errorf("file changed while computing download SHA-256")
+	}
 	cache.mu.Lock()
 	defer cache.mu.Unlock()
-	if cache.entries == nil { cache.entries = make(map[string]downloadFingerprint) }
+	if cache.entries == nil {
+		cache.entries = make(map[string]downloadFingerprint)
+	}
 	if len(cache.entries) >= 128 {
 		var oldest string
 		var oldestTime time.Time
 		for path, entry := range cache.entries {
-			if oldest == "" || entry.used.Before(oldestTime) { oldest, oldestTime = path, entry.used }
+			if oldest == "" || entry.used.Before(oldestTime) {
+				oldest, oldestTime = path, entry.used
+			}
 		}
 		delete(cache.entries, oldest)
 	}
@@ -75,7 +87,9 @@ func (c *Client) handleManagedDownloadStart(msg *protocol.Message) {
 	c.mu.Lock()
 	transport := c.transport
 	c.mu.Unlock()
-	if transport == nil { return }
+	if transport == nil {
+		return
+	}
 	var f *os.File
 	var err error
 	if msg.DownloadRoot != "" {
@@ -127,7 +141,7 @@ func (c *Client) handleManagedDownloadStart(msg *protocol.Message) {
 		}
 		c.mu.Unlock()
 	}()
-	digest, err := c.downloadFingerprints.fingerprint(msg.DownloadRoot + "\x00" + path, f, st, cancel)
+	digest, err := c.downloadFingerprints.fingerprint(msg.DownloadRoot+"\x00"+path, f, st, cancel)
 	if err != nil {
 		c.sendFileTransferError(taskID, path, err.Error())
 		return
@@ -136,7 +150,11 @@ func (c *Client) handleManagedDownloadStart(msg *protocol.Message) {
 		c.sendFileTransferError(taskID, path, "download source SHA-256 changed; restart required")
 		return
 	}
-	select { case <-cancel: return; default: }
+	select {
+	case <-cancel:
+		return
+	default:
+	}
 	checkVersion := func() bool {
 		current, err := f.Stat()
 		if err != nil || !sameDownloadVersion(st, current) {
@@ -192,7 +210,9 @@ func (c *Client) handleManagedDownloadStart(msg *protocol.Message) {
 			cur += int64(n)
 		}
 		if rangeAck && cur == segmentEnd {
-			if !checkVersion() { return }
+			if !checkVersion() {
+				return
+			}
 			if cur < st.Size() {
 				if err := rtc.expectRangeAck(cur); err != nil {
 					return
@@ -215,7 +235,9 @@ func (c *Client) handleManagedDownloadStart(msg *protocol.Message) {
 				c.sendFileTransferError(taskID, path, "file changed during range download")
 				return
 			}
-			if !checkVersion() { return }
+			if !checkVersion() {
+				return
+			}
 			if !rangeAck {
 				if err := c.sendFileBinary(rtc, protocol.BinFileTransferEnd, taskID, cur, nil); err != nil {
 					return

@@ -47,15 +47,6 @@ func linuxX11ConnectAny() (*xgb.Conn, linuxX11Env, error) {
 	return nil, linuxX11Env{}, fmt.Errorf("connect X11: %s", strings.Join(errs, "; "))
 }
 
-func linuxX11Available() bool {
-	conn, _, err := linuxX11ConnectAny()
-	if err != nil {
-		return false
-	}
-	conn.Close()
-	return true
-}
-
 func discoverLinuxX11Envs() []linuxX11Env {
 	var out []linuxX11Env
 	seen := map[string]bool{}
