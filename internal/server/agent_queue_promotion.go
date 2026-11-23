@@ -99,7 +99,7 @@ func (h *agentWSHandler) handlePromoteQueued(ac *agentConn, threadRef, queueID s
 	if success {
 		message = ""
 	}
-	ac.writeJSON(agentMsg{Op: "queue_promoted", Thread: threadID, QueueID: queueID, IsError: !success, Message: message})
+	ac.writeJSON(agentMsg{Op: "queue_promoted", Thread: threadID, QueueID: queueID, IsError: !success, Message: message, Reason: queueFailureReason(message)})
 	if th != nil {
 		srv.broadcastQueue(entry, th)
 	}

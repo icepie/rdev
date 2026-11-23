@@ -482,6 +482,15 @@ it('updates queue modes and promotion errors without interrupting the active tur
  expect(sink.state).toMatchObject({queueModes:[],queueError:''});
 });
 
+it('clears a queue mutation error once a snapshot proves the item is gone', async () => {
+  await frame({ op: 'queue', items: ['pending'], queueIds: ['one'], queueModes: ['follow_up'] });
+  await frame({ op: 'queue_updated', queueId: 'one', isError: true, message: 'Queued message is no longer available.' });
+  expect(sink.state).toMatchObject({ queue: ['pending'], queueError: 'Queued message is no longer available.' });
+  // The server consumed the item and broadcast the empty queue.
+  await frame({ op: 'queue', items: [], queueIds: [], queueModes: [] });
+  expect(sink.state).toMatchObject({ queue: [], queueError: '' });
+});
+
 it('shows content filtering as a provider notice while preserving partial output', async () => {
   await frame({ op: 'turn_start', text: 'request' });
   await act(async () => sink.ops.appendDelta('partial answer'));
@@ -586,4 +595,13 @@ it('shows live structured filtering diagnostics with the preserved partial answe
   expect(sink.state.items.some(item => item.kind === 'turn' && item.text === 'partial')).toBe(true);
   expect(sink.state.items.some(item => item.kind === 'system' && item.text.includes('requestId: req-live'))).toBe(true);
   expect(sink.state.running).toBe(false);
+});
+
+it('renders queue failures from the server reason code instead of English text', async () => {
+  await frame({ op: 'queue', items: ['pending'], queueIds: ['one'], queueModes: ['follow_up'] });
+  await frame({ op: 'queue_updated', queueId: 'one', isError: true, reason: 'missing', message: 'Queued message is no longer available.' });
+  expect(sink.state.queueError).toBe('agent.queueErrorMissing');
+  await frame({ op: 'queue', items: ['pending'], queueIds: ['one'], queueModes: ['follow_up'] });
+  await frame({ op: 'queue_updated', queueId: 'one', isError: true, reason: 'vendor-custom', message: 'Vendor said no' });
+  expect(sink.state.queueError).toBe('Vendor said no');
 });

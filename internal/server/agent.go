@@ -86,16 +86,18 @@ type agentMsg struct {
 	Args               string                   `json:"args,omitempty"`
 	Result             string                   `json:"result,omitempty"`
 	IsError            bool                     `json:"isError,omitempty"`
-	Usage              *agentUsage              `json:"usage,omitempty"`
-	Summary            string                   `json:"summary,omitempty"`
-	Diff               string                   `json:"diff,omitempty"`
-	Reasoning          string                   `json:"reasoning,omitempty"`
-	Thread             string                   `json:"thread,omitempty"`
-	Threads            []agentThreadInfo        `json:"threads,omitempty"`
-	Todos              []todoItem               `json:"todos,omitempty"`
-	QueueModes         []string                 `json:"queueModes,omitempty"`
-	QueueIDs           []string                 `json:"queueIds,omitempty"`
-	Queue              []string                 `json:"queue,omitempty"`
+	// Reason is a stable machine code for a UI-localised failure (queue ops).
+	Reason     string            `json:"reason,omitempty"`
+	Usage      *agentUsage       `json:"usage,omitempty"`
+	Summary    string            `json:"summary,omitempty"`
+	Diff       string            `json:"diff,omitempty"`
+	Reasoning  string            `json:"reasoning,omitempty"`
+	Thread     string            `json:"thread,omitempty"`
+	Threads    []agentThreadInfo `json:"threads,omitempty"`
+	Todos      []todoItem        `json:"todos,omitempty"`
+	QueueModes []string          `json:"queueModes,omitempty"`
+	QueueIDs   []string          `json:"queueIds,omitempty"`
+	Queue      []string          `json:"queue,omitempty"`
 	// Live carries the marshaled frames of the in-flight turn in auth_ok and
 	// thread_switched so the browser replays mid-turn UI state; each element
 	// is a complete tagged frame (turn_start/delta/tool_*/approval_request…).

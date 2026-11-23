@@ -106,11 +106,41 @@ func (h *agentWSHandler) handleQueueMutation(ac *agentConn, msg agentMsg) {
 		time.AfterFunc(time.Until(leaseUntil), func() { s.expireQueueEdit(ac.entry, th, msg.QueueID, msg.EditToken, leaseUntil) })
 	}
 	success := failure == ""
-	ac.writeJSON(agentMsg{Op: "queue_updated", Thread: threadID, ID: msg.ID, QueueID: msg.QueueID, IsError: failure != "", Message: failure, Success: &success})
+	ac.writeJSON(agentMsg{Op: "queue_updated", Thread: threadID, ID: msg.ID, QueueID: msg.QueueID, IsError: failure != "", Message: failure, Reason: queueFailureReason(failure), Success: &success})
 	if th != nil {
 		s.broadcastQueue(ac.entry, th)
 		if failure == "" && msg.Op != "hold_queue" {
 			s.resumeAgentQueue(ac.entry, th)
 		}
+	}
+}
+
+// queueFailureReason maps a user-visible queue failure to a stable code the
+// web UI can localise. Unknown messages keep the server text as-is.
+func queueFailureReason(message string) string {
+	switch message {
+	case "":
+		return ""
+	case "Queued message is no longer available.":
+		return "missing"
+	case "Only pending follow-up messages can be edited or reordered.":
+		return "steering"
+	case "This queued message is being edited in another window.":
+		return "locked"
+	case "The message changed. Reopen it to edit.",
+		"This queued message changed in another window. Reopen it before saving.":
+		return "changed"
+	case "Queued message is too large.":
+		return "too_large"
+	case "Queued message cannot be empty.":
+		return "empty"
+	case "The queue changed. Retry using the current order.":
+		return "reordered"
+	case "Invalid queue destination.":
+		return "bad_target"
+	case "The current response has finished.":
+		return "finished"
+	default:
+		return ""
 	}
 }

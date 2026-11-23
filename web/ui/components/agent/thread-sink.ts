@@ -73,6 +73,24 @@ function failureNotice(value: unknown): string {
   return [summary, ...details, ...progress].join("\n");
 }
 
+// Server queue failures carry a stable reason code; translate it instead of
+// showing the English fallback text. Unknown codes keep the server message.
+function queueErrorText(msg: Record<string, unknown>, t: (key: string) => string): string {
+  const keys: Record<string, string> = {
+    missing: "agent.queueErrorMissing",
+    steering: "agent.queueErrorSteering",
+    locked: "agent.queueErrorLocked",
+    changed: "agent.queueErrorChanged",
+    too_large: "agent.queueErrorTooLarge",
+    empty: "agent.queueErrorEmpty",
+    reordered: "agent.queueErrorReordered",
+    bad_target: "agent.queueErrorBadTarget",
+    finished: "agent.queueErrorFinished",
+  };
+  const key = keys[asString(msg.reason)];
+  return key ? t(key) : asString(msg.message);
+}
+
 function parseJob(value: unknown): AgentJob | null {
   if (!value || typeof value !== "object") return null;
   const job = value as Record<string, unknown>;
@@ -765,10 +783,10 @@ export function applyScopedMessage(
       return;
     case "queue_updated":
       acceptQueueRemoval(ops.queueReturns.current, { ...msg, removed: msg.success === true, text: "" });
-      ops.setQueueError(msg.isError === true ? asString(msg.message) : "");
+      ops.setQueueError(queueErrorText(msg, t));
       return;
     case "queue_promoted":
-      ops.setQueueError(msg.isError === true ? asString(msg.message) || t("agent.queuePromoteFailed") : "");
+      ops.setQueueError(msg.isError === true ? queueErrorText(msg, t) || t("agent.queuePromoteFailed") : "");
       return;
     case "dequeued":
       acceptQueueRemoval(ops.queueReturns.current, msg);
@@ -777,6 +795,9 @@ export function applyScopedMessage(
       ops.setQueue(parseStringArray(msg.items));
       ops.setQueueIds(parseStringArray(msg.queueIds));
       ops.setQueueModes(parseStringArray(msg.queueModes));
+      // A broadcast snapshot supersedes any earlier mutation failure: without
+      // this, a consumed message leaves "no longer available" under 队列 (0).
+      ops.setQueueError("");
       return;
     case "done": {
       const usage = msg.usage;
