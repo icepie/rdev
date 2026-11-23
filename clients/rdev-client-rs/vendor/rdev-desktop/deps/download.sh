@@ -16,13 +16,15 @@ clone_repo() {
     fi
 
     local url attempt
+    # A stalled transfer used to hang the build forever; abort below 1 KiB/s for 60s.
+    local git_slow=(-c http.lowSpeedLimit=1024 -c http.lowSpeedTime=60)
     for url in "$@"; do
         for attempt in 1 2 3; do
             rm -rf "$dir"
             if [ -n "$branch" ]; then
-                git clone --depth 1 -b "$branch" "$url" "$dir" && return 0
+                git "${git_slow[@]}" clone --depth 1 -b "$branch" "$url" "$dir" && return 0
             else
-                git clone --depth 1 "$url" "$dir" && return 0
+                git "${git_slow[@]}" clone --depth 1 "$url" "$dir" && return 0
             fi
             sleep $((attempt * 5))
         done

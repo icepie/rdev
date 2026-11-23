@@ -70,6 +70,8 @@ jobs:
   build:
     name: Build ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
+    # A stalled dependency clone used to hold a runner for over an hour.
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
