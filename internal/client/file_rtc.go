@@ -29,32 +29,15 @@ type fileRTCAnswer struct {
 	RangeAck bool   `json:"rangeAck,omitempty"`
 }
 
-// rtcICEServers keeps old servers' STUN default while honoring explicit []
-// from a configured server (host candidates only).
-func rtcICEServers(config *[]protocol.IceServer) []webrtc.ICEServer {
-	if config == nil {
-		return []webrtc.ICEServer{{URLs: []string{"stun:stun.l.google.com:19302"}}}
-	}
-	servers := make([]webrtc.ICEServer, len(*config))
-	for i, server := range *config {
-		servers[i] = webrtc.ICEServer{URLs: server.URLs, Username: server.Username, Credential: server.Credential}
-	}
-	return servers
-}
-
 // A peer has exactly one authorized operation. It cannot receive paths,
 // controls, or chunks for any other task. The control transport owns its life.
 type fileRTCSession struct {
+	rtcPeer
 	client       *Client
 	start        protocol.Message
 	transport    clientTransport
-	mu           sync.Mutex
 	startMu      sync.Mutex
 	sendMu       sync.Mutex
-	peer         *webrtc.PeerConnection
-	channel      *webrtc.DataChannel
-	pending      []webrtc.ICECandidateInit
-	remote       bool
 	opened       bool
 	candidates   int
 	closed       atomic.Bool
@@ -132,14 +115,9 @@ func (c *Client) handleFileRTCSignal(msg *protocol.Message) {
 			r.close(true)
 			return
 		}
-		peer := r.peer
-		if peer == nil || !r.remote {
-			r.pending = append(r.pending, candidate)
-			r.mu.Unlock()
-			return
-		}
+		peer := r.bufferCandidateLocked(candidate)
 		r.mu.Unlock()
-		if peer.AddICECandidate(candidate) != nil {
+		if peer != nil && peer.AddICECandidate(candidate) != nil {
 			r.close(true)
 		}
 	}
@@ -151,7 +129,7 @@ func (r *fileRTCSession) acceptOffer() {
 		r.close(true)
 		return
 	}
-	peer, err := webrtc.NewPeerConnection(webrtc.Configuration{ICEServers: rtcICEServers(r.start.IceServers)})
+	peer, err := newRTCPeer(r.start.IceServers)
 	if err != nil {
 		r.close(true)
 		return
@@ -164,34 +142,9 @@ func (r *fileRTCSession) acceptOffer() {
 	}
 	r.peer = peer
 	r.mu.Unlock()
-	peer.OnICECandidate(func(candidate *webrtc.ICECandidate) {
-		if candidate != nil {
-			r.signal("candidate", candidate.ToJSON())
-		}
-	})
-	peer.OnConnectionStateChange(func(state webrtc.PeerConnectionState) {
-		if state == webrtc.PeerConnectionStateFailed || state == webrtc.PeerConnectionStateClosed {
-			r.close(true)
-		}
-	})
-	peer.OnDataChannel(r.acceptChannel)
-	if peer.SetRemoteDescription(offer) != nil {
-		r.close(true)
-		return
-	}
-	r.mu.Lock()
-	r.remote = true
-	pending := r.pending
-	r.pending = nil
-	r.mu.Unlock()
-	for _, candidate := range pending {
-		if peer.AddICECandidate(candidate) != nil {
-			r.close(true)
-			return
-		}
-	}
-	answer, err := peer.CreateAnswer(nil)
-	if err != nil || peer.SetLocalDescription(answer) != nil {
+	r.wire(r.signal, r.acceptChannel, func() { r.close(true) })
+	answer, err := r.acceptRemote(offer)
+	if err != nil {
 		r.close(true)
 		return
 	}

@@ -2,22 +2,16 @@ package client
 
 import (
 	"encoding/json"
-	"sync"
 
 	"github.com/pion/webrtc/v4"
 	"rdev/internal/protocol"
 )
 
 type desktopRTCSession struct {
+	rtcPeer
 	client    *Client
 	sessionID string
-	peer      *webrtc.PeerConnection
-
-	mu                sync.Mutex
-	channel           *webrtc.DataChannel
-	remoteDescription bool
-	pendingCandidates []webrtc.ICECandidateInit
-	closed            bool
+	closed    bool
 }
 
 func (s *desktopSession) closeRTC() {
@@ -89,9 +83,7 @@ func (r *desktopRTCSession) acceptOffer(raw json.RawMessage, iceServers *[]proto
 		r.close()
 		return
 	}
-	peer, err := webrtc.NewPeerConnection(webrtc.Configuration{
-		ICEServers: rtcICEServers(iceServers),
-	})
+	peer, err := newRTCPeer(iceServers)
 	if err != nil {
 		r.close()
 		return
@@ -104,76 +96,44 @@ func (r *desktopRTCSession) acceptOffer(raw json.RawMessage, iceServers *[]proto
 	}
 	r.peer = peer
 	r.mu.Unlock()
-
-	peer.OnICECandidate(func(candidate *webrtc.ICECandidate) {
-		if candidate == nil {
-			return
-		}
-		r.sendSignal("candidate", candidate.ToJSON())
-	})
-	peer.OnDataChannel(func(channel *webrtc.DataChannel) {
-		if channel.Label() != "rdev-desktop" {
-			_ = channel.Close()
-			return
-		}
-		r.mu.Lock()
-		if r.closed {
-			r.mu.Unlock()
-			_ = channel.Close()
-			return
-		}
-		r.channel = channel
-		r.mu.Unlock()
-		// Human input and clipboard stay on the server-arbitrated desktop socket.
-	})
-	peer.OnConnectionStateChange(func(state webrtc.PeerConnectionState) {
-		if state == webrtc.PeerConnectionStateFailed || state == webrtc.PeerConnectionStateClosed {
-			r.close()
-		}
-	})
-
-	if err := peer.SetRemoteDescription(offer); err != nil {
-		r.close()
-		return
-	}
-	r.mu.Lock()
-	r.remoteDescription = true
-	pending := append([]webrtc.ICECandidateInit(nil), r.pendingCandidates...)
-	r.pendingCandidates = nil
-	r.mu.Unlock()
-	for _, candidate := range pending {
-		if err := peer.AddICECandidate(candidate); err != nil {
-			r.close()
-			return
-		}
-	}
-	answer, err := peer.CreateAnswer(nil)
+	r.wire(r.sendSignal, r.acceptChannel, r.close)
+	answer, err := r.acceptRemote(offer)
 	if err != nil {
-		r.close()
-		return
-	}
-	if err := peer.SetLocalDescription(answer); err != nil {
 		r.close()
 		return
 	}
 	r.sendSignal("answer", answer)
 }
 
+// acceptChannel keeps only the desktop media channel; human input and
+// clipboard stay on the server-arbitrated desktop socket.
+func (r *desktopRTCSession) acceptChannel(channel *webrtc.DataChannel) {
+	if channel.Label() != "rdev-desktop" {
+		_ = channel.Close()
+		return
+	}
+	r.mu.Lock()
+	if r.closed {
+		r.mu.Unlock()
+		_ = channel.Close()
+		return
+	}
+	r.channel = channel
+	r.mu.Unlock()
+}
+
 func (r *desktopRTCSession) addCandidate(candidate webrtc.ICECandidateInit) {
 	r.mu.Lock()
-	peer := r.peer
 	if r.closed {
 		r.mu.Unlock()
 		return
 	}
-	if peer == nil || !r.remoteDescription {
-		r.pendingCandidates = append(r.pendingCandidates, candidate)
-		r.mu.Unlock()
-		return
-	}
+	peer := r.bufferCandidateLocked(candidate)
 	r.mu.Unlock()
-	if err := peer.AddICECandidate(candidate); err != nil {
-		r.close()
+	if peer != nil {
+		if err := peer.AddICECandidate(candidate); err != nil {
+			r.close()
+		}
 	}
 }
 
@@ -213,7 +173,7 @@ func (r *desktopRTCSession) close() {
 	channel := r.channel
 	r.peer = nil
 	r.channel = nil
-	r.pendingCandidates = nil
+	r.pending = nil
 	r.mu.Unlock()
 	if channel != nil {
 		_ = channel.Close()
