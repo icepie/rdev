@@ -46,6 +46,15 @@ jobs:
       - name: Vet
         run: go vet ./...
 
+      - name: Check formatting
+        run: |
+          files=$(gofmt -l .)
+          if [ -n "$files" ]; then
+            echo "gofmt needed:"
+            echo "$files"
+            exit 1
+          fi
+
       - name: Test
         run: go test ./...
 
