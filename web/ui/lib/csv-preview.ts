@@ -6,8 +6,8 @@ export interface CsvPreviewData {
   truncatedRows: boolean;
 }
 interface ParsedCsvRows { rows: string[][]; truncatedRows: boolean }
-export const CSV_PREVIEW_MAX_COLUMNS = 100;
-export const CSV_PREVIEW_MAX_ROWS = 500;
+const CSV_PREVIEW_MAX_COLUMNS = 100;
+const CSV_PREVIEW_MAX_ROWS = 500;
 export const CSV_PREVIEW_ROW_HEIGHT_PX = 29;
 export const CSV_PREVIEW_OVERSCAN_ROWS = 8;
 

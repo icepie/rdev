@@ -1,7 +1,7 @@
 // Scope text selections through the open Shadow DOM used by Pierre's source
 // view. Both endpoints must belong to this panel: a split-pane drag must never
 // attach another conversation's text.
-export function isWithinPanel(panel: HTMLElement, node: Node): boolean {
+function isWithinPanel(panel: HTMLElement, node: Node): boolean {
   let current: Node | null = node;
   while (current) {
     if (current === panel) return true;

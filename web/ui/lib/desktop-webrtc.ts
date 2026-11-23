@@ -1,13 +1,13 @@
 import { apiJSON, wsURL } from "./api";
 
-export type DesktopRTCSignal = {
+type DesktopRTCSignal = {
   op: "rtc_signal";
   session?: string;
   rtcType: "offer" | "answer" | "candidate" | "close";
   rtcData?: unknown;
 };
 
-export type DesktopRTCState = "connecting" | "open" | "failed" | "closed";
+type DesktopRTCState = "connecting" | "open" | "failed" | "closed";
 
 export interface DesktopRTCConnection {
   readonly dataChannel: RTCDataChannel;

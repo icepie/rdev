@@ -1,4 +1,4 @@
-export const FALLBACK_DOWNLOAD_SLOTS = 2;
+const FALLBACK_DOWNLOAD_SLOTS = 2;
 export const FALLBACK_BUSY_MESSAGE = "Only two in-memory downloads can be retained at once across Files panes. Finish or cancel another download, then retry; use disk-save support for larger transfers.";
 interface FallbackTask {
   id: string;
