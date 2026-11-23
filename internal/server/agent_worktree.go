@@ -337,9 +337,6 @@ func (s *Server) reserveAgentWorktree(e *agentSessionEntry, t *agentThread) (fun
 	}, nil
 }
 
-// AgentWorktreeBusyLocked is for central turn/job admission. Caller MUST hold
-// agentSessionsMu; parent admission paths should reject while this is true.
-func AgentWorktreeBusyLocked(e *agentSessionEntry) bool { return e != nil && e.worktreeBusy }
 func (s *Server) worktreePathInUse(e *agentSessionEntry, t *agentThread, p string) bool {
 	s.agentSessionsMu.Lock()
 	defer s.agentSessionsMu.Unlock()
