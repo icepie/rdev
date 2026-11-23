@@ -6,9 +6,12 @@ package ptyutil
 import (
 	"errors"
 	"fmt"
+	"io/fs"
+	"log"
 	"os"
 	"runtime"
 	"sync/atomic"
+	"syscall"
 
 	"github.com/aymanbagabas/go-pty"
 	"golang.org/x/crypto/ssh"
@@ -86,17 +89,19 @@ func Start(cfg *Config) (proc *Process, err error) {
 	}
 
 	shell := cfg.Shell
+	fallbacks := []string(nil)
 	if shell == "" {
 		shell = detectShell()
+		fallbacks = shellCandidates()
 	}
 
 	flag := shellFlag()
 
-	var cmd *pty.Cmd
-	if cfg.Command != "" {
-		cmd = pseudo.Command(shell, flag, cfg.Command)
-	} else {
-		cmd = pseudo.Command(shell)
+	newCmd := func(shell string) *pty.Cmd {
+		if cfg.Command != "" {
+			return pseudo.Command(shell, flag, cfg.Command)
+		}
+		return pseudo.Command(shell)
 	}
 
 	// Build environment
@@ -107,7 +112,6 @@ func Start(cfg *Config) (proc *Process, err error) {
 	} else {
 		env = append(env, "TERM=xterm-256color")
 	}
-	cmd.Env = env
 
 	// Resize to initial dimensions
 	rows, cols := initialSize(cfg)
@@ -119,7 +123,24 @@ func Start(cfg *Config) (proc *Process, err error) {
 		_ = pty.ApplyTerminalModes(int(pseudo.Fd()), int(cols), int(rows), cfg.Modes)
 	}
 
-	if err := cmd.Start(); err != nil {
+	cmd := newCmd(shell)
+	cmd.Env = env
+	err = cmd.Start()
+	// A detected shell can exist yet be unusable (wrong permissions, removed by
+	// an update, or missing on Android). Try the remaining candidates before
+	// reporting the failure, so a stale $SHELL cannot break every session.
+	for _, candidate := range fallbacks {
+		if err == nil || !retryableShellError(err) {
+			break
+		}
+		cmd = newCmd(candidate)
+		cmd.Env = env
+		err = cmd.Start()
+		if err == nil {
+			log.Printf("pty: fell back to shell %s", candidate)
+		}
+	}
+	if err != nil {
 		pseudo.Close()
 		return nil, fmt.Errorf("pty start: %w", err)
 	}
@@ -128,6 +149,37 @@ func Start(cfg *Config) (proc *Process, err error) {
 		pty: pseudo,
 		cmd: cmd,
 	}, nil
+}
+
+// retryableShellError reports whether another shell may work instead.
+func retryableShellError(err error) bool {
+	return errors.Is(err, fs.ErrPermission) || errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOEXEC)
+}
+
+// shellCandidates lists fallbacks in the order a platform should try them.
+func shellCandidates() []string {
+	candidates := []string{os.Getenv("SHELL")}
+	for _, shell := range detectedShells() {
+		if shell != "" && shell != candidates[0] {
+			candidates = append(candidates, shell)
+		}
+	}
+	return candidates
+}
+
+// detectedShells returns the platform-specific shell order without $SHELL.
+func detectedShells() []string {
+	if runtime.GOOS == "android" {
+		var shells []string
+		if prefix := os.Getenv("PREFIX"); prefix != "" {
+			shells = append(shells, prefix+"/bin/bash", prefix+"/bin/sh")
+		}
+		return append(shells, "/system/bin/sh", "/bin/bash", "/bin/sh")
+	}
+	if runtime.GOOS == "windows" {
+		return []string{os.Getenv("COMSPEC"), "cmd.exe"}
+	}
+	return []string{"/bin/bash", "/bin/sh"}
 }
 
 var errPtyClosed = errors.New("pty: closed")

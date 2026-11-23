@@ -730,7 +730,8 @@ fn default_shell(shell: Option<String>) -> String {
         return shell;
     }
     if let Ok(shell) = std::env::var(if cfg!(windows) { "COMSPEC" } else { "SHELL" }) {
-        if !shell.is_empty() {
+        // A stale or non-executable $SHELL must not break every session.
+        if !shell.is_empty() && (cfg!(windows) || is_executable(std::path::Path::new(&shell))) {
             return shell;
         }
     }
@@ -741,11 +742,32 @@ fn default_shell(shell: Option<String>) -> String {
         if let Some(shell) = termux_shell(std::env::var("PREFIX").ok().as_deref()) {
             return shell;
         }
-        if std::path::Path::new("/system/bin/sh").is_file() {
+        if is_executable(std::path::Path::new("/system/bin/sh")) {
             return "/system/bin/sh".into();
         }
     }
+    for fallback in ["/bin/bash", "/bin/sh"] {
+        if is_executable(std::path::Path::new(fallback)) {
+            return fallback.into();
+        }
+    }
     "/bin/sh".into()
+}
+
+/// A shell candidate must exist, be a file, and carry an execute bit.
+fn is_executable(path: &std::path::Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        match std::fs::metadata(path) {
+            Ok(meta) => meta.is_file() && meta.permissions().mode() & 0o111 != 0,
+            Err(_) => false,
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        path.is_file()
+    }
 }
 
 /// Termux has no /bin/sh; its prefix holds the real shell.
@@ -753,7 +775,7 @@ fn termux_shell(prefix: Option<&str>) -> Option<String> {
     let prefix = prefix.filter(|p| !p.is_empty())?;
     for name in ["bash", "sh"] {
         let candidate = std::path::Path::new(prefix).join("bin").join(name);
-        if candidate.is_file() {
+        if is_executable(&candidate) {
             return Some(candidate.to_string_lossy().into_owned());
         }
     }
@@ -808,16 +830,62 @@ mod tests {
     use super::*;
 
     #[test]
+    fn termux_shell_requires_an_execute_bit() {
+        let prefix = std::env::temp_dir().join(format!("rdev-termux-bit-{}", std::process::id()));
+        let bin = prefix.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let prefix = prefix.to_string_lossy().into_owned();
+        let sh = bin.join("sh");
+        std::fs::write(&sh, b"#!/bin/sh\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&sh, std::fs::Permissions::from_mode(0o644)).unwrap();
+            assert_eq!(
+                termux_shell(Some(&prefix)),
+                None,
+                "non-executable shell must be skipped"
+            );
+            std::fs::set_permissions(&sh, std::fs::Permissions::from_mode(0o755)).unwrap();
+            assert_eq!(
+                termux_shell(Some(&prefix)),
+                Some(sh.to_string_lossy().into_owned())
+            );
+        }
+        std::fs::remove_dir_all(bin.parent().unwrap()).unwrap();
+    }
+
+    #[test]
     fn termux_shell_prefers_bash_then_sh() {
-        let prefix = std::env::temp_dir().join(format!("rdev-termux-{}", std::process::id()));
+        let prefix = std::env::temp_dir().join(format!("rdev-termux-pref-{}", std::process::id()));
         let bin = prefix.join("bin");
         std::fs::create_dir_all(&bin).unwrap();
         let prefix = prefix.to_string_lossy().into_owned();
         assert_eq!(termux_shell(Some(&prefix)), None);
         std::fs::write(bin.join("sh"), b"#!/bin/sh\n").unwrap();
-        assert_eq!(termux_shell(Some(&prefix)), Some(bin.join("sh").to_string_lossy().into_owned()));
+        let mut sh = std::fs::metadata(bin.join("sh")).unwrap().permissions();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            sh.set_mode(0o755);
+            std::fs::set_permissions(bin.join("sh"), sh).unwrap();
+        }
+        assert_eq!(
+            termux_shell(Some(&prefix)),
+            Some(bin.join("sh").to_string_lossy().into_owned())
+        );
         std::fs::write(bin.join("bash"), b"#!/bin/sh\n").unwrap();
-        assert_eq!(termux_shell(Some(&prefix)), Some(bin.join("bash").to_string_lossy().into_owned()));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut bash = std::fs::metadata(bin.join("bash")).unwrap().permissions();
+            bash.set_mode(0o755);
+            std::fs::set_permissions(bin.join("bash"), bash).unwrap();
+        }
+        assert_eq!(
+            termux_shell(Some(&prefix)),
+            Some(bin.join("bash").to_string_lossy().into_owned())
+        );
         assert_eq!(termux_shell(Some("")), None);
         assert_eq!(termux_shell(None), None);
         std::fs::remove_dir_all(bin.parent().unwrap()).unwrap();

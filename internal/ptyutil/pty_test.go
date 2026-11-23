@@ -1,9 +1,12 @@
 package ptyutil
 
 import (
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
+	"syscall"
 	"testing"
 )
 
@@ -68,5 +71,31 @@ func TestShellInPrefixPrefersBashThenSh(t *testing.T) {
 	}
 	if got := shellInPrefix(""); got != "" {
 		t.Fatalf("empty prefix = %q, want none", got)
+	}
+}
+
+func TestRetryableShellErrorCoversPermissionAndMissingShells(t *testing.T) {
+	for _, err := range []error{fs.ErrPermission, fs.ErrNotExist, syscall.ENOEXEC} {
+		if !retryableShellError(err) {
+			t.Errorf("%v should allow another shell", err)
+		}
+	}
+	if retryableShellError(errors.New("boom")) {
+		t.Error("unrelated failure must not be retried")
+	}
+}
+
+func TestShellCandidatesStartWithDetectShellAndAvoidDuplicates(t *testing.T) {
+	t.Setenv("SHELL", "")
+	candidates := shellCandidates()
+	if len(candidates) == 0 || candidates[0] != "" {
+		t.Fatalf("candidates = %v, want empty $SHELL first", candidates)
+	}
+	seen := map[string]bool{}
+	for _, shell := range candidates[1:] {
+		if seen[shell] {
+			t.Fatalf("duplicate candidate %q in %v", shell, candidates)
+		}
+		seen[shell] = true
 	}
 }
