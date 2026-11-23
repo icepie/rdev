@@ -6,7 +6,7 @@ export interface DownloadWriter {
   close(): Promise<void>;
   abort(): Promise<void>;
 }
-interface SaveHandle { createWritable(): Promise<DownloadWriter> }
+export interface SaveHandle { createWritable(): Promise<DownloadWriter> }
 type SavePicker = (options: { suggestedName: string }) => Promise<SaveHandle>;
 export function pickDownloadDestination(name: string): Promise<SaveHandle> | undefined {
   const picker = (globalThis as typeof globalThis & { showSaveFilePicker?: SavePicker }).showSaveFilePicker;
@@ -120,7 +120,15 @@ export class DiskDownload {
   }
 }
 
-export function createDiskDownloads() {
+export interface DiskDownloads {
+  get(id: string): DiskDownload | undefined;
+  isOpening(id: string): boolean;
+  open(id: string, destination: Promise<SaveHandle>, current: () => boolean, progress: (offset: number) => void, failure?: (error: unknown) => void): Promise<boolean>;
+  abort(id: string): void;
+  clear(): void;
+}
+
+export function createDiskDownloads(): DiskDownloads {
   const sinks = new Map<string, DiskDownload>();
   const opening = new Set<string>();
   return {

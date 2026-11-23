@@ -2,7 +2,7 @@ import { Participants, parseParticipants, type Participant } from "../components
 import { createAutomationRevealTracker, parseAutomation, type AutomationView } from "../components/agent/automation";
 import { createFileReadRequests } from "../components/agent/file-read-requests";
 import { useThreadModels } from "../components/agent/use-thread-models";
-import { createStreamBatch } from "../components/agent/stream-batch";
+import { useAgentConnection, type AgentConnectionHandlers } from "../components/agent/use-agent-connection";
 import { clearQueueReturns } from "../components/agent/queue-actions";
 import { discardComposerTextDraft, reconcileComposerTextDrafts } from "../components/agent/use-composer-text-draft";
 import { AgentConnectionError } from "../components/agent/connection-error";
@@ -35,7 +35,6 @@ import { setRailControl } from "../lib/rail-control";
 import { useI18n } from "../lib/i18n";
 import { useDevices } from "../lib/devices";
 import {
-  wsURL,
   rememberDevicePassword,
   forgetDevicePassword,
 } from "../lib/api";
@@ -107,7 +106,6 @@ import {
   type ModelInfo,
   type PermMode,
   type ReasoningLevel,
-  type Status,
 } from "../components/agent/protocol";
 import {
   countPanes,
@@ -182,11 +180,8 @@ export function AgentPage() {
   }, [navigate]);
 
   const [device, setDeviceState] = useState("");
-  const [status, setStatus] = useState<Status>("disconnected");
-  const [authed, setAuthed] = useState(false);
   const [model, setModel] = useState("");
   const [models, setModels] = useState<ModelInfo[]>([]);
-  const [authError, setAuthError] = useState("");
   const [notificationPermission, setNotificationPermission] = useState<WebNotificationPermission>(webNotificationPermission);
   const enableWebNotifications = useCallback(() => {
     void requestWebNotificationPermission().then(setNotificationPermission).catch(() => setNotificationPermission("denied"));
@@ -231,7 +226,6 @@ export function AgentPage() {
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const dirReqsRef = useRef(new Map<string, { resolve: (l: DirListing) => void; reject: (e: Error) => void; timer: number; id: string }>());
   const mkdirReqsRef = useRef(new Map<string, { resolve: () => void; reject: (e: Error) => void; timer: number; id: string }>());
-  const [reconnecting, setReconnecting] = useState(false);
   const isNarrow = useIsCompactViewport();
   const isCoarse = usePointerCoarse();
   const [desktopSidebarOpen, setDesktopSidebarOpen] = useState(
@@ -328,16 +322,32 @@ export function AgentPage() {
   const [panelDragging, setPanelDragging] = useState(false);
   const [groupWidth, setGroupWidth] = useState(0);
 
-  const wsRef = useRef<WebSocket | null>(null);
-  const streamBatchRef = useRef<ReturnType<typeof createStreamBatch> | null>(null);
+  /* Socket lifecycle (open/close, frame parsing, ping, backoff) lives in the
+   * connection hook; the page router below is wired through this handler ref
+   * so the socket callbacks always see the current render's closures. */
+  const connectionHandlers = useRef<AgentConnectionHandlers>({
+    message: () => {},
+    replace: () => {},
+    closed: () => {},
+  });
+  const {
+    wsRef,
+    status,
+    setStatus,
+    authed,
+    setAuthed,
+    authError,
+    setAuthError,
+    reconnecting,
+    setReconnecting,
+    statusRef,
+    connect,
+    disconnect,
+    noteAuthenticated,
+  } = useAgentConnection({ t, handlers: connectionHandlers });
   const rightPanelRef = useRef<ImperativePanelHandle>(null);
   const panelWidthRef = useRef(initialPanelWidth);
   const panelSizingRef = useRef<HTMLDivElement>(null);
-  const statusRef = useRef<Status>(status);
-  statusRef.current = status;
-  const reconnectTimer = useRef<number | null>(null);
-  const reconnectAttempt = useRef(0);
-  const pingInterval = useRef<number | null>(null);
 
   /* Thread-scoped transcript state lives in sinks: the page owns the sink
    * of the connection's current thread; every secondary split pane owns
@@ -381,29 +391,6 @@ export function AgentPage() {
     engaged: boolean;
   } | null>(null);
   const suppressClickRef = useRef(false);
-
-  const clearReconnectTimer = useCallback(() => {
-    if (reconnectTimer.current !== null) {
-      window.clearTimeout(reconnectTimer.current);
-      reconnectTimer.current = null;
-    }
-  }, []);
-
-  const clearPing = useCallback(() => {
-    if (pingInterval.current !== null) {
-      window.clearInterval(pingInterval.current);
-      pingInterval.current = null;
-    }
-  }, []);
-
-  const startPing = useCallback(() => {
-    clearPing();
-    pingInterval.current = window.setInterval(() => {
-      if (wsRef.current?.readyState === WebSocket.OPEN) {
-        wsRef.current.send(JSON.stringify({ op: "ping" }));
-      }
-    }, 25000);
-  }, [clearPing]);
 
   const currentDevice = devices.find((d) => d.id === device);
 
@@ -618,6 +605,32 @@ export function AgentPage() {
       searchReqsRef.current.delete(key);
     }
   }, []);
+  /* Connection teardown shared by a socket replacement and a close: settle
+   * page-owned pending work and drop half-finished thread management. */
+  const settleConnectionPending = useCallback((reason: string) => {
+    rejectPendingPanelRequests(reason);
+    for (const ops of [primaryOps, ...secondarySinksRef.current.values()]) {
+      [...ops.workspaceReplies.current.values()].forEach(reply => reply(null));
+    }
+    if (pendingDeleteRef.current || pendingRenameRef.current.size > 0) {
+      setManagementError(t("common.disconnected"));
+    }
+    pendingDeleteRef.current = null;
+    pendingRenameRef.current.clear();
+    setDeleteBusy(false);
+  }, [primaryOps, rejectPendingPanelRequests, t]);
+  /* Unexpected close: also end in-flight turns so panes stop spinning. */
+  const handleConnectionClosed = useCallback((_event: CloseEvent, _deviceId: string, _rejected: boolean) => {
+    settleConnectionPending("disconnected");
+    if (primaryOps.turnOpen.current) primaryOps.finishTurn();
+    primaryOps.resetTransient();
+    primaryOps.setRunning(false);
+    for (const ops of secondarySinksRef.current.values()) {
+      if (ops.turnOpen.current) ops.finishTurn();
+      ops.resetTransient();
+      ops.setRunning(false);
+    }
+  }, [primaryOps, settleConnectionPending]);
   const requestFileSearch = useCallback((q: string): Promise<string[]> => {
     const ws = wsRef.current;
     if (!ws || ws.readyState !== WebSocket.OPEN) return Promise.reject(new Error("offline"));
@@ -872,9 +885,7 @@ export function AgentPage() {
             setLiveReplay(false);
           }
         }
-        reconnectAttempt.current = 0;
-        setReconnecting(false);
-        startPing();
+        noteAuthenticated();
         break;
       }
       case "auth_fail":
@@ -1098,134 +1109,18 @@ export function AgentPage() {
         break;
       }
     }
-  }, [primaryOps, rejectPendingPanelRequests, navigateThread, startPing, t]);
+  }, [primaryOps, rejectPendingPanelRequests, navigateThread, noteAuthenticated, t]);
 
-  /* Auto-reconnect with exponential backoff: 1s → 2s → 4s → 8s … cap 30s.
-   * Reset on successful auth_ok (see handleMessage) or manual connect.
-   * Uses connectRef to break the connect ↔ scheduleReconnect cycle. */
-  const connectRef = useRef<(deviceId: string, preserveBackoff?: boolean) => void>(() => {});
-  const scheduleReconnect = useCallback((deviceId: string) => {
-    if (reconnectTimer.current !== null) return;
-    const delay = Math.min(1000 * 2 ** reconnectAttempt.current, 30000);
-    reconnectAttempt.current += 1;
-    setReconnecting(true);
-    reconnectTimer.current = window.setTimeout(() => {
-      reconnectTimer.current = null;
-      connectRef.current(deviceId, true);
-    }, delay);
-  }, []);
-
-  const connect = useCallback((deviceId: string, preserveBackoff = false) => {
-    if (!deviceId) return;
-    clearReconnectTimer();
-    if (!preserveBackoff) {
-      reconnectAttempt.current = 0;
-      setReconnecting(false);
-    }
-    clearPing();
-    // Replacing a socket disables its onclose handler, so settle its pending
-    // operations here as well as on an unexpected disconnect.
-    rejectPendingPanelRequests("connection replaced");
-    for (const ops of [primaryOps, ...secondarySinksRef.current.values()]) {
-      [...ops.workspaceReplies.current.values()].forEach(reply => reply(null));
-    }
-    if (pendingDeleteRef.current || pendingRenameRef.current.size > 0) {
-      setManagementError(t("common.disconnected"));
-    }
-    pendingDeleteRef.current = null;
-    pendingRenameRef.current.clear();
-    setDeleteBusy(false);
-    if (wsRef.current) {
-      streamBatchRef.current?.dispose();
-      streamBatchRef.current = null;
-      wsRef.current.onclose = null;
-      wsRef.current.close();
-      wsRef.current = null;
-    }
-    pendingPasswordRef.current = null;
-    setAuthed(false);
-    setStatus("connecting");
-    setAuthError("");
-    // Per-device state (transcript, threads, models, cwd…) is NOT cleared
-    // here: a reconnect must keep the partial transcript visible until the
-    // next auth_ok replaces it with the server-side truth. Device switches
-    // clear it in setDevice before calling connect.
-
-    const ws = new WebSocket(wsURL("/agent?device=" + encodeURIComponent(deviceId)));
-    wsRef.current = ws;
-    const streamBatch = createStreamBatch(msg => {
-      if (wsRef.current === ws) handleMessage(msg, deviceId);
-    });
-    streamBatchRef.current = streamBatch;
-    // These belong to this socket, not the previous connection's React state.
-    let authenticated = false;
-    let rejected = false;
-    ws.onmessage = (evt) => {
-      if (wsRef.current !== ws) return;
-      let msg: Record<string, unknown>;
-      try {
-        msg = JSON.parse(String(evt.data));
-      } catch {
-        return;
-      }
-      if (msg.op === "auth_ok") authenticated = true;
-      if (msg.op === "error" && !authenticated && !asString(msg.thread)) {
-        // Setup failures arrive as an error followed by an empty close reason;
-        // misconfiguration may leave the socket open. Neither is a network retry.
-        rejected = true;
-        setAuthed(false);
-        setStatus("disconnected");
-        setReconnecting(false);
-        setAuthError(msg.code === "offline_admin_required" ? t("agent.offlineAdminRequired") : asString(msg.message) || t("common.error"));
-        clearPing();
-        ws.close();
-        return;
-      }
-      streamBatch.push(msg);
-    };
-    ws.onclose = (event) => {
-      if (wsRef.current !== ws) return;
-      streamBatch.flush();
-      streamBatch.dispose();
-      streamBatchRef.current = null;
-      clearPing();
-      rejectPendingPanelRequests();
-      for (const ops of [primaryOps, ...secondarySinksRef.current.values()]) {
-        [...ops.workspaceReplies.current.values()].forEach(reply => reply(null));
-      }
-      setAuthed(false);
-      if (primaryOps.turnOpen.current) primaryOps.finishTurn();
-      primaryOps.resetTransient();
-      primaryOps.setRunning(false);
-      for (const ops of secondarySinksRef.current.values()) {
-        if (ops.turnOpen.current) ops.finishTurn();
-        ops.resetTransient();
-        ops.setRunning(false);
-      }
-      setStatus("disconnected");
-      pendingDeleteRef.current = null;
-      pendingRenameRef.current.clear();
-      setDeleteBusy(false);
-      if (rejected) return;
-      // A clean 1000 close with a reason is the server rejecting the
-      // session at open time (invalid configuration). Offline devices use
-      // the retryable 1013 close code; for permanent failures surface the
-      // reason and stop.
-      if (event.code === 1000 && event.reason) {
-        setReconnecting(false);
-        setAuthError(event.reason);
-        return;
-      }
-      scheduleReconnect(deviceId);
-    };
-    ws.onerror = () => {
-      if (wsRef.current !== ws) return;
-      if (statusRef.current !== "disconnected") {
-        setStatus("disconnected");
-      }
-    };
-  }, [clearPing, clearReconnectTimer, handleMessage, primaryOps, rejectPendingPanelRequests, scheduleReconnect, t]);
-  connectRef.current = connect;
+  /* The hook's socket callbacks run outside render; they reach the page
+   * router and teardown through the handler ref declared above it. */
+  connectionHandlers.current = {
+    message: handleMessage,
+    replace: (reason) => {
+      settleConnectionPending(reason);
+      pendingPasswordRef.current = null;
+    },
+    closed: handleConnectionClosed,
+  };
 
   const activateDevice = useCallback((id: string) => {
     setDeviceState(id);
@@ -1248,17 +1143,8 @@ export function AgentPage() {
     setPermMode("write");
     setReasoning(parseReasoningLevel(localStorage.getItem(REASONING_KEY)) ?? "medium");
     threadsLoadedRef.current = false;
-    clearReconnectTimer();
-    reconnectAttempt.current = 0;
     setReconnecting(false);
-    clearPing();
-    if (wsRef.current) {
-      streamBatchRef.current?.dispose();
-      streamBatchRef.current = null;
-      wsRef.current.onclose = null;
-      wsRef.current.close();
-      wsRef.current = null;
-    }
+    disconnect();
     setAuthed(false);
     setCwd("");
     setBranch("");
@@ -1271,7 +1157,7 @@ export function AgentPage() {
     fileRequestsRef.current!.clear();
     setStatus("disconnected");
     if (id) connect(id);
-  }, [clearPing, clearReconnectTimer, connect, primaryOps, rejectPendingPanelRequests]);
+  }, [connect, disconnect, primaryOps, rejectPendingPanelRequests]);
 
   const setDevice = useCallback((id: string) => navigateThread(id), [navigateThread]);
   const routeState = agentRouteState(route, device, thread, authed, threads);
@@ -1299,19 +1185,11 @@ export function AgentPage() {
 
   useEffect(
     () => () => {
-      clearReconnectTimer();
-      clearPing();
       fileRequestsRef.current!.clear();
       rejectPendingPanelRequests();
-      if (wsRef.current) {
-        streamBatchRef.current?.dispose();
-        streamBatchRef.current = null;
-        wsRef.current.onclose = null;
-        wsRef.current.close();
-        wsRef.current = null;
-      }
+      disconnect(false);
     },
-    [clearPing, clearReconnectTimer, rejectPendingPanelRequests],
+    [disconnect, rejectPendingPanelRequests],
   );
 
   /* ── Actions ── */

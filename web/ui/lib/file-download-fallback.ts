@@ -8,7 +8,14 @@ interface FallbackTask {
 }
 // Shared across every workspace and Agent panel in this browser application.
 const admitted = new Set<object>();
-export function createFallbackDownloads() {
+export interface FallbackDownloads {
+  acquire(task: FallbackTask): void;
+  retire(task: FallbackTask, dispose: () => void): void;
+  reconcile(tasks: Map<string, FallbackTask>): void;
+  clear(): void;
+}
+
+export function createFallbackDownloads(): FallbackDownloads {
   const retiring = new Map<string, { timer: ReturnType<typeof setTimeout>; dispose(): void }>();
   const owned = new Map<string, FallbackTask>();
   return {

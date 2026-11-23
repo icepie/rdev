@@ -18,8 +18,18 @@ function deadlineFor(phase: TransferAttemptPhase, now: number) {
   }
 }
 
+export interface TransferAttempts {
+  current(task: string): string | undefined;
+  resolve(wire: string): string | undefined;
+  begin(task: string, now?: number): string;
+  phase(task: string, wire: string, phase: TransferAttemptPhase, now?: number): boolean;
+  progress(task: string, wire: string, now?: number): boolean;
+  expired(task: string, now?: number): boolean;
+  remove(task: string): void;
+}
+
 /** Attempt identity and phase deadlines stay outside React and persisted tasks. */
-export function createTransferAttempts(makeId: () => string) {
+export function createTransferAttempts(makeId: () => string): TransferAttempts {
   const current = new Map<string, string>();
   const owners = new Map<string, string>();
   const timings = new Map<string, AttemptTiming>();

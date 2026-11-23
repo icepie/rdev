@@ -8,7 +8,13 @@ function isTextFrame(frame: Frame): boolean {
     Object.keys(frame).every(key => key === "op" || key === "thread" || key === "text");
 }
 
-export function createStreamBatch(deliver: (frame: Frame) => void) {
+export interface StreamBatch {
+  push(frame: Frame): void;
+  flush(): void;
+  dispose(): void;
+}
+
+export function createStreamBatch(deliver: (frame: Frame) => void): StreamBatch {
   let pending: Frame | null = null;
   let chunks: string[] = [];
   let size = 0;
