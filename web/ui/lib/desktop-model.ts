@@ -89,6 +89,61 @@ export interface DesktopSettingsBase {
 export type ConnMode = "" | "desktop" | "gpu";
 export type StatusCls = "" | "ok" | "warn" | "err";
 
+type DesktopStoredSettings = Omit<DesktopSettingsBase, "fps" | "quality">;
+
+/** Settings both viewers read from the same keys, under caller-chosen prefixes
+ * (the agent panel uses its own so page and panel never overwrite each other).
+ * fps/quality stay caller-derived: the page normalizes stream rates, the panel
+ * snaps to its preset list. */
+export function loadDesktopSettings(settingsPrefix: string, gpuPrefix: string): DesktopStoredSettings {
+  const fit = localStorage.getItem(settingsPrefix + "fit");
+  const clipboardMode = localStorage.getItem(settingsPrefix + "clipboardSyncMode");
+  return {
+    source: localStorage.getItem(settingsPrefix + "source") || "auto",
+    inputBackend: localStorage.getItem(settingsPrefix + "inputBackend") || "auto",
+    fit: fit === "fit" || fit === "actual" ? fit : "fit",
+    control: localStorage.getItem(settingsPrefix + "control") === "true",
+    showCursor: localStorage.getItem(settingsPrefix + "showCursor") === "true",
+    // Clipboard sync is opt-in: it polls the local clipboard in the background.
+    clipboardMode: ["off", "remote-to-local", "local-to-remote", "bidirectional"].includes(
+      clipboardMode || "",
+    )
+      ? (clipboardMode as string)
+      : "off",
+    gpuSource: localStorage.getItem(gpuPrefix + "source") || "",
+    gpuEncoder: localStorage.getItem(gpuPrefix + "encoder") || "auto",
+    gpuEnableVideo: localStorage.getItem(gpuPrefix + "enableVideo") !== "false",
+    gpuLowLatency: localStorage.getItem(gpuPrefix + "lowLatency") !== "false",
+    gpuStretch: localStorage.getItem(gpuPrefix + "stretch") === "true",
+    gpuEnableMouse: localStorage.getItem(gpuPrefix + "enableMouse") !== "false",
+    gpuEnablePen: localStorage.getItem(gpuPrefix + "enablePen") !== "false",
+    gpuEnableTouch: localStorage.getItem(gpuPrefix + "enableTouch") !== "false",
+    gpuScale: localStorage.getItem(gpuPrefix + "scale") || "1.5",
+    gpuFrameRate: localStorage.getItem(gpuPrefix + "frameRateSlider") || "30",
+    gpuPointerBackend: localStorage.getItem(gpuPrefix + "pointerBackend") || "auto",
+    gpuKeyboardBackend: localStorage.getItem(gpuPrefix + "keyboardBackend") || "auto",
+    gpuMinPressure: localStorage.getItem(gpuPrefix + "minPressure") || "0",
+  };
+}
+
+/** GPU settings are namespaced by the caller so the page and the agent panel
+ * never clobber each other's persisted stream configuration. */
+export function persistGpuDesktopSettings(prefix: string, s: DesktopSettingsBase): void {
+  localStorage.setItem(prefix + "source", s.gpuSource || "");
+  localStorage.setItem(prefix + "encoder", s.gpuEncoder || "auto");
+  localStorage.setItem(prefix + "pointerBackend", s.gpuPointerBackend || "auto");
+  localStorage.setItem(prefix + "keyboardBackend", s.gpuKeyboardBackend || "auto");
+  localStorage.setItem(prefix + "enableVideo", String(s.gpuEnableVideo));
+  localStorage.setItem(prefix + "lowLatency", String(s.gpuLowLatency));
+  localStorage.setItem(prefix + "stretch", String(s.gpuStretch));
+  localStorage.setItem(prefix + "enableMouse", String(s.gpuEnableMouse));
+  localStorage.setItem(prefix + "enablePen", String(s.gpuEnablePen));
+  localStorage.setItem(prefix + "enableTouch", String(s.gpuEnableTouch));
+  localStorage.setItem(prefix + "scale", s.gpuScale);
+  localStorage.setItem(prefix + "frameRateSlider", s.gpuFrameRate);
+  localStorage.setItem(prefix + "minPressure", s.gpuMinPressure);
+}
+
 export function clampInt(value: string | number, min: number, max: number, fallback: number): number {
   const n = parseInt(String(value), 10);
   if (!Number.isFinite(n)) return fallback;

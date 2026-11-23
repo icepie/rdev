@@ -16,10 +16,11 @@ import {
   desktopFrameLine,
   desktopFrameRates,
   errMessage,
-  formatBytes,
   gpuDesktopFrameRate,
   gpuDesktopMaxVideoSize,
   inputBackendLabel,
+  loadDesktopSettings,
+  persistGpuDesktopSettings,
   sourceLabel,
   type ClipCaps,
   type ClipItem,
@@ -86,41 +87,15 @@ interface Settings extends DesktopSettingsBase {
 
 function loadSettings(): Settings {
   const mode = localStorage.getItem(P + "mode");
-  const fit = localStorage.getItem(P + "fit");
-  const clipboardMode = localStorage.getItem(P + "clipboardSyncMode");
   const rates = desktopStreamRates(localStorage.getItem(P + "fps"), localStorage.getItem(P + "quality"));
   return {
+    ...loadDesktopSettings(P, GP),
     mode: mode === "auto" || mode === "manual" ? mode : "auto",
-    source: localStorage.getItem(P + "source") || "auto",
     fps: String(rates.fps),
     quality: String(rates.quality),
     maxWidth: localStorage.getItem(P + "width") || "1600",
     maxHeight: localStorage.getItem(P + "height") || "1000",
-    inputBackend: localStorage.getItem(P + "inputBackend") || "auto",
-    fit: fit === "fit" || fit === "actual" ? fit : "fit",
-    control: localStorage.getItem(P + "control") === "true",
-    showCursor: localStorage.getItem(P + "showCursor") === "true",
-    /* Clipboard sync defaults off (matches the Agent desktop panel): it
-     * polls the local clipboard in the background — opt-in only. */
-    clipboardMode: ["off", "remote-to-local", "local-to-remote", "bidirectional"].includes(
-      clipboardMode || "",
-    )
-      ? (clipboardMode as string)
-      : "off",
-    gpuSource: localStorage.getItem(GP + "source") || "",
-    gpuEncoder: localStorage.getItem(GP + "encoder") || "auto",
     gpuAdvancedOpen: localStorage.getItem(GP + "advanced") === "true",
-    gpuEnableVideo: localStorage.getItem(GP + "enableVideo") !== "false",
-    gpuLowLatency: localStorage.getItem(GP + "lowLatency") !== "false",
-    gpuStretch: localStorage.getItem(GP + "stretch") === "true",
-    gpuEnableMouse: localStorage.getItem(GP + "enableMouse") !== "false",
-    gpuEnablePen: localStorage.getItem(GP + "enablePen") !== "false",
-    gpuEnableTouch: localStorage.getItem(GP + "enableTouch") !== "false",
-    gpuScale: localStorage.getItem(GP + "scale") || "1.5",
-    gpuFrameRate: localStorage.getItem(GP + "frameRateSlider") || "30",
-    gpuPointerBackend: localStorage.getItem(GP + "pointerBackend") || "auto",
-    gpuKeyboardBackend: localStorage.getItem(GP + "keyboardBackend") || "auto",
-    gpuMinPressure: localStorage.getItem(GP + "minPressure") || "0",
   };
 }
 
@@ -294,19 +269,7 @@ function DesktopSession({
 
   const saveGpuDesktopSettings = () => {
     const s = settingsRef.current;
-    localStorage.setItem(GP + "source", s.gpuSource || "");
-    localStorage.setItem(GP + "encoder", s.gpuEncoder || "auto");
-    localStorage.setItem(GP + "pointerBackend", s.gpuPointerBackend || "auto");
-    localStorage.setItem(GP + "keyboardBackend", s.gpuKeyboardBackend || "auto");
-    localStorage.setItem(GP + "enableVideo", String(s.gpuEnableVideo));
-    localStorage.setItem(GP + "lowLatency", String(s.gpuLowLatency));
-    localStorage.setItem(GP + "stretch", String(s.gpuStretch));
-    localStorage.setItem(GP + "enableMouse", String(s.gpuEnableMouse));
-    localStorage.setItem(GP + "enablePen", String(s.gpuEnablePen));
-    localStorage.setItem(GP + "enableTouch", String(s.gpuEnableTouch));
-    localStorage.setItem(GP + "scale", s.gpuScale);
-    localStorage.setItem(GP + "frameRateSlider", s.gpuFrameRate);
-    localStorage.setItem(GP + "minPressure", s.gpuMinPressure);
+    persistGpuDesktopSettings(GP, s);
     localStorage.setItem(GP + "advanced", String(s.gpuAdvancedOpen));
   };
 
@@ -320,28 +283,18 @@ function DesktopSession({
     return desktop.platform === "android" || desktop.displayServer === "mediaprojection";
   };
 
-  const gpuFrameRate = () => {
-    const maxFps = isAndroidGpuDevice() ? 15 : 120;
-    const v = parseFloat(settingsRef.current.gpuFrameRate) || 0;
-    return Math.max(0, Math.min(maxFps, v));
-  };
+  const gpuFrameRate = () =>
+    gpuDesktopFrameRate(settingsRef.current.gpuFrameRate, isAndroidGpuDevice());
 
-  const gpuMaxVideoSize = () => {
-    if (isAndroidGpuDevice()) return { width: 1080, height: 1920 };
-    const scale = Math.max(0.1, Math.min(2, parseFloat(settingsRef.current.gpuScale) || 1));
-    const ratio = Math.min(window.devicePixelRatio || 1, 2);
-    const viewer = viewerRef.current;
-    return {
-      width: Math.max(
-        320,
-        Math.min(3840, Math.round(scale * Math.max(1, viewer?.clientWidth || window.innerWidth) * ratio)),
-      ),
-      height: Math.max(
-        240,
-        Math.min(2160, Math.round(scale * Math.max(1, viewer?.clientHeight || window.innerHeight) * ratio)),
-      ),
-    };
-  };
+  const gpuMaxVideoSize = () =>
+    gpuDesktopMaxVideoSize({
+      android: isAndroidGpuDevice(),
+      scale: parseFloat(settingsRef.current.gpuScale) || 1,
+      ratio: Math.min(window.devicePixelRatio || 1, 2),
+      viewer: viewerRef.current,
+      viewportWidth: window.innerWidth,
+      viewportHeight: window.innerHeight,
+    });
 
   const updateGpuRangeLabels = () => {
     const size = gpuMaxVideoSize();
@@ -349,28 +302,15 @@ function DesktopSession({
     setGpuFrameRateOut(String(Math.round(gpuFrameRate())));
   };
 
-  const gpuPointerTypes = () => {
-    const s = settingsRef.current;
-    const types: string[] = [];
-    if (s.gpuEnableMouse) types.push("mouse");
-    if (s.gpuEnablePen) types.push("pen");
-    if (s.gpuEnableTouch) types.push("touch");
-    return types;
-  };
+  const gpuPointerTypes = () => readGpuPointerTypes(settingsRef.current);
 
-  const adaptiveSize = () => {
-    const rect = stageRef.current?.getBoundingClientRect();
-    const ratio = Math.min(window.devicePixelRatio || 1, 2);
-    const width = Math.max(
-      320,
-      Math.min(3840, Math.round(((rect?.width || 0) || window.innerWidth || 1600) * ratio)),
+  const adaptiveSize = () =>
+    adaptiveDesktopSize(
+      stageRef.current?.getBoundingClientRect(),
+      window.innerWidth,
+      window.innerHeight,
+      window.devicePixelRatio,
     );
-    const height = Math.max(
-      240,
-      Math.min(2160, Math.round(((rect?.height || 0) || window.innerHeight || 1000) * ratio)),
-    );
-    return { width, height };
-  };
 
   const desktopOptions = () => {
     const s = settingsRef.current;
@@ -474,17 +414,25 @@ function DesktopSession({
   const updateFrameInfo = () => {
     const canvas = canvasRef.current;
     if (!canvas || !canvas.width || !canvas.height) return;
-    const source = currentSourceRef.current ? ` · ${currentSourceRef.current}` : "";
-    const elapsed = statsStartedAtRef.current
-      ? Math.max(0.001, (performance.now() - statsStartedAtRef.current) / 1000)
-      : 0;
-    const fps = elapsed ? (frameCountRef.current / elapsed).toFixed(1) : "0.0";
-    const kbps = elapsed ? ((frameBytesRef.current * 8) / elapsed / 1024).toFixed(0) : "0";
+    const now = performance.now();
+    const { fps, kbps } = desktopFrameRates({
+      count: frameCountRef.current,
+      bytes: frameBytesRef.current,
+      startedAt: statsStartedAtRef.current,
+      now,
+    });
     const age = lastFrameAtRef.current
-      ? Math.max(0, (performance.now() - lastFrameAtRef.current) / 1000).toFixed(1)
+      ? Math.max(0, (now - lastFrameAtRef.current) / 1000).toFixed(1)
       : "0.0";
     setFrameInfo(
-      `${canvas.width}×${canvas.height}${source} · ${fps} fps · ${kbps} kbps · ${formatBytes(frameBytesRef.current)} · ${age}s`,
+      desktopFrameLine({
+        size: `${canvas.width}×${canvas.height}`,
+        source: currentSourceRef.current,
+        fps,
+        kbps,
+        bytes: frameBytesRef.current,
+        age,
+      }),
     );
   };
 
@@ -492,11 +440,12 @@ function DesktopSession({
     const now = performance.now();
     if (now - gpuLastStatsAtRef.current < 500) return;
     gpuLastStatsAtRef.current = now;
-    const elapsed = statsStartedAtRef.current
-      ? Math.max(0.001, (now - statsStartedAtRef.current) / 1000)
-      : 0;
-    const fps = elapsed ? (frameCountRef.current / elapsed).toFixed(1) : "0.0";
-    const kbps = elapsed ? ((frameBytesRef.current * 8) / elapsed / 1024).toFixed(0) : "0";
+    const { fps, kbps } = desktopFrameRates({
+      count: frameCountRef.current,
+      bytes: frameBytesRef.current,
+      startedAt: statsStartedAtRef.current,
+      now,
+    });
     const gpuCanvas = gpuCanvasRef.current;
     const video = videoRef.current;
     const size =
@@ -505,8 +454,9 @@ function DesktopSession({
         : video && video.videoWidth && video.videoHeight
           ? `${video.videoWidth}×${video.videoHeight}`
           : "video";
-    const source = currentSourceRef.current ? ` · ${currentSourceRef.current}` : "";
-    setFrameInfo(`${size}${source} · ${fps} fps · ${kbps} kbps · ${formatBytes(frameBytesRef.current)}`);
+    setFrameInfo(
+      desktopFrameLine({ size, source: currentSourceRef.current, fps, kbps, bytes: frameBytesRef.current }),
+    );
   };
 
   /* ── H264 (legacy desktop stream) ── */
@@ -1141,7 +1091,7 @@ function DesktopSession({
       wsRef.current.close();
       wsRef.current = null;
     }
-    closeH264Decoder();
+    h264Ref.current?.close();
     closeGPUVideo();
     remoteInputRef.current = false;
     stopClipboardSync();
@@ -1358,7 +1308,7 @@ function DesktopSession({
     }
     setConnMode("desktop");
     remoteInputRef.current = false;
-    closeH264Decoder();
+    h264Ref.current?.close();
     resetFrameStats();
     const ws = new WebSocket(wsURL("/desktop?" + desktopQuery()));
     wsRef.current = ws;
@@ -1429,7 +1379,7 @@ function DesktopSession({
         }
         setCanvasShown(true);
         currentSourceRef.current = msg.source || "";
-        if (msg.format === "h264" && !setupH264Decoder(msg)) fallbackToMjpeg();
+        if (msg.format === "h264" && !h264().setup(msg)) fallbackToMjpeg();
         if (msg.inputBackend && msg.inputBackend !== settingsRef.current.inputBackend)
           updateSettings({ inputBackend: msg.inputBackend });
         remoteInputRef.current = !!(msg.desktop && msg.desktop.input);
@@ -1492,7 +1442,7 @@ function DesktopSession({
       wsRef.current = null;
       stopClipboardSync();
       setClipboardCapabilities(null);
-      closeH264Decoder();
+      h264Ref.current?.close();
       setStatus(
         lastCloseMsgRef.current || tRef.current("desktop.closed"),
         lastCloseMsgRef.current ? "err" : "warn",
@@ -1615,94 +1565,34 @@ function DesktopSession({
 
   /* ── GPU input ── */
 
-  const gpuPointerBits = (button: number) => {
-    if (button === 0) return 1;
-    if (button === 2) return 2;
-    if (button === 1) return 4;
-    if (button === 3) return 8;
-    if (button === 4) return 16;
-    if (button === 5) return 32;
-    return 0;
-  };
-
-  const gpuVideoContentRect = () => {
-    const overlay = overlayRef.current;
-    const rect = overlay?.getBoundingClientRect() || new DOMRect();
-    const video = videoRef.current;
-    const gpuCanvas = gpuCanvasRef.current;
-    const videoWidth =
-      gpuVideoModeRef.current === "webcodecs" ? gpuCanvas?.width || 0 : video?.videoWidth || 0;
-    const videoHeight =
-      gpuVideoModeRef.current === "webcodecs" ? gpuCanvas?.height || 0 : video?.videoHeight || 0;
-    if (!videoWidth || !videoHeight || !rect.width || !rect.height || settingsRef.current.gpuStretch)
-      return rect;
-    if (settingsRef.current.fit === "actual") {
-      return new DOMRect(
-        rect.left + (rect.width - videoWidth) / 2,
-        rect.top + (rect.height - videoHeight) / 2,
-        videoWidth,
-        videoHeight,
-      );
-    }
-    const containerRatio = rect.width / rect.height;
-    const videoRatio = videoWidth / videoHeight;
-    if (containerRatio > videoRatio) {
-      const width = rect.height * videoRatio;
-      return new DOMRect(rect.left + (rect.width - width) / 2, rect.top, width, rect.height);
-    }
-    const height = rect.width / videoRatio;
-    return new DOMRect(rect.left, rect.top + (rect.height - height) / 2, rect.width, height);
-  };
+  const gpuVideoContentRect = () =>
+    computeGpuVideoContentRect({
+      rect: overlayRef.current?.getBoundingClientRect() || new DOMRect(),
+      videoWidth:
+        gpuVideoModeRef.current === "webcodecs"
+          ? gpuCanvasRef.current?.width || 0
+          : videoRef.current?.videoWidth || 0,
+      videoHeight:
+        gpuVideoModeRef.current === "webcodecs"
+          ? gpuCanvasRef.current?.height || 0
+          : videoRef.current?.videoHeight || 0,
+      stretch: settingsRef.current.gpuStretch,
+      fit: settingsRef.current.fit,
+    });
 
   const gpuPointerMessage = (event: PointerEvent, eventType = event.type) => {
-    const rect = gpuVideoContentRect();
-    const x = Math.max(0, Math.min(1, (event.clientX - rect.left) / Math.max(1, rect.width)));
-    const y = Math.max(0, Math.min(1, (event.clientY - rect.top) / Math.max(1, rect.height)));
     const previous = gpuLastPointerRef.current.get(event.pointerId) || {
       x: event.clientX,
       y: event.clientY,
     };
     gpuLastPointerRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
-    const diag = Math.max(1, Math.sqrt(rect.width * rect.width + rect.height * rect.height));
-    const pressure = Math.max(
-      event.pressure || (event.buttons ? 0.5 : 0),
-      parseFloat(settingsRef.current.gpuMinPressure) || 0,
-    );
-    return {
-      PointerEvent: {
-        event_type: eventType,
-        pointer_id: event.pointerId,
-        timestamp: Math.round(event.timeStamp * 1000),
-        is_primary: event.isPrimary,
-        pointer_type: event.pointerType || "mouse",
-        button: gpuPointerBits(event.button),
-        buttons: event.buttons,
-        x,
-        y,
-        movement_x: Math.round(event.movementX || event.clientX - previous.x),
-        movement_y: Math.round(event.movementY || event.clientY - previous.y),
-        pressure,
-        tilt_x: event.tiltX || 0,
-        tilt_y: event.tiltY || 0,
-        twist: event.twist || 0,
-        width: (event.width || 1) / diag,
-        height: (event.height || 1) / diag,
-      },
-    };
+    return buildGpuPointerMessage(event, {
+      rect: gpuVideoContentRect(),
+      previous,
+      minPressure: settingsRef.current.gpuMinPressure,
+      eventType,
+    });
   };
-
-  const gpuKeyMessage = (event: KeyboardEvent, eventType: string) => ({
-    KeyboardEvent: {
-      event_type: eventType,
-      code: event.code,
-      key: event.key,
-      location: event.location,
-      alt: event.altKey,
-      ctrl: event.ctrlKey || false,
-      shift: event.shiftKey,
-      meta: event.metaKey,
-    },
-  });
 
   const gpuTextInput = (text: string | null) => {
     if (!text || connModeRef.current !== "gpu" || !settingsRef.current.control || !remoteInputRef.current)
