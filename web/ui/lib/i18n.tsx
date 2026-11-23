@@ -64,12 +64,3 @@ export function I18nProvider({ children }: { children: ReactNode }) {
 export function useI18n(): I18nCtx {
   return useContext(Ctx);
 }
-
-/** Standalone translator for non-React spots (document.title, xterm). */
-export function createTranslator(lang: Lang) {
-  return (key: string, vars?: Vars): string => {
-    const dict = dictionaries[lang] as Record<string, string>;
-    const en = dictionaries.en as Record<string, string>;
-    return format(dict[key] || en[key] || key, vars);
-  };
-}

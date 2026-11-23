@@ -60,13 +60,6 @@ export function findPane(root: LayoutNode, paneId: string): PaneNode | null {
   return null;
 }
 
-export function findPaneByThread(root: LayoutNode, threadId: string): PaneNode | null {
-  for (const p of listPanes(root)) {
-    if (p.threadId === threadId) return p;
-  }
-  return null;
-}
-
 function replacePaneNode(node: LayoutNode, paneId: string, replacement: LayoutNode): LayoutNode {
   if (node.type === "pane") return node.paneId === paneId ? replacement : node;
   return { ...node, children: node.children.map((c) => replacePaneNode(c, paneId, replacement)) };

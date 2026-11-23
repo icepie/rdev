@@ -23,6 +23,7 @@ import {
   forgetDevicePassword,
 } from "../lib/api";
 import { useServerCapabilities } from "../lib/server-capabilities";
+import { payloadToDataURL } from "../lib/terminal-images";
 import { cn } from "../lib/utils";
 import { Button } from "../components/button";
 import { Input } from "../components/input";
@@ -110,13 +111,6 @@ function createKittyWriter(term: Terminal): KittyWriter {
     return params;
   }
 
-  function mimeFor(params: Record<string, string>): string {
-    if (params.f === "100") return "image/png";
-    if (params.f === "101") return "image/jpeg";
-    if (params.f === "102") return "image/gif";
-    return "image/png";
-  }
-
   function getCellSize(): { width: number; height: number } {
     const core = term as unknown as {
       _core?: { _renderService?: { dimensions?: { css?: { cell?: { width: number; height: number } } } } };
@@ -143,86 +137,6 @@ function createKittyWriter(term: Terminal): KittyWriter {
       "position:absolute;inset:0;pointer-events:none;overflow:hidden;z-index:4;";
     term.element.appendChild(layer);
     return layer;
-  }
-
-  function base64ToBytes(raw: string): Uint8Array {
-    const bin = atob(raw.replace(/\s+/g, ""));
-    const bytes = new Uint8Array(bin.length);
-    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-    return bytes;
-  }
-
-  function bytesToBase64(bytes: Uint8Array): string {
-    let out = "";
-    const chunk = 0x8000;
-    for (let i = 0; i < bytes.length; i += chunk) {
-      out += String.fromCharCode.apply(
-        null,
-        bytes.subarray(i, i + chunk) as unknown as number[],
-      );
-    }
-    return btoa(out);
-  }
-
-  async function inflateZlib(bytes: Uint8Array): Promise<Uint8Array> {
-    if (!("DecompressionStream" in window)) {
-      throw new Error("compressed Kitty images are not supported by this browser");
-    }
-    const stream = new Blob([bytes as unknown as BlobPart])
-      .stream()
-      .pipeThrough(new DecompressionStream("deflate"));
-    return new Uint8Array(await new Response(stream).arrayBuffer());
-  }
-
-  function rawPixelSize(
-    params: Record<string, string>,
-    bytes: Uint8Array,
-    channels: number,
-  ): { width: number; height: number } {
-    let width = parseInt(params.s || params.c || "", 10);
-    let height = parseInt(params.v || params.r || "", 10);
-    if (width > 0 && height > 0) return { width, height };
-    if (width > 0)
-      return { width, height: Math.max(1, Math.floor(bytes.length / channels / width)) };
-    if (height > 0)
-      return { width: Math.max(1, Math.floor(bytes.length / channels / height)), height };
-    const pixels = Math.max(1, Math.floor(bytes.length / channels));
-    width = Math.max(1, Math.round(Math.sqrt(pixels)));
-    height = Math.max(1, Math.ceil(pixels / width));
-    return { width, height };
-  }
-
-  function rawPixelsToPNG(params: Record<string, string>, bytes: Uint8Array): string | null {
-    const channels = params.f === "24" ? 3 : params.f === "32" ? 4 : 0;
-    if (!channels) return null;
-    const size = rawPixelSize(params, bytes, channels);
-    const canvas = document.createElement("canvas");
-    canvas.width = size.width;
-    canvas.height = size.height;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return null;
-    const image = ctx.createImageData(size.width, size.height);
-    const pixels = size.width * size.height;
-    for (let i = 0, j = 0; i < pixels; i++, j += channels) {
-      const out = i * 4;
-      image.data[out] = bytes[j] || 0;
-      image.data[out + 1] = bytes[j + 1] || 0;
-      image.data[out + 2] = bytes[j + 2] || 0;
-      image.data[out + 3] = channels === 4 ? (bytes[j + 3] ?? 255) : 255;
-    }
-    ctx.putImageData(image, 0, 0);
-    return canvas.toDataURL("image/png");
-  }
-
-  async function payloadToDataURL(
-    params: Record<string, string>,
-    payload: string,
-  ): Promise<string> {
-    let bytes = base64ToBytes(payload);
-    if (params.o === "z") bytes = await inflateZlib(bytes);
-    const rawPNG = rawPixelsToPNG(params, bytes);
-    if (rawPNG) return rawPNG;
-    return "data:" + mimeFor(params) + ";base64," + bytesToBase64(bytes);
   }
 
   function fitImageToPlaceholder(
