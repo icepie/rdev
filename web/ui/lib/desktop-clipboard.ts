@@ -46,7 +46,7 @@ const POLL_MS = 1000;
 
 /** Builds the state machine once per component; all inputs are getters so the
  * instance never captures stale refs. */
-export function createDesktopClipboard(deps: DesktopClipboardDeps): DesktopClipboard {
+function createDesktopClipboard(deps: DesktopClipboardDeps): DesktopClipboard {
   let caps: ClipCaps | null = null;
   let generation = 0;
   let pollTimer: number | undefined;

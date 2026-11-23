@@ -22,7 +22,7 @@ export function setUnauthorizedHandler(fn: () => Promise<string | null>) {
 }
 
 let tokenGen = 0;
-export function setAdminToken(token: string) {
+function setAdminToken(token: string) {
   adminToken = token;
   tokenGen++;
   localStorage.setItem(TOKEN_KEY, token);

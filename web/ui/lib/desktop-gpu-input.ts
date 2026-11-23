@@ -1,7 +1,7 @@
 /* GPU-stream input payloads. Coordinates are normalized against the video
  * content box (letterboxing excluded) because the encoder maps 0..1 itself. */
 
-export function gpuPointerBits(button: number): number {
+function gpuPointerBits(button: number): number {
   if (button === 0) return 1;
   if (button === 2) return 2;
   if (button === 1) return 4;

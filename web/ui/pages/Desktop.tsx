@@ -1,10 +1,12 @@
 import { desktopEncoderRecoveryFormat, desktopEncoderStatus, desktopRuntimeEncoderStatus, desktopStreamRates } from "../lib/desktop-media";
 import { connectDesktopRTC, sendGPUDesktopMessage, type DesktopRTCConnection } from "../lib/desktop-webrtc";
-import { desktopOwnsKeyboard } from "../lib/desktop-input-focus";
 import { DesktopCanvasInput } from "../lib/desktop-input";
 import { isImeComposing } from "../lib/keyboard";
 import { useDesktopClipboard } from "../lib/desktop-clipboard";
 import { paintDesktopImage } from "../lib/desktop-frame";
+import { androidVideoPacket, startWebCodecsVideo, type DesktopFrameCounters } from "../lib/desktop-gpu-video";
+import { attachDesktopCaptureListeners, attachDesktopStageInput } from "../lib/desktop-stage-input";
+import { saveDesktopScreenshot } from "../lib/desktop-shot";
 import { DesktopH264Decoder } from "../lib/desktop-h264";
 import {
   adaptiveDesktopSize,
@@ -211,6 +213,12 @@ function DesktopSession({
   const gpuLastStatsAtRef = useRef(0);
   const gpuComposingRef = useRef(false);
   const gpuIgnoreNextTextInputRef = useRef(false);
+  /* Grouped for the shared GPU video helpers (androidVideoPacket/WebCodecs). */
+  const gpuFrameCounters: DesktopFrameCounters = {
+    count: frameCountRef,
+    bytes: frameBytesRef,
+    lastAt: lastFrameAtRef,
+  };
 
   /* ── State helpers (keep refs in sync, synchronously) ── */
 
@@ -222,6 +230,7 @@ function DesktopSession({
   const autoRates = desktopStreamRates(null, null, true);
 
   const setStatus = (text: string, cls: StatusCls = "") => setStatusState({ text, cls });
+  const setGpuVideoError = (cause: unknown) => setStatus(errMessage(cause), "err");
 
   const setConnMode = (mode: ConnMode) => {
     connModeRef.current = mode;
@@ -640,85 +649,25 @@ function DesktopSession({
   };
 
   const gpuStartWebCodecsVideo = (config: { codec?: string; width?: number; height?: number }) => {
-    if (!("VideoDecoder" in window) || !("EncodedVideoChunk" in window)) {
-      setStatus(tRef.current("desktop.gpu.webCodecsUnsupported"), "err");
-      return;
-    }
-    closeGPUVideo();
-    gpuVideoModeRef.current = "webcodecs";
-    frameCountRef.current = 0;
-    frameBytesRef.current = 0;
-    statsStartedAtRef.current = performance.now();
-    lastFrameAtRef.current = 0;
-    setGpuDisplay("canvas");
-    const gpuCanvas = gpuCanvasRef.current;
-    const gpuCtx = gpuCanvas?.getContext("2d");
-    if (gpuCanvas) {
-      gpuCanvas.width = config.width || 320;
-      gpuCanvas.height = config.height || 640;
-    }
-    const decoder = new VideoDecoder({
-      output: (frame) => {
-        try {
-          if (gpuVideoDecoderRef.current !== decoder) return;
-          if (gpuCanvas && gpuCtx) {
-            gpuCanvas.width = frame.displayWidth || frame.codedWidth || gpuCanvas.width;
-            gpuCanvas.height = frame.displayHeight || frame.codedHeight || gpuCanvas.height;
-            gpuCtx.clearRect(0, 0, gpuCanvas.width, gpuCanvas.height);
-            gpuCtx.drawImage(frame, 0, 0, gpuCanvas.width, gpuCanvas.height);
-            setGpuEmpty(null);
-          }
-          gpuUpdateFrameInfo();
-        } finally { frame.close(); }
-      },
-      error: (err) => {
-        if (gpuVideoDecoderRef.current === decoder) setStatus(errMessage(err), "err");
-      },
+    const started = startWebCodecsVideo(config, {
+      canvas: gpuCanvasRef.current,
+      decoder: gpuVideoDecoderRef,
+      mode: gpuVideoModeRef,
+      needKeyframe: gpuNeedKeyFrameRef,
+      frames: gpuFrameCounters,
+      startedAt: statsStartedAtRef,
+      reset: closeGPUVideo,
+      showCanvas: () => setGpuDisplay("canvas"),
+      onPainted: () => setGpuEmpty(null),
+      onFrame: gpuUpdateFrameInfo,
+      fail: setGpuVideoError,
+      onReady: () => setStatus(tRef.current("index.desktopReady"), "ok"),
     });
-    decoder.configure({
-      codec: config.codec || "avc1.42E01F",
-      codedWidth: config.width || 320,
-      codedHeight: config.height || 640,
-      optimizeForLatency: true,
-      hardwareAcceleration: "prefer-hardware",
-    });
-    gpuVideoDecoderRef.current = decoder;
-    gpuNeedKeyFrameRef.current = true;
-    setStatus(tRef.current("index.desktopReady"), "ok");
+    if (!started) setStatus(tRef.current("desktop.gpu.webCodecsUnsupported"), "err");
   };
 
-  const gpuHandleAndroidVideoPacket = (buffer: ArrayBuffer): boolean => {
-    const view = new DataView(buffer);
-    if (
-      view.byteLength < 13 ||
-      view.getUint8(0) !== 0x52 ||
-      view.getUint8(1) !== 0x44 ||
-      view.getUint8(2) !== 0x41 ||
-      view.getUint8(3) !== 0x31
-    )
-      return false;
-    const decoder = gpuVideoDecoderRef.current;
-    if (!decoder || decoder.state !== "configured") return true;
-    const isKey = view.getUint8(4) !== 0;
-    if (gpuNeedKeyFrameRef.current && !isKey) return true;
-    const timestamp = Number(view.getBigUint64(5));
-    const data = new Uint8Array(buffer, 13);
-    if (!isKey && decoder.decodeQueueSize > 2) {
-      gpuNeedKeyFrameRef.current = true;
-      return true;
-    }
-    frameCountRef.current++;
-    frameBytesRef.current += data.byteLength;
-    lastFrameAtRef.current = performance.now();
-    try {
-      decoder.decode(new EncodedVideoChunk({ type: isKey ? "key" : "delta", timestamp, data }));
-      gpuNeedKeyFrameRef.current = false;
-    } catch (err) {
-      gpuNeedKeyFrameRef.current = true;
-      setStatus(errMessage(err), "err");
-    }
-    return true;
-  };
+  const gpuHandleAndroidVideoPacket = (buffer: ArrayBuffer): boolean =>
+    androidVideoPacket(buffer, gpuVideoDecoderRef.current, gpuNeedKeyFrameRef, gpuFrameCounters, setGpuVideoError);
 
   /* ── GPU protocol ── */
 
@@ -1343,44 +1292,16 @@ function DesktopSession({
     }
   };
 
-  const saveCanvasBlob = (targetCanvas: HTMLCanvasElement) => {
-    targetCanvas.toBlob((blob) => {
-      if (!blob) return;
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `rdev-${deviceRef.current || "desktop"}-${new Date()
-        .toISOString()
-        .replace(/[:.]/g, "-")}.png`;
-      a.click();
-      setTimeout(() => URL.revokeObjectURL(url), 1000);
-    }, "image/png");
-  };
-
-  const saveScreenshot = () => {
-    const gpuCanvas = gpuCanvasRef.current;
-    const video = videoRef.current;
-    const canvas = canvasRef.current;
-    if (
-      connModeRef.current === "gpu" &&
-      gpuVideoModeRef.current === "webcodecs" &&
-      gpuCanvas?.width &&
-      gpuCanvas?.height
-    ) {
-      saveCanvasBlob(gpuCanvas);
-      return;
-    }
-    if (connModeRef.current === "gpu" && video?.videoWidth && video?.videoHeight) {
-      const shot = document.createElement("canvas");
-      shot.width = video.videoWidth;
-      shot.height = video.videoHeight;
-      shot.getContext("2d")?.drawImage(video, 0, 0, shot.width, shot.height);
-      saveCanvasBlob(shot);
-      return;
-    }
-    if (!canvas || !canvas.width || !canvas.height || !canvasShown) return;
-    saveCanvasBlob(canvas);
-  };
+  const saveScreenshot = () =>
+    saveDesktopScreenshot({
+      gpu: connModeRef.current === "gpu",
+      videoMode: gpuVideoModeRef.current,
+      gpuCanvas: gpuCanvasRef.current,
+      video: videoRef.current,
+      canvas: canvasRef.current,
+      canvasShown,
+      device: deviceRef.current,
+    });
 
   const toggleFullscreen = () => {
     if (document.fullscreenElement) {
@@ -1467,249 +1388,51 @@ function DesktopSession({
 
   /* ── Canvas/overlay listeners: elements unmount with connMode, so re-attach. ── */
 
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    const overlay = overlayRef.current;
-    const cleanups: (() => void)[] = [];
-    const on = <E extends Event>(
-      el: HTMLElement,
-      type: string,
-      fn: (e: E) => void,
-      opts?: AddEventListenerOptions,
-    ) => {
-      // The listener is registered for one specific event type, so the
-      // caller's narrower event type is sound at runtime.
-      const listener = fn as EventListener;
-      el.addEventListener(type, listener, opts);
-      cleanups.push(() => el.removeEventListener(type, listener, opts));
-    };
-
-    if (canvas) cleanups.push(desktopInput.attach(canvas, {
-      socket: () => wsRef.current,
-      mode: () => {
-        if (connModeRef.current !== "desktop") return null;
-        if (settingsRef.current.control && remoteInputRef.current) return "control";
-        return settingsRef.current.showCursor ? "cursor" : null;
-      },
-      error: (error) => setStatus(errMessage(error), "err"),
-    }));
-
-    if (overlay) {
-      on(overlay, "contextmenu", (e: Event) => e.preventDefault());
-      on(overlay, "auxclick", (e: Event) => e.preventDefault());
-      for (const type of [
-        "pointerdown",
-        "pointermove",
-        "pointerup",
-        "pointercancel",
-        "pointerover",
-        "pointerenter",
-        "pointerleave",
-        "pointerout",
-      ]) {
-        on(overlay, type, (e: PointerEvent) => {
-          if (!apiRef.current.gpuInputAllowed()) return;
-          if (!apiRef.current.gpuPointerTypes().includes(e.pointerType || "mouse")) return;
-          if (type === "pointerdown") overlay.focus({ preventScroll: true });
-          if (type === "pointerdown" && overlay.setPointerCapture)
-            overlay.setPointerCapture(e.pointerId);
-          const events =
-            type === "pointermove" && typeof e.getCoalescedEvents === "function"
-              ? e.getCoalescedEvents()
-              : [e];
-          for (const ev of events) apiRef.current.gpuSend(apiRef.current.gpuPointerMessage(ev, type));
-          e.preventDefault();
-          e.stopPropagation();
-        });
-      }
-      on(
-        overlay,
-        "wheel",
-        (e: WheelEvent) => {
-          if (!apiRef.current.gpuInputAllowed() || !settingsRef.current.gpuEnableMouse) return;
-          let scale = 1;
-          if (e.deltaMode === 1) scale = 10;
-          else if (e.deltaMode === 2) scale = 1000;
-          apiRef.current.gpuSend({
-            WheelEvent: {
-              dx: Math.round(scale * e.deltaX),
-              dy: -Math.round(scale * e.deltaY),
-              timestamp: Math.round(e.timeStamp * 1000),
-            },
-          });
-          e.preventDefault();
-          e.stopPropagation();
+  useEffect(
+    () =>
+      attachDesktopStageInput({
+        canvas: canvasRef.current,
+        overlay: overlayRef.current,
+        input: desktopInput,
+        api: () => apiRef.current,
+        composing: gpuComposingRef,
+        ignoreNextTextInput: gpuIgnoreNextTextInputRef,
+        heldKeys: gpuHeldKeysRef,
+        socket: () => wsRef.current,
+        mode: () => {
+          if (connModeRef.current !== "desktop") return null;
+          if (settingsRef.current.control && remoteInputRef.current) return "control";
+          return settingsRef.current.showCursor ? "cursor" : null;
         },
-        { passive: false },
-      );
-      on(overlay, "blur", () => {
-        apiRef.current.gpuReleaseKeyboard();
-        gpuComposingRef.current = false;
-        gpuIgnoreNextTextInputRef.current = false;
-      });
-      on(overlay, "keydown", (e: KeyboardEvent) => {
-        if (!apiRef.current.gpuInputAllowed() || wsRef.current?.readyState !== WebSocket.OPEN) return;
-        if (gpuComposingRef.current || e.isComposing || e.key === "Process" || e.keyCode === 229) {
-          e.preventDefault();
-          e.stopPropagation();
-          return;
-        }
-        const identity = `${e.code || e.key}:${e.location}`;
-        const eventType = e.repeat && gpuHeldKeysRef.current.has(identity) ? "repeat" : "down";
-        const msg = apiRef.current.gpuKeyMessage(e, eventType);
-        apiRef.current.gpuSend(msg);
-        if (eventType === "down") gpuHeldKeysRef.current.set(identity, msg.KeyboardEvent);
-        e.preventDefault();
-        e.stopPropagation();
-      });
-      on(overlay, "keyup", (e: KeyboardEvent) => {
-        const identity = `${e.code || e.key}:${e.location}`;
-        if (!gpuHeldKeysRef.current.has(identity)) return;
-        const msg = apiRef.current.gpuKeyMessage(e, "up");
-        apiRef.current.gpuSend(msg);
-        gpuHeldKeysRef.current.delete(identity);
-        e.preventDefault();
-        e.stopPropagation();
-      });
-    }
-
-    return () => {
-      for (const fn of cleanups) fn();
-    };
+        mouseEnabled: () => settingsRef.current.gpuEnableMouse,
+        socketOpen: () => wsRef.current?.readyState === WebSocket.OPEN,
+        fail: setGpuVideoError,
+      }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [connMode]);
+    [connMode],
+  );
 
   /* ── Window-level listeners + ResizeObserver (mount once) ── */
 
   useEffect(() => {
-    const on = <E extends Event>(
-      el: Window | Document,
-      type: string,
-      fn: (e: E) => void,
-      opts?: AddEventListenerOptions | boolean,
-    ) => {
-      // The listener is registered for one specific event type, so the
-      // caller's narrower event type is sound at runtime.
-      const listener = fn as EventListener;
-      el.addEventListener(type, listener, opts);
-      return () => el.removeEventListener(type, listener, opts);
-    };
-    const cleanups = [
-      on(window, "focus", () => apiRef.current.pollClipboardSync(), true),
-      on(window, "blur", () => {
-        apiRef.current.desktopReleaseKeyboard();
-        apiRef.current.gpuReleaseKeyboard();
-      }),
-      on(
-        document,
-        "visibilitychange",
-        () => {
-          if (document.hidden) {
-            apiRef.current.gpuReleaseKeyboard();
-            apiRef.current.desktopReleaseKeyboard();
-            if (connModeRef.current === "gpu") apiRef.current.gpuSend("PauseVideo");
-            return;
-          }
-          apiRef.current.pollClipboardSync();
-          if (connModeRef.current === "gpu" && settingsRef.current.gpuEnableVideo)
-            apiRef.current.gpuSend("ResumeVideo");
-        },
-        true,
-      ),
-      on(
-        window,
-        "beforeinput",
-        (e: InputEvent) => {
-          if (!apiRef.current.gpuInputAllowed() || !desktopOwnsKeyboard(overlayRef.current)) return;
-          if (
-            e.target instanceof HTMLInputElement ||
-            e.target instanceof HTMLTextAreaElement ||
-            e.target instanceof HTMLSelectElement
-          )
-            return;
-          if (
-            e.inputType === "insertCompositionText" ||
-            (e.inputType === "insertText" && gpuIgnoreNextTextInputRef.current)
-          ) {
-            gpuIgnoreNextTextInputRef.current = false;
-            e.preventDefault();
-            e.stopPropagation();
-            return;
-          }
-          if (e.inputType !== "insertText" && e.inputType !== "insertLineBreak") return;
-          apiRef.current.gpuTextInput(e.inputType === "insertLineBreak" ? "\n" : e.data);
-          e.preventDefault();
-          e.stopPropagation();
-        },
-        true,
-      ),
-      on(
-        window,
-        "paste",
-        (e: ClipboardEvent) => {
-          if (!apiRef.current.gpuInputAllowed() || !desktopOwnsKeyboard(overlayRef.current)) return;
-          if (
-            e.target instanceof HTMLInputElement ||
-            e.target instanceof HTMLTextAreaElement ||
-            e.target instanceof HTMLSelectElement
-          )
-            return;
-          const text = e.clipboardData?.getData("text") || "";
-          apiRef.current.gpuTextInput(text);
-          e.preventDefault();
-          e.stopPropagation();
-        },
-        true,
-      ),
-      on(
-        window,
-        "compositionstart",
-        (e: CompositionEvent) => {
-          if (!apiRef.current.gpuInputAllowed() || !desktopOwnsKeyboard(overlayRef.current)) return;
-          if (
-            e.target instanceof HTMLInputElement ||
-            e.target instanceof HTMLTextAreaElement ||
-            e.target instanceof HTMLSelectElement
-          )
-            return;
-          gpuComposingRef.current = true;
-          e.preventDefault();
-          e.stopPropagation();
-        },
-        true,
-      ),
-      on(
-        window,
-        "compositionend",
-        (e: CompositionEvent) => {
-          if (!apiRef.current.gpuInputAllowed() || !desktopOwnsKeyboard(overlayRef.current)) return;
-          if (
-            e.target instanceof HTMLInputElement ||
-            e.target instanceof HTMLTextAreaElement ||
-            e.target instanceof HTMLSelectElement
-          )
-            return;
-          gpuComposingRef.current = false;
-          gpuIgnoreNextTextInputRef.current = true;
-          apiRef.current.gpuTextInput(e.data || "");
-          setTimeout(() => {
-            gpuIgnoreNextTextInputRef.current = false;
-          }, 0);
-          e.preventDefault();
-          e.stopPropagation();
-        },
-        true,
-      ),
-      on(window, "beforeunload", () => apiRef.current.disconnect()),
-    ];
-
+    const capture = attachDesktopCaptureListeners({
+      overlay: overlayRef,
+      api: () => apiRef.current,
+      composing: gpuComposingRef,
+      ignoreNextTextInput: gpuIgnoreNextTextInputRef,
+      streaming: () => connModeRef.current === "gpu",
+      resumeVideo: () => settingsRef.current.gpuEnableVideo,
+    });
+    const unload = () => apiRef.current.disconnect();
+    window.addEventListener("beforeunload", unload);
     const stage = stageRef.current;
     const observer = new ResizeObserver(() => apiRef.current.scheduleAdaptiveReconnect());
     if (stage) observer.observe(stage);
     apiRef.current.updateGpuRangeLabels();
 
     return () => {
-      for (const fn of cleanups) fn();
+      capture();
+      window.removeEventListener("beforeunload", unload);
       observer.disconnect();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
