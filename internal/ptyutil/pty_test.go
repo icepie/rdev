@@ -1,6 +1,8 @@
 package ptyutil
 
 import (
+	"os"
+	"path/filepath"
 	"runtime"
 	"testing"
 )
@@ -41,5 +43,30 @@ func TestDetectShellPrefersEnvironment(t *testing.T) {
 	t.Setenv("SHELL", "")
 	if got := detectShell(); got != `C:\cmd.exe` {
 		t.Fatalf("detectShell() = %q, want $COMSPEC", got)
+	}
+}
+
+func TestShellInPrefixPrefersBashThenSh(t *testing.T) {
+	prefix := t.TempDir()
+	if got := shellInPrefix(prefix); got != "" {
+		t.Fatalf("empty prefix = %q, want none", got)
+	}
+	if err := os.MkdirAll(filepath.Join(prefix, "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(prefix, "bin", "sh"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := shellInPrefix(prefix), filepath.Join(prefix, "bin", "sh"); got != want {
+		t.Fatalf("sh only = %q, want %q", got, want)
+	}
+	if err := os.WriteFile(filepath.Join(prefix, "bin", "bash"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := shellInPrefix(prefix), filepath.Join(prefix, "bin", "bash"); got != want {
+		t.Fatalf("bash preferred = %q, want %q", got, want)
+	}
+	if got := shellInPrefix(""); got != "" {
+		t.Fatalf("empty prefix = %q, want none", got)
 	}
 }

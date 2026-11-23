@@ -729,13 +729,35 @@ fn default_shell(shell: Option<String>) -> String {
     if let Some(shell) = shell.filter(|s| !s.is_empty()) {
         return shell;
     }
-    std::env::var(if cfg!(windows) { "COMSPEC" } else { "SHELL" }).unwrap_or_else(|_| {
-        if cfg!(windows) {
-            "cmd.exe".into()
-        } else {
-            "/bin/sh".into()
+    if let Ok(shell) = std::env::var(if cfg!(windows) { "COMSPEC" } else { "SHELL" }) {
+        if !shell.is_empty() {
+            return shell;
         }
-    })
+    }
+    if cfg!(windows) {
+        return "cmd.exe".into();
+    }
+    if cfg!(target_os = "android") {
+        if let Some(shell) = termux_shell(std::env::var("PREFIX").ok().as_deref()) {
+            return shell;
+        }
+        if std::path::Path::new("/system/bin/sh").is_file() {
+            return "/system/bin/sh".into();
+        }
+    }
+    "/bin/sh".into()
+}
+
+/// Termux has no /bin/sh; its prefix holds the real shell.
+fn termux_shell(prefix: Option<&str>) -> Option<String> {
+    let prefix = prefix.filter(|p| !p.is_empty())?;
+    for name in ["bash", "sh"] {
+        let candidate = std::path::Path::new(prefix).join("bin").join(name);
+        if candidate.is_file() {
+            return Some(candidate.to_string_lossy().into_owned());
+        }
+    }
+    None
 }
 
 fn parse_env(env: &[String]) -> Vec<(String, String)> {
@@ -784,6 +806,22 @@ async fn send_close(outbound: &mpsc::Sender<OutboundEvent>, session_id: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn termux_shell_prefers_bash_then_sh() {
+        let prefix = std::env::temp_dir().join(format!("rdev-termux-{}", std::process::id()));
+        let bin = prefix.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let prefix = prefix.to_string_lossy().into_owned();
+        assert_eq!(termux_shell(Some(&prefix)), None);
+        std::fs::write(bin.join("sh"), b"#!/bin/sh\n").unwrap();
+        assert_eq!(termux_shell(Some(&prefix)), Some(bin.join("sh").to_string_lossy().into_owned()));
+        std::fs::write(bin.join("bash"), b"#!/bin/sh\n").unwrap();
+        assert_eq!(termux_shell(Some(&prefix)), Some(bin.join("bash").to_string_lossy().into_owned()));
+        assert_eq!(termux_shell(Some("")), None);
+        assert_eq!(termux_shell(None), None);
+        std::fs::remove_dir_all(bin.parent().unwrap()).unwrap();
+    }
 
     #[test]
     fn parses_env_pairs() {

@@ -101,7 +101,11 @@ if [ "$RDEV_RANDOM_PASSWORD" = "1" ] && [ -z "$RDEV_PASSWORD" ]; then
 fi
 
 ANDROID_ENV=0
-if [ "$(uname -o 2>/dev/null || true)" = "Android" ] || [ -n "${ANDROID_ROOT:-}" ]; then
+# Termux sets PREFIX=/data/data/com.termux/files/usr but its uname may lack -o.
+case "${PREFIX:-}" in
+    *com.termux*) ANDROID_ENV=1 ;;
+esac
+if [ "$ANDROID_ENV" = "0" ] && { [ "$(uname -o 2>/dev/null || true)" = "Android" ] || [ -n "${ANDROID_ROOT:-}" ]; }; then
     ANDROID_ENV=1
 fi
 

@@ -114,3 +114,18 @@ for (const client of ['go', 'rs']) {
     }
   });
 }
+
+test('termux prefix selects the android asset when uname lacks -o', () => {
+  const f = fixture('go');
+  try {
+    // Toybox/coreutils variants may not implement -o; Termux still sets PREFIX.
+    writeFileSync(join(f.root, 'bin', 'uname'), '#!/bin/sh\ncase "$1" in -s) echo Linux;; -m) echo aarch64;; -o) exit 1;; esac\n', { mode: 0o755 });
+    const result = f.run({ PREFIX: '/data/data/com.termux/files/usr', ANDROID_ROOT: '' });
+    assert.equal(result.status, 0, result.stderr);
+    const requests = readFileSync(join(f.root, 'requests'), 'utf8');
+    assert.match(requests, /rdev-client-android-arm64/);
+    assert.doesNotMatch(requests, /rdev-client-linux-arm64/);
+  } finally {
+    f.close();
+  }
+});

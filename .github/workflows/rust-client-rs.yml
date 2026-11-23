@@ -504,7 +504,11 @@ jobs:
             mkdir -p "dist/${{ matrix.asset }}"
             cp "target/${{ matrix.target }}/release/${{ matrix.artifact }}" "dist/${{ matrix.asset }}/rdev-client-rs"
             chmod +x "dist/${{ matrix.asset }}/rdev-client-rs"
-            upx --best "dist/${{ matrix.asset }}/rdev-client-rs" || true
+            # UPX removes PT_INTERP; Android 10+ refuses to run its stub.
+            readelf -l "dist/${{ matrix.asset }}/rdev-client-rs" | grep -q 'program interpreter' || {
+              echo "Android Rust client lost its PT_INTERP interpreter" >&2
+              exit 1
+            }
             echo "rdev-client-rs ${GITHUB_REF_NAME}" > "dist/${{ matrix.asset }}/VERSION.txt"
             tar -C dist -czf "dist/${{ matrix.asset }}.tar.gz" "${{ matrix.asset }}"
           elif [[ "${{ matrix.target }}" == x86_64-pc-windows-gnu ]]; then

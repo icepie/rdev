@@ -215,7 +215,8 @@ func (p *Process) Wait() (int, error) {
 	return -1, err
 }
 
-// detectShell returns the appropriate shell for the current platform
+// detectShell returns the appropriate shell for the current platform.
+// Termux has no /bin/sh, so an Android host falls back through $PREFIX first.
 func detectShell() string {
 	if s := os.Getenv("SHELL"); s != "" {
 		return s
@@ -223,9 +224,29 @@ func detectShell() string {
 	if s := os.Getenv("COMSPEC"); s != "" {
 		return s
 	}
-	// Fallback
+	if runtime.GOOS == "android" {
+		if shell := shellInPrefix(os.Getenv("PREFIX")); shell != "" {
+			return shell
+		}
+		if _, err := os.Stat("/system/bin/sh"); err == nil {
+			return "/system/bin/sh"
+		}
+	}
 	if _, err := os.Stat("/bin/bash"); err == nil {
 		return "/bin/bash"
 	}
 	return "/bin/sh"
+}
+
+// shellInPrefix returns the first usable shell under a Termux-style prefix.
+func shellInPrefix(prefix string) string {
+	if prefix == "" {
+		return ""
+	}
+	for _, candidate := range []string{prefix + "/bin/bash", prefix + "/bin/sh"} {
+		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+			return candidate
+		}
+	}
+	return ""
 }

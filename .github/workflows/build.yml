@@ -201,8 +201,13 @@ jobs:
           if [ -n "${{ matrix.goarm }}" ]; then export GOARM="${{ matrix.goarm }}"; fi
           # Pion's anet dependency accesses net.zoneCache on Android; Go 1.23+ requires this opt-in.
           go build -ldflags "-checklinkname=0 -s -w -X main.version=${GITHUB_REF_NAME}" -o rdev-client ./cmd/rdev-client
-          upx --best rdev-client || true
+          # UPX strips PT_INTERP (/system/bin/linker64); Android 10+ blocks the
+          # self-decompressing stub, so the client must ship as a normal PIE.
           file rdev-client
+          readelf -l rdev-client | grep -q 'program interpreter' || {
+            echo "Android client lost its PT_INTERP interpreter" >&2
+            exit 1
+          }
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
