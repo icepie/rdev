@@ -1,15 +1,11 @@
 import { attachDesktopMediaSource, desktopEncoderRecoveryFormat, desktopEncoderStatus, desktopFPSPresets, desktopPanelPresets, desktopQualityPresets, desktopRuntimeEncoderStatus } from "../../lib/desktop-media";
 import { desktopOwnsKeyboard } from "../../lib/desktop-input-focus";
 import { DesktopCanvasInput } from "../../lib/desktop-input";
-import { writeOwnedClipboard } from "../../lib/clipboard-write";
+import { useDesktopClipboard } from "../../lib/desktop-clipboard";
 import { paintDesktopCanvas, paintDesktopImage } from "../../lib/desktop-frame";
 import { DesktopH264Decoder } from "../../lib/desktop-h264";
 import {
   adaptiveDesktopSize,
-  base64ToBytes,
-  bytesToBase64,
-  clipboardFingerprint,
-  clipboardItems,
   desktopFrameLine,
   desktopFrameRates,
   errMessage,
@@ -19,8 +15,6 @@ import {
   loadDesktopSettings,
   persistGpuDesktopSettings,
   sourceLabel,
-  type ClipCaps,
-  type ClipItem,
   type ConnMode,
   type DesktopCaps,
   type DesktopDevice,
@@ -138,7 +132,6 @@ export function PanelDesktop({
   visibleRef.current = visible;
   const passwordRef = useRef("");
   const deviceCapsRef = useRef<DesktopDevice | null>(null);
-  const clipCapsRef = useRef<ClipCaps | null>(null);
   const gpuSourceNamesRef = useRef<string[] | null>(null);
   const tRef = useRef(t);
   tRef.current = t;
@@ -192,15 +185,6 @@ export function PanelDesktop({
   const gpuLastStatsAtRef = useRef(0);
   const gpuComposingRef = useRef(false);
   const gpuIgnoreNextTextInputRef = useRef(false);
-
-  const clipRemoteWritePendingRef = useRef(false);
-  const clipGenRef = useRef(0);
-  const clipPollTimerRef = useRef<number | undefined>(undefined);
-  const clipReadPendingRef = useRef(false);
-  const clipLocalReadPendingRef = useRef(false);
-  const clipLastLocalFpRef = useRef<string | null>(null);
-  const clipLastRemoteFpRef = useRef<string | null>(null);
-  const clipPendingRemoteFpRef = useRef<string | null>(null);
 
   /* ── State helpers (keep refs in sync, synchronously) ── */
 
@@ -772,175 +756,21 @@ export function PanelDesktop({
 
   /* ── Clipboard sync ── */
 
-  const clipboardSyncsRemoteToLocal = () =>
-    (settingsRef.current.clipboardMode === "remote-to-local" ||
-      settingsRef.current.clipboardMode === "bidirectional") &&
-    clipCapsRef.current?.read !== false;
-
-  const clipboardSyncsLocalToRemote = () =>
-    (settingsRef.current.clipboardMode === "local-to-remote" ||
-      settingsRef.current.clipboardMode === "bidirectional") &&
-    clipCapsRef.current?.write !== false;
-
-  const stopClipboardSync = () => {
-    clipGenRef.current++;
-    clipRemoteWritePendingRef.current = false;
-    clearInterval(clipPollTimerRef.current);
-    clipPollTimerRef.current = undefined;
-    clipReadPendingRef.current = false;
-    clipLocalReadPendingRef.current = false;
-  };
-
-  const pollClipboardSync = () => {
-    // Never touch the browser clipboard while the tab is hidden.
-    if (!visibleRef.current) return;
-    requestRemoteClipboard();
-    syncLocalClipboard();
-  };
-
-  const startClipboardSync = () => {
-    stopClipboardSync();
-    clipLastLocalFpRef.current = null;
-    clipLastRemoteFpRef.current = null;
-    clipPendingRemoteFpRef.current = null;
-    if (!clipCapsRef.current || settingsRef.current.clipboardMode === "off") return;
-    pollClipboardSync();
-    clipPollTimerRef.current = window.setInterval(pollClipboardSync, 1000);
-  };
-
-  const setClipboardCapabilities = (capabilities: ClipCaps | null) => {
-    clipCapsRef.current = capabilities && capabilities.supported ? capabilities : null;
-    if (!clipCapsRef.current) {
-      stopClipboardSync();
-      setClipStatus("");
-      return;
-    }
-    const formats = clipCapsRef.current.formats || ["text/plain"];
-    setClipStatus(`${tRef.current("desktop.clipboardAvailable")}：${formats.join(", ")}`);
-    startClipboardSync();
-  };
-
-  const readBrowserClipboardItems = async (): Promise<ClipItem[]> => {
-    const allowed: Record<string, boolean> = Object.fromEntries(
-      (clipCapsRef.current?.formats || ["text/plain"]).map((format) => [format, true]),
-    );
-    const result: ClipItem[] = [];
-    if (navigator.clipboard?.read) {
-      for (const clipboardItem of await navigator.clipboard.read()) {
-        for (const type of clipboardItem.types) {
-          const mime = type.split(";", 1)[0].toLowerCase();
-          if (!allowed[mime]) continue;
-          const blob = await clipboardItem.getType(type);
-          result.push({
-            mime,
-            data: bytesToBase64(new Uint8Array(await blob.arrayBuffer())),
-          });
-        }
-      }
-    }
-    if (!result.length && navigator.clipboard?.readText && allowed["text/plain"]) {
-      const text = await navigator.clipboard.readText();
-      if (text)
-        result.push({ mime: "text/plain", data: bytesToBase64(new TextEncoder().encode(text)) });
-    }
-    return result;
-  };
-
-  const writeBrowserClipboardItems = async (event: { items?: ClipItem[]; text?: string }) => {
-    const items = clipboardItems(event);
-    if (!items.length) throw new Error(tRef.current("desktop.clipboardEmpty"));
-    if (navigator.clipboard?.write && typeof ClipboardItem === "function") {
-      const data: Record<string, Blob> = {};
-      for (const item of items) {
-        if (typeof ClipboardItem.supports !== "function" || ClipboardItem.supports(item.mime))
-          data[item.mime] = new Blob([base64ToBytes(item.data) as BlobPart], { type: item.mime });
-      }
-      if (Object.keys(data).length) await navigator.clipboard.write([new ClipboardItem(data)]);
-      else throw new Error(tRef.current("desktop.clipboardFormatUnsupported"));
-    } else {
-      const text = items.find((item) => item.mime === "text/plain");
-      if (!text || !navigator.clipboard?.writeText)
-        throw new Error(tRef.current("desktop.clipboardFormatUnsupported"));
-      await navigator.clipboard.writeText(new TextDecoder().decode(base64ToBytes(text.data)));
-    }
-
-  };
-
-  const requestRemoteClipboard = () => {
-    if (!clipCapsRef.current || !clipboardSyncsRemoteToLocal() || clipReadPendingRef.current)
-      return;
-    clipReadPendingRef.current = true;
-    const ws = wsRef.current;
-    if (connModeRef.current === "gpu") gpuSend("GetClipboard");
-    else if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ op: "clipboard_get" }));
-    else clipReadPendingRef.current = false;
-  };
-
-  const syncLocalClipboard = async () => {
-    if (!clipCapsRef.current || !clipboardSyncsLocalToRemote() || clipLocalReadPendingRef.current || clipRemoteWritePendingRef.current)
-      return;
-    const generation = clipGenRef.current;
-    clipLocalReadPendingRef.current = true;
-    try {
-      const items = await readBrowserClipboardItems();
-      if (generation !== clipGenRef.current || !visibleRef.current || !clipboardSyncsLocalToRemote() || clipRemoteWritePendingRef.current || !items.length)
-        return;
-      const fingerprint = clipboardFingerprint(items);
-      if (clipLastLocalFpRef.current === null) {
-        clipLastLocalFpRef.current = fingerprint;
-        if (settingsRef.current.clipboardMode === "bidirectional") return;
-      } else if (fingerprint === clipLastLocalFpRef.current) {
-        return;
-      } else {
-        clipLastLocalFpRef.current = fingerprint;
-      }
-      clipPendingRemoteFpRef.current = fingerprint;
-      const ws = wsRef.current;
-      if (connModeRef.current === "gpu") gpuSend({ SetClipboard: { items } });
-      else if (ws?.readyState === WebSocket.OPEN)
-        ws.send(JSON.stringify({ op: "clipboard_set", clipboardItems: items }));
-      setClipStatus(
-        `${tRef.current("desktop.clipboardSyncedRemote")}（${items.map((item) => item.mime).join(", ")}）`,
-      );
-    } catch (err) {
-      if (generation === clipGenRef.current)
-        setClipStatus(`${tRef.current("desktop.clipboardReadFailed")}：${errMessage(err)}`);
-    } finally {
-      if (generation === clipGenRef.current) clipLocalReadPendingRef.current = false;
-    }
-  };
-
-  const handleRemoteClipboard = (event: { items?: ClipItem[]; text?: string }) => {
-    clipReadPendingRef.current = false;
-    const items = clipboardItems(event);
-    if (!visibleRef.current || !clipboardSyncsRemoteToLocal() || !items.length) return;
-    const fingerprint = clipboardFingerprint(items);
-    if (clipPendingRemoteFpRef.current !== null) {
-      if (fingerprint === clipPendingRemoteFpRef.current) {
-        clipLastRemoteFpRef.current = fingerprint;
-        clipPendingRemoteFpRef.current = null;
-      }
-      return;
-    }
-    if (clipLastRemoteFpRef.current === null && settingsRef.current.clipboardMode === "bidirectional") {
-      clipLastRemoteFpRef.current = fingerprint;
-      return;
-    }
-    if (fingerprint === clipLastRemoteFpRef.current || clipRemoteWritePendingRef.current) return;
-    const generation = clipGenRef.current;
-    const socket = wsRef.current;
-    const current = () => generation === clipGenRef.current && socket === wsRef.current && visibleRef.current && clipboardSyncsRemoteToLocal();
-    clipRemoteWritePendingRef.current = true;
-    void writeOwnedClipboard(current, () => writeBrowserClipboardItems({ items }), () => {
-      clipLastRemoteFpRef.current = fingerprint;
-      clipLastLocalFpRef.current = fingerprint;
-      setClipStatus(`${tRef.current("desktop.clipboardSyncedLocal")}（${items.map((item) => item.mime).join(", ")}）`);
-    }, (err) => {
-      setClipStatus(`${tRef.current("desktop.clipboardWriteFailed")}：${errMessage(err)}`);
-    }).finally(() => {
-      if (generation === clipGenRef.current) clipRemoteWritePendingRef.current = false;
-    });
-  };
+  const clipboard = useDesktopClipboard({
+    // Folded-away panels never touch the browser clipboard.
+    active: () => visibleRef.current,
+    mode: () => settingsRef.current.clipboardMode,
+    connMode: () => connModeRef.current,
+    socket: () => wsRef.current,
+    send: (message) => wsRef.current?.send(JSON.stringify(message)),
+    gpuSend,
+    setClipStatus,
+    t: (key) => tRef.current(key),
+  });
+  const pollClipboardSync = clipboard.poll;
+  const stopClipboardSync = clipboard.stop;
+  const setClipboardCapabilities = clipboard.setCapabilities;
+  const handleRemoteClipboard = clipboard.handleRemote;
 
   /* ── Connect / disconnect ── */
 
@@ -1152,9 +982,7 @@ export function PanelDesktop({
         setStatus(msg.ConfigError, "err");
       } else if (msg && msg.Error) {
         if (String(msg.Error).startsWith("clipboard:")) {
-          clipReadPendingRef.current = false;
-          clipPendingRemoteFpRef.current = null;
-          setClipStatus(msg.Error);
+          clipboard.failRemote(msg.Error);
         } else {
           lastCloseMsgRef.current = msg.Error;
           setStatus(msg.Error, "err");
@@ -1296,9 +1124,7 @@ export function PanelDesktop({
       } else if (msg.op === "clipboard_content") {
         handleRemoteClipboard({ items: msg.clipboardItems || [], text: msg.text || "" });
       } else if (msg.op === "clipboard_error") {
-        clipReadPendingRef.current = false;
-        clipPendingRemoteFpRef.current = null;
-        setClipStatus(msg.message || tt("desktop.clipboardRemoteError"));
+        clipboard.failRemote(msg.message || tt("desktop.clipboardRemoteError"));
       } else if (msg.op === "input_error") {
         setStatus(msg.message || tt("common.error"), "err");
       }
@@ -1807,7 +1633,7 @@ export function PanelDesktop({
       connSeqRef.current++;
       clearTimeout(reconnectTimerRef.current);
       clearTimeout(resizeTimerRef.current);
-      clearInterval(clipPollTimerRef.current);
+      clipboard.stop();
       if (wsRef.current) {
         wsRef.current.close();
         wsRef.current = null;
