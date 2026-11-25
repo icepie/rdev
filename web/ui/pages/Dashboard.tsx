@@ -66,7 +66,7 @@ interface DesktopCaps {
   reason?: string;
 }
 
-type ClientFlavor = "go" | "cgo" | "rs";
+type ClientFlavor = "go" | "rs";
 
 function shellQuote(value: string): string {
   return `'${value.replaceAll("'", "'\\''")}'`;
@@ -404,7 +404,6 @@ export function DashboardPage() {
 
   const flavorTags: { value: ClientFlavor; key: string }[] = [
     { value: "go", key: "index.clientCompat" },
-    { value: "cgo", key: "index.clientFeature" },
     { value: "rs", key: "index.clientPerf" },
   ];
 
