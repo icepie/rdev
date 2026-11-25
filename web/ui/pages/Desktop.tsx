@@ -257,6 +257,8 @@ function DesktopSession({
     localStorage.setItem(P + "fit", s.fit);
     localStorage.setItem(P + "control", String(s.control));
     localStorage.setItem(P + "showCursor", String(s.showCursor));
+    localStorage.setItem(P + "pointerLock", String(s.pointerLock));
+    localStorage.setItem(P + "globalMouse", String(s.globalMouse));
     localStorage.setItem(P + "clipboardSyncMode", s.clipboardMode);
     const rates = desktopStreamRates(s.fps, s.quality);
     localStorage.setItem(P + "fps", String(rates.fps));
@@ -1396,6 +1398,8 @@ function DesktopSession({
         ignoreNextTextInput: gpuIgnoreNextTextInputRef,
         heldKeys: gpuHeldKeysRef,
         socket: () => wsRef.current,
+        pointerLock: () => settingsRef.current.pointerLock,
+        globalMouse: () => settingsRef.current.globalMouse,
         mode: () => {
           if (connModeRef.current !== "desktop") return null;
           if (settingsRef.current.control && remoteInputRef.current) return "control";
@@ -1810,6 +1814,27 @@ function DesktopSession({
           <Switch checked={settings.showCursor} onCheckedChange={onShowCursorChange} />
           <span>{t("desktop.showCursor")}</span>
         </label>
+        <label className="inline-flex items-center gap-1.5 whitespace-nowrap" title={t("desktop.pointerLockHint")}>
+          <Switch
+            checked={settings.pointerLock}
+            onCheckedChange={(checked) => {
+              updateSettings({ pointerLock: checked, ...(checked ? { globalMouse: false } : {}) });
+              saveDesktopSettings();
+            }}
+          />
+          <span>{t("desktop.pointerLock")}</span>
+        </label>
+        <label className="inline-flex items-center gap-1.5 whitespace-nowrap" title={t("desktop.globalMouseHint")}>
+          <Switch
+            checked={settings.globalMouse}
+            onCheckedChange={(checked) => {
+              updateSettings({ globalMouse: checked, ...(checked ? { pointerLock: false } : {}) });
+              saveDesktopSettings();
+            }}
+          />
+          <span>{t("desktop.globalMouse")}</span>
+        </label>
+
 
         {!isGpuDevice && (
           <label className="inline-flex items-center gap-1.5 whitespace-nowrap">

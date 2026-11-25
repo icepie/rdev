@@ -223,6 +223,8 @@ export function PanelDesktop({
     localStorage.setItem(P + "fit", s.fit);
     localStorage.setItem(P + "control", String(s.control));
     localStorage.setItem(P + "showCursor", String(s.showCursor));
+    localStorage.setItem(P + "pointerLock", String(s.pointerLock));
+    localStorage.setItem(P + "globalMouse", String(s.globalMouse));
     localStorage.setItem(P + "clipboardSyncMode", s.clipboardMode);
     localStorage.setItem(P + "fps", s.fps);
     localStorage.setItem(P + "quality", s.quality);
@@ -1233,6 +1235,8 @@ export function PanelDesktop({
         ignoreNextTextInput: gpuIgnoreNextTextInputRef,
         heldKeys: gpuHeldKeysRef,
         socket: () => wsRef.current,
+        pointerLock: () => settingsRef.current.pointerLock,
+        globalMouse: () => settingsRef.current.globalMouse,
         mode: () => {
           if (!visibleRef.current || connModeRef.current !== "desktop") return null;
           if (settingsRef.current.control && remoteInputRef.current) return "control";

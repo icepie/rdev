@@ -34,7 +34,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function viewer() {
+function viewer(extra = {}) {
   const frames = [];
   vi.stubGlobal("requestAnimationFrame", callback => frames.push(callback));
   // Invoke even cancelled callbacks to exercise stale-frame guards.
@@ -52,13 +52,17 @@ function viewer() {
   const state = { mode: "control", socket: { readyState: 1, bufferedAmount: 0,
     send: data => messages.push(JSON.parse(data)) } };
   const input = new DesktopCanvasInput();
-  const detach = input.attach(canvas, { socket: () => state.socket, mode: () => state.mode, globalKeyboard: true });
+  const detach = input.attach(canvas, { socket: () => state.socket, mode: () => state.mode, globalKeyboard: true, ...extra });
   function dispatch(type, props = {}) {
     const init = { clientX: 11, clientY: 21, cancelable: true, bubbles: true, ...props };
     const event = type.startsWith("key") ? new KeyboardEvent(type, init) : type === "wheel" ? new WheelEvent(type, init) : new MouseEvent(type, init);
     if (type.startsWith("pointer")) Object.defineProperties(event, {
       pointerId: { value: props.pointerId ?? 1 }, pointerType: { value: "mouse" }, pressure: { value: 0.5 },
     });
+    if (props.movementX !== undefined) {
+      Object.defineProperty(event, "movementX", { value: props.movementX });
+      Object.defineProperty(event, "movementY", { value: props.movementY ?? 0 });
+    }
     canvas.dispatchEvent(event);
     return event;
   }
@@ -204,4 +208,37 @@ it("does not steal keys from local controls such as selects and buttons", () => 
     control.remove();
   }
   expect(messages).toEqual([]);
+});
+
+it("drives the remote cursor from relative movement while the pointer is locked", () => {
+  const locks = [];
+  const { canvas, dispatch, messages, frames } = viewer({
+    pointerLock: () => true,
+    onPointerLockChange: locked => locks.push(locked),
+  });
+  canvas.requestPointerLock = () => {
+    Object.defineProperty(document, "pointerLockElement", { value: canvas, configurable: true });
+    document.dispatchEvent(new Event("pointerlockchange"));
+  };
+  dispatch("pointerdown", { button: 0, buttons: 1 });
+  expect(locks.at(-1)).toBe(true);
+  dispatch("pointermove", { movementX: 20, movementY: 10, buttons: 1 });
+  frames.at(-1)();
+  const move = messages.filter(m => m.inputType === "mouse_move").at(-1);
+  expect(move).toMatchObject({ x: 139, y: 69 });
+  Object.defineProperty(document, "pointerLockElement", { value: null, configurable: true });
+  document.dispatchEvent(new Event("pointerlockchange"));
+  expect(locks.at(-1)).toBe(false);
+});
+
+it("tracks the pointer across the whole page in global mode", () => {
+  const { messages, frames } = viewer({ globalMouse: () => true });
+  const outside = new MouseEvent("pointermove", { clientX: 400, clientY: 400, bubbles: true, cancelable: true });
+  Object.defineProperties(outside, { pointerId: { value: 1 }, pointerType: { value: "mouse" }, pressure: { value: 0 } });
+  document.body.dispatchEvent(outside);
+  frames.at(-1)?.();
+  const move = messages.filter(m => m.inputType === "mouse_move").at(-1);
+  expect(move).toBeTruthy();
+  expect(move.x).toBe(199);
+  expect(move.y).toBe(99);
 });

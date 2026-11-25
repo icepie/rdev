@@ -52,6 +52,8 @@ export function attachDesktopStageInput({
   heldKeys,
   socket,
   mode,
+  pointerLock,
+  globalMouse,
   mouseEnabled,
   socketOpen,
   fail,
@@ -63,6 +65,8 @@ export function attachDesktopStageInput({
   heldKeys: { current: Map<string, Record<string, unknown>> };
   socket: () => WebSocket | null;
   mode: () => "control" | "cursor" | null;
+  pointerLock?: () => boolean;
+  globalMouse?: () => boolean;
   mouseEnabled: () => boolean;
   socketOpen: () => boolean;
   fail: (cause: unknown) => void;
@@ -83,7 +87,7 @@ export function attachDesktopStageInput({
 
   if (canvas) {
     cleanups.push(
-      input.attach(canvas, { socket, mode, error: fail, globalKeyboard: true }),
+      input.attach(canvas, { socket, mode, error: fail, globalKeyboard: true, pointerLock, globalMouse }),
     );
   }
 

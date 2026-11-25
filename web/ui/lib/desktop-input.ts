@@ -75,6 +75,12 @@ type DesktopCanvasInputOptions = {
    * remote session keeps typing after focus moves off the canvas. Editable
    * fields, dialogs and the settings panel stay local. */
   globalKeyboard?: boolean;
+  /** Lock the pointer on click and drive the remote cursor from relative
+   * movement. Esc always releases per browser policy. */
+  pointerLock?: () => boolean;
+  /** Track the pointer anywhere on the page instead of only over the canvas. */
+  globalMouse?: () => boolean;
+  onPointerLockChange?: (locked: boolean) => void;
 };
 
 const localEditableSelector = [
@@ -111,6 +117,9 @@ export class DesktopCanvasInput {
   private readonly held = new DesktopHeldInput();
   private readonly motion = new CanvasMotionQueue();
   private readonly wheel = new CanvasWheelAccumulator();
+  private locked = false;
+  private virtualX = 0;
+  private virtualY = 0;
 
   attach(canvas: HTMLCanvasElement, options: DesktopCanvasInputOptions) {
     const mode = () => canvas.isConnected && !canvas.ownerDocument.hidden && !canvas.closest("[inert]") &&
@@ -127,12 +136,28 @@ export class DesktopCanvasInput {
         return false;
       }
     };
+    const lockedPoint = () => ({
+      x: Math.max(0, Math.min(canvas.width - 1, Math.round(this.virtualX))),
+      y: Math.max(0, Math.min(canvas.height - 1, Math.round(this.virtualY))),
+    });
     const pointer = (event: PointerEvent) => {
       const access = mode();
       if (!access) return;
       const id = event.pointerId;
       const dragging = this.held.hasPointer(id);
-      const point = framePoint(canvas, event, dragging);
+      let point: { x: number; y: number } | null;
+      if (this.locked) {
+        if (event.type === "pointermove") {
+          const rect = canvas.getBoundingClientRect();
+          const scaleX = rect.width > 0 ? canvas.width / rect.width : 1;
+          const scaleY = rect.height > 0 ? canvas.height / rect.height : 1;
+          this.virtualX = Math.max(0, Math.min(canvas.width - 1, this.virtualX + (event.movementX || 0) * scaleX));
+          this.virtualY = Math.max(0, Math.min(canvas.height - 1, this.virtualY + (event.movementY || 0) * scaleY));
+        }
+        point = lockedPoint();
+      } else {
+        point = framePoint(canvas, event, dragging || (options.globalMouse?.() === true && access === "control"));
+      }
       if (!point) return;
       const data = { ...point, pointerType: event.pointerType, pointerId: id, pressure: event.pressure,
         button: event.button, ...modifiers(event) };
@@ -161,7 +186,16 @@ export class DesktopCanvasInput {
       event.preventDefault();
       if (event.type === "pointerdown") {
         canvas.focus({ preventScroll: true });
-        canvas.setPointerCapture?.(id);
+        if (!this.locked && options.pointerLock?.() && typeof canvas.requestPointerLock === "function") {
+          try {
+            const locked = canvas.requestPointerLock();
+            if (locked && typeof (locked as Promise<void>).catch === "function") (locked as Promise<void>).catch(() => {});
+          } catch {
+            /* pointer lock is optional */
+          }
+        } else {
+          canvas.setPointerCapture?.(id);
+        }
       }
       if (event.type === "pointerup" && canvas.hasPointerCapture?.(id)) canvas.releasePointerCapture(id);
     };
@@ -188,7 +222,7 @@ export class DesktopCanvasInput {
     };
     const wheel = (event: WheelEvent) => {
       if (mode() !== "control") return;
-      const point = framePoint(canvas, event, false);
+      const point = this.locked ? lockedPoint() : framePoint(canvas, event, false);
       if (!point) return;
       event.preventDefault();
       event.stopPropagation();
@@ -214,6 +248,31 @@ export class DesktopCanvasInput {
     canvas.addEventListener("keydown", key, opts);
     canvas.addEventListener("keyup", key, opts);
     canvas.addEventListener("blur", () => this.release(send), opts);
+    const onLockChange = () => {
+      const locked = canvas.ownerDocument.pointerLockElement === canvas;
+      if (locked === this.locked) return;
+      this.locked = locked;
+      if (locked) {
+        const center = framePoint(canvas, { clientX: canvas.getBoundingClientRect().left + canvas.getBoundingClientRect().width / 2, clientY: canvas.getBoundingClientRect().top + canvas.getBoundingClientRect().height / 2 } as MouseEvent, true);
+        this.virtualX = center?.x ?? canvas.width / 2;
+        this.virtualY = center?.y ?? canvas.height / 2;
+      } else {
+        this.release(send);
+      }
+      options.onPointerLockChange?.(locked);
+    };
+    canvas.ownerDocument.addEventListener("pointerlockchange", onLockChange, opts);
+    canvas.ownerDocument.addEventListener("pointerlockerror", () => options.onPointerLockChange?.(false), opts);
+    if (options.globalMouse) {
+      canvas.ownerDocument.addEventListener("pointermove", (event: PointerEvent) => {
+        if (this.locked || mode() !== "control" || options.globalMouse?.() !== true) return;
+        const point = framePoint(canvas, event, true);
+        if (!point) return;
+        const id = event.pointerId;
+        const input = { inputType: "mouse_move", ...point, pointerType: event.pointerType || "mouse", pointerId: id, pressure: event.pressure, button: -1, ...modifiers(event) };
+        this.motion.enqueue(id, () => send(input));
+      }, opts);
+    }
     if (options.globalKeyboard) {
       const doc = canvas.ownerDocument;
       doc.addEventListener("keydown", globalKey, opts);

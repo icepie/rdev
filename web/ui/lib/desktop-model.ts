@@ -70,6 +70,8 @@ export interface DesktopSettingsBase {
   fit: string;
   control: boolean;
   showCursor: boolean;
+  pointerLock: boolean;
+  globalMouse: boolean;
   clipboardMode: string;
   gpuSource: string;
   gpuEncoder: string;
@@ -104,6 +106,8 @@ export function loadDesktopSettings(settingsPrefix: string, gpuPrefix: string): 
     fit: fit === "fit" || fit === "actual" ? fit : "fit",
     control: localStorage.getItem(settingsPrefix + "control") === "true",
     showCursor: localStorage.getItem(settingsPrefix + "showCursor") === "true",
+    pointerLock: localStorage.getItem(settingsPrefix + "pointerLock") !== "false",
+    globalMouse: localStorage.getItem(settingsPrefix + "globalMouse") === "true",
     // Clipboard sync is opt-in: it polls the local clipboard in the background.
     clipboardMode: ["off", "remote-to-local", "local-to-remote", "bidirectional"].includes(
       clipboardMode || "",
