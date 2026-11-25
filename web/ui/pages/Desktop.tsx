@@ -37,6 +37,7 @@ import {
   gpuVideoContentRect as computeGpuVideoContentRect,
 } from "../lib/desktop-gpu-input";
 import { DisclosureBody } from "../components/disclosure-body";
+import { DesktopSessionBar } from "../components/desktop-session-bar";
 import { Icon } from "../components/icon";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useSearchParams } from "react-router-dom";
@@ -126,6 +127,8 @@ function DesktopSession({
     cls: "",
   });
   const [frameInfo, setFrameInfo] = useState("");
+  const [sessionInfo, setSessionInfo] = useState("");
+  const [sessionReady, setSessionReady] = useState(false);
   const [gpuEncoderStatus, setGpuEncoderStatus] = useState("");
   const [clipStatus, setClipStatus] = useState("");
   const [clipCaps, setClipCapsState] = useState<ClipCaps | null>(null);
@@ -211,6 +214,7 @@ function DesktopSession({
   const gpuVideoModeRef = useRef<"mse" | "webcodecs">("mse");
   const gpuNeedKeyFrameRef = useRef(false);
   const gpuLastStatsAtRef = useRef(0);
+  const frameStatsAtRef = useRef(0);
   const gpuComposingRef = useRef(false);
   const gpuIgnoreNextTextInputRef = useRef(false);
   /* Grouped for the shared GPU video helpers (androidVideoPacket/WebCodecs). */
@@ -403,12 +407,17 @@ function DesktopSession({
     lastFrameAtRef.current = 0;
     currentSourceRef.current = "";
     setFrameInfo("");
+    setSessionInfo("");
   };
 
   const updateFrameInfo = () => {
     const canvas = canvasRef.current;
     if (!canvas || !canvas.width || !canvas.height) return;
     const now = performance.now();
+    // Frame counters advance every frame; refresh the label at most twice a
+    // second so the status bar does not re-render the page per frame.
+    if (now - frameStatsAtRef.current < 500) return;
+    frameStatsAtRef.current = now;
     const { fps, kbps } = desktopFrameRates({
       count: frameCountRef.current,
       bytes: frameBytesRef.current,
@@ -419,14 +428,7 @@ function DesktopSession({
       ? Math.max(0, (now - lastFrameAtRef.current) / 1000).toFixed(1)
       : "0.0";
     setFrameInfo(
-      desktopFrameLine({
-        size: `${canvas.width}×${canvas.height}`,
-        source: currentSourceRef.current,
-        fps,
-        kbps,
-        bytes: frameBytesRef.current,
-        age,
-      }),
+      desktopFrameLine({ fps, kbps, bytes: frameBytesRef.current, age }),
     );
   };
 
@@ -440,17 +442,7 @@ function DesktopSession({
       startedAt: statsStartedAtRef.current,
       now,
     });
-    const gpuCanvas = gpuCanvasRef.current;
-    const video = videoRef.current;
-    const size =
-      gpuVideoModeRef.current === "webcodecs"
-        ? `${gpuCanvas?.width || 0}×${gpuCanvas?.height || 0}`
-        : video && video.videoWidth && video.videoHeight
-          ? `${video.videoWidth}×${video.videoHeight}`
-          : "video";
-    setFrameInfo(
-      desktopFrameLine({ size, source: currentSourceRef.current, fps, kbps, bytes: frameBytesRef.current }),
-    );
+    setFrameInfo(desktopFrameLine({ fps, kbps, bytes: frameBytesRef.current }));
   };
 
   /* ── H264 (legacy desktop stream) ── */
@@ -1146,8 +1138,10 @@ function DesktopSession({
         forgetDevicePassword(dev);
         setStatus(msg.message || tt("common.passwordWrong"), "err");
       } else if (msg.op === "starting") {
+        setSessionReady(false);
         setStatus(tt("desktop.starting"));
       } else if (msg.op === "ready") {
+        setSessionReady(true);
         desktopReleaseKeyboard();
         desktopReconnectDelayRef.current = 1000;
         const canvas = canvasRef.current;
@@ -1174,7 +1168,8 @@ function DesktopSession({
         const encoder = desktopEncoderStatus(msg, tt);
         const w = canvas?.width || 0;
         const h = canvas?.height || 0;
-        setStatus(`${tt("index.desktopReady")} · ${w}×${h}${source}${encoder ? ` · ${encoder}` : ""}`, "ok");
+        setSessionInfo(`${w}×${h}${source}${encoder ? ` · ${encoder}` : ""}`);
+        setStatus(tt("index.desktopReady"), "ok");
         setClipboardCapabilities(
           msg.desktop && msg.desktop.clipboard
             ? {
@@ -1191,6 +1186,7 @@ function DesktopSession({
         lastCloseMsgRef.current = msg.message || tt("common.error");
         setStatus(lastCloseMsgRef.current, "err");
       } else if (msg.op === "closed") {
+        setSessionReady(false);
         desktopInput.clear();
         remoteInputRef.current = false;
         const recoveryFormat = desktopEncoderRecoveryFormat(msg.format, msg.encoderBackend);
@@ -1211,6 +1207,7 @@ function DesktopSession({
     };
     ws.onclose = () => {
       if (connID !== connSeqRef.current || wsRef.current !== ws) return;
+      setSessionReady(false);
       desktopInput.clear();
       rtcRef.current?.close();
       rtcRef.current = null;
@@ -1896,11 +1893,6 @@ function DesktopSession({
             {clipStatus}
           </span>
         )}
-        <div className="ml-auto flex items-center gap-2">
-          {frameInfo && (
-            <span className="text-xs text-muted-foreground">{frameInfo}</span>
-          )}
-        </div>
 
         {isGpuDevice && settings.gpuAdvancedOpen && (
           <div className="flex w-full flex-wrap items-center gap-x-3 gap-y-2 border-t border-border-seam pt-2">
@@ -2148,10 +2140,17 @@ function DesktopSession({
         )}
         {connMode !== "gpu" && !canvasShown && (
           <div className="text-center leading-loose text-muted-foreground">
-            {t("desktop.empty")}
+            {!connMode && status.text && status.text !== t("desktop.idle") ? status.text : t("desktop.empty")}
           </div>
         )}
       </div>
+      <DesktopSessionBar
+        controlling={controlActive && sessionReady && !controlDisabled}
+        onReleaseControl={() => onControlChange(false)}
+        info={sessionInfo}
+        frame={frameInfo}
+        t={t}
+      />
     </div>
   );
 }

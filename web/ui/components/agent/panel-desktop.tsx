@@ -65,6 +65,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "../select";
+import { DesktopSessionBar } from "../desktop-session-bar";
 import { Icon } from "../icon";
 import { TabAuthOverlay } from "../../pages/Terminal";
 import type { Translator } from "./types";
@@ -103,6 +104,8 @@ export function PanelDesktop({
     cls: "",
   });
   const [frameInfo, setFrameInfo] = useState("");
+  const [sessionInfo, setSessionInfo] = useState("");
+  const [sessionReady, setSessionReady] = useState(false);
   const [clipStatus, setClipStatus] = useState("");
   const [isGpuDevice, setIsGpuDevice] = useState(false);
   const [sourceOptions, setSourceOptions] = useState<DesktopSource[]>([]);
@@ -185,6 +188,7 @@ export function PanelDesktop({
   const gpuVideoModeRef = useRef<"mse" | "webcodecs">("mse");
   const gpuNeedKeyFrameRef = useRef(false);
   const gpuLastStatsAtRef = useRef(0);
+  const frameStatsAtRef = useRef(0);
   const gpuComposingRef = useRef(false);
   const gpuIgnoreNextTextInputRef = useRef(false);
   /* Grouped for the shared GPU video helpers (androidVideoPacket/WebCodecs). */
@@ -358,12 +362,15 @@ export function PanelDesktop({
     lastFrameAtRef.current = 0;
     currentSourceRef.current = "";
     setFrameInfo("");
+    setSessionInfo("");
   };
 
   const updateFrameInfo = () => {
     const canvas = canvasRef.current;
     if (!canvas || !canvas.width || !canvas.height) return;
     const now = performance.now();
+    if (now - frameStatsAtRef.current < 500) return;
+    frameStatsAtRef.current = now;
     const { fps, kbps } = desktopFrameRates({
       count: frameCountRef.current,
       bytes: frameBytesRef.current,
@@ -374,14 +381,7 @@ export function PanelDesktop({
       ? Math.max(0, (now - lastFrameAtRef.current) / 1000).toFixed(1)
       : "0.0";
     setFrameInfo(
-      desktopFrameLine({
-        size: `${canvas.width}×${canvas.height}`,
-        source: currentSourceRef.current,
-        fps,
-        kbps,
-        bytes: frameBytesRef.current,
-        age,
-      }),
+      desktopFrameLine({ fps, kbps, bytes: frameBytesRef.current, age }),
     );
   };
 
@@ -395,17 +395,7 @@ export function PanelDesktop({
       startedAt: statsStartedAtRef.current,
       now,
     });
-    const gpuCanvas = gpuCanvasRef.current;
-    const video = videoRef.current;
-    const size =
-      gpuVideoModeRef.current === "webcodecs"
-        ? `${gpuCanvas?.width || 0}×${gpuCanvas?.height || 0}`
-        : video && video.videoWidth && video.videoHeight
-          ? `${video.videoWidth}×${video.videoHeight}`
-          : "video";
-    setFrameInfo(
-      desktopFrameLine({ size, source: currentSourceRef.current, fps, kbps, bytes: frameBytesRef.current }),
-    );
+    setFrameInfo(desktopFrameLine({ fps, kbps, bytes: frameBytesRef.current }));
   };
 
   /* ── H264 (legacy desktop stream) ── */
@@ -1016,8 +1006,10 @@ export function PanelDesktop({
         pendingPwRef.current = "";
         setAuthError(msg.message || tt("common.passwordWrong"));
       } else if (msg.op === "starting") {
+        setSessionReady(false);
         setStatus(tt("desktop.starting"));
       } else if (msg.op === "ready") {
+        setSessionReady(true);
         desktopReleaseKeyboard();
         desktopReconnectDelayRef.current = 1000;
         const canvas = canvasRef.current;
@@ -1044,7 +1036,8 @@ export function PanelDesktop({
         const encoder = desktopEncoderStatus(msg, tt);
         const w = canvas?.width || 0;
         const h = canvas?.height || 0;
-        setStatus(`${tt("index.desktopReady")} · ${w}×${h}${source}${encoder ? ` · ${encoder}` : ""}`, "ok");
+        setSessionInfo(`${w}×${h}${source}${encoder ? ` · ${encoder}` : ""}`);
+        setStatus(tt("index.desktopReady"), "ok");
         setClipboardCapabilities(
           msg.desktop && msg.desktop.clipboard
             ? {
@@ -1061,6 +1054,7 @@ export function PanelDesktop({
         lastCloseMsgRef.current = msg.message || tt("common.error");
         setStatus(lastCloseMsgRef.current, "err");
       } else if (msg.op === "closed") {
+        setSessionReady(false);
         desktopInput.clear();
         remoteInputRef.current = false;
         const recoveryFormat = desktopEncoderRecoveryFormat(msg.format, msg.encoderBackend);
@@ -1081,6 +1075,7 @@ export function PanelDesktop({
     };
     ws.onclose = () => {
       if (connID !== connSeqRef.current || wsRef.current !== ws) return;
+      setSessionReady(false);
       desktopInput.clear();
       wsRef.current = null;
       stopClipboardSync();
@@ -1422,7 +1417,6 @@ export function PanelDesktop({
 
   const toolbarStatus = [status.text || t("desktop.idle"),
     connMode === "gpu" && status.cls === "ok" && settings.gpuEnableVideo && gpuEncoderStatus,
-    connMode && frameInfo,
   ].filter(Boolean).join(" · ");
 
   /* ── Render ── */
@@ -1678,6 +1672,13 @@ export function PanelDesktop({
           </div>
         )}
       </div>
+      <DesktopSessionBar
+        controlling={controlActive && sessionReady && !controlDisabled}
+        onReleaseControl={() => onControlChange(false)}
+        info={sessionInfo}
+        frame={frameInfo}
+        t={t}
+      />
 
       {authOpen && (
         <TabAuthOverlay

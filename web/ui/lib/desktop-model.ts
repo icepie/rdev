@@ -301,22 +301,19 @@ export function desktopFrameRates({
   };
 }
 
+/* Frame metrics only: geometry, source and encoder live in the session info
+ * line so the bar does not repeat them on every refresh. */
 export function desktopFrameLine({
-  size,
-  source,
   fps,
   kbps,
   bytes,
   age,
 }: {
-  size: string;
-  source?: string;
   fps: string;
   kbps: string;
   bytes: number;
   age?: string;
 }): string {
-  const suffix = source ? ` · ${source}` : "";
   const freshness = age === undefined ? "" : ` · ${age}s`;
-  return `${size}${suffix} · ${fps} fps · ${kbps} kbps · ${formatBytes(bytes)}${freshness}`;
+  return `${fps} fps · ${kbps} kbps · ${formatBytes(bytes)}${freshness}`;
 }
