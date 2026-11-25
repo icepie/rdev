@@ -254,3 +254,57 @@ func TestStaticCompressedHTMLAndSniffedTypes(t *testing.T) {
 		}
 	}
 }
+
+func TestStaticPackedTreeWithoutOriginals(t *testing.T) {
+	plain := []byte("<!doctype html><title>packed</title>" + strings.Repeat(" body", 40))
+	var compressed bytes.Buffer
+	writer := gzip.NewWriter(&compressed)
+	if _, err := writer.Write(plain); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	files := fstest.MapFS{
+		"packed.html.gz": {Data: compressed.Bytes()},
+	}
+	for _, accept := range []string{"gzip", "identity", ""} {
+		t.Run("accept="+accept, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodGet, "/packed.html", nil)
+			if accept != "" {
+				request.Header.Set("Accept-Encoding", accept)
+			}
+			response := httptest.NewRecorder()
+			serveStatic(response, request, files, "packed.html")
+			if response.Code != http.StatusOK {
+				t.Fatalf("status=%d", response.Code)
+			}
+			if response.Header().Get("Content-Type") != "text/html; charset=utf-8" {
+				t.Fatalf("content type=%q", response.Header().Get("Content-Type"))
+			}
+			if accept == "gzip" {
+				if response.Header().Get("Content-Encoding") != "gzip" || !bytes.Equal(response.Body.Bytes(), compressed.Bytes()) {
+					t.Fatal("gzip passthrough failed")
+				}
+				return
+			}
+			if response.Header().Get("Content-Encoding") != "" {
+				t.Fatal("identity response was encoded")
+			}
+			if !bytes.Equal(response.Body.Bytes(), plain) {
+				t.Fatal("identity body mismatch")
+			}
+			if response.Header().Get("Content-Length") != strconv.Itoa(len(plain)) {
+				t.Fatalf("length=%q", response.Header().Get("Content-Length"))
+			}
+		})
+	}
+
+	rangeRequest := httptest.NewRequest(http.MethodGet, "/packed.html", nil)
+	rangeRequest.Header.Set("Range", "bytes=10-19")
+	rangeResponse := httptest.NewRecorder()
+	serveStatic(rangeResponse, rangeRequest, files, "packed.html")
+	if rangeResponse.Code != http.StatusPartialContent || !bytes.Equal(rangeResponse.Body.Bytes(), plain[10:20]) {
+		t.Fatalf("range status=%d body=%q", rangeResponse.Code, rangeResponse.Body.String())
+	}
+}

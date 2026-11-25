@@ -1,12 +1,14 @@
 import { defineConfig, type Plugin } from 'vite';
 import { resolve } from 'node:path';
-import { writeFile } from 'node:fs/promises';
+import { rm, writeFile } from 'node:fs/promises';
 import { brotliCompressSync, constants, gzipSync } from 'node:zlib';
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 
 // Emit portable sidecars into the actual output directory, including --outDir
 // overrides. Go embeds these as ordinary files; production needs no compressor.
+// Once the gzip sidecar exists the original is dropped: it dominated the
+// embedded binary, and the server rebuilds it for the rare identity request.
 function precompressedAssets(): Plugin {
   return {
     name: 'precompressed-assets',
@@ -23,11 +25,14 @@ function precompressedAssets(): Plugin {
             params: { [constants.BROTLI_PARAM_QUALITY]: 11 },
           })],
         ] as const;
-        await Promise.all(representations.map(async ([suffix, compressed]) => {
+        const written = await Promise.all(representations.map(async ([suffix, compressed]) => {
           if (compressed.length < data.length) {
             await writeFile(resolve(output.dir!, `${entry.fileName}.${suffix}`), compressed);
+            return suffix;
           }
+          return null;
         }));
+        if (written.includes('gz')) await rm(resolve(output.dir!, entry.fileName));
       }));
     },
   };

@@ -320,6 +320,7 @@ Web UI 是 React 19 + Tailwind CSS v4 + Radix UI 单页应用，组件/设计令
 - 构建顺序：`bun run build`（vite → `internal/server/static/`，go:embed）必须在 `go build` 之前。`internal/server/static/` 是被 `.gitignore` 忽略的生成目录，不能作为源码手工编辑；安装器源文件只维护在 `web/public/`，构建会同步 `run.sh`、`run.ps1` 和 `mustreademe.md`。
 - 前端构建会先清空并重新生成整个嵌入目录；不要与 `go test`、`go vet` 或 `go build` 并发执行，否则 Go 可能在资源被替换的中间状态读取 `go:embed` 文件并失败。CI 与 `make build` 按前端构建完成后再运行 Go 检查。
 - 构建时生成 Brotli/gzip 静态资源；服务端按 `Accept-Encoding` 协商并设置 `Vary`，不在请求中压缩。带构建哈希的资源缓存一年且 `immutable`；HTML、安装脚本和缺失资源不使用不可变缓存。
+- 生成 gzip 副本后构建会删除对应的原始文件，Go 只嵌入压缩副本；不带 `Accept-Encoding` 的请求由服务端解压回原文，因此二进制体积从约 36 MB 降到约 29 MB，且不需要 UPX（UPX 改写 ELF 会破坏解释器/加固兼容性）。Go 构建统一使用 `-trimpath -ldflags "-s -w"`。
 - Dashboard 不再预加载 Markdown 渲染器及完整扩展图标集；进入相关功能时才加载。
 - HTTP 请求头超时 5 秒、keep-alive 空闲超时 60 秒；不设置整次请求的读写时限，以保留长时间文件传输、SSE 和 WebSocket。
 

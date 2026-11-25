@@ -1,6 +1,8 @@
 package server
 
 import (
+	"bytes"
+	"compress/gzip"
 	"io"
 	"io/fs"
 	"mime"
@@ -9,6 +11,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Keep this in sync with the explicit eight-character hashes in vite.config.ts.
@@ -29,20 +32,38 @@ func serveStatic(w http.ResponseWriter, r *http.Request, files fs.FS, name strin
 		staticError(w, r, "404 page not found", http.StatusNotFound)
 		return
 	}
-	original, err := files.Open(name)
-	if err != nil {
-		staticError(w, r, "404 page not found", http.StatusNotFound)
-		return
+	var original fs.File
+	var originalInfo fs.FileInfo
+	if file, err := files.Open(name); err == nil {
+		if info, statErr := file.Stat(); statErr == nil && !info.IsDir() {
+			original, originalInfo = file, info
+		} else {
+			file.Close()
+		}
 	}
-	defer original.Close()
-	info, err := original.Stat()
-	if err != nil || info.IsDir() {
-		staticError(w, r, "404 page not found", http.StatusNotFound)
-		return
+	if original != nil {
+		defer original.Close()
+	}
+	gzipPath := name + ".gz"
+	if original == nil {
+		// Packed builds ship only the gzip representation; a stray .br without
+		// either is an orphan and stays a 404.
+		file, err := files.Open(gzipPath)
+		if err != nil {
+			staticError(w, r, "404 page not found", http.StatusNotFound)
+			return
+		}
+		info, statErr := file.Stat()
+		file.Close()
+		if statErr != nil || info.IsDir() {
+			staticError(w, r, "404 page not found", http.StatusNotFound)
+			return
+		}
 	}
 
 	qualities := staticEncodingQualities(r.Header.Values("Accept-Encoding"))
-	selected := original
+	var selected fs.File
+	var info fs.FileInfo
 	encoding := ""
 	best := qualities[2]
 	// An implicit identity is a fallback, not a preference over requested coding.
@@ -72,8 +93,51 @@ func serveStatic(w http.ResponseWriter, r *http.Request, files fs.FS, name strin
 		selected, info, encoding = file, stat, candidate.coding
 		break
 	}
-	if selected != original {
+	if selected == nil && original != nil {
+		selected, info = original, originalInfo
+	}
+	if selected != nil {
 		defer selected.Close()
+	}
+
+	contentType := mime.TypeByExtension(path.Ext(name))
+	var decompressed []byte
+	if contentType == "" {
+		if original != nil {
+			var prefix [512]byte
+			n, _ := original.Read(prefix[:])
+			contentType = http.DetectContentType(prefix[:n])
+			if seeker, ok := original.(io.Seeker); ok {
+				if _, err := seeker.Seek(0, io.SeekStart); err != nil {
+					staticError(w, r, "cannot seek static file", http.StatusInternalServerError)
+					return
+				}
+			}
+		} else {
+			body, err := decompressStaticFile(files, gzipPath)
+			if err != nil {
+				staticError(w, r, "static file is corrupt", http.StatusInternalServerError)
+				return
+			}
+			decompressed = body
+			contentType = http.DetectContentType(body)
+		}
+	}
+
+	if selected == nil {
+		// Identity request against a packed tree: rebuild the body from gzip.
+		if decompressed == nil {
+			body, err := decompressStaticFile(files, gzipPath)
+			if err != nil {
+				staticError(w, r, "static file is corrupt", http.StatusInternalServerError)
+				return
+			}
+			decompressed = body
+		}
+		w.Header().Set("Content-Type", contentType)
+		w.Header().Set("Content-Length", strconv.Itoa(len(decompressed)))
+		http.ServeContent(w, r, name, time.Time{}, bytes.NewReader(decompressed))
+		return
 	}
 	if encoding == "" && qualities[2] == 0 {
 		staticError(w, r, "no acceptable content encoding", http.StatusNotAcceptable)
@@ -84,18 +148,6 @@ func serveStatic(w http.ResponseWriter, r *http.Request, files fs.FS, name strin
 		staticError(w, r, "static file is not seekable", http.StatusInternalServerError)
 		return
 	}
-	contentType := mime.TypeByExtension(path.Ext(name))
-	if contentType == "" {
-		var prefix [512]byte
-		n, _ := original.Read(prefix[:])
-		contentType = http.DetectContentType(prefix[:n])
-		if selected == original {
-			if _, err := content.Seek(0, io.SeekStart); err != nil {
-				staticError(w, r, "cannot seek static file", http.StatusInternalServerError)
-				return
-			}
-		}
-	}
 	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Content-Length", strconv.FormatInt(info.Size(), 10))
 	if encoding != "" {
@@ -105,6 +157,26 @@ func serveStatic(w http.ResponseWriter, r *http.Request, files fs.FS, name strin
 		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 	}
 	http.ServeContent(w, r, name, info.ModTime(), content)
+}
+
+// decompressStaticFile expands an embedded gzip representation; packed static
+// trees keep only the compressed form, so identity requests rebuild the body.
+func decompressStaticFile(files fs.FS, name string) ([]byte, error) {
+	file, err := files.Open(name)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	reader, err := gzip.NewReader(file)
+	if err != nil {
+		return nil, err
+	}
+	defer reader.Close()
+	var body bytes.Buffer
+	if _, err := io.Copy(&body, reader); err != nil {
+		return nil, err
+	}
+	return body.Bytes(), nil
 }
 
 // A negative identity quality means it was not explicitly ranked. RFC 9110

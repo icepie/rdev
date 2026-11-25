@@ -3,6 +3,8 @@
 BINS = rdev-server rdev-client
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 LDFLAGS = -s -w -X main.version=$(VERSION)
+# Static embeds ship gzip-only (see vite.config.ts), so no UPX is needed or wanted.
+GO_TRIMPATH ?= -trimpath
 GO264_TAGS ?=
 GO_WIN7 ?= go
 WIN7_SERVICE_DIST = target/win7-service
@@ -25,10 +27,10 @@ web-install:
 	bun install
 
 server: web
-	go build -ldflags "$(LDFLAGS)" -o rdev-server ./cmd/rdev-server
+	go build $(GO_TRIMPATH) -ldflags "$(LDFLAGS)" -o rdev-server ./cmd/rdev-server
 
 client:
-	go build $(GO264_TAGS) -ldflags "$(LDFLAGS)" -o rdev-client ./cmd/rdev-client
+	go build $(GO_TRIMPATH) $(GO264_TAGS) -ldflags "$(LDFLAGS)" -o rdev-client ./cmd/rdev-client
 
 
 client-cpp:
@@ -114,25 +116,25 @@ cross-windows: \
 	rdev-client-windows-386.exe
 
 rdev-server-linux-%: web
-	CGO_ENABLED=0 GOOS=linux GOARCH=$* go build -ldflags "$(LDFLAGS)" -o $@ ./cmd/rdev-server
+	CGO_ENABLED=0 GOOS=linux GOARCH=$* go build $(GO_TRIMPATH) -ldflags "$(LDFLAGS)" -o $@ ./cmd/rdev-server
 
 rdev-client-linux-%:
-	CGO_ENABLED=0 GOOS=linux GOARCH=$* go build $(GO264_TAGS) -ldflags "$(LDFLAGS)" -o $@ ./cmd/rdev-client
+	CGO_ENABLED=0 GOOS=linux GOARCH=$* go build $(GO_TRIMPATH) $(GO264_TAGS) -ldflags "$(LDFLAGS)" -o $@ ./cmd/rdev-client
 
 rdev-server-darwin-%: web
-	CGO_ENABLED=0 GOOS=darwin GOARCH=$* go build -ldflags "$(LDFLAGS)" -o $@ ./cmd/rdev-server
+	CGO_ENABLED=0 GOOS=darwin GOARCH=$* go build $(GO_TRIMPATH) -ldflags "$(LDFLAGS)" -o $@ ./cmd/rdev-server
 
 rdev-client-darwin-%:
-	CGO_ENABLED=0 GOOS=darwin GOARCH=$* go build $(GO264_TAGS) -ldflags "$(LDFLAGS)" -o $@ ./cmd/rdev-client
+	CGO_ENABLED=0 GOOS=darwin GOARCH=$* go build $(GO_TRIMPATH) $(GO264_TAGS) -ldflags "$(LDFLAGS)" -o $@ ./cmd/rdev-client
 
 rdev-server-windows-amd64.exe: web
-	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags "$(LDFLAGS)" -o $@ ./cmd/rdev-server
+	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build $(GO_TRIMPATH) -ldflags "$(LDFLAGS)" -o $@ ./cmd/rdev-server
 
 rdev-client-windows-amd64.exe:
-	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build $(GO264_TAGS) -ldflags "$(LDFLAGS)" -o $@ ./cmd/rdev-client
+	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build $(GO_TRIMPATH) $(GO264_TAGS) -ldflags "$(LDFLAGS)" -o $@ ./cmd/rdev-client
 
 rdev-client-windows-386.exe:
-	CGO_ENABLED=0 GOOS=windows GOARCH=386 go build $(GO264_TAGS) -ldflags "$(LDFLAGS)" -o $@ ./cmd/rdev-client
+	CGO_ENABLED=0 GOOS=windows GOARCH=386 go build $(GO_TRIMPATH) $(GO264_TAGS) -ldflags "$(LDFLAGS)" -o $@ ./cmd/rdev-client
 
 test:
 	go test $(GO264_TAGS) ./...
