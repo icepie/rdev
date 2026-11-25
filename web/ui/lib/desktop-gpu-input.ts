@@ -52,15 +52,19 @@ export function gpuPointerMessage(
     previous,
     minPressure,
     eventType,
+    point,
   }: {
     rect: DOMRect;
     previous: { x: number; y: number };
     minPressure: string;
     eventType: string;
+    /** Already-normalized cursor position, used while the pointer is locked;
+     * client coordinates freeze in that mode. */
+    point?: { x: number; y: number };
   },
 ) {
-  const x = Math.max(0, Math.min(1, (event.clientX - rect.left) / Math.max(1, rect.width)));
-  const y = Math.max(0, Math.min(1, (event.clientY - rect.top) / Math.max(1, rect.height)));
+  const x = Math.max(0, Math.min(1, point?.x ?? (event.clientX - rect.left) / Math.max(1, rect.width)));
+  const y = Math.max(0, Math.min(1, point?.y ?? (event.clientY - rect.top) / Math.max(1, rect.height)));
   const diag = Math.max(1, Math.sqrt(rect.width * rect.width + rect.height * rect.height));
   const pressure = Math.max(
     event.pressure || (event.buttons ? 0.5 : 0),

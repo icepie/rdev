@@ -11,7 +11,11 @@ type DesktopGpuInputApi = {
   gpuInputAllowed: () => boolean;
   gpuPointerTypes: () => string[];
   gpuSend: (message: unknown) => void;
-  gpuPointerMessage: (event: PointerEvent, eventType: string) => unknown;
+  gpuPointerMessage: (
+    event: PointerEvent,
+    eventType: string,
+    point?: { x: number; y: number },
+  ) => unknown;
   gpuKeyMessage: (
     event: KeyboardEvent,
     eventType: string,
@@ -94,6 +98,46 @@ export function attachDesktopStageInput({
   if (overlay) {
     on(overlay, "contextmenu", (e: Event) => e.preventDefault());
     on(overlay, "auxclick", (e: Event) => e.preventDefault());
+    // Pointer lock freezes client coordinates, so a locked GPU session
+    // accumulates relative movement into a virtual normalized position and
+    // sends that instead of the frozen pointer location.
+    const doc = overlay.ownerDocument;
+    let locked = false;
+    let virtualX = 0.5;
+    let virtualY = 0.5;
+    const lockedPoint = { x: 0.5, y: 0.5 };
+    const pressedAt = new Map<number, PointerEvent>();
+    const onLockChange = () => {
+      const next = doc.pointerLockElement === overlay;
+      if (next === locked) return;
+      locked = next;
+      if (locked) {
+        virtualX = 0.5;
+        virtualY = 0.5;
+        lockedPoint.x = virtualX;
+        lockedPoint.y = virtualY;
+        return;
+      }
+      // Esc unlocks with buttons still down; release them so the remote does
+      // not stay stuck in a drag.
+      const current = api();
+      for (const [button, event] of pressedAt) {
+        current.gpuSend(
+          current.gpuPointerMessage(event, "pointerup", { x: virtualX, y: virtualY }),
+        );
+      }
+      pressedAt.clear();
+    };
+    doc.addEventListener("pointerlockchange", onLockChange);
+    cleanups.push(() => doc.removeEventListener("pointerlockchange", onLockChange));
+    const trackLockedMove = (ev: PointerEvent) => {
+      const rect = overlay.getBoundingClientRect();
+      virtualX = Math.max(0, Math.min(1, virtualX + (ev.movementX || 0) / Math.max(1, rect.width)));
+      virtualY = Math.max(0, Math.min(1, virtualY + (ev.movementY || 0) / Math.max(1, rect.height)));
+      lockedPoint.x = virtualX;
+      lockedPoint.y = virtualY;
+      return lockedPoint;
+    };
     for (const type of [
       "pointerdown",
       "pointermove",
@@ -109,13 +153,31 @@ export function attachDesktopStageInput({
         if (!current.gpuInputAllowed()) return;
         if (!current.gpuPointerTypes().includes(e.pointerType || "mouse")) return;
         if (type === "pointerdown") overlay.focus({ preventScroll: true });
-        if (type === "pointerdown" && overlay.setPointerCapture)
-          overlay.setPointerCapture(e.pointerId);
         const events =
           type === "pointermove" && typeof e.getCoalescedEvents === "function"
             ? e.getCoalescedEvents()
             : [e];
-        for (const ev of events) current.gpuSend(current.gpuPointerMessage(ev, type));
+        for (const ev of events) {
+          const point = locked && type === "pointermove" ? trackLockedMove(ev) : undefined;
+          current.gpuSend(current.gpuPointerMessage(ev, type, locked ? point ?? lockedPoint : undefined));
+          if (type === "pointerdown") pressedAt.set(ev.button, ev);
+          else if (type === "pointerup") pressedAt.delete(ev.button);
+        }
+        // Request the lock after forwarding the press so this click still
+        // reaches the remote at its absolute position.
+        if (type === "pointerdown" && !locked) {
+          if (pointerLock?.() && typeof overlay.requestPointerLock === "function") {
+            try {
+              const request = overlay.requestPointerLock();
+              if (request && typeof (request as Promise<void>).catch === "function")
+                (request as Promise<void>).catch(() => {});
+            } catch {
+              /* pointer lock is optional */
+            }
+          } else if (overlay.setPointerCapture) {
+            overlay.setPointerCapture(e.pointerId);
+          }
+        }
         e.preventDefault();
         e.stopPropagation();
       });

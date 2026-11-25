@@ -1327,7 +1327,11 @@ function DesktopSession({
       fit: settingsRef.current.fit,
     });
 
-  const gpuPointerMessage = (event: PointerEvent, eventType = event.type) => {
+  const gpuPointerMessage = (
+    event: PointerEvent,
+    eventType = event.type,
+    point?: { x: number; y: number },
+  ) => {
     const previous = gpuLastPointerRef.current.get(event.pointerId) || {
       x: event.clientX,
       y: event.clientY,
@@ -1338,6 +1342,7 @@ function DesktopSession({
       previous,
       minPressure: settingsRef.current.gpuMinPressure,
       eventType,
+      point,
     });
   };
 
