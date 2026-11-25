@@ -83,7 +83,7 @@ export function attachDesktopStageInput({
 
   if (canvas) {
     cleanups.push(
-      input.attach(canvas, { socket, mode, error: fail }),
+      input.attach(canvas, { socket, mode, error: fail, globalKeyboard: true }),
     );
   }
 

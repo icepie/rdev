@@ -71,7 +71,22 @@ type DesktopCanvasInputOptions = {
   socket: () => WebSocket | null;
   mode: () => "control" | "cursor" | null;
   error?: (error: unknown) => void;
+  /** Capture keyboard events at window level while control is active, so the
+   * remote session keeps typing after focus moves off the canvas. Editable
+   * fields, dialogs and the settings panel stay local. */
+  globalKeyboard?: boolean;
 };
+
+const localEditableSelector = [
+  'input', 'textarea', 'select', '[contenteditable=""]', '[contenteditable="true"]',
+  '[role="textbox"]', 'button', '[role="button"]', '[role="combobox"]', '[role="switch"]',
+  '[role="menuitem"]', '[role="tab"]', 'a[href]', 'summary', '[role="dialog"]',
+].join(',');
+
+function typingLocally(event: Event): boolean {
+  const target = event.target;
+  return target instanceof Element && target.closest(localEditableSelector) !== null;
+}
 
 // Both Go viewers render the frame into a padding-free canvas with a symmetric border.
 function framePoint(canvas: HTMLCanvasElement, event: MouseEvent, captured: boolean) {
@@ -163,6 +178,14 @@ export class DesktopCanvasInput {
         event.stopPropagation();
       }
     };
+    const globalKey = (event: KeyboardEvent) => {
+      if (!options.globalKeyboard || mode() !== "control" || typingLocally(event)) return;
+      if (event.type === "keyup" && !this.held.hasKey(event)) return;
+      this.motion.flush();
+      if (send({ inputType: event.type === "keydown" ? "key_down" : "key_up", key: event.key, code: event.code, ...modifiers(event) })) {
+        event.preventDefault();
+      }
+    };
     const wheel = (event: WheelEvent) => {
       if (mode() !== "control") return;
       const point = framePoint(canvas, event, false);
@@ -191,6 +214,15 @@ export class DesktopCanvasInput {
     canvas.addEventListener("keydown", key, opts);
     canvas.addEventListener("keyup", key, opts);
     canvas.addEventListener("blur", () => this.release(send), opts);
+    if (options.globalKeyboard) {
+      const doc = canvas.ownerDocument;
+      doc.addEventListener("keydown", globalKey, opts);
+      doc.addEventListener("keyup", globalKey, opts);
+      doc.defaultView?.addEventListener("blur", () => this.release(send), opts);
+      doc.addEventListener("visibilitychange", () => {
+        if (doc.hidden) this.release(send);
+      }, opts);
+    }
     return () => {
       listeners.abort();
       this.release(send);

@@ -52,7 +52,7 @@ function viewer() {
   const state = { mode: "control", socket: { readyState: 1, bufferedAmount: 0,
     send: data => messages.push(JSON.parse(data)) } };
   const input = new DesktopCanvasInput();
-  const detach = input.attach(canvas, { socket: () => state.socket, mode: () => state.mode });
+  const detach = input.attach(canvas, { socket: () => state.socket, mode: () => state.mode, globalKeyboard: true });
   function dispatch(type, props = {}) {
     const init = { clientX: 11, clientY: 21, cancelable: true, bubbles: true, ...props };
     const event = type.startsWith("key") ? new KeyboardEvent(type, init) : type === "wheel" ? new WheelEvent(type, init) : new MouseEvent(type, init);
@@ -132,24 +132,25 @@ it("never upgrades cursor-only input or consumes local shortcuts in view-only mo
   expect(messages.map(m => m.inputType)).toEqual(["cursor_move"]);
 });
 
-it("routes keyboard chords only while focused, flushes earlier motion, and releases once on blur", () => {
+it("routes keyboard chords while control is active, flushes motion, and releases once on blur", () => {
   const { dispatch, state, messages, canvas } = viewer();
   const chord = { code: "KeyZ", key: "Z", metaKey: true, shiftKey: true };
-  expect(dispatch("keydown", chord).defaultPrevented).toBe(false);
+  // Window-level capture means chords arrive without focusing the canvas.
+  expect(dispatch("keydown", chord).defaultPrevented).toBe(true);
   canvas.focus();
   dispatch("pointermove");
-  const bubbled = vi.fn();
-  document.body.addEventListener("keydown", bubbled, { once: true });
-  expect(dispatch("keydown", chord).defaultPrevented).toBe(true);
-  expect(bubbled).not.toHaveBeenCalled();
-  document.body.removeEventListener("keydown", bubbled);
-  expect(messages.map(m => m.inputType)).toEqual(["mouse_move", "key_down"]);
-  expect(messages[1]).toMatchObject(chord);
+  // A later key flushes the queued move first, keeping causal order.
+  dispatch("keydown", { code: "KeyY", key: "y" });
+  expect(messages.map(m => m.inputType)).toEqual(["key_down", "mouse_move", "key_down"]);
+  expect(messages[0]).toMatchObject(chord);
   canvas.blur();
-  expect(messages[2]).toMatchObject({ inputType: "key_up", code: "KeyZ", metaKey: false });
+  const releases = messages.slice(3);
+  expect(releases).toHaveLength(2);
+  expect(releases.every(m => m.inputType === "key_up" && m.metaKey === false)).toBe(true);
+  expect(releases.map(m => m.code).sort()).toEqual(["KeyY", "KeyZ"]);
   state.mode = null;
   expect(dispatch("keyup", chord).defaultPrevented).toBe(false);
-  expect(messages).toHaveLength(3);
+  expect(messages).toHaveLength(5);
 });
 
 it("normalizes wheel line and page units to CSS pixels and retains fractional trackpad deltas", () => {
@@ -162,4 +163,45 @@ it("normalizes wheel line and page units to CSS pixels and retains fractional tr
   dispatch("wheel", { deltaMode: 2, deltaX: 1, deltaY: 1.5 });
   expect(messages.map(m => [m.deltaX, m.deltaY])).toEqual([[0, -1], [30, -40], [100, 74]]);
   expect(messages[0]).toMatchObject({ inputType: "wheel", ctrlKey: true, x: 0, y: 0 });
+});
+
+it("captures keyboard at window level while control is active", () => {
+  const { dispatch, messages, canvas } = viewer();
+  document.body.focus();
+  canvas.blur();
+  expect(dispatch("keydown", { code: "KeyA", key: "a" }).defaultPrevented).toBe(true);
+  expect(messages.map(m => m.inputType)).toEqual(["key_down"]);
+  dispatch("keyup", { code: "KeyA", key: "a" });
+  expect(messages.at(-1)).toMatchObject({ inputType: "key_up", code: "KeyA" });
+});
+
+it("leaves local text fields and view-only sessions alone", () => {
+  const { dispatch, messages, state } = viewer();
+  const field = document.createElement("input");
+  document.body.append(field);
+  field.focus();
+  const typing = new KeyboardEvent("keydown", { code: "KeyB", key: "b", cancelable: true, bubbles: true });
+  field.dispatchEvent(typing);
+  expect(typing.defaultPrevented).toBe(false);
+  expect(messages).toEqual([]);
+  field.remove();
+  state.mode = "cursor";
+  expect(dispatch("keydown", { code: "KeyC", key: "c" }).defaultPrevented).toBe(false);
+  expect(messages).toEqual([]);
+});
+
+it("does not steal keys from local controls such as selects and buttons", () => {
+  const { dispatch, messages } = viewer();
+  for (const role of ["combobox", "switch", "menuitem"]) {
+    const control = document.createElement("div");
+    control.setAttribute("role", role);
+    control.tabIndex = 0;
+    document.body.append(control);
+    control.focus();
+    const event = new KeyboardEvent("keydown", { key: "ArrowDown", code: "ArrowDown", cancelable: true, bubbles: true });
+    control.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(false);
+    control.remove();
+  }
+  expect(messages).toEqual([]);
 });
