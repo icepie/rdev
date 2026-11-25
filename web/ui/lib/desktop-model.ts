@@ -106,7 +106,9 @@ export function loadDesktopSettings(settingsPrefix: string, gpuPrefix: string): 
     fit: fit === "fit" || fit === "actual" ? fit : "fit",
     control: localStorage.getItem(settingsPrefix + "control") === "true",
     showCursor: localStorage.getItem(settingsPrefix + "showCursor") === "true",
-    pointerLock: localStorage.getItem(settingsPrefix + "pointerLock") !== "false",
+    // Absolute cursor positioning is the default; lock and page-wide tracking
+    // stay opt-in because they change where a click lands.
+    pointerLock: localStorage.getItem(settingsPrefix + "pointerLock") === "true",
     globalMouse: localStorage.getItem(settingsPrefix + "globalMouse") === "true",
     // Clipboard sync is opt-in: it polls the local clipboard in the background.
     clipboardMode: ["off", "remote-to-local", "local-to-remote", "bidirectional"].includes(
