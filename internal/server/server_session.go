@@ -41,6 +41,10 @@ type ProxySession struct {
 	// Observers for session attach.
 	obsMu     sync.RWMutex
 	observers map[string]*sessionObserver // id -> observer
+
+	// Guards the output channels against CloseOutput while a producer enqueues.
+	outputMu     sync.RWMutex
+	outputClosed bool
 }
 
 type sessionObserver struct {
@@ -61,9 +65,44 @@ func (s *ProxySession) SignalClose() {
 
 func (s *ProxySession) CloseOutput() {
 	s.outputOnce.Do(func() {
+		s.outputMu.Lock()
+		s.outputClosed = true
 		close(s.WriteCh)
 		close(s.StderrCh)
+		s.outputMu.Unlock()
 	})
+}
+
+// PushOutput hands device output to the session's consumer without blocking
+// the caller. queued reports the bytes were accepted; open is false once the
+// output side closed, so a late frame cannot be mistaken for backpressure.
+func (s *ProxySession) PushOutput(data []byte, stderr bool) (queued bool, open bool) {
+	s.outputMu.RLock()
+	defer s.outputMu.RUnlock()
+	if s.outputClosed || len(data) == 0 {
+		return false, false
+	}
+	ch := s.WriteCh
+	if stderr {
+		ch = s.StderrCh
+	}
+	select {
+	case ch <- data:
+		return true, true
+	default:
+		return false, true
+	}
+}
+
+// ExitSignaled reports whether the device delivered an exit status, which
+// distinguishes a normal end (drain output, then exit) from a cancellation.
+func (s *ProxySession) ExitSignaled() bool {
+	select {
+	case <-s.exitDone:
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *ProxySession) SetExitCode(code int) {

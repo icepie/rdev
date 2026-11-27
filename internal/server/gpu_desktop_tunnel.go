@@ -32,6 +32,13 @@ const (
 	gpuDesktopTunnelChunkSize  = 64 * 1024
 	gpuDesktopTunnelSendQueue  = 256
 	gpuDesktopProxyPrefix      = "/gpu-desktop"
+
+	// A substream buffers at most this much device output. The device read
+	// loop never waits for a browser: overflow fails that stream only.
+	gpuDesktopStreamQueueBytes = 8 << 20
+	// Bound on each browser socket write so a stalled tab cannot pin the
+	// proxy goroutine that owns this substream.
+	gpuDesktopBrowserWriteWait = 10 * time.Second
 )
 
 type gpuDesktopTunnelOpen struct {
@@ -39,11 +46,19 @@ type gpuDesktopTunnelOpen struct {
 }
 
 type gpuDesktopStream struct {
-	dataMu sync.RWMutex
-	id     uint64
-	data   chan []byte
-	closed chan struct{}
-	once   sync.Once
+	dataMu   sync.Mutex
+	id       uint64
+	data     chan []byte
+	buffered int
+	closed   chan struct{}
+	once     sync.Once
+}
+
+// release returns a consumed chunk's budget to the queue.
+func (st *gpuDesktopStream) release(data []byte) {
+	st.dataMu.Lock()
+	st.buffered -= len(data)
+	st.dataMu.Unlock()
 }
 
 type gpuDesktopTunnel struct {
@@ -294,25 +309,53 @@ func (t *gpuDesktopTunnel) openStream() (*gpuDesktopStream, error) {
 	return stream, nil
 }
 
+// dispatchData hands device output to one substream without ever blocking the
+// shared device read loop. A browser that stops reading loses that substream,
+// not the whole tunnel.
 func (t *gpuDesktopTunnel) dispatchData(streamID uint64, data []byte) {
 	t.mu.Lock()
 	stream := t.streams[streamID]
 	t.mu.Unlock()
-	if stream == nil {
+	if stream == nil || len(data) == 0 {
 		return
 	}
-	stream.dataMu.RLock()
-	defer stream.dataMu.RUnlock()
+	stream.dataMu.Lock()
 	select {
 	case <-stream.closed:
+		stream.dataMu.Unlock()
 		return
 	default:
 	}
+	if stream.buffered+len(data) > gpuDesktopStreamQueueBytes {
+		stream.dataMu.Unlock()
+		t.failStream(stream, "output queue limit exceeded")
+		return
+	}
 	payload := append([]byte(nil), data...)
+	stream.buffered += len(payload)
 	select {
 	case stream.data <- payload:
+		stream.dataMu.Unlock()
 	case <-stream.closed:
+		stream.buffered -= len(payload)
+		stream.dataMu.Unlock()
+	case <-t.closed:
+		stream.buffered -= len(payload)
+		stream.dataMu.Unlock()
+	default:
+		// Frame-count cap reached before the byte cap.
+		stream.buffered -= len(payload)
+		stream.dataMu.Unlock()
+		t.failStream(stream, "output queue full")
 	}
+}
+
+// failStream ends one substream, wakes its proxy handler through the closed
+// data channel, and tells the device to stop producing. Other substreams on
+// the same device keep running.
+func (t *gpuDesktopTunnel) failStream(stream *gpuDesktopStream, reason string) {
+	log.Printf("gpu desktop stream closed: device=%s stream=%d reason=%s", t.deviceID, stream.id, reason)
+	t.sendClose(stream.id)
 }
 
 func (t *gpuDesktopTunnel) closeStream(streamID uint64) {
@@ -533,6 +576,7 @@ func proxyGPUDesktopHTTP(w http.ResponseWriter, r *http.Request, tunnel *gpuDesk
 				writeGPUDesktopHTTPResponse(w, r, &rawResp, deviceID, targetPath)
 				return
 			}
+			stream.release(data)
 			_, _ = rawResp.Write(data)
 		case <-timer.C:
 			http.Error(w, "gpu desktop tunnel response timeout", http.StatusGatewayTimeout)
@@ -541,6 +585,16 @@ func proxyGPUDesktopHTTP(w http.ResponseWriter, r *http.Request, tunnel *gpuDesk
 			return
 		}
 	}
+}
+
+// writeGPUDesktopBrowser bounds one browser socket write so a stalled tab
+// cannot pin the proxy goroutine that owns the substream.
+func writeGPUDesktopBrowser(conn net.Conn, data []byte) error {
+	if err := conn.SetWriteDeadline(time.Now().Add(gpuDesktopBrowserWriteWait)); err != nil {
+		return err
+	}
+	_, err := conn.Write(data)
+	return err
 }
 
 func (s *Server) proxyGPUDesktopWebSocket(w http.ResponseWriter, r *http.Request, tunnel *gpuDesktopTunnel, deviceID string) {
@@ -571,8 +625,14 @@ func (s *Server) proxyGPUDesktopWebSocket(w http.ResponseWriter, r *http.Request
 		return
 	}
 	go s.pipeGPUDesktopClientToTunnel(clientBuf.Reader, tunnel, stream.id, deviceID)
-	for data := range stream.data {
-		if _, err = clientConn.Write(data); err != nil {
+	for {
+		data, ok := <-stream.data
+		if !ok {
+			return
+		}
+		stream.release(data)
+		if err := writeGPUDesktopBrowser(clientConn, data); err != nil {
+			log.Printf("gpu desktop browser write failed: device=%s stream=%d bytes=%d err=%v", deviceID, stream.id, len(data), err)
 			return
 		}
 	}

@@ -436,14 +436,15 @@ func (tc *terminalConn) writeMessage(opcode gws.Opcode, data []byte) bool {
 	return true
 }
 
-// pumpOutput forwards ProxySession output to browser as binary frames
+// pumpOutput forwards ProxySession output to browser as binary frames, then
+// reports the terminal's final state.
 func (tc *terminalConn) pumpOutput() {
 	defer tc.close()
 	for {
 		select {
 		case data, ok := <-tc.sess.WriteCh:
 			if !ok {
-				tc.sendExit(tc.sess.WaitExitCode(500 * time.Millisecond))
+				tc.finishSession()
 				return
 			}
 			// Binary frame = raw terminal output (no header needed, xterm.js handles raw bytes)
@@ -453,6 +454,7 @@ func (tc *terminalConn) pumpOutput() {
 
 		case data, ok := <-tc.sess.StderrCh:
 			if !ok {
+				tc.finishSession()
 				return
 			}
 			if !tc.writeMessage(gws.OpcodeBinary, data) {
@@ -460,12 +462,51 @@ func (tc *terminalConn) pumpOutput() {
 			}
 
 		case <-tc.sess.CloseCh:
-			tc.sess.NotifyObserversClose()
-			tc.sess.CloseOutput()
-			tc.sendExit(tc.sess.WaitExitCode(500 * time.Millisecond))
+			tc.finishSession()
 			return
 
 		case <-tc.done:
+			return
+		}
+	}
+}
+
+// finishSession sends the terminal's final state. A device that reported an
+// exit status finished normally, so stdout/stderr already queued are written
+// before the exit message; a cancellation owes no output and exits at once.
+func (tc *terminalConn) finishSession() {
+	defer tc.sess.CloseOutput()
+	tc.sess.NotifyObserversClose()
+	if !tc.sess.ExitSignaled() {
+		tc.sendExit(-1)
+		return
+	}
+	// Another teardown path (such as the TCP forward goroutine) may close the
+	// output channels before this goroutine drains them; stop selecting on a
+	// closed channel and still deliver the exit message.
+	stdout, stderr := tc.sess.WriteCh, tc.sess.StderrCh
+	for {
+		select {
+		case data, ok := <-stdout:
+			if !ok {
+				stdout = nil
+				continue
+			}
+			if !tc.writeMessage(gws.OpcodeBinary, data) {
+				return
+			}
+		case data, ok := <-stderr:
+			if !ok {
+				stderr = nil
+				continue
+			}
+			if !tc.writeMessage(gws.OpcodeBinary, data) {
+				return
+			}
+		case <-tc.done:
+			return
+		default:
+			tc.sendExit(tc.sess.GetExitCode())
 			return
 		}
 	}

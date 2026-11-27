@@ -283,11 +283,16 @@ func (h *wsHandler) OnMessage(socket *gws.Conn, message *gws.Message) {
 	h.srv.handleClientMessage(client, msg)
 }
 
-func sendBytes(ch chan []byte, data []byte, label string) {
+// sendBytes hands data to a stream consumer without blocking the shared device
+// read loop. A full queue means the consumer stalled: report it so the caller
+// tears the stream down instead of truncating the byte stream.
+func sendBytes(ch chan []byte, data []byte, label string) bool {
 	select {
 	case ch <- data:
-	case <-time.After(30 * time.Second):
-		log.Printf("dropping %s data after backpressure timeout", label)
+		return true
+	default:
+		log.Printf("%s backpressure exceeded; closing stream", label)
+		return false
 	}
 }
 

@@ -478,24 +478,67 @@ func (s *Server) handleClientBinary(client *ClientConn, raw []byte) {
 	data := append([]byte(nil), payload...)
 	switch typ {
 	case protocol.BinData:
-		sess := s.getSession(id)
-		if sess != nil && len(data) > 0 {
-			sendBytes(sess.WriteCh, data, "session stdout")
-			sess.BroadcastOutput(data)
+		if sess := s.getSession(id); sess != nil && len(data) > 0 {
+			s.pushSessionOutput(sess, client, data, false)
 		}
 	case protocol.BinStderr:
-		sess := s.getSession(id)
-		if sess != nil && len(data) > 0 {
-			sendBytes(sess.StderrCh, data, "session stderr")
-			sess.BroadcastStderr(data)
+		if sess := s.getSession(id); sess != nil && len(data) > 0 {
+			s.pushSessionOutput(sess, client, data, true)
 		}
 	case protocol.BinTCPData:
-		fwd := s.getForward(id)
-		if fwd != nil && len(data) > 0 {
-			sendBytes(fwd.WriteCh, data, "tcp forward")
+		if fwd := s.getForward(id); fwd != nil && len(data) > 0 {
+			if !sendBytes(fwd.WriteCh, data, "tcp forward") {
+				if fwd.CloseSSH != nil {
+					fwd.CloseSSH()
+				}
+				fwd.SignalClose()
+			}
 		}
 	case protocol.BinDesktopFrame:
 		s.handleDesktopFrame(id, data)
+	}
+}
+
+// pushSessionOutput forwards device output without blocking the shared device
+// read loop. A full queue cannot be repaired by waiting or dropping bytes, so
+// the session is reclaimed and the device told to stop.
+func (s *Server) pushSessionOutput(sess *ProxySession, client *ClientConn, data []byte, stderr bool) {
+	queued, open := sess.PushOutput(data, stderr)
+	if !open {
+		return
+	}
+	if !queued {
+		s.abortSession(sess, client, stderr)
+		return
+	}
+	if stderr {
+		sess.BroadcastStderr(data)
+	} else {
+		sess.BroadcastOutput(data)
+	}
+}
+
+// abortSession reclaims a session whose output the browser stopped consuming.
+// The explicit close is what the terminal pump turns into an exit message; no
+// byte of the stream is dropped silently while the session keeps running.
+func (s *Server) abortSession(sess *ProxySession, client *ClientConn, stderr bool) {
+	stream := "stdout"
+	if stderr {
+		stream = "stderr"
+	}
+	log.Printf("session output backpressure: session=%s device=%s stream=%s; closing session", sess.ID, sess.ClientID, stream)
+	sess.SignalClose()
+	if client != nil && client.Transport != nil {
+		_ = client.Send(&protocol.Message{Type: protocol.MsgClose, SessionID: sess.ID})
+	}
+	s.removeSession(sess.ID)
+	if client != nil {
+		client.mu.Lock()
+		delete(client.Sessions, sess.ID)
+		client.mu.Unlock()
+	}
+	if sess.CloseSSH != nil {
+		sess.CloseSSH()
 	}
 }
 

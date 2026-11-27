@@ -67,7 +67,7 @@ func TestFileRequestDeadlinesOwnershipAndLegacyCapabilities(t *testing.T) {
 }
 func TestFileRequestCapacityAndSocketCleanup(t *testing.T) {
 	srv := NewServer()
-	socket := &fileSocket{}
+	socket := testFileSocket(func(gws.Opcode, []byte) error { return nil })
 	for i := 0; i < fileRequestsPerSocket; i++ {
 		if err := srv.registerFileRequest(fmt.Sprint(i), socket, "dev"); err != nil {
 			t.Fatal(err)
@@ -76,7 +76,7 @@ func TestFileRequestCapacityAndSocketCleanup(t *testing.T) {
 	if err := srv.registerFileRequest("overflow", socket, "dev"); err == nil {
 		t.Fatal("unbounded requests")
 	}
-	other := &fileSocket{}
+	other := testFileSocket(func(gws.Opcode, []byte) error { return nil })
 	if err := srv.registerFileRequest("other", other, "dev"); err != nil {
 		t.Fatal(err)
 	}

@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"slices"
@@ -11,6 +12,14 @@ import (
 
 	"github.com/lxzan/gws"
 	"rdev/internal/protocol"
+)
+
+const (
+	// One writer goroutine owns each browser WebSocket. Producers enqueue
+	// without blocking; queue overflow or a failed write closes the socket.
+	fileSocketWriteWait = 10 * time.Second
+	fileSocketSendQueue = 256
+	fileSocketSendBytes = 8 << 20
 )
 
 type fileMsg struct {
@@ -56,11 +65,111 @@ type fileSocket struct {
 	prefix      string // private wire namespace, never exposed to the browser
 	conn        *gws.Conn
 	srv         *Server
-	mu          sync.Mutex
+	out         *frameWriter
 	authMu      sync.RWMutex
 	authorized  map[string]string
 	authFails   map[string]int
 	adminBypass bool
+}
+
+type fileSocketFrame struct {
+	opcode gws.Opcode
+	data   []byte
+}
+
+// frameWriter serializes frames onto one browser WebSocket from a single
+// goroutine with a FIFO bounded by both frame count and bytes. Producers never
+// wait for the peer, and an overrun or write failure closes the connection
+// instead of silently dropping a control frame or truncating a transfer.
+type frameWriter struct {
+	queue  chan fileSocketFrame
+	limit  int
+	send   func(gws.Opcode, []byte) error
+	fail   func(string)
+	done   chan struct{}
+	mu     sync.Mutex
+	bytes  int
+	closed bool
+	once   sync.Once
+}
+
+func newFrameWriter(limit int, send func(gws.Opcode, []byte) error, fail func(string)) *frameWriter {
+	w := &frameWriter{
+		queue: make(chan fileSocketFrame, fileSocketSendQueue),
+		limit: limit,
+		send:  send,
+		fail:  fail,
+		done:  make(chan struct{}),
+	}
+	go w.loop()
+	return w
+}
+
+func (w *frameWriter) push(opcode gws.Opcode, data []byte) {
+	w.mu.Lock()
+	if w.closed {
+		w.mu.Unlock()
+		return
+	}
+	if w.bytes+len(data) > w.limit {
+		queued := w.bytes
+		w.mu.Unlock()
+		w.abort(fmt.Sprintf("send queue limit exceeded: queued=%d frame=%d limit=%d", queued, len(data), w.limit))
+		return
+	}
+	w.bytes += len(data)
+	w.mu.Unlock()
+	select {
+	case w.queue <- fileSocketFrame{opcode: opcode, data: data}:
+	default:
+		w.release(len(data))
+		w.abort(fmt.Sprintf("send queue full: frames=%d", cap(w.queue)))
+	}
+}
+
+func (w *frameWriter) loop() {
+	for {
+		select {
+		case frame := <-w.queue:
+			err := w.send(frame.opcode, frame.data)
+			w.release(len(frame.data))
+			if err != nil {
+				w.abort(fmt.Sprintf("write failed: %v", err))
+				return
+			}
+		case <-w.done:
+			return
+		}
+	}
+}
+
+func (w *frameWriter) release(n int) {
+	w.mu.Lock()
+	w.bytes -= n
+	w.mu.Unlock()
+}
+
+// abort stops the writer and reports the failure once; the callback closes the
+// connection so the existing OnClose cleanup reclaims every route it owned.
+func (w *frameWriter) abort(reason string) {
+	w.once.Do(func() {
+		w.mu.Lock()
+		w.closed = true
+		w.mu.Unlock()
+		close(w.done)
+		log.Printf("files ws writer stopped: %s", reason)
+		w.fail(reason)
+	})
+}
+
+// stop ends the writer without reporting a failure (normal socket close).
+func (w *frameWriter) stop() {
+	w.once.Do(func() {
+		w.mu.Lock()
+		w.closed = true
+		w.mu.Unlock()
+		close(w.done)
+	})
 }
 
 type fileTaskRoute struct {
@@ -90,9 +199,11 @@ func (s *fileSocket) writeText(msg fileMsg) {
 	msg.TaskID = strings.TrimPrefix(msg.TaskID, s.prefix)
 	msg.RequestID = strings.TrimPrefix(msg.RequestID, s.prefix)
 	data, _ := json.Marshal(msg)
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.conn.WriteMessage(gws.OpcodeText, data)
+	if s.out == nil {
+		log.Printf("files ws not ready: dropping %s response", msg.Op)
+		return
+	}
+	s.out.push(gws.OpcodeText, data)
 }
 
 func (s *fileSocket) writeBinary(raw []byte) {
@@ -101,20 +212,34 @@ func (s *fileSocket) writeBinary(raw []byte) {
 		return
 	}
 	data := protocol.EncodeBinFrameOffset(typ, strings.TrimPrefix(id, s.prefix), offset, payload)
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.conn.WriteMessage(gws.OpcodeBinary, data)
+	if s.out == nil {
+		log.Printf("files ws not ready: dropping binary frame")
+		return
+	}
+	s.out.push(gws.OpcodeBinary, data)
 }
 
 func (h *filesWSHandler) OnOpen(socket *gws.Conn) {
-	socket.Session().Store("fileSocket", &fileSocket{
+	fs := &fileSocket{
 		conn:        socket,
 		prefix:      generateID() + ":",
 		srv:         h.srv,
 		authorized:  make(map[string]string),
 		authFails:   make(map[string]int),
 		adminBypass: h.adminBypass,
+	}
+	fs.out = newFrameWriter(fileSocketSendBytes, func(opcode gws.Opcode, data []byte) error {
+		_ = socket.SetWriteDeadline(time.Now().Add(fileSocketWriteWait))
+		err := socket.WriteMessage(opcode, data)
+		_ = socket.SetWriteDeadline(time.Time{})
+		return err
+	}, func(reason string) {
+		log.Printf("files ws closed: prefix=%s reason=%s", fs.prefix, reason)
+		if conn := socket.NetConn(); conn != nil {
+			_ = conn.Close()
+		}
 	})
+	socket.Session().Store("fileSocket", fs)
 }
 
 func (h *filesWSHandler) OnClose(socket *gws.Conn, err error) {
@@ -154,6 +279,9 @@ func (s *Server) closeFileSocket(fs *fileSocket) {
 			client.Send(&protocol.Message{Type: protocol.MsgFileTransferCancel, TaskID: id})
 			client.SendBinaryOffset(protocol.BinFileTransferCancel, id, 0, nil)
 		}
+	}
+	if fs.out != nil {
+		fs.out.stop()
 	}
 }
 
