@@ -601,6 +601,7 @@ jobs:
         shell: pwsh
         env:
           EVSIGN_LICENSE_KEY: ${{ secrets.EVSIGN_LICENSE_KEY }}
+          EVSIGN_PASSWORD: ${{ secrets.EVSIGN_PASSWORD }}
           ASSET: ${{ matrix.asset }}
         run: |
           $ErrorActionPreference = 'Stop'

@@ -5,10 +5,11 @@
 #
 # A path may be a .exe/.dll or a directory; directories are searched recursively
 # so a packaged client (exe + bundled DLLs) is never published half-signed.
-# Requires EVSIGN_CLIENT (downloaded client) and EVSIGN_LICENSE_KEY.
+# Requires EVSIGN_CLIENT (downloaded client) and EVSIGN_LICENSE_KEY; the account
+# password goes in EVSIGN_PASSWORD when the license enforces one.
 param(
   [Parameter(Mandatory = $true, Position = 0)][string[]] $Path,
-  [string] $Provider = 'digicert'
+  [string] $Provider = $(if ($env:EVSIGN_TIMESTAMP) { $env:EVSIGN_TIMESTAMP } else { 'digicert' })
 )
 
 $ErrorActionPreference = 'Stop'
@@ -53,13 +54,21 @@ foreach ($target in $targets) {
     Copy-Item -LiteralPath $target.FullName -Destination $file
     Push-Location $stage
     try {
-      # The provider's diagnostic output may contain its command line or key.
-      $null = & $env:EVSIGN_CLIENT $target.Name -key $env:EVSIGN_LICENSE_KEY -sha256 -t $Provider -cdn 2>&1
+      $arguments = @($target.Name, '-key', $env:EVSIGN_LICENSE_KEY, '-sha256', '-t', $Provider, '-cdn')
+      if ($env:EVSIGN_PASSWORD) { $arguments += @('-pwd', $env:EVSIGN_PASSWORD) }
+      $output = & $env:EVSIGN_CLIENT @arguments 2>&1
       $code = $LASTEXITCODE
     } finally {
       Pop-Location
     }
-    if ($code -ne 0) { throw "EVSign failed for $($target.Name) (exit $code)." }
+    if ($code -ne 0) {
+      # Keep the provider's reason, but never echo the license key or password.
+      $reason = ($output | Out-String)
+      foreach ($secret in @($env:EVSIGN_LICENSE_KEY, $env:EVSIGN_PASSWORD)) {
+        if ($secret) { $reason = $reason.Replace($secret, '***') }
+      }
+      throw "EVSign failed for $($target.Name) (exit $code): $($reason.Trim())"
+    }
     $signature = Get-AuthenticodeSignature -LiteralPath $file
     if ($signature.Status -ne 'Valid' -or -not $signature.TimeStamperCertificate) {
       throw "Signing did not produce a valid timestamped signature for $($target.Name): $($signature.Status)"

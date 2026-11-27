@@ -209,6 +209,7 @@ jobs:
         shell: pwsh
         env:
           EVSIGN_LICENSE_KEY: ${{ secrets.EVSIGN_LICENSE_KEY }}
+          EVSIGN_PASSWORD: ${{ secrets.EVSIGN_PASSWORD }}
         run: ./scripts/ci/sign-windows.ps1 artifacts/${{ matrix.artifact }}
 
       - name: Publish signed binaries

@@ -64,8 +64,10 @@ for file in "${mapfile_targets[@]}"; do
     "Developer ID Application:"*) ;;
     *) echo "::error::$file is not signed by a Developer ID Application certificate ($authority)" >&2; exit 1 ;;
   esac
-  case "$(codesign -dv --verbose=4 "$file" 2>&1 | sed -n 's/^Flags=//p' | head -n 1)" in
-    *runtime*) ;;
+  # codesign prints the hardened runtime flag on the CodeDirectory line as
+  # flags=0x10000(runtime), not as a standalone Flags= entry.
+  case "$(codesign -dv --verbose=4 "$file" 2>&1)" in
+    *"(runtime)"*) ;;
     *) echo "::error::$file was not signed with the hardened runtime" >&2; exit 1 ;;
   esac
   echo "signed: $file"
