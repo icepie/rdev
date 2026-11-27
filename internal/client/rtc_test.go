@@ -97,6 +97,9 @@ func TestRTCPeerHandshakeOverLoopback(t *testing.T) {
 		}
 
 		answered, ready := false, false
+		// Trickled candidates can arrive before the answer; pion refuses them
+		// until the remote description exists, so hold them back.
+		var pendingCandidates []webrtc.ICECandidateInit
 		for !answered || !ready {
 			m := nextRTCMessage(t, tr)
 			switch {
@@ -104,6 +107,10 @@ func TestRTCPeerHandshakeOverLoopback(t *testing.T) {
 				var candidate webrtc.ICECandidateInit
 				if err := json.Unmarshal(m.RTCData, &candidate); err != nil {
 					t.Fatalf("decode candidate: %v", err)
+				}
+				if !answered {
+					pendingCandidates = append(pendingCandidates, candidate)
+					continue
 				}
 				if err := peer.AddICECandidate(candidate); err != nil {
 					t.Fatalf("add candidate: %v", err)
@@ -117,6 +124,12 @@ func TestRTCPeerHandshakeOverLoopback(t *testing.T) {
 					t.Fatalf("set remote description: %v", err)
 				}
 				answered = true
+				for _, pending := range pendingCandidates {
+					if err := peer.AddICECandidate(pending); err != nil {
+						t.Fatalf("add buffered candidate: %v", err)
+					}
+				}
+				pendingCandidates = nil
 			case m.Type == protocol.MsgFileUploadReady:
 				ready = true
 			case m.Type == protocol.MsgFileRTCSignal && m.RTCType == "close":
@@ -191,6 +204,9 @@ func TestRTCPeerHandshakeOverLoopback(t *testing.T) {
 		}
 
 		answered := false
+		// Trickled candidates can arrive before the answer; pion refuses them
+		// until the remote description exists, so hold them back.
+		var pendingCandidates []webrtc.ICECandidateInit
 		for !answered {
 			m := nextRTCMessage(t, tr)
 			if m.Type != protocol.MsgDesktopRTCSignal {
@@ -201,6 +217,10 @@ func TestRTCPeerHandshakeOverLoopback(t *testing.T) {
 				var candidate webrtc.ICECandidateInit
 				if err := json.Unmarshal(m.RTCData, &candidate); err != nil {
 					t.Fatalf("decode candidate: %v", err)
+				}
+				if !answered {
+					pendingCandidates = append(pendingCandidates, candidate)
+					continue
 				}
 				if err := peer.AddICECandidate(candidate); err != nil {
 					t.Fatalf("add candidate: %v", err)
@@ -214,6 +234,12 @@ func TestRTCPeerHandshakeOverLoopback(t *testing.T) {
 					t.Fatalf("set remote description: %v", err)
 				}
 				answered = true
+				for _, pending := range pendingCandidates {
+					if err := peer.AddICECandidate(pending); err != nil {
+						t.Fatalf("add buffered candidate: %v", err)
+					}
+				}
+				pendingCandidates = nil
 			default:
 				t.Fatalf("unexpected signal during negotiation: %+v", m)
 			}
