@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log"
 	"os"
@@ -27,6 +28,89 @@ func (s *sftpRWC) Read(p []byte) (int, error)  { return s.reader.Read(p) }
 func (s *sftpRWC) Write(p []byte) (int, error) { return s.writer.Write(p) }
 func (s *sftpRWC) Close() error                { return s.closer.Close() }
 
+const clientSessionInputBytes = 1 << 20
+
+// sessionInput is one session's bounded, ordered stdin queue. The shared
+// device read loop only enqueues; a per-session goroutine performs the writes
+// so a stopped child never stalls other sessions or control messages.
+type sessionInput struct {
+	mu      sync.Mutex
+	chunks  [][]byte
+	bytes   int
+	limit   int
+	eof     bool
+	stopped bool
+	wake    chan struct{}
+	done    chan struct{}
+}
+
+func newSessionInput(limit int) *sessionInput {
+	return &sessionInput{limit: limit, wake: make(chan struct{}, 1), done: make(chan struct{})}
+}
+
+// push queues data owned by the queue. full reports the bounded queue cannot
+// hold it; stopped reports the input side already ended.
+func (q *sessionInput) push(data []byte) (full bool, stopped bool) {
+	q.mu.Lock()
+	if q.stopped {
+		q.mu.Unlock()
+		return false, true
+	}
+	if q.bytes+len(data) > q.limit {
+		q.mu.Unlock()
+		return true, false
+	}
+	q.chunks = append(q.chunks, data)
+	q.bytes += len(data)
+	q.mu.Unlock()
+	q.notify()
+	return false, false
+}
+
+// finishEOF requests the underlying handle close after every queued byte, so
+// normal stdin EOF can never overtake data still waiting in the queue.
+func (q *sessionInput) finishEOF() {
+	q.mu.Lock()
+	q.eof = true
+	q.mu.Unlock()
+	q.notify()
+}
+
+// stop cancels outstanding input. The caller closes the underlying handle to
+// release a write goroutine blocked on a stopped child.
+func (q *sessionInput) stop() {
+	q.mu.Lock()
+	q.stopped = true
+	q.chunks = nil
+	q.bytes = 0
+	q.mu.Unlock()
+	q.notify()
+}
+
+// next returns the oldest queued chunk, or reports EOF once the queue drained.
+func (q *sessionInput) next() (data []byte, eof, stopped bool) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.stopped {
+		return nil, false, true
+	}
+	if len(q.chunks) > 0 {
+		data = q.chunks[0]
+		q.chunks[0] = nil
+		q.chunks = q.chunks[1:]
+		q.bytes -= len(data)
+		return data, false, false
+	}
+	return nil, q.eof, false
+}
+
+func (q *sessionInput) notify() {
+	select {
+	case q.wake <- struct{}{}:
+	default:
+	}
+}
+
 // clientSession represents a proxied session on the client device
 type clientSession struct {
 	id string
@@ -44,12 +128,20 @@ type clientSession struct {
 	sftpInput  *io.PipeWriter
 	sftpOutput *io.PipeReader
 
+	input *sessionInput
+
 	done chan struct{}
 	once sync.Once
 }
 
 func (s *clientSession) close() {
 	s.once.Do(func() {
+		// Mark the session ended before releasing handles: a write goroutine
+		// unblocked by the close must not report a spurious session failure.
+		close(s.done)
+		if s.input != nil {
+			s.input.stop()
+		}
 		if s.ptyProc != nil {
 			s.ptyProc.Close()
 		}
@@ -57,7 +149,6 @@ func (s *clientSession) close() {
 			s.cancelExec()
 		}
 		s.closeInput()
-		close(s.done)
 	})
 }
 
@@ -80,14 +171,76 @@ func (c *Client) handleBinData(sessionID string, data []byte) {
 	if !ok || len(data) == 0 {
 		return
 	}
+	// The queue owns a copy: the frame buffer is released after this message.
+	full, stopped := sess.input.push(append([]byte(nil), data...))
+	if stopped {
+		return
+	}
+	if full {
+		c.failSessionInput(sess, fmt.Sprintf("stdin queue limit (%d bytes) exceeded", clientSessionInputBytes))
+	}
+}
 
+// writeInput performs the queued write for the session's single input consumer.
+func (s *clientSession) writeInput(data []byte) error {
 	switch {
-	case sess.ptyProc != nil:
-		sess.ptyProc.Write(data)
-	case sess.stdinPipe != nil:
-		sess.stdinPipe.Write(data)
-	case sess.sftpInput != nil:
-		sess.sftpInput.Write(data)
+	case s.ptyProc != nil:
+		_, err := s.ptyProc.Write(data)
+		return err
+	case s.stdinPipe != nil:
+		_, err := s.stdinPipe.Write(data)
+		return err
+	case s.sftpInput != nil:
+		_, err := s.sftpInput.Write(data)
+		return err
+	}
+	return nil
+}
+
+// runInput drains this session's input FIFO. Normal EOF is applied only after
+// every queued byte; a failed write ends the session instead of losing input.
+func (s *clientSession) runInput(c *Client) {
+	defer close(s.input.done)
+	for {
+		data, eof, stopped := s.input.next()
+		if stopped {
+			return
+		}
+		if len(data) > 0 {
+			if err := s.writeInput(data); err != nil {
+				select {
+				case <-s.done:
+					return
+				default:
+				}
+				c.failSessionInput(s, "input write failed: "+err.Error())
+				return
+			}
+			continue
+		}
+		if eof {
+			s.input.stop()
+			s.closeInput()
+			return
+		}
+		<-s.input.wake
+	}
+}
+
+// failSessionInput ends a session whose input can no longer be delivered. The
+// device keeps no session that the server still believes is alive.
+func (c *Client) failSessionInput(sess *clientSession, reason string) {
+	log.Printf("session %s: %s; closing session", sess.id, reason)
+	sess.input.stop()
+	c.mu.Lock()
+	current := c.sessions[sess.id]
+	if current == sess {
+		delete(c.sessions, sess.id)
+	}
+	c.mu.Unlock()
+	sess.close()
+	if current == sess {
+		c.sendClose(sess.id)
 	}
 }
 
@@ -121,8 +274,9 @@ func (c *Client) handleNewSession(msg *protocol.Message) {
 
 func (c *Client) startShellExecSession(msg *protocol.Message) (*clientSession, error) {
 	sess := &clientSession{
-		id:   msg.SessionID,
-		done: make(chan struct{}),
+		id:    msg.SessionID,
+		input: newSessionInput(clientSessionInputBytes),
+		done:  make(chan struct{}),
 	}
 
 	if msg.Pty {
@@ -179,12 +333,14 @@ func (c *Client) startShellExecSession(msg *protocol.Message) (*clientSession, e
 			}()
 
 			log.Printf("session %s: PTY started (cmd=%q)", msg.SessionID, msg.Command)
+			go sess.runInput(c)
 			return sess, nil
 		}
 	}
 
 	if msg.Command != "" {
 		if gitCmd, ok := parseGitSmartSSHCommand(msg.Command); ok && !hasSystemGitCommand(gitCmd.Name) {
+			go sess.runInput(c)
 			return c.startGitFallbackSession(sess, gitCmd)
 		}
 	}
@@ -312,6 +468,7 @@ func (c *Client) startShellExecSession(msg *protocol.Message) (*clientSession, e
 
 	log.Printf("session %s: exec started (cmd=%q)", msg.SessionID, msg.Command)
 
+	go sess.runInput(c)
 	return sess, nil
 }
 
@@ -325,6 +482,7 @@ func (c *Client) startSFTPSession(sessionID string) (*clientSession, error) {
 		id:         sessionID,
 		sftpInput:  pw1,
 		sftpOutput: pr2,
+		input:      newSessionInput(clientSessionInputBytes),
 		done:       make(chan struct{}),
 	}
 
@@ -354,6 +512,7 @@ func (c *Client) startSFTPSession(sessionID string) (*clientSession, error) {
 	}()
 
 	log.Printf("session %s: SFTP server started", sessionID)
+	go sess.runInput(c)
 	return sess, nil
 }
 
@@ -364,7 +523,7 @@ func (c *Client) handleStdinClose(msg *protocol.Message) {
 	if !ok {
 		return
 	}
-	sess.closeInput()
+	sess.input.finishEOF()
 }
 
 func (c *Client) handleResize(msg *protocol.Message) {
