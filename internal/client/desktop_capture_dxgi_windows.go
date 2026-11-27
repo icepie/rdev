@@ -6,8 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"image"
+	"log"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 	"unsafe"
@@ -17,6 +19,9 @@ import (
 
 const (
 	dxgiErrorNotFound           = 0x887A0002
+	dxgiErrorDeviceRemoved      = 0x887A0005
+	dxgiErrorDeviceReset        = 0x887A0007
+	dxgiErrorAccessLost         = 0x887A0026
 	dxgiErrorWaitTimeout        = 0x887A0027
 	dxgiFormatR16G16B16A16Float = 10
 	dxgiFormatR8G8B8A8          = 28
@@ -41,6 +46,8 @@ var (
 	procRtlGetVersion      = ntdllDLL.NewProc("RtlGetVersion")
 
 	errDXGIFrameTimeout = errors.New("DXGI frame timeout")
+	errDXGIDeviceLost   = errors.New("DXGI device lost")
+	errDXGIMappingEmpty = errors.New("D3D11 Map staging texture exposed no data")
 )
 
 type winOSVersionInfo struct {
@@ -126,6 +133,9 @@ type dxgiCaptureSource struct {
 }
 
 type dxgiDesktopCapturer struct {
+	// Serializes Capture against Close: releasing the device or the staging
+	// texture while a frame is mapped produces garbage HRESULTs.
+	mu            sync.Mutex
 	adapter       uintptr
 	output        uintptr
 	output1       uintptr
@@ -139,6 +149,8 @@ type dxgiDesktopCapturer struct {
 	textureHeight uint32
 	textureFormat uint32
 	lastFrame     *image.RGBA
+	lost          error
+	mapFailures   int
 }
 
 func enumerateDXGISources() []protocol.DesktopSource {
@@ -309,6 +321,8 @@ func (c *dxgiDesktopCapturer) CursorPosition() (image.Point, bool) {
 }
 
 func (c *dxgiDesktopCapturer) Close() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if c.staging != 0 {
 		comRelease(c.staging)
 		c.staging = 0
@@ -341,6 +355,11 @@ func (c *dxgiDesktopCapturer) Close() error {
 }
 
 func (c *dxgiDesktopCapturer) Capture() (image.Image, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.lost != nil {
+		return nil, c.lost
+	}
 	deadline := time.Now().Add(2 * time.Second)
 	var resource uintptr
 	for {
@@ -383,19 +402,27 @@ func (c *dxgiDesktopCapturer) Capture() (image.Image, error) {
 	default:
 		return nil, fmt.Errorf("unsupported DXGI frame format %d", desc.Format)
 	}
-	if err := c.ensureStaging(desc); err != nil {
+	mapped, staging, err := c.mapFrame(texture, desc, uint32(bytesPerPixel))
+	if err != nil {
+		if errors.Is(err, errDXGIDeviceLost) {
+			c.lost = err
+			return nil, err
+		}
+		// A driver hiccup on Map must not end the stream: the browser keeps
+		// the previous frame and the next tick retries with a fresh staging
+		// texture.
+		if c.lastFrame != nil {
+			c.mapFailures++
+			if c.mapFailures == 1 || c.mapFailures%120 == 0 {
+				log.Printf("desktop capture skipped frame %d: %v (keeping the last frame)", c.mapFailures, err)
+			}
+			return c.lastFrame, nil
+		}
 		return nil, err
 	}
-	d3d11ContextCopyResource(c.context, c.staging, texture)
-	mapped, hr := d3d11ContextMap(c.context, c.staging, d3d11MapRead)
-	if failedHR(hr) || mapped.Data == 0 {
-		return nil, fmt.Errorf("D3D11 Map staging texture failed: %s", formatHRESULT(hr))
-	}
-	defer d3d11ContextUnmap(c.context, c.staging)
+	defer d3d11ContextUnmap(c.context, staging)
+	c.mapFailures = 0
 
-	if uint64(desc.Width)*uint64(bytesPerPixel) > uint64(mapped.RowPitch) {
-		return nil, fmt.Errorf("DXGI row pitch %d too small for %d pixels in format %d", mapped.RowPitch, desc.Width, desc.Format)
-	}
 	width := int(desc.Width)
 	height := int(desc.Height)
 	img := reusableDesktopRGBA(c.lastFrame, width, height)
@@ -439,6 +466,76 @@ func (c *dxgiDesktopCapturer) acquireFrame() (uintptr, error) {
 		return 0, errDXGIFrameTimeout
 	}
 	return 0, fmt.Errorf("DXGI AcquireNextFrame failed: %s", formatHRESULT(hr))
+}
+
+// mapFrame copies the acquired texture into the staging texture and maps it.
+// A single rebuild of the staging texture covers transient driver state, and
+// a device that reports itself lost is never retried.
+func (c *dxgiDesktopCapturer) mapFrame(texture uintptr, desc d3d11Texture2DDesc, bytesPerPixel uint32) (d3d11MappedSubresource, uintptr, error) {
+	var lastErr error
+	for attempt := 0; attempt < 2; attempt++ {
+		if err := c.ensureStaging(desc); err != nil {
+			return d3d11MappedSubresource{}, 0, err
+		}
+		d3d11ContextCopyResource(c.context, c.staging, texture)
+		staging := c.staging
+		mapped, hr := d3d11ContextMap(c.context, staging, d3d11MapRead)
+		err := checkDXGIMapping(mapped, hr)
+		if err == nil {
+			if uint64(desc.Width)*uint64(bytesPerPixel) <= uint64(mapped.RowPitch) {
+				return mapped, staging, nil
+			}
+			err = fmt.Errorf("DXGI row pitch %d too small for %d pixels in format %d", mapped.RowPitch, desc.Width, desc.Format)
+		}
+		if dxgiDeviceLost(hr) {
+			return d3d11MappedSubresource{}, 0, err
+		}
+		if !failedHR(hr) {
+			// The driver reported success, so keep the map balanced before the
+			// staging texture is dropped.
+			d3d11ContextUnmap(c.context, staging)
+		}
+		lastErr = err
+		c.releaseStaging()
+	}
+	return d3d11MappedSubresource{}, 0, fmt.Errorf("%w (after recreating the staging texture)", lastErr)
+}
+
+// checkDXGIMapping turns a Map result into an error, separating a real failure
+// from a driver that reports S_OK while handing back no readable pixels.
+func checkDXGIMapping(mapped d3d11MappedSubresource, hr uint32) error {
+	if dxgiDeviceLost(hr) {
+		return fmt.Errorf("%w: %s", errDXGIDeviceLost, formatHRESULT(hr))
+	}
+	if failedHR(hr) {
+		return fmt.Errorf("D3D11 Map staging texture failed: %s", formatHRESULT(hr))
+	}
+	if mapped.Data == 0 {
+		return fmt.Errorf("%w: %s with a null data pointer", errDXGIMappingEmpty, formatHRESULT(hr))
+	}
+	if mapped.RowPitch == 0 {
+		return fmt.Errorf("%w: %s with row pitch 0", errDXGIMappingEmpty, formatHRESULT(hr))
+	}
+	return nil
+}
+
+func dxgiDeviceLost(hr uint32) bool {
+	switch hr {
+	case dxgiErrorDeviceRemoved, dxgiErrorDeviceReset, dxgiErrorAccessLost:
+		return true
+	}
+	return false
+}
+
+// releaseStaging drops the staging texture so the next attempt recreates it.
+func (c *dxgiDesktopCapturer) releaseStaging() {
+	if c.staging != 0 {
+		comRelease(c.staging)
+	}
+	c.staging = 0
+	c.textureWidth = 0
+	c.textureHeight = 0
+	c.textureFormat = 0
 }
 
 func (c *dxgiDesktopCapturer) ensureStaging(desc d3d11Texture2DDesc) error {
