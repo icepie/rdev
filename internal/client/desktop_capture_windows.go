@@ -127,6 +127,35 @@ func desktopSources() []protocol.DesktopSource {
 	return sources
 }
 
+// newDesktopFallbackCapturer offers the GDI backend for the monitor a failed
+// capturer covered, so a broken DXGI pipeline degrades instead of ending the
+// session. GDI is the documented default backend on Windows.
+func newDesktopFallbackCapturer(c desktopCapturer) (desktopCapturer, bool) {
+	if _, isDXGI := c.(*dxgiDesktopCapturer); !isDXGI {
+		return nil, false
+	}
+	target := c.Bounds()
+	best := ""
+	bestArea := 0
+	for _, monitor := range enumerateWindowsMonitors() {
+		// Exact bounds are the common case; overlapping ones still let the
+		// session continue with a slightly different crop.
+		area := monitor.bounds.Intersect(target).Dx() * monitor.bounds.Intersect(target).Dy()
+		if area <= bestArea {
+			continue
+		}
+		best, bestArea = monitor.source.ID, area
+	}
+	if best == "" {
+		return nil, false
+	}
+	fallback, err := newDesktopCapturer(best)
+	if err != nil {
+		return nil, false
+	}
+	return fallback, true
+}
+
 func newDesktopCapturer(source string) (desktopCapturer, error) {
 	if strings.HasPrefix(source, "dxgi:") {
 		return newDXGICapturer(source)

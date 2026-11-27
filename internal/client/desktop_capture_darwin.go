@@ -505,3 +505,9 @@ func convertQuartzImage(dst *image.RGBA, src []byte, stride int, bitmapInfo uint
 		}
 	})
 }
+
+// newDesktopFallbackCapturer reports whether another native backend can cover
+// the same area; only Windows ships an alternative backend for monitors.
+func newDesktopFallbackCapturer(desktopCapturer) (desktopCapturer, bool) {
+	return nil, false
+}

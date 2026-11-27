@@ -21,6 +21,31 @@ type desktopCapturer interface {
 	Close() error
 }
 
+// errDesktopCapturerUnavailable marks a native capture backend that can no
+// longer produce frames. The session switches backends instead of closing.
+var errDesktopCapturerUnavailable = errors.New("desktop capturer unavailable")
+
+// switchDesktopCapturer replaces a failed capturer with another backend for the
+// same area so the desktop session survives a broken native pipeline.
+func switchDesktopCapturer(capturer desktopCapturer, sourceName string, cause error) (desktopCapturer, bool) {
+	replacement, ok := newDesktopFallbackCapturer(capturer)
+	if !ok {
+		return nil, false
+	}
+	log.Printf("desktop source %s unavailable (%v); switching to %s", sourceName, cause, desktopSourceID(replacement))
+	if err := capturer.Close(); err != nil {
+		log.Printf("desktop capturer close after switch failed: %v", err)
+	}
+	return replacement, true
+}
+
+func desktopSourceID(capturer desktopCapturer) string {
+	if reporter, ok := capturer.(desktopSourceReporter); ok {
+		return reporter.Source().ID
+	}
+	return "fallback capturer"
+}
+
 type desktopSourceReporter interface {
 	Source() protocol.DesktopSource
 }
@@ -142,7 +167,7 @@ func (c *Client) runDesktop(msg *protocol.Message, session *desktopSession) {
 		c.send(&protocol.Message{Type: protocol.MsgDesktopReady, SessionID: msg.SessionID, DesktopCapabilities: caps, Error: err.Error()})
 		return
 	}
-	defer capturer.Close()
+	defer func() { _ = capturer.Close() }()
 
 	bounds := capturer.Bounds()
 	session.inputMu.Lock()
@@ -248,6 +273,12 @@ func (c *Client) runDesktop(msg *protocol.Message, session *desktopSession) {
 			nextFrame = time.Now().Add(frameInterval)
 			img, err := capturer.Capture()
 			if err != nil {
+				if errors.Is(err, errDesktopCapturerUnavailable) {
+					if next, ok := switchDesktopCapturer(capturer, sourceName, err); ok {
+						capturer = next
+						continue
+					}
+				}
 				err = fmt.Errorf("desktop capture failed for source %s: %w", sourceName, err)
 				log.Printf("%v", err)
 				c.send(&protocol.Message{Type: protocol.MsgDesktopClose, SessionID: msg.SessionID, Error: err.Error()})
@@ -492,6 +523,7 @@ func (c *Client) handleDesktopClose(sessionID string) {
 // Each native capturer remains on its owning OS thread. Input uses the existing
 // lightweight control path; screenshots neither start a ticker nor a video codec.
 func (c *Client) runDesktopSnapshots(id string, session *desktopSession, capturer desktopCapturer, size image.Point, quality int) {
+	defer func() { _ = capturer.Close() }()
 	idle := time.NewTimer(2 * time.Minute)
 	defer idle.Stop()
 	var scratch *image.RGBA
@@ -505,6 +537,12 @@ func (c *Client) runDesktopSnapshots(id string, session *desktopSession, capture
 		case <-session.snapshot:
 			idle.Reset(2 * time.Minute)
 			img, err := capturer.Capture()
+			if errors.Is(err, errDesktopCapturerUnavailable) {
+				if next, ok := switchDesktopCapturer(capturer, id, err); ok {
+					capturer = next
+					continue
+				}
+			}
 			if err == nil {
 				var frame *image.RGBA
 				frame, err = resizeDesktopFrameToSize(scratch, img, size.X, size.Y)

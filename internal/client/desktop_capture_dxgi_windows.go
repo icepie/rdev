@@ -33,7 +33,10 @@ const (
 	d3d11UsageStaging           = 3
 	d3d11CPUAccessRead          = 0x20000
 	d3d11MapRead                = 1
-	dxgiAcquireTimeoutMS        = 500
+	// Consecutive frames a failing Map may reuse the previous frame before the
+	// pipeline is rebuilt (about three seconds at 30 FPS).
+	dxgiMapFailureBudget = 90
+	dxgiAcquireTimeoutMS = 500
 )
 
 var (
@@ -149,7 +152,7 @@ type dxgiDesktopCapturer struct {
 	textureHeight uint32
 	textureFormat uint32
 	lastFrame     *image.RGBA
-	lost          error
+	unavailable   error
 	mapFailures   int
 }
 
@@ -323,10 +326,14 @@ func (c *dxgiDesktopCapturer) CursorPosition() (image.Point, bool) {
 func (c *dxgiDesktopCapturer) Close() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.staging != 0 {
-		comRelease(c.staging)
-		c.staging = 0
-	}
+	c.releaseHandles()
+	return nil
+}
+
+// releaseHandles drops every COM handle the capturer owns. The caller holds
+// c.mu.
+func (c *dxgiDesktopCapturer) releaseHandles() {
+	c.releaseStaging()
 	if c.duplication != 0 {
 		comRelease(c.duplication)
 		c.duplication = 0
@@ -351,15 +358,68 @@ func (c *dxgiDesktopCapturer) Close() error {
 		comRelease(c.adapter)
 		c.adapter = 0
 	}
+}
+
+// rebind rebuilds the whole capture pipeline for the same source. Every handle
+// of the failed pipeline is released first: reusing a device or duplication
+// that the driver invalidated produces frames that cannot be read.
+func (c *dxgiDesktopCapturer) rebind() error {
+	fresh, err := newDXGICapturer(c.source.ID)
+	if err != nil {
+		return err
+	}
+	next, ok := fresh.(*dxgiDesktopCapturer)
+	if !ok {
+		return errors.New("DXGI capturer returned an unexpected type")
+	}
+	c.releaseHandles()
+	c.adapter, c.output, c.output1 = next.adapter, next.output, next.output1
+	c.device, c.context, c.duplication = next.device, next.context, next.duplication
+	c.bounds, c.source = next.bounds, next.source
+	next.adapter, next.output, next.output1 = 0, 0, 0
+	next.device, next.context, next.duplication = 0, 0, 0
 	return nil
 }
 
 func (c *dxgiDesktopCapturer) Capture() (image.Image, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.lost != nil {
-		return nil, c.lost
+	if c.unavailable != nil {
+		return nil, c.unavailable
 	}
+	img, err := c.captureOnce()
+	if err == nil {
+		c.mapFailures = 0
+		return img, nil
+	}
+	if !errors.Is(err, errDXGIDeviceLost) && c.lastFrame != nil && c.mapFailures < dxgiMapFailureBudget {
+		// Most mapping failures are a hiccup that clears within a few frames;
+		// keep the last frame instead of tearing the pipeline down.
+		c.mapFailures++
+		if c.mapFailures == 1 || c.mapFailures%120 == 0 {
+			log.Printf("desktop capture skipped frame %d: %v (keeping the last frame)", c.mapFailures, err)
+		}
+		return c.lastFrame, nil
+	}
+	// The pipeline is suspect: a driver reset, a display mode change, or a
+	// device that no longer hands back mapped pixels. Rebuild it once, then
+	// let the session switch backends rather than retrying forever.
+	c.mapFailures = 0
+	if rebuildErr := c.rebind(); rebuildErr != nil {
+		c.unavailable = fmt.Errorf("%w: %v (rebuild failed: %v)", errDesktopCapturerUnavailable, err, rebuildErr)
+		return nil, c.unavailable
+	}
+	img, retryErr := c.captureOnce()
+	if retryErr != nil {
+		c.unavailable = fmt.Errorf("%w: %v", errDesktopCapturerUnavailable, retryErr)
+		return nil, c.unavailable
+	}
+	return img, nil
+}
+
+// captureOnce acquires, copies and reads one frame from the current pipeline.
+// It never retries by itself; Capture owns the recovery policy.
+func (c *dxgiDesktopCapturer) captureOnce() (image.Image, error) {
 	deadline := time.Now().Add(2 * time.Second)
 	var resource uintptr
 	for {
@@ -404,24 +464,9 @@ func (c *dxgiDesktopCapturer) Capture() (image.Image, error) {
 	}
 	mapped, staging, err := c.mapFrame(texture, desc, uint32(bytesPerPixel))
 	if err != nil {
-		if errors.Is(err, errDXGIDeviceLost) {
-			c.lost = err
-			return nil, err
-		}
-		// A driver hiccup on Map must not end the stream: the browser keeps
-		// the previous frame and the next tick retries with a fresh staging
-		// texture.
-		if c.lastFrame != nil {
-			c.mapFailures++
-			if c.mapFailures == 1 || c.mapFailures%120 == 0 {
-				log.Printf("desktop capture skipped frame %d: %v (keeping the last frame)", c.mapFailures, err)
-			}
-			return c.lastFrame, nil
-		}
 		return nil, err
 	}
 	defer d3d11ContextUnmap(c.context, staging)
-	c.mapFailures = 0
 
 	width := int(desc.Width)
 	height := int(desc.Height)

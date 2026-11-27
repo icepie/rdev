@@ -62,3 +62,11 @@ func TestReleaseStagingClearsCachedDescription(t *testing.T) {
 		t.Fatalf("staging state survived release: %+v", c)
 	}
 }
+
+// Only the DXGI backend has a GDI counterpart; other capturers must not be
+// swapped behind the session's back.
+func TestDesktopFallbackCapturerSkipsNonDXGI(t *testing.T) {
+	if _, ok := newDesktopFallbackCapturer(&gdiDesktopCapturer{}); ok {
+		t.Fatal("GDI capturer was offered a fallback")
+	}
+}

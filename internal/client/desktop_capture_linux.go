@@ -692,3 +692,9 @@ func bitfieldMax(field fbBitfield) uint32 {
 	}
 	return (uint32(1) << field.Length) - 1
 }
+
+// newDesktopFallbackCapturer reports whether another native backend can cover
+// the same area; only Windows ships an alternative backend for monitors.
+func newDesktopFallbackCapturer(desktopCapturer) (desktopCapturer, bool) {
+	return nil, false
+}
