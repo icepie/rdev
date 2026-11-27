@@ -12,6 +12,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -39,6 +40,19 @@ const (
 	// Bound on each browser socket write so a stalled tab cannot pin the
 	// proxy goroutine that owns this substream.
 	gpuDesktopBrowserWriteWait = 10 * time.Second
+	// Request bodies are bounded and read with a deadline instead of being
+	// buffered whole.
+	gpuDesktopRequestBodyLimit = 32 << 20
+	// Only HTML/JavaScript needs rewriting, so only those responses are
+	// buffered, and never past this bound.
+	gpuDesktopRewriteBodyLimit = 8 << 20
+	// Cap on one response header line (the bufio reader size for ReadResponse).
+	gpuDesktopResponseHeaderSize = 64 << 10
+)
+
+var (
+	errGPUDesktopReadTimeout     = errors.New("gpu desktop stream read timeout")
+	errGPUDesktopRequestTooLarge = errors.New("gpu desktop request body too large")
 )
 
 type gpuDesktopTunnelOpen struct {
@@ -548,6 +562,75 @@ func serveGPUDesktopFrontend(w http.ResponseWriter, r *http.Request, deviceID st
 	http.Redirect(w, r, "/remote-desktop?"+query.Encode(), http.StatusFound)
 }
 
+// gpuDesktopStreamReader adapts one substream to io.Reader for the proxied
+// HTTP response. Chunks are released to the substream budget as they are
+// consumed, and an idle upstream fails the read instead of pinning this proxy
+// goroutine until the client gives up.
+type gpuDesktopStreamReader struct {
+	stream *gpuDesktopStream
+	tunnel *gpuDesktopTunnel
+	idle   time.Duration
+	chunk  []byte
+}
+
+func (r *gpuDesktopStreamReader) Read(p []byte) (int, error) {
+	for len(r.chunk) == 0 {
+		if err := r.fill(); err != nil {
+			return 0, err
+		}
+	}
+	n := copy(p, r.chunk)
+	r.chunk = r.chunk[n:]
+	return n, nil
+}
+
+func (r *gpuDesktopStreamReader) fill() error {
+	select {
+	case data, ok := <-r.stream.data:
+		if !ok {
+			return io.EOF
+		}
+		r.stream.release(data)
+		r.chunk = data
+		return nil
+	default:
+	}
+	timer := time.NewTimer(r.idle)
+	defer timer.Stop()
+	select {
+	case data, ok := <-r.stream.data:
+		if !ok {
+			return io.EOF
+		}
+		r.stream.release(data)
+		r.chunk = data
+		return nil
+	case <-r.tunnel.closed:
+		return io.ErrUnexpectedEOF
+	case <-timer.C:
+		return errGPUDesktopReadTimeout
+	}
+}
+
+// gpuDesktopNeedsRewrite reports whether the body must be buffered so the
+// device-side asset URLs can be pointed at the proxy prefix.
+func gpuDesktopNeedsRewrite(contentType, targetPath string) bool {
+	return strings.Contains(contentType, "text/html") ||
+		strings.Contains(contentType, "javascript") ||
+		strings.HasSuffix(targetPath, "/lib.js")
+}
+
+func writeGPUDesktopProxyError(w http.ResponseWriter, err error, what string) {
+	switch {
+	case errors.Is(err, errGPUDesktopReadTimeout):
+		http.Error(w, "gpu desktop tunnel response timeout", http.StatusGatewayTimeout)
+	case errors.Is(err, io.EOF):
+		http.Error(w, "gpu desktop tunnel closed before "+what, http.StatusBadGateway)
+	default:
+		http.Error(w, "gpu desktop "+what+" failed: "+err.Error(), http.StatusBadGateway)
+	}
+}
+
 func proxyGPUDesktopHTTP(w http.ResponseWriter, r *http.Request, tunnel *gpuDesktopTunnel, deviceID string) {
 	stream, err := tunnel.openStream()
 	if err != nil {
@@ -556,8 +639,17 @@ func proxyGPUDesktopHTTP(w http.ResponseWriter, r *http.Request, tunnel *gpuDesk
 	}
 	defer tunnel.sendClose(stream.id)
 
+	// The request body is read before anything is sent, so a slow client can
+	// only hold this one stream; the size limit keeps it bounded.
+	controller := http.NewResponseController(w)
+	_ = controller.SetReadDeadline(time.Now().Add(gpuDesktopTunnelOpenWait))
 	rawReq, targetPath, err := buildGPUDesktopRawRequest(r, deviceID, false)
+	_ = controller.SetReadDeadline(time.Time{})
 	if err != nil {
+		if errors.Is(err, errGPUDesktopRequestTooLarge) {
+			http.Error(w, err.Error(), http.StatusRequestEntityTooLarge)
+			return
+		}
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -566,24 +658,52 @@ func proxyGPUDesktopHTTP(w http.ResponseWriter, r *http.Request, tunnel *gpuDesk
 		return
 	}
 
-	var rawResp bytes.Buffer
-	timer := time.NewTimer(gpuDesktopTunnelOpenWait)
-	defer timer.Stop()
-	for {
-		select {
-		case data, ok := <-stream.data:
-			if !ok {
-				writeGPUDesktopHTTPResponse(w, r, &rawResp, deviceID, targetPath)
-				return
-			}
-			stream.release(data)
-			_, _ = rawResp.Write(data)
-		case <-timer.C:
-			http.Error(w, "gpu desktop tunnel response timeout", http.StatusGatewayTimeout)
-			return
-		case <-r.Context().Done():
+	// Headers are parsed as they arrive; the body is streamed unless the
+	// content needs rewriting, which is bounded and fails loudly past the cap.
+	reader := &gpuDesktopStreamReader{stream: stream, tunnel: tunnel, idle: gpuDesktopTunnelReadWait}
+	resp, err := http.ReadResponse(bufio.NewReaderSize(reader, gpuDesktopResponseHeaderSize), r)
+	if err != nil {
+		writeGPUDesktopProxyError(w, err, "response headers")
+		return
+	}
+	defer resp.Body.Close()
+
+	for key, values := range resp.Header {
+		if strings.EqualFold(key, "Content-Length") || strings.EqualFold(key, "Transfer-Encoding") || strings.EqualFold(key, "Connection") {
+			continue
+		}
+		for _, value := range values {
+			w.Header().Add(key, value)
+		}
+	}
+
+	contentType := resp.Header.Get("Content-Type")
+	if gpuDesktopNeedsRewrite(contentType, targetPath) {
+		body, err := io.ReadAll(io.LimitReader(resp.Body, gpuDesktopRewriteBodyLimit+1))
+		if err != nil {
+			writeGPUDesktopProxyError(w, err, "response body")
 			return
 		}
+		if len(body) > gpuDesktopRewriteBodyLimit {
+			http.Error(w, "gpu desktop response too large to rewrite", http.StatusBadGateway)
+			return
+		}
+		body = rewriteGPUDesktopBody(contentType, targetPath, r.URL.RawQuery, gpuDesktopProxyPrefix+"/"+deviceID, body)
+		w.Header().Set("Content-Length", strconv.Itoa(len(body)))
+		w.WriteHeader(resp.StatusCode)
+		_, _ = w.Write(body)
+		return
+	}
+
+	w.WriteHeader(resp.StatusCode)
+	if _, err := io.Copy(w, resp.Body); err != nil {
+		// Headers are gone, so a truncated upstream can only be reported by
+		// aborting the connection; ending quietly would look like a complete
+		// response with fewer bytes.
+		if r.Context().Err() == nil {
+			log.Printf("gpu desktop response truncated: device=%s path=%s err=%v", deviceID, targetPath, err)
+		}
+		panic(http.ErrAbortHandler)
 	}
 }
 
@@ -753,36 +873,16 @@ func buildGPUDesktopRawRequest(r *http.Request, deviceID string, websocketUpgrad
 	}
 	out.WriteString("\r\n")
 	if r.Body != nil {
-		body, err := io.ReadAll(r.Body)
+		body, err := io.ReadAll(io.LimitReader(r.Body, gpuDesktopRequestBodyLimit+1))
 		if err != nil {
 			return nil, "", err
+		}
+		if len(body) > gpuDesktopRequestBodyLimit {
+			return nil, "", fmt.Errorf("%w (limit %d bytes)", errGPUDesktopRequestTooLarge, gpuDesktopRequestBodyLimit)
 		}
 		_, _ = out.Write(body)
 	}
 	return out.Bytes(), targetPath, nil
-}
-
-func writeGPUDesktopHTTPResponse(w http.ResponseWriter, r *http.Request, rawResp *bytes.Buffer, deviceID, targetPath string) {
-	resp, err := http.ReadResponse(bufio.NewReader(bytes.NewReader(rawResp.Bytes())), r)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
-		return
-	}
-	defer resp.Body.Close()
-
-	body, _ := io.ReadAll(resp.Body)
-	prefix := gpuDesktopProxyPrefix + "/" + deviceID
-	body = rewriteGPUDesktopBody(resp.Header.Get("Content-Type"), targetPath, r.URL.RawQuery, prefix, body)
-	for key, values := range resp.Header {
-		if strings.EqualFold(key, "Content-Length") {
-			continue
-		}
-		for _, value := range values {
-			w.Header().Add(key, value)
-		}
-	}
-	w.WriteHeader(resp.StatusCode)
-	_, _ = w.Write(body)
 }
 
 func rewriteGPUDesktopBody(contentType, targetPath, rawQuery, prefix string, body []byte) []byte {
