@@ -2,9 +2,11 @@
 
 FROM oven/bun:1.3.14-alpine AS web-build
 WORKDIR /src
-COPY package.json bun.lock tsconfig.json vite.config.ts ./
+COPY package.json bun.lock ./
+RUN bun install --frozen-lockfile
+COPY tsconfig.json vite.config.ts ./
 COPY web ./web
-RUN bun install --frozen-lockfile && bun run build
+RUN bun run build
 
 FROM golang:1.26-alpine AS go-build
 WORKDIR /src
@@ -16,7 +18,7 @@ ENV GOPROXY=$GOPROXY
 COPY go.mod go.sum ./
 COPY internal/sshlib/go.mod ./internal/sshlib/go.mod
 RUN go mod download
-COPY cmd ./cmd
+COPY cmd/rdev-server ./cmd/rdev-server
 COPY internal ./internal
 COPY --from=web-build /src/internal/server/static ./internal/server/static
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \

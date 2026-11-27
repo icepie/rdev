@@ -36,6 +36,11 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6
 
+      - name: Run Android unit tests
+        env:
+          ANDROID_HOME: ${{ env.ANDROID_HOME }}
+        run: sh third_party/autojs6/gradlew -p clients/rdev-android --no-daemon test
+
       - name: Build debug APK
         env:
           ANDROID_HOME: ${{ env.ANDROID_HOME }}

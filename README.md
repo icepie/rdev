@@ -318,7 +318,7 @@ Web UI 是 React 19 + Tailwind CSS v4 + Radix UI 单页应用，组件/设计令
 - 路由保持原有 URL：`/`、`/terminal`、`/remote-desktop`、`/batch`、`/sessions`、`/files`、`/agent`；`?token=` 管理令牌与 `rdev.devicePassword.<id>` 设备密码 localStorage 契约不变。
 - 明暗主题：右上角切换 自动/浅色/深色，持久化在 `rdevTheme`，自动模式跟随系统。
 - 构建顺序：`bun run build`（vite → `internal/server/static/`，go:embed）必须在 `go build` 之前。`internal/server/static/` 是被 `.gitignore` 忽略的生成目录，不能作为源码手工编辑；安装器源文件只维护在 `web/public/`，构建会同步 `run.sh`、`run.ps1` 和 `mustreademe.md`。
-- 前端构建会先清空并重新生成整个嵌入目录；不要与 `go test`、`go vet` 或 `go build` 并发执行，否则 Go 可能在资源被替换的中间状态读取 `go:embed` 文件并失败。CI 与 `make build` 按前端构建完成后再运行 Go 检查。
+- 前端构建会先清空并重新生成整个嵌入目录；不要与 `go test`、`go vet` 或 `go build` 并发执行，否则 Go 可能在资源被替换的中间状态读取 `go:embed` 文件并失败。CI 与 `make build` 按前端构建完成后再运行 Go 检查；`make test`、`make vet`、`make server` 共用 `web` 依赖，先把嵌入资源生成一次。
 - 构建时生成 Brotli/gzip 静态资源；服务端按 `Accept-Encoding` 协商并设置 `Vary`，不在请求中压缩。带构建哈希的资源缓存一年且 `immutable`；HTML、安装脚本和缺失资源不使用不可变缓存。
 - 生成 gzip 副本后构建会删除对应的原始文件，Go 只嵌入压缩副本；不带 `Accept-Encoding` 的请求由服务端解压回原文，因此二进制体积从约 36 MB 降到约 29 MB，且不需要 UPX（UPX 改写 ELF 会破坏解释器/加固兼容性）。Go 构建统一使用 `-trimpath -ldflags "-s -w"`。
 - Dashboard 不再预加载 Markdown 渲染器及完整扩展图标集；进入相关功能时才加载。
@@ -373,8 +373,14 @@ GO_WIN7=/path/to/go-win7/bin/go make win7-go-client win7-service-wrapper
 # 交叉编译 (无 CGO)
 make cross
 
-# 手动构建
+# 手动构建（go:embed 需要先产出 internal/server/static，`make test`/`make vet` 也走同一 web 依赖）
+bun install --frozen-lockfile
+bun run build
 CGO_ENABLED=0 go build -o rdev-server ./cmd/rdev-server
+
+# Go 检查（会先构建 Web 资源，避免干净 checkout 缺少嵌入目录）
+make test
+make vet
 
 # 交叉编译客户端
 CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -o rdev-client.exe ./cmd/rdev-client

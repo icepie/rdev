@@ -1,6 +1,7 @@
 .git
 .github
 node_modules
+**/node_modules
 .tmp
 tmp
 *.log
@@ -13,7 +14,20 @@ tmp
 /rdev-server-gui
 /rdev-server-nocgo
 *.exe
+/target
+**/target
+/build
+**/build
 /clients/rdev-client-rs/target
+**/rust-target
+/internal/client/cua_native
+
+# Generated frontend embeds; the image builds them in the web stage.
+/internal/server/static
+
+# Device clients and initialized submodules are irrelevant to the server image.
+/clients
+/third_party
 
 # Runtime data/secrets
 *.pem

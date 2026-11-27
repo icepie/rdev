@@ -1,4 +1,4 @@
-.PHONY: all build clean cross server client web web-install test vet fmt win7-go-client win7-service-wrapper rust-client-rs rust-client-rs-check rust-client-rs-fmt rust-client-rs-clippy rust-client-rs-test rust-client-rs-smoke rust-client-rs-linux-desktop-package rust-client-rs-windows-arm64-package rust-client-rs-win7-package rust-client-rs-win7-rdev-desktop-package rust-client-rs-win7-stage rust-client-rs-win7-smoke client-cpp
+.PHONY: all build clean cross server client web web-install test vet fmt win7-go-client win7-service-wrapper rust-client-rs rust-client-rs-check rust-client-rs-fmt rust-client-rs-clippy rust-client-rs-test rust-client-rs-smoke rust-client-rs-linux-desktop-package rust-client-rs-windows-arm64-package rust-client-rs-win7-package rust-client-rs-win7-rdev-desktop-package rust-client-rs-win7-stage rust-client-rs-win7-smoke
 
 BINS = rdev-server rdev-client
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
@@ -13,7 +13,6 @@ RUST_CLIENT_RS_WIN7_DIR = clients/rdev-client-rs/target/x86_64-pc-windows-gnullv
 RUST_CLIENT_RS_WIN7_DIST = clients/rdev-client-rs/target/win7-dist
 RUST_CLIENT_RS_WIN7_RUNTIME_DIR ?= /opt/llvm-mingw/x86_64-w64-mingw32/bin
 RUST_CLIENT_RS_WIN7_RDEV_DESKTOP_DIST = clients/rdev-client-rs/target/win7-rdev-desktop-dist
-CPP_CLIENT_BUILD_DIR = target/rdev-client-cpp
 
 all: build
 
@@ -26,6 +25,7 @@ web:
 web-install:
 	bun install
 
+# go:embed needs internal/server/static, which only the web build produces.
 server: web
 	go build $(GO_TRIMPATH) -ldflags "$(LDFLAGS)" -o rdev-server ./cmd/rdev-server
 
@@ -33,14 +33,9 @@ client:
 	go build $(GO_TRIMPATH) $(GO264_TAGS) -ldflags "$(LDFLAGS)" -o rdev-client ./cmd/rdev-client
 
 
-client-cpp:
-	cmake -S clients/rdev-client-cpp -B $(CPP_CLIENT_BUILD_DIR)
-	cmake --build $(CPP_CLIENT_BUILD_DIR) --parallel
-
-
 clean:
 	rm -f $(BINS) $(BINS)-*
-	rm -rf clients/rdev-client-rs/target $(WIN7_SERVICE_DIST) $(CPP_CLIENT_BUILD_DIR)
+	rm -rf clients/rdev-client-rs/target $(WIN7_SERVICE_DIST)
 
 win7-go-client:
 	mkdir -p $(WIN7_SERVICE_DIST)
@@ -136,10 +131,10 @@ rdev-client-windows-amd64.exe:
 rdev-client-windows-386.exe:
 	CGO_ENABLED=0 GOOS=windows GOARCH=386 go build $(GO_TRIMPATH) $(GO264_TAGS) -ldflags "$(LDFLAGS)" -o $@ ./cmd/rdev-client
 
-test:
+test: web
 	go test $(GO264_TAGS) ./...
 
-vet:
+vet: web
 	go vet $(GO264_TAGS) ./...
 
 fmt:
