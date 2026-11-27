@@ -12,17 +12,18 @@ permissions:
 
 env:
   GO_WIN7_VERSION: 'patched-1.26.4'
+  UPX_VERSION: '4.2.4'
+  # Shared release linker flags for every Go target. Compression is chosen per
+  # platform by scripts/ci/build-go.sh, never implied by these flags.
+  RDEV_LDFLAGS: '-s -w -X main.version=${{ github.ref_name }}'
 
 jobs:
-  test:
-    name: Test
+  # ── Web assets are built exactly once and reused by every Go job ──
+  web:
+    name: Build web UI
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-
-      - uses: actions/setup-go@v7
-        with:
-          go-version: '1.26'
 
       - uses: oven-sh/setup-bun@v2
 
@@ -43,6 +44,31 @@ jobs:
         run: |
           bun run build
 
+      - name: Upload web UI
+        uses: actions/upload-artifact@v7
+        with:
+          name: web-dist
+          path: internal/server/static
+          if-no-files-found: error
+          retention-days: 3
+
+  test:
+    name: Test
+    needs: web
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.26'
+
+      - name: Download web UI
+        uses: actions/download-artifact@v8
+        with:
+          name: web-dist
+          path: internal/server/static
+
       - name: Vet
         run: go vet ./...
 
@@ -60,9 +86,9 @@ jobs:
 
       - name: Build check
         run: |
-          CGO_ENABLED=0 go build -o /dev/null ./cmd/rdev-server
-          CGO_ENABLED=0 go build -o /dev/null ./cmd/rdev-client
-          CGO_ENABLED=0 go build -tags go264_nohwaccel -o /dev/null ./cmd/rdev-client
+          CGO_ENABLED=0 go build -trimpath -o /dev/null ./cmd/rdev-server
+          CGO_ENABLED=0 go build -trimpath -o /dev/null ./cmd/rdev-client
+          CGO_ENABLED=0 go build -trimpath -tags go264_nohwaccel -o /dev/null ./cmd/rdev-client
 
   test-installers:
     name: Test Windows installers
@@ -103,37 +129,32 @@ jobs:
         with:
           go-version: '1.26'
 
-      - uses: oven-sh/setup-bun@v2
-
-      - name: Build web UI
-        run: |
-          bun install --frozen-lockfile
-          bun run build
+      - name: Download web UI
+        uses: actions/download-artifact@v8
+        with:
+          name: web-dist
+          path: internal/server/static
 
       - name: Install UPX
         run: |
           curl -fSL --retry 3 -o /tmp/upx.tar.xz \
-            "https://github.com/upx/upx/releases/download/v4.2.4/upx-4.2.4-amd64_linux.tar.xz"
+            "https://github.com/upx/upx/releases/download/v${UPX_VERSION}/upx-${UPX_VERSION}-amd64_linux.tar.xz"
           tar xf /tmp/upx.tar.xz -C /tmp
-          sudo cp /tmp/upx-4.2.4-amd64_linux/upx /usr/local/bin/
+          sudo cp "/tmp/upx-${UPX_VERSION}-amd64_linux/upx" /usr/local/bin/
 
       - name: Build & compress server
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: 0
-        run: |
-          go build -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" -o rdev-server-raw ./cmd/rdev-server
-          upx --best rdev-server-raw -o rdev-server${{ matrix.ext }} || cp rdev-server-raw rdev-server${{ matrix.ext }}
+        run: scripts/ci/build-go.sh ./cmd/rdev-server "rdev-server${{ matrix.ext }}" upx
 
       - name: Build & compress client
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: 0
-        run: |
-          go build -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" -o rdev-client-raw ./cmd/rdev-client
-          upx --best rdev-client-raw -o rdev-client${{ matrix.ext }} || cp rdev-client-raw rdev-client${{ matrix.ext }}
+        run: scripts/ci/build-go.sh ./cmd/rdev-client "rdev-client${{ matrix.ext }}" upx
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v7
@@ -182,13 +203,6 @@ jobs:
       - name: Install Android NDK
         run: sdkmanager "ndk;27.1.12297006"
 
-      - name: Install UPX
-        run: |
-          curl -fSL --retry 3 -o /tmp/upx.tar.xz \
-            "https://github.com/upx/upx/releases/download/v4.2.4/upx-4.2.4-amd64_linux.tar.xz"
-          tar xf /tmp/upx.tar.xz -C /tmp
-          sudo cp /tmp/upx-4.2.4-amd64_linux/upx /usr/local/bin/
-
       - name: Build Android client
         env:
           GOOS: android
@@ -200,9 +214,9 @@ jobs:
           export PATH="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH"
           if [ -n "${{ matrix.goarm }}" ]; then export GOARM="${{ matrix.goarm }}"; fi
           # Pion's anet dependency accesses net.zoneCache on Android; Go 1.23+ requires this opt-in.
-          go build -ldflags "-checklinkname=0 -s -w -X main.version=${GITHUB_REF_NAME}" -o rdev-client ./cmd/rdev-client
-          # UPX strips PT_INTERP (/system/bin/linker64); Android 10+ blocks the
-          # self-decompressing stub, so the client must ship as a normal PIE.
+          # Compression is explicitly disabled: UPX strips PT_INTERP (/system/bin/linker64)
+          # and Android 10+ blocks the self-decompressing stub, so this ships as a PIE.
+          scripts/ci/build-go.sh ./cmd/rdev-client rdev-client none "-checklinkname=0"
           file rdev-client
           readelf -l rdev-client | grep -q 'program interpreter' || {
             echo "Android client lost its PT_INTERP interpreter" >&2
@@ -226,12 +240,11 @@ jobs:
         with:
           go-version: '1.26'
 
-      - uses: oven-sh/setup-bun@v2
-
-      - name: Build web UI
-        run: |
-          bun install --frozen-lockfile
-          bun run build
+      - name: Download web UI
+        uses: actions/download-artifact@v8
+        with:
+          name: web-dist
+          path: internal/server/static
 
       - name: Cache go-win7
         id: cache-go-win7
@@ -254,9 +267,9 @@ jobs:
       - name: Install UPX
         run: |
           curl -fSL --retry 3 -o /tmp/upx.tar.xz \
-            "https://github.com/upx/upx/releases/download/v4.2.4/upx-4.2.4-amd64_linux.tar.xz"
+            "https://github.com/upx/upx/releases/download/v${UPX_VERSION}/upx-${UPX_VERSION}-amd64_linux.tar.xz"
           tar xf /tmp/upx.tar.xz -C /tmp
-          sudo cp /tmp/upx-4.2.4-amd64_linux/upx /usr/local/bin/
+          sudo cp "/tmp/upx-${UPX_VERSION}-amd64_linux/upx" /usr/local/bin/
 
       - name: Build & compress windows/amd64
         env:
@@ -266,11 +279,8 @@ jobs:
           GOROOT: /home/runner/go-win7
         run: |
           export PATH="/home/runner/go-win7/bin:$PATH"
-          mkdir -p dist/windows-amd64
-          go build -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" -o rdev-server-raw ./cmd/rdev-server
-          upx --best rdev-server-raw -o dist/windows-amd64/rdev-server.exe || cp rdev-server-raw dist/windows-amd64/rdev-server.exe
-          go build -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" -o rdev-client-raw ./cmd/rdev-client
-          upx --best rdev-client-raw -o dist/windows-amd64/rdev-client.exe || cp rdev-client-raw dist/windows-amd64/rdev-client.exe
+          scripts/ci/build-go.sh ./cmd/rdev-server dist/windows-amd64/rdev-server.exe upx
+          scripts/ci/build-go.sh ./cmd/rdev-client dist/windows-amd64/rdev-client.exe upx
 
       - name: Build & compress windows/386 client
         env:
@@ -280,9 +290,7 @@ jobs:
           GOROOT: /home/runner/go-win7
         run: |
           export PATH="/home/runner/go-win7/bin:$PATH"
-          mkdir -p dist/windows-386
-          go build -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" -o rdev-client-raw ./cmd/rdev-client
-          upx --best rdev-client-raw -o dist/windows-386/rdev-client.exe || cp rdev-client-raw dist/windows-386/rdev-client.exe
+          scripts/ci/build-go.sh ./cmd/rdev-client dist/windows-386/rdev-client.exe upx
 
       - name: Build & compress windows/arm64
         env:
@@ -290,11 +298,8 @@ jobs:
           GOARCH: arm64
           CGO_ENABLED: 0
         run: |
-          mkdir -p dist/windows-arm64
-          go build -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" -o rdev-server-raw ./cmd/rdev-server
-          upx --best rdev-server-raw -o dist/windows-arm64/rdev-server.exe || cp rdev-server-raw dist/windows-arm64/rdev-server.exe
-          go build -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" -o rdev-client-raw ./cmd/rdev-client
-          upx --best rdev-client-raw -o dist/windows-arm64/rdev-client.exe || cp rdev-client-raw dist/windows-arm64/rdev-client.exe
+          scripts/ci/build-go.sh ./cmd/rdev-server dist/windows-arm64/rdev-server.exe upx
+          scripts/ci/build-go.sh ./cmd/rdev-client dist/windows-arm64/rdev-client.exe upx
 
       - name: Upload windows/amd64
         uses: actions/upload-artifact@v7
@@ -318,18 +323,74 @@ jobs:
             dist/windows-arm64/rdev-server.exe
             dist/windows-arm64/rdev-client.exe
 
+  # ── Real browser smoke: web assets + Go server + Go client ───
+  browser-smoke:
+    name: Browser smoke (terminal + files)
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      PLAYWRIGHT_VERSION: '1.65.1'
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.26'
+
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Download web UI
+        uses: actions/download-artifact@v8
+        with:
+          name: web-dist
+          path: internal/server/static
+
+      - name: Build service binaries
+        env:
+          CGO_ENABLED: 0
+        run: |
+          mkdir -p "$RUNNER_TEMP/bin"
+          scripts/ci/build-go.sh ./cmd/rdev-server "$RUNNER_TEMP/bin/rdev-server" none
+          scripts/ci/build-go.sh ./cmd/rdev-client "$RUNNER_TEMP/bin/rdev-client" none
+
+      - name: Install Playwright Chromium
+        run: |
+          bunx "playwright@${PLAYWRIGHT_VERSION}" install --with-deps chromium
+          mkdir -p "$RUNNER_TEMP/playwright"
+          cd "$RUNNER_TEMP/playwright"
+          bun add "playwright@${PLAYWRIGHT_VERSION}"
+
+      - name: Run browser smoke
+        run: |
+          node scripts/ci/browser-smoke.mjs \
+            --server "$RUNNER_TEMP/bin/rdev-server" \
+            --client "$RUNNER_TEMP/bin/rdev-client" \
+            --playwright-root "$RUNNER_TEMP/playwright" \
+            --artifacts "$RUNNER_TEMP/browser-smoke-artifacts"
+
+      - name: Upload browser smoke diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: browser-smoke-artifacts
+          path: ${{ runner.temp }}/browser-smoke-artifacts
+          if-no-files-found: warn
+
   # ── Release (only on v* tags) ────────────────────────────────
   release:
     name: Release
-    needs: [test, test-installers, build, build-android, build-windows]
+    needs: [test, test-installers, build, build-android, build-windows, browser-smoke]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
     steps:
       - uses: actions/checkout@v7
 
-      - name: Download all artifacts
+      - name: Download release artifacts
         uses: actions/download-artifact@v8
         with:
+          # web-dist is a build input, never a release asset.
+          pattern: rdev-*
           path: artifacts
 
       - name: Rename for release
