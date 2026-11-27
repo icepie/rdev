@@ -198,6 +198,11 @@ Every implementation asserts against these same bytes:
   (run by the Android unit tests, or stand-alone with `javac` + `java` when no
   Android SDK is installed) resolves it from `RDEV_FIXTURE_ROOT` or by walking up
   from the working directory.
+- Web: `web/tests/file-transfer-frame-fixtures.test.js` (`bun run test:web`)
+  decodes the layer-C rows and the `error:invalid` rows with
+  `web/ui/lib/file-transfer-frame.ts`. It intentionally skips layer-B-only rows
+  (the browser relay never parses them) and asserts that `idLen = 0` decodes to
+  `null`, per the ID table above.
 
-A case is not covered until all three read the same file. Do not fork the corpus
+A case is not covered until all four read the same file. Do not fork the corpus
 per language.
