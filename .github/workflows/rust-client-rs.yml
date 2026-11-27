@@ -564,9 +564,118 @@ jobs:
             clients/rdev-client-rs/dist/${{ matrix.asset }}*.zip
           if-no-files-found: error
 
+  # ── Code signing (release tags and manual runs) ───────────────
+  # Same credentials as nicecode-tools and the Go release: see
+  # docs/release-signing.md. The packaged archives are rebuilt in place so the
+  # published bytes carry the signatures.
+  sign-windows:
+    name: Sign ${{ matrix.asset }}
+    needs: build
+    runs-on: windows-latest
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    strategy:
+      fail-fast: true
+      matrix:
+        asset: [rdev-client-rs-windows-amd64, rdev-client-rs-windows-arm64, rdev-client-rs-windows-win7-amd64]
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Download ${{ matrix.asset }}
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ matrix.asset }}
+          path: package
+
+      - name: Prepare Authenticode signer
+        shell: pwsh
+        env:
+          EVSIGN_LICENSE_KEY: ${{ secrets.EVSIGN_LICENSE_KEY }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not $env:EVSIGN_LICENSE_KEY) { throw 'Missing EVSIGN_LICENSE_KEY secret' }
+          $client = Join-Path $env:RUNNER_TEMP 'evsign-client.exe'
+          Invoke-WebRequest 'https://mc.evsign.cn/evsign-client-cli-windows-latest' -OutFile $client
+          "EVSIGN_CLIENT=$client" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Sign the packaged payload and rebuild the archive
+        shell: pwsh
+        env:
+          EVSIGN_LICENSE_KEY: ${{ secrets.EVSIGN_LICENSE_KEY }}
+          ASSET: ${{ matrix.asset }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Expand-Archive -LiteralPath "package/$env:ASSET.zip" -DestinationPath unpacked -Force
+          ./scripts/ci/sign-windows.ps1 "unpacked/$env:ASSET"
+          Remove-Item -LiteralPath "package/$env:ASSET.zip" -Force
+          Compress-Archive -Path "unpacked/$env:ASSET" -DestinationPath "package/$env:ASSET.zip" -Force
+
+      - name: Publish signed package
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.asset }}
+          path: package/${{ matrix.asset }}.zip
+          if-no-files-found: error
+          overwrite: true
+
+  sign-darwin:
+    name: Sign ${{ matrix.asset }}
+    needs: build
+    runs-on: macos-15
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    strategy:
+      fail-fast: true
+      matrix:
+        asset: [rdev-client-rs-darwin-amd64, rdev-client-rs-darwin-arm64]
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Download ${{ matrix.asset }}
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ matrix.asset }}
+          path: package
+
+      - name: Prepare Developer ID signing
+        env:
+          MACOS_CERT_P12_BASE64: ${{ secrets.MACOS_CERT_P12_BASE64 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+        run: scripts/ci/apple-signing-setup.sh
+
+      - name: Sign the payload, notarize it and rebuild the archive
+        env:
+          ASSET: ${{ matrix.asset }}
+        run: |
+          set -euo pipefail
+          work="${RUNNER_TEMP}/rust-sign"
+          rm -rf "$work"; mkdir -p "$work"
+          tar -C "$work" -xzf "package/$ASSET.tar.gz"
+          scripts/ci/sign-darwin.sh "$work/$ASSET"
+          rm -f "package/$ASSET.tar.gz"
+          tar -C "$work" -czf "package/$ASSET.tar.gz" "$ASSET"
+          tar -tzf "package/$ASSET.tar.gz" | head -5
+
+      - name: Publish signed package
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.asset }}
+          path: package/${{ matrix.asset }}.tar.gz
+          if-no-files-found: error
+          overwrite: true
+
+      - name: Remove temporary signing material
+        if: always()
+        run: |
+          security delete-keychain "${APPLE_NOTARY_KEYCHAIN}" || true
+          rm -f "${RUNNER_TEMP}/rdev-signing.p12" "${RUNNER_TEMP}/rdev-notary.p8"
+
   windows-smoke:
     name: Smoke ${{ matrix.asset }}
-    needs: build
+    needs: [build, sign-windows]
+    # sign-windows is skipped off release tags; the smoke test still has to run.
+    if: ${{ always() && !cancelled() }}
     runs-on: windows-latest
     strategy:
       fail-fast: false
@@ -605,7 +714,7 @@ jobs:
 
   release:
     name: Release Rust client
-    needs: [test, build, windows-smoke]
+    needs: [test, build, windows-smoke, sign-windows, sign-darwin]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
     steps:

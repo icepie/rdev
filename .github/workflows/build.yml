@@ -113,15 +113,21 @@ jobs:
           - goos: linux
             goarch: amd64
             ext: ""
+            compress: upx
           - goos: linux
             goarch: arm64
             ext: ""
+            compress: upx
+          # Signed and notarized macOS binaries must not be UPX-packed: the
+          # self-extracting stub cannot carry a valid Developer ID signature.
           - goos: darwin
             goarch: amd64
             ext: ""
+            compress: none
           - goos: darwin
             goarch: arm64
             ext: ""
+            compress: none
     steps:
       - uses: actions/checkout@v7
 
@@ -147,14 +153,14 @@ jobs:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: 0
-        run: scripts/ci/build-go.sh ./cmd/rdev-server "rdev-server${{ matrix.ext }}" upx
+        run: scripts/ci/build-go.sh ./cmd/rdev-server "rdev-server${{ matrix.ext }}" "${{ matrix.compress }}"
 
       - name: Build & compress client
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: 0
-        run: scripts/ci/build-go.sh ./cmd/rdev-client "rdev-client${{ matrix.ext }}" upx
+        run: scripts/ci/build-go.sh ./cmd/rdev-client "rdev-client${{ matrix.ext }}" "${{ matrix.compress }}"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v7
@@ -165,6 +171,97 @@ jobs:
             rdev-client${{ matrix.ext }}
 
 
+
+  # ── Code signing (release tags and manual runs) ───────────────
+  # Windows and macOS payloads are signed with the same credentials as
+  # nicecode-tools; see docs/release-signing.md. Release publication depends on
+  # both jobs, so an unsigned tag build never ships.
+  sign-windows:
+    name: Sign ${{ matrix.artifact }}
+    needs: build-windows
+    runs-on: windows-latest
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    strategy:
+      fail-fast: true
+      matrix:
+        artifact: [rdev-windows-amd64, rdev-windows-386, rdev-windows-arm64]
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Download ${{ matrix.artifact }}
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ matrix.artifact }}
+          path: artifacts/${{ matrix.artifact }}
+
+      - name: Prepare Authenticode signer
+        shell: pwsh
+        env:
+          EVSIGN_LICENSE_KEY: ${{ secrets.EVSIGN_LICENSE_KEY }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not $env:EVSIGN_LICENSE_KEY) { throw 'Missing EVSIGN_LICENSE_KEY secret' }
+          $client = Join-Path $env:RUNNER_TEMP 'evsign-client.exe'
+          Invoke-WebRequest 'https://mc.evsign.cn/evsign-client-cli-windows-latest' -OutFile $client
+          "EVSIGN_CLIENT=$client" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Sign and verify executables
+        shell: pwsh
+        env:
+          EVSIGN_LICENSE_KEY: ${{ secrets.EVSIGN_LICENSE_KEY }}
+        run: ./scripts/ci/sign-windows.ps1 artifacts/${{ matrix.artifact }}
+
+      - name: Publish signed binaries
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.artifact }}
+          path: artifacts/${{ matrix.artifact }}
+          if-no-files-found: error
+          overwrite: true
+
+  sign-darwin:
+    name: Sign ${{ matrix.artifact }}
+    needs: build
+    runs-on: macos-15
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    strategy:
+      fail-fast: true
+      matrix:
+        artifact: [rdev-darwin-amd64, rdev-darwin-arm64]
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Download ${{ matrix.artifact }}
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ matrix.artifact }}
+          path: artifacts/${{ matrix.artifact }}
+
+      - name: Prepare Developer ID signing
+        env:
+          MACOS_CERT_P12_BASE64: ${{ secrets.MACOS_CERT_P12_BASE64 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+        run: scripts/ci/apple-signing-setup.sh
+
+      - name: Sign, verify and notarize binaries
+        run: scripts/ci/sign-darwin.sh artifacts/${{ matrix.artifact }}
+
+      - name: Publish signed binaries
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.artifact }}
+          path: artifacts/${{ matrix.artifact }}
+          if-no-files-found: error
+          overwrite: true
+
+      - name: Remove temporary signing material
+        if: always()
+        run: |
+          security delete-keychain "${APPLE_NOTARY_KEYCHAIN}" || true
+          rm -f "${RUNNER_TEMP}/rdev-signing.p12" "${RUNNER_TEMP}/rdev-notary.p8"
 
   # ── Android/Termux client builds (Bionic + libc DNS) ─────────
   build-android:
@@ -380,7 +477,7 @@ jobs:
   # ── Release (only on v* tags) ────────────────────────────────
   release:
     name: Release
-    needs: [test, test-installers, build, build-android, build-windows, browser-smoke]
+    needs: [test, test-installers, build, build-android, build-windows, browser-smoke, sign-windows, sign-darwin]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
     steps:

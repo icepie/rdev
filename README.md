@@ -398,6 +398,8 @@ CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o rdev-client-arm64 ./cmd/rdev-c
 
 发布标签前应通过 Rust 的格式检查、Clippy、单元测试及 `make rust-client-rs-smoke`；GPU 发布流程要求这些检查和跨平台构建、Windows 包启动检查全部成功。文件传输冒烟使用必需的 SHA-256 上传摘要，并核对上传完成及下载元数据中的摘要。已发布标签不重写；发布检查修复使用新的补丁版本。
 
+Windows 与 macOS 产物在标签构建中必须带操作系统签名（Authenticode / Developer ID + 公证），签名凭据与 `nicecode-tools` 共用，失败即阻断发布；macOS 产物因此不再做 UPX 压缩。细节见 [docs/release-signing.md](docs/release-signing.md)。
+
 ### Go 客户端桌面编码
 
 默认 Go 客户端通过 BSD-2-Clause 的 `go.264` 提供 H.264 Baseline/AVCC，
