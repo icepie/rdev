@@ -1,6 +1,6 @@
 # Android / Termux Client
 
-RDev supports Android as a Termux-hosted client before a native APK is introduced.
+RDev ships two Android paths: the Termux-hosted CLI clients documented here, and a native APK with `MediaProjection` screen capture and `AccessibilityService` input ([docs/android-apk.md](android-apk.md)). The APK is released; the Termux client needs no capture or input grants.
 
 ## One-click start
 
@@ -26,7 +26,7 @@ curl -sL https://r.niceaigc.cn/run.sh | sh -s -- wss://r.niceaigc.cn -p YOUR_PAS
 - Android Go builds require `-ldflags "-checklinkname=0"` with Go 1.23+: Pion's `github.com/wlynxg/anet` dependency accesses `net.zoneCache` to support Android network interfaces. This linker opt-in is limited to Android builds; see [anet's build requirements](https://github.com/wlynxg/anet#how-to-build-with-go-1230-or-later).
 - The default shell is `$PREFIX/bin/bash`, then `$PREFIX/bin/sh`, then `/system/bin/sh`. The Go and Rust clients use the same order when `SHELL` is unset (for example under Termux:Boot or `nohup`), and `run.sh` recognises Termux from `PREFIX` even when `uname -o` is unavailable. A shell that exists but is not executable is skipped: the clients retry the remaining candidates on `EACCES`/`ENOENT`/`ENOEXEC` and log which shell they used.
 - Android artifacts ship as ordinary PIE executables with `PT_INTERP=/system/bin/linker64`; they are **not** UPX-compressed. UPX rewrites the ELF into a self-decompressing stub without an interpreter, which Android 10+ refuses to execute. CI fails the build if an Android asset loses its interpreter. Expect roughly 18 MB for the Go client and a larger `rdev-client-rs` archive as a result.
-- The Android Rust package is a no-desktop terminal/file/session client. Screen capture and input need a future APK because Android requires `MediaProjection` and `AccessibilityService` user grants.
+- The Android Rust package is a terminal/file/session client without screen capture. Android requires user-granted `MediaProjection` and `AccessibilityService` for capture and input, so those live in the native APK ([docs/android-apk.md](android-apk.md)), not in the Termux client.
 
 ## Troubleshooting
 
@@ -35,6 +35,10 @@ curl -sL https://r.niceaigc.cn/run.sh | sh -s -- wss://r.niceaigc.cn -p YOUR_PAS
 
 ## Limitations
 
-- Termux cannot provide Android screen capture or touch injection by itself.
+- Termux cannot provide Android screen capture or touch injection by itself; install the APK ([docs/android-apk.md](android-apk.md)) for desktop control.
 - Ordinary Termux permissions are limited to the Termux app sandbox plus Android storage grants.
 - Root, ADB, or Device Owner mode can provide broader device control, but is intentionally separate from the default client path.
+
+## History
+
+Earlier revisions of this page described Android as Termux-only, with screen capture and input planned for a future APK. That plan shipped: the native APK provides `MediaProjection` capture and `AccessibilityService` input, and is documented in [docs/android-apk.md](android-apk.md).
