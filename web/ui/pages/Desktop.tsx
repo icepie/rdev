@@ -1,4 +1,4 @@
-import { desktopEncoderRecoveryFormat, desktopEncoderStatus, desktopRuntimeEncoderStatus, desktopStreamRates } from "../lib/desktop-media";
+import { attachDesktopMediaSource, desktopEncoderRecoveryFormat, desktopEncoderStatus, desktopRuntimeEncoderStatus, desktopStreamRates } from "../lib/desktop-media";
 import { connectDesktopRTC, sendGPUDesktopMessage, type DesktopRTCConnection } from "../lib/desktop-webrtc";
 import { DesktopCanvasInput } from "../lib/desktop-input";
 import { isImeComposing } from "../lib/keyboard";
@@ -206,6 +206,7 @@ function DesktopSession({
   const [desktopInput] = useState(() => new DesktopCanvasInput());
 
   const gpuMediaSourceRef = useRef<MediaSource | null>(null);
+  const gpuMediaCleanupRef = useRef<(() => void) | null>(null);
   const gpuSourceBufferRef = useRef<SourceBuffer | null>(null);
   const gpuQueueRef = useRef<ArrayBuffer[]>([]);
   const gpuLastPointerRef = useRef(new Map<number, { x: number; y: number }>());
@@ -538,6 +539,8 @@ function DesktopSession({
 
   const closeGPUVideo = () => {
     setGpuEncoderStatus("");
+    gpuMediaCleanupRef.current?.();
+    gpuMediaCleanupRef.current = null;
     gpuQueueRef.current = [];
     gpuSourceBufferRef.current = null;
     const ms = gpuMediaSourceRef.current;
@@ -622,24 +625,15 @@ function DesktopSession({
     setGpuDisplay("video");
     const video = videoRef.current;
     if (video) video.src = URL.createObjectURL(ms);
-    ms.addEventListener(
-      "sourceopen",
-      () => {
-        let mime = 'video/mp4; codecs="avc1.4D403D"';
-        if (!MS.isTypeSupported(mime)) mime = "video/mp4";
-        const sb = ms.addSourceBuffer(mime);
-        // Sequence mode makes appends order-authoritative, which suits a
-        // live stream where we keep chasing the newest fragment.
-        try {
-          sb.mode = "sequence";
-        } catch {
-          /* ignore */
-        }
-        gpuSourceBufferRef.current = sb;
-        sb.addEventListener("updateend", gpuUpdateBuffer);
+    gpuMediaCleanupRef.current = attachDesktopMediaSource(ms, {
+      current: () => gpuMediaSourceRef.current === ms && gpuVideoModeRef.current === "mse",
+      supported: (mime) => MS.isTypeSupported(mime),
+      ready: (buffer) => {
+        gpuSourceBufferRef.current = buffer;
       },
-      { once: true },
-    );
+      update: gpuUpdateBuffer,
+      error: (cause) => setStatus(errMessage(cause), "err"),
+    });
   };
 
   const gpuStartWebCodecsVideo = (config: { codec?: string; width?: number; height?: number }) => {
@@ -1372,6 +1366,7 @@ function DesktopSession({
     pollClipboardSync,
     scheduleAdaptiveReconnect,
     updateGpuRangeLabels,
+    closeGPUVideo,
   });
   apiRef.current = {
     connect,
@@ -1388,6 +1383,7 @@ function DesktopSession({
     pollClipboardSync,
     scheduleAdaptiveReconnect,
     updateGpuRangeLabels,
+    closeGPUVideo,
   };
 
   /* ── Canvas/overlay listeners: elements unmount with connMode, so re-attach. ── */
@@ -1486,6 +1482,8 @@ function DesktopSession({
         wsRef.current.close();
         wsRef.current = null;
       }
+      // Media listeners are page-lifetime state, not socket-lifetime state.
+      apiRef.current.closeGPUVideo();
     },
     [],
   );
