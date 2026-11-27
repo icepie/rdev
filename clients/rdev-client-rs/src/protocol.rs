@@ -318,38 +318,52 @@ pub fn encode_bin_frame(typ: u8, id: &str, payload: &[u8]) -> Result<Vec<u8>> {
     Ok(out)
 }
 
-pub fn decode_bin_frame(raw: &[u8]) -> Result<(u8, String, Vec<u8>)> {
+/// Parses `[type][idLen][id][body]` on the input slice without copying.
+fn split_bin_frame(raw: &[u8]) -> Result<(u8, &str, &[u8])> {
     if raw.len() < 2 {
         return Err(anyhow!("binary frame too short"));
     }
-    let typ = raw[0];
     let id_len = raw[1] as usize;
-    if raw.len() < 2 + id_len {
+    let body = 2 + id_len;
+    if raw.len() < body {
         return Err(anyhow!("binary frame id truncated"));
     }
-    let id = String::from_utf8(raw[2..2 + id_len].to_vec())?;
-    Ok((typ, id, raw[2 + id_len..].to_vec()))
+    let id = std::str::from_utf8(&raw[2..body])?;
+    Ok((raw[0], id, &raw[body..]))
 }
 
+pub fn decode_bin_frame(raw: &[u8]) -> Result<(u8, String, Vec<u8>)> {
+    let (typ, id, body) = split_bin_frame(raw)?;
+    Ok((typ, id.to_owned(), body.to_vec()))
+}
+
+/// Writes the final frame once: header, id, offset and payload go straight into
+/// the returned buffer, with no intermediate body vector.
 pub fn encode_bin_frame_offset(typ: u8, id: &str, offset: i64, payload: &[u8]) -> Result<Vec<u8>> {
-    let mut body = Vec::with_capacity(8 + payload.len());
-    body.extend_from_slice(&(offset as u64).to_be_bytes());
-    body.extend_from_slice(payload);
-    encode_bin_frame(typ, id, &body)
+    let id = id.as_bytes();
+    if id.len() > u8::MAX as usize {
+        return Err(anyhow!("binary frame id too long: {}", id.len()));
+    }
+    let mut out = Vec::with_capacity(2 + id.len() + 8 + payload.len());
+    out.push(typ);
+    out.push(id.len() as u8);
+    out.extend_from_slice(id);
+    out.extend_from_slice(&(offset as u64).to_be_bytes());
+    out.extend_from_slice(payload);
+    Ok(out)
 }
 
+/// Parses the offset header in place and copies the payload tail exactly once.
 pub fn decode_bin_frame_offset(raw: &[u8]) -> Result<(u8, String, i64, Vec<u8>)> {
-    let (typ, id, payload) = decode_bin_frame(raw)?;
-    if payload.len() < 8 {
-        return Err(anyhow!("binary offset frame too short"));
-    }
-    let mut bytes = [0u8; 8];
-    bytes.copy_from_slice(&payload[..8]);
+    let (typ, id, body) = split_bin_frame(raw)?;
+    let (offset, payload) = body
+        .split_first_chunk::<8>()
+        .ok_or_else(|| anyhow!("binary offset frame too short"))?;
     Ok((
         typ,
-        id,
-        u64::from_be_bytes(bytes) as i64,
-        payload[8..].to_vec(),
+        id.to_owned(),
+        i64::from_be_bytes(*offset),
+        payload.to_vec(),
     ))
 }
 
@@ -433,6 +447,42 @@ mod tests {
     fn binary_offset_frame_rejects_short_payload() {
         let frame = encode_bin_frame(BIN_FILE_DOWNLOAD_CHUNK, "task", b"short").unwrap();
         assert!(decode_bin_frame_offset(&frame).is_err());
+    }
+
+    #[test]
+    fn binary_frame_roundtrip_large_payloads() {
+        for size in [64 * 1024usize, 512 * 1024] {
+            let payload: Vec<u8> = (0..size).map(|i| (i * 31 % 251) as u8).collect();
+            let plain = encode_bin_frame(BIN_DATA, "session-large", &payload).unwrap();
+            let (typ, id, decoded) = decode_bin_frame(&plain).unwrap();
+            assert_eq!(typ, BIN_DATA);
+            assert_eq!(id, "session-large");
+            assert_eq!(decoded, payload);
+        }
+    }
+
+    #[test]
+    fn binary_offset_frame_roundtrip_large_payloads() {
+        for size in [64 * 1024usize, 512 * 1024] {
+            let payload: Vec<u8> = (0..size).map(|i| (i * 31 % 251) as u8).collect();
+            let mut offset = 0i64;
+            let mut rebuilt = Vec::with_capacity(size);
+            for chunk in payload.chunks(16 * 1024) {
+                let frame =
+                    encode_bin_frame_offset(BIN_FILE_UPLOAD_CHUNK, "task-large", offset, chunk)
+                        .unwrap();
+                assert_eq!(frame.len(), 2 + "task-large".len() + 8 + chunk.len());
+                let (typ, id, decoded_offset, decoded) = decode_bin_frame_offset(&frame).unwrap();
+                assert_eq!(typ, BIN_FILE_UPLOAD_CHUNK);
+                assert_eq!(id, "task-large");
+                assert_eq!(decoded_offset, offset);
+                assert_eq!(decoded, chunk);
+                rebuilt.extend_from_slice(&decoded);
+                offset += chunk.len() as i64;
+            }
+            assert_eq!(offset, size as i64);
+            assert_eq!(rebuilt, payload);
+        }
     }
 
     #[test]

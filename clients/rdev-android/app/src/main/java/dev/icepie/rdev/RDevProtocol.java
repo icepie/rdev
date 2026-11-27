@@ -2,6 +2,7 @@ package dev.icepie.rdev;
 
 import java.io.ByteArrayOutputStream;
 import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 
 final class RDevProtocol {
     static final int BIN_DATA = 0x01;
@@ -15,6 +16,11 @@ final class RDevProtocol {
 
     final int type;
     final String id;
+    /**
+     * Frame data bytes. For session/forward frames this is the whole body; for
+     * offset file frames (0x20..0x24) it is the same array as
+     * {@link #offsetPayload}, i.e. the bytes after the offset word.
+     */
     final byte[] payload;
     final long offset;
     final byte[] offsetPayload;
@@ -27,26 +33,32 @@ final class RDevProtocol {
         this.offsetPayload = offsetPayload;
     }
 
+    /** Only these types carry the 8-byte offset word; everything else is payload. */
+    static boolean isOffsetType(int type) {
+        return type >= BIN_FILE_UPLOAD_CHUNK && type <= BIN_FILE_TRANSFER_CANCEL;
+    }
+
     static RDevProtocol decode(byte[] raw) throws Exception {
         if (raw == null || raw.length < 2) throw new IllegalArgumentException("binary frame too short");
         int type = raw[0] & 0xff;
         int idLen = raw[1] & 0xff;
-        if (raw.length < 2 + idLen) throw new IllegalArgumentException("binary frame id truncated");
-        String id = new String(raw, 2, idLen, "UTF-8");
-        byte[] payload = new byte[raw.length - 2 - idLen];
-        System.arraycopy(raw, 2 + idLen, payload, 0, payload.length);
-        long offset = 0;
-        byte[] offsetPayload = payload;
-        if (payload.length >= 8) {
-            offset = ByteBuffer.wrap(payload, 0, 8).getLong();
-            offsetPayload = new byte[payload.length - 8];
-            System.arraycopy(payload, 8, offsetPayload, 0, offsetPayload.length);
+        int body = 2 + idLen;
+        if (raw.length < body) throw new IllegalArgumentException("binary frame id truncated");
+        String id = new String(raw, 2, idLen, StandardCharsets.UTF_8);
+        if (!isOffsetType(type)) {
+            byte[] payload = new byte[raw.length - body];
+            System.arraycopy(raw, body, payload, 0, payload.length);
+            return new RDevProtocol(type, id, payload, 0L, payload);
         }
-        return new RDevProtocol(type, id, payload, offset, offsetPayload);
+        if (raw.length < body + 8) throw new IllegalArgumentException("binary offset frame too short");
+        long offset = ByteBuffer.wrap(raw, body, 8).getLong();
+        byte[] payload = new byte[raw.length - body - 8];
+        System.arraycopy(raw, body + 8, payload, 0, payload.length);
+        return new RDevProtocol(type, id, payload, offset, payload);
     }
 
     static byte[] encode(int type, String id, byte[] data, int len) throws Exception {
-        byte[] idBytes = id.getBytes("UTF-8");
+        byte[] idBytes = id.getBytes(StandardCharsets.UTF_8);
         ByteArrayOutputStream out = new ByteArrayOutputStream(2 + idBytes.length + len);
         out.write(type & 0xff);
         out.write(idBytes.length & 0xff);
@@ -55,14 +67,16 @@ final class RDevProtocol {
         return out.toByteArray();
     }
 
+    /** Writes the final frame in one array; no intermediate body copy. */
     static byte[] encodeOffset(int type, String id, long offset, byte[] data, int len) throws Exception {
-        byte[] idBytes = id.getBytes("UTF-8");
-        ByteArrayOutputStream out = new ByteArrayOutputStream(2 + idBytes.length + 8 + len);
-        out.write(type & 0xff);
-        out.write(idBytes.length & 0xff);
-        out.write(idBytes);
-        for (int i = 7; i >= 0; i--) out.write((int) ((offset >>> (8 * i)) & 0xff));
-        out.write(data, 0, len);
-        return out.toByteArray();
+        byte[] idBytes = id.getBytes(StandardCharsets.UTF_8);
+        byte[] out = new byte[2 + idBytes.length + 8 + len];
+        out[0] = (byte) type;
+        out[1] = (byte) idBytes.length;
+        System.arraycopy(idBytes, 0, out, 2, idBytes.length);
+        int pos = 2 + idBytes.length;
+        for (int shift = 56; shift >= 0; shift -= 8) out[pos++] = (byte) (offset >>> shift);
+        System.arraycopy(data, 0, out, pos, len);
+        return out;
     }
 }
