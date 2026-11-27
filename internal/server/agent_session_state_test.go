@@ -21,7 +21,7 @@ import (
 // --- prefs ---
 
 func TestAgentPrefsAtomicWriteAndLoad(t *testing.T) {
-	srv := &Server{DataDir: t.TempDir()}
+	srv := &Server{DataDir: agentTestDataDir(t)}
 	p := agentPrefs{
 		Model:          "p/m",
 		PermissionMode: "ask",
@@ -54,10 +54,24 @@ func TestAgentPrefsAtomicWriteAndLoad(t *testing.T) {
 
 // newPrefsTestServer builds a minimal agent server with two models and a
 // data dir (client nil: no probes run).
+// agentTestDataDir gives a server data directory whose cleanup tolerates the
+// late flushes of agent persistence goroutines. t.TempDir's strict RemoveAll
+// fails with "directory not empty" when a job or transcript write lands after
+// the test body returns, which made these tests flaky on CI.
+func agentTestDataDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "rdev-agent-test-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return dir
+}
+
 func newPrefsTestServer(t *testing.T) *Server {
 	t.Helper()
 	return &Server{
-		DataDir:         t.TempDir(),
+		DataDir:         agentTestDataDir(t),
 		AgentSessionTTL: 24 * time.Hour,
 		Agent: &AgentConfig{Providers: []AgentProvider{{
 			ID:      "p",
