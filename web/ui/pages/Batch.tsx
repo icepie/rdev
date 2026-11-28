@@ -587,33 +587,44 @@ export function BatchPage() {
   return (
     <div className="h-full overflow-y-auto">
       <div className="page-content">
-        <button
-          type="button"
-          aria-label={t("nav.label")}
-          onClick={() => openMobileNav()}
-          className={cn(COARSE_POINTER_HEADER_ICON_BUTTON_CLASS, "flex cursor-pointer items-center justify-center self-start text-muted-foreground transition-colors hover:bg-state-hover hover:text-foreground md:hidden")}
-        >
-          <Icon name="PanelLeft" className="size-5" />
-        </button>
+        <header className="flex items-center gap-2">
+          <h1 className="page-title">
+            <button
+              type="button"
+              aria-label={t("nav.label")}
+              onClick={() => openMobileNav()}
+              className={cn(
+                COARSE_POINTER_HEADER_ICON_BUTTON_CLASS,
+                "flex shrink-0 cursor-pointer items-center justify-center text-muted-foreground transition-colors hover:bg-state-hover hover:text-foreground md:hidden",
+              )}
+            >
+              <Icon name="PanelLeft" className="size-5" />
+            </button>
+            <span>{t("nav.batch")}</span>
+          </h1>
+        </header>
         {/* Device selector */}
         <Card>
-          <CardHeader className="p-4 pb-2">
+          <CardHeader className="flex-row flex-wrap items-center justify-between gap-2 space-y-0 p-4 pb-2">
             <CardTitle className="flex items-center gap-2 text-sm text-primary">
               <Icon name="Radio" className="size-4" />
-              {t("batch.devices")}
+              <span>{t("batch.devices")}</span>
+              <span className="rounded-full bg-surface-recessed px-2 py-0.5 text-2xs font-medium tabular-nums text-muted-foreground">
+                {selected.size}/{devices.length}
+              </span>
             </CardTitle>
-          </CardHeader>
-          <CardContent className="p-4 pt-0">
             <Button
               variant="ghost"
               size="sm"
-              className="mb-1 h-7 px-2 text-xs text-muted-foreground"
+              className="h-7 px-2 text-xs text-muted-foreground max-md:pointer-coarse:h-9"
               onClick={toggleAll}
               disabled={!devices.length}
               aria-pressed={devices.length > 0 && selected.size === devices.length}
             >
               {t("batch.selectAll")}
             </Button>
+          </CardHeader>
+          <CardContent className="p-4 pt-2">
             {loadError && <div role="alert" className="mb-2 break-words text-sm text-destructive-text">{t("common.error")}: {loadError}</div>}
             {devices.length === 0 ? (
               <div role="status" className="text-sm text-muted-foreground">
@@ -627,7 +638,7 @@ export function BatchPage() {
                     <label
                       key={d.id}
                       className={cn(
-                        "flex cursor-pointer items-center gap-2 rounded-md border px-2.5 py-1.5 text-sm transition-colors select-none",
+                        "flex cursor-pointer items-center gap-2 rounded-md border px-2.5 py-1.5 text-sm transition-colors select-none max-md:pointer-coarse:min-h-10 has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring",
                         sel
                           ? "border-primary bg-surface-selected"
                           : "border-transparent hover:bg-state-hover",
@@ -688,6 +699,7 @@ export function BatchPage() {
                     className="flex-1 font-mono"
                   />
                   <Button onClick={runBatchExec} disabled={!hasSelection || !cmd.trim() || busy}>
+                    {busy && <Icon name="Spinner" className="animate-spin motion-reduce:animate-none" />}
                     {t("batch.run")}
                   </Button>
                 </div>
@@ -771,6 +783,7 @@ export function BatchPage() {
                     onClick={runBatchUpload}
                     disabled={!hasSelection || !file || !destPath.trim() || busy}
                   >
+                    {busy && <Icon name="Spinner" className="animate-spin motion-reduce:animate-none" />}
                     {t("batch.distribute")}
                   </Button>
                 </div>

@@ -24,6 +24,7 @@ import {
 } from "../lib/api";
 import { useServerCapabilities } from "../lib/server-capabilities";
 import { payloadToDataURL } from "../lib/terminal-images";
+import { readTerminalFontFamily, readXtermTheme } from "../lib/xterm-theme";
 import { cn } from "../lib/utils";
 import { Button } from "../components/button";
 import { Input } from "../components/input";
@@ -45,37 +46,6 @@ interface SessionInfo {
 }
 
 type Translate = (key: string, vars?: Record<string, string | number>) => string;
-
-/* ── Theme-aware xterm palette (re-read on theme change) ── */
-
-function readXtermTheme() {
-  const cs = getComputedStyle(document.documentElement);
-  const v = (name: string) => cs.getPropertyValue(name).trim();
-  const ansi = (i: number) => v(`--ansi-${i}`);
-  return {
-    background: v("--background") || undefined,
-    foreground: v("--foreground") || undefined,
-    cursor: v("--foreground") || undefined,
-    cursorAccent: v("--background") || undefined,
-    selectionBackground: "color-mix(in oklab, var(--foreground) 25%, transparent)",
-    black: ansi(0),
-    red: ansi(1),
-    green: ansi(2),
-    yellow: ansi(3),
-    blue: ansi(4),
-    magenta: ansi(5),
-    cyan: ansi(6),
-    white: ansi(7),
-    brightBlack: ansi(8),
-    brightRed: ansi(9),
-    brightGreen: ansi(10),
-    brightYellow: ansi(11),
-    brightBlue: ansi(12),
-    brightMagenta: ansi(13),
-    brightCyan: ansi(14),
-    brightWhite: ansi(15),
-  };
-}
 
 /* ── Kitty graphics protocol writer ──
  * Port of web/public/terminal-images.js: intercepts APC ESC_G ... ESC\
@@ -551,7 +521,7 @@ export function SessionsPage() {
       const term = new Terminal({
         cursorBlink: true,
         fontSize: 14,
-        fontFamily: "'SF Mono','Fira Code','Cascadia Code',Menlo,Monaco,monospace",
+        fontFamily: readTerminalFontFamily(),
         theme: readXtermTheme(),
         allowProposedApi: true,
       });
@@ -622,13 +592,14 @@ export function SessionsPage() {
       termRef.current = term;
       fitRef.current = fit;
 
-      // Re-apply palette when the theme flips (.dark class on <html>)
+      // Re-apply palette when the theme or preset flips on <html>
       const observer = new MutationObserver(() => {
         term.options.theme = readXtermTheme();
+        term.options.fontFamily = readTerminalFontFamily();
       });
       observer.observe(document.documentElement, {
         attributes: true,
-        attributeFilter: ["class"],
+        attributeFilter: ["class", "data-theme-preset"],
       });
       themeObserver.current = observer;
 
@@ -909,7 +880,7 @@ export function SessionsPage() {
                     <span
                       className={cn(
                         "rounded px-1.5 py-px text-2xs font-medium",
-                        s.type === "shell" && "bg-success/15 text-success",
+                        s.type === "shell" && "bg-success/15 text-success-foreground",
                         s.type === "sftp" && "bg-timeline-accent/15 text-timeline-accent",
                         s.type !== "shell" && s.type !== "sftp" && "bg-primary/15 text-primary",
                       )}
@@ -956,7 +927,7 @@ export function SessionsPage() {
                 </>
               )}
             </span>
-            <span className="rounded bg-success/15 px-2 py-0.5 text-2xs font-semibold text-success">
+            <span className="rounded bg-success/15 px-2 py-0.5 text-2xs font-semibold text-success-foreground">
               {t("sessions.writable")}
             </span>
             <div className="flex-1" />
@@ -1017,7 +988,7 @@ export function SessionsPage() {
               <button
                 key={k.label}
                 type="button"
-                className="min-h-[34px] min-w-[44px] shrink-0 rounded-md border border-border bg-background px-2.5 py-1.5 text-xs text-foreground"
+                className="min-h-[34px] min-w-[44px] shrink-0 cursor-pointer rounded-md border border-border bg-background px-2.5 py-1.5 text-xs text-foreground max-md:pointer-coarse:min-h-10"
                 onClick={() => {
                   sendData(k.key);
                   termRef.current?.focus();

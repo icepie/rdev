@@ -109,7 +109,7 @@ function FileIconButton({ label, children, className, ...props }: ComponentProps
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <Button type="button" size="icon" aria-label={label} className={cn("size-8 shrink-0", className)} {...props}>
+        <Button type="button" size="icon" aria-label={label} className={cn("size-8 shrink-0 max-md:pointer-coarse:size-9", className)} {...props}>
           {children}
           <span className="sr-only">{label}</span>
         </Button>
@@ -1038,7 +1038,7 @@ export function FilesBrowser({
       <FileIconButton label={t("files.tasks")} variant={tasksOpen ? "secondary" : "ghost"} aria-expanded={tasksOpen} onClick={() => setTasksOpen((open) => !open)}>
         <span className="relative">
           <Icon name="Files" className="size-4" />
-          {sortedTasks.length > 0 && <span className="absolute -right-2 -top-2 min-w-3.5 rounded-full bg-timeline-accent px-1 text-center text-[9px] leading-3.5 text-white">{sortedTasks.length > 99 ? "99+" : sortedTasks.length}</span>}
+          {sortedTasks.length > 0 && <span className="absolute -right-2 -top-2 min-w-3.5 rounded-full bg-foreground px-1 text-center text-[9px] font-medium leading-3.5 tabular-nums text-background">{sortedTasks.length > 99 ? "99+" : sortedTasks.length}</span>}
         </span>
       </FileIconButton>
     </div>
@@ -1197,7 +1197,7 @@ export function FilesBrowser({
                             {/* Cross-pane transfer menu (split view). */}
                             <DropdownMenu>
                               <DropdownMenuTrigger asChild>
-                                <Button type="button" variant="ghost" size="icon" className="size-8" aria-label={t("files.transfer")}>
+                                <Button type="button" variant="ghost" size="icon" className="size-8 max-md:pointer-coarse:size-9" aria-label={t("files.transfer")}>
                                   <Icon name="MoreHorizontal" className="size-4" />
                                 </Button>
                               </DropdownMenuTrigger>
@@ -1344,7 +1344,7 @@ export function FilesBrowser({
                         key={action}
                         variant="outline"
                         size="icon"
-                        className="size-8"
+                        className="size-8 max-md:pointer-coarse:size-9"
                         aria-label={t(`files.${action}`)}
                         onClick={() => taskAction(task, action)}
                       >

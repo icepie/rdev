@@ -30,9 +30,9 @@ import { Icon } from "./icon.js";
 const MENU_ITEM_NEUTRAL_STATE_CLASS =
   "focus:bg-state-hover focus:text-foreground data-[last-hovered]:bg-state-hover data-[last-hovered]:text-foreground";
 const MENU_ITEM_DESTRUCTIVE_STATE_CLASS =
-  "text-destructive focus:bg-destructive/15 focus:text-destructive data-[last-hovered]:bg-destructive/15";
+  "text-destructive-text focus:bg-destructive/15 focus:text-destructive-text data-[last-hovered]:bg-destructive/15";
 const MENU_ITEM_DESTRUCTIVE_TOUCH_CLASS =
-  "text-destructive focus:bg-destructive/15 focus:text-destructive active:bg-destructive/20 active:text-destructive";
+  "text-destructive-text focus:bg-destructive/15 focus:text-destructive-text active:bg-destructive/20 active:text-destructive-text";
 
 const RESPONSIVE_MENU_CONTEXT_KEY = Symbol.for("bb.responsive-menu-context.v1");
 

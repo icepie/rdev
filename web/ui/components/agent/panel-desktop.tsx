@@ -1588,7 +1588,7 @@ export function PanelDesktop({
         <span
           className={cn(
             "min-w-0 flex-1 truncate text-right text-[11px]",
-            status.cls === "ok" && "text-success",
+            status.cls === "ok" && "text-success-foreground",
             status.cls === "warn" && "text-warning-text",
             status.cls === "err" && "text-destructive-text",
             !status.cls && "text-muted-foreground",

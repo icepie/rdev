@@ -112,7 +112,7 @@ function Branch({
             draggable={!!props.onDragStart}
             onDragStart={(e) => props.onDragStart?.(entry, e)}
             style={{ paddingLeft: 8 + depth * 14 }}
-            className={`flex h-7 w-full items-center gap-1.5 pr-2 text-left text-xs hover:bg-state-hover focus-visible:outline focus-visible:outline-ring ${entry.path === props.selected ? "bg-state-active text-foreground" : "text-muted-foreground"}`}
+            className={`flex h-7 w-full items-center gap-1.5 pr-2 text-left text-xs hover:bg-state-hover focus-visible:outline focus-visible:outline-ring max-md:pointer-coarse:h-9 max-md:pointer-coarse:text-sm ${entry.path === props.selected ? "bg-state-active text-foreground" : "text-muted-foreground"}`}
             onClick={() => {
               if (entry.isDir) toggle(!expanded);
               else {
@@ -233,7 +233,7 @@ function Branch({
         <button
           type="button"
           aria-label={props.t("files.download") + " " + entry.name}
-          className="absolute right-1 top-0.5 flex size-6 items-center justify-center rounded bg-background text-muted-foreground opacity-0 group-hover/tree-row:opacity-100 focus:opacity-100 pointer-coarse:opacity-100"
+          className="absolute right-1 top-0.5 flex size-6 items-center justify-center rounded bg-background text-muted-foreground opacity-0 group-hover/tree-row:opacity-100 focus:opacity-100 pointer-coarse:opacity-100 max-md:pointer-coarse:top-0 max-md:pointer-coarse:size-9"
           onClick={() => props.onDownload?.(entry)}
         >
           <Icon name="Download" className="size-3.5" />
@@ -381,7 +381,7 @@ export function FileExplorer(
           <Button
             size="icon"
             variant="ghost"
-            className="size-7"
+            className="size-7 max-md:pointer-coarse:size-9"
             aria-label={props.t("files.newFolder")}
             disabled={!props.operations?.includes("mkdir")}
             onClick={() =>

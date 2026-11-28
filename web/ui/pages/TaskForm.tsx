@@ -3,6 +3,15 @@ import { Link, useNavigate } from "react-router-dom";
 import { useI18n } from "../lib/i18n";
 import { Button } from "../components/button";
 import { Input } from "../components/input";
+import { Textarea } from "../components/textarea";
+import { Switch } from "../components/switch";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "../components/select";
 import {
   Card,
   CardContent,
@@ -23,7 +32,7 @@ import { fmt, localDateInput, Shell } from "./TasksShared";
 
 export { TaskForm };
 
-const selectClass = "h-9 rounded-md border border-input bg-transparent px-3 text-sm";
+const NONE_OPTION = "__none__";
 
 const blank: Spec = {
   name: "",
@@ -70,6 +79,7 @@ function TaskForm({ existing, duplicateId }: { existing?: Schedule; duplicateId?
   const [options, setOptions] = useState<Options>({});
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
+  const [previewing, setPreviewing] = useState(false);
   const [preview, setPreview] = useState<string[]>([]);
 
   const set = <K extends keyof Spec>(key: K, value: Spec[K]) => {
@@ -109,6 +119,10 @@ function TaskForm({ existing, duplicateId }: { existing?: Schedule; duplicateId?
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
+    if (!spec.device) {
+      setError(t("tasks.selectDevice"));
+      return;
+    }
     const submitter = (event.nativeEvent as SubmitEvent).submitter;
     const mode = submitter instanceof HTMLButtonElement ? submitter.value : "save";
     const savedSpec = scheduleSpecForRequest(spec, timingMode, mode === "paused" ? false : spec.enabled);
@@ -132,11 +146,15 @@ function TaskForm({ existing, duplicateId }: { existing?: Schedule; duplicateId?
   };
 
   const previewRuns = async () => {
+    if (previewing) return;
+    setPreviewing(true);
     setError("");
     try {
       setPreview(await request<string[]>("preview", { spec: scheduleSpecForRequest(spec, timingMode) }));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setPreviewing(false);
     }
   };
 
@@ -158,7 +176,7 @@ function TaskForm({ existing, duplicateId }: { existing?: Schedule; duplicateId?
             </h2>
           </div>
           <div className="flex flex-wrap gap-2">
-            <Button type="button" variant="outline" onClick={() => void previewRuns()}>
+            <Button type="button" variant="outline" disabled={previewing} onClick={() => void previewRuns()}>
               {t("tasks.preview")}
             </Button>
             <Button type="submit" value="save" disabled={saving}>
@@ -174,7 +192,7 @@ function TaskForm({ existing, duplicateId }: { existing?: Schedule; duplicateId?
         </div>
 
         {error && (
-          <p role="alert" className="rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
+          <p role="alert" className="rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive-text">
             {error}
           </p>
         )}
@@ -189,34 +207,38 @@ function TaskForm({ existing, duplicateId }: { existing?: Schedule; duplicateId?
               <Input required value={spec.name} onChange={(event) => set("name", event.target.value)} />
             </Field>
             <Field label={t("tasks.kind")}>
-              <select
-                className={selectClass}
-                value={spec.kind}
-                onChange={(event) => set("kind", event.target.value as Spec["kind"])}
-              >
-                <option value="shell">{t("tasks.shell")}</option>
-                <option value="agent">{t("tasks.agent")}</option>
-              </select>
+              <Select value={spec.kind} onValueChange={(value) => set("kind", value as Spec["kind"])}>
+                <SelectTrigger aria-label={t("tasks.kind")}>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="shell">{t("tasks.shell")}</SelectItem>
+                  <SelectItem value="agent">{t("tasks.agent")}</SelectItem>
+                </SelectContent>
+              </Select>
             </Field>
             <Field label={t("tasks.device")}>
-              <select
-                className={selectClass}
-                required
+              <Select
                 disabled={Boolean(existing)}
-                value={spec.device}
-                onChange={(event) => set("device", event.target.value)}
+                value={spec.device || NONE_OPTION}
+                onValueChange={(value) => set("device", value === NONE_OPTION ? "" : value)}
               >
-                <option value="">{t("tasks.selectDevice")}</option>
-                {(options.devices || []).map((device) => (
-                  <option key={device.id} value={device.id}>
-                    {device.name || device.id}
-                    {device.online === false ? ` (${t("tasks.offline")})` : ""}
-                  </option>
-                ))}
-              </select>
+                <SelectTrigger aria-label={t("tasks.device")}>
+                  <SelectValue placeholder={t("tasks.selectDevice")} />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={NONE_OPTION}>{t("tasks.selectDevice")}</SelectItem>
+                  {(options.devices || []).map((device) => (
+                    <SelectItem key={device.id} value={device.id}>
+                      {device.name || device.id}
+                      {device.online === false ? ` (${t("tasks.offline")})` : ""}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </Field>
             <Field label={t("tasks.cwd")}>
-              <Input value={spec.cwd} onChange={(event) => set("cwd", event.target.value)} />
+              <Input value={spec.cwd} onChange={(event) => set("cwd", event.target.value)} className="font-mono" />
             </Field>
 
             <div className="grid gap-2 md:col-span-2">
@@ -244,20 +266,24 @@ function TaskForm({ existing, duplicateId }: { existing?: Schedule; duplicateId?
             {timingMode === "cron" ? (
               <>
                 <Field label={t("tasks.preset")}>
-                  <select
-                    className={selectClass}
+                  <Select
                     value={cronPreset}
-                    onChange={(event) => {
-                      if (event.target.value !== "custom") set("cron", event.target.value);
+                    onValueChange={(value) => {
+                      if (value !== "custom") set("cron", value);
                     }}
                   >
-                    <option value="custom">{t("tasks.custom")}</option>
-                    {CRON_PRESETS.map((preset) => (
-                      <option key={preset.value} value={preset.value}>
-                        {t(preset.labelKey)}
-                      </option>
-                    ))}
-                  </select>
+                    <SelectTrigger aria-label={t("tasks.preset")}>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="custom">{t("tasks.custom")}</SelectItem>
+                      {CRON_PRESETS.map((preset) => (
+                        <SelectItem key={preset.value} value={preset.value}>
+                          {t(preset.labelKey)}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </Field>
                 <Field label={t("tasks.cron")}>
                   <Input
@@ -265,6 +291,7 @@ function TaskForm({ existing, duplicateId }: { existing?: Schedule; duplicateId?
                     value={spec.cron}
                     onChange={(event) => set("cron", event.target.value)}
                     placeholder="*/15 * * * *"
+                    className="font-mono"
                   />
                 </Field>
                 <Field label={t("tasks.timezone")}>
@@ -302,8 +329,8 @@ function TaskForm({ existing, duplicateId }: { existing?: Schedule; duplicateId?
           </CardHeader>
           <CardContent className="grid gap-4">
             <Field label={spec.kind === "shell" ? t("tasks.command") : t("tasks.prompt")}>
-              <textarea
-                className="min-h-32 rounded-md border border-input bg-transparent p-3 font-mono text-sm"
+              <Textarea
+                className="min-h-32 font-mono text-sm"
                 required
                 value={spec.kind === "shell" ? spec.command : spec.prompt}
                 onChange={(event) => set(spec.kind === "shell" ? "command" : "prompt", event.target.value)}
@@ -312,34 +339,54 @@ function TaskForm({ existing, duplicateId }: { existing?: Schedule; duplicateId?
             {spec.kind === "agent" && (
               <div className="grid gap-4 md:grid-cols-2">
                 <Field label={t("tasks.sessionMode")}>
-                  <select
-                    className={selectClass}
+                  <Select
                     value={spec.sessionMode}
-                    onChange={(event) => set("sessionMode", event.target.value as Spec["sessionMode"])}
+                    onValueChange={(value) => set("sessionMode", value as Spec["sessionMode"])}
                   >
-                    <option value="new">{t("tasks.newThread")}</option>
-                    <option value="existing">{t("tasks.existingThread")}</option>
-                  </select>
+                    <SelectTrigger aria-label={t("tasks.sessionMode")}>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="new">{t("tasks.newThread")}</SelectItem>
+                      <SelectItem value="existing">{t("tasks.existingThread")}</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </Field>
                 {spec.sessionMode === "new" ? (
                   <Field label={t("tasks.model")}>
-                    <select className={selectClass} value={spec.model} onChange={(event) => set("model", event.target.value)}>
-                      <option value="">{t("tasks.selectModel")}</option>
-                      {(options.models || []).map((model) => (
-                        <option key={model.id} value={model.id}>{model.name || model.id}</option>
-                      ))}
-                    </select>
+                    <Select
+                      value={spec.model || NONE_OPTION}
+                      onValueChange={(value) => set("model", value === NONE_OPTION ? "" : value)}
+                    >
+                      <SelectTrigger aria-label={t("tasks.model")}>
+                        <SelectValue placeholder={t("tasks.selectModel")} />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value={NONE_OPTION}>{t("tasks.selectModel")}</SelectItem>
+                        {(options.models || []).map((model) => (
+                          <SelectItem key={model.id} value={model.id}>{model.name || model.id}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
                   </Field>
                 ) : (
                   <Field label={t("tasks.thread")}>
-                    <select className={selectClass} value={spec.thread} onChange={(event) => set("thread", event.target.value)}>
-                      <option value="">{t("tasks.selectThread")}</option>
-                      {(options.threads || [])
-                        .filter((thread) => !spec.device || thread.device === spec.device)
-                        .map((thread) => (
-                          <option key={thread.id} value={thread.id}>{thread.title || thread.id}</option>
-                        ))}
-                    </select>
+                    <Select
+                      value={spec.thread || NONE_OPTION}
+                      onValueChange={(value) => set("thread", value === NONE_OPTION ? "" : value)}
+                    >
+                      <SelectTrigger aria-label={t("tasks.thread")}>
+                        <SelectValue placeholder={t("tasks.selectThread")} />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value={NONE_OPTION}>{t("tasks.selectThread")}</SelectItem>
+                        {(options.threads || [])
+                          .filter((thread) => !spec.device || thread.device === spec.device)
+                          .map((thread) => (
+                            <SelectItem key={thread.id} value={thread.id}>{thread.title || thread.id}</SelectItem>
+                          ))}
+                      </SelectContent>
+                    </Select>
                   </Field>
                 )}
                 <Field label={t("tasks.reasoning")}>
@@ -372,10 +419,18 @@ function TaskForm({ existing, duplicateId }: { existing?: Schedule; duplicateId?
               <Input type="number" min={0} value={spec.maxRuns} onChange={(event) => set("maxRuns", Number(event.target.value))} />
             </Field>
             <Field label={t("tasks.busyPolicy")}>
-              <select className={selectClass} value={spec.busyPolicy} onChange={(event) => set("busyPolicy", event.target.value as Spec["busyPolicy"])}>
-                <option value="skip">{t("tasks.skip")}</option>
-                <option value="wait">{t("tasks.wait")}</option>
-              </select>
+              <Select
+                value={spec.busyPolicy}
+                onValueChange={(value) => set("busyPolicy", value as Spec["busyPolicy"])}
+              >
+                <SelectTrigger aria-label={t("tasks.busyPolicy")}>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="skip">{t("tasks.skip")}</SelectItem>
+                  <SelectItem value="wait">{t("tasks.wait")}</SelectItem>
+                </SelectContent>
+              </Select>
             </Field>
             <Field label={t("tasks.maxWait")}>
               <Input type="number" min={1} value={spec.maxWaitSeconds} onChange={(event) => set("maxWaitSeconds", Number(event.target.value))} />
@@ -384,10 +439,18 @@ function TaskForm({ existing, duplicateId }: { existing?: Schedule; duplicateId?
               <Input value={spec.mutexGroup} onChange={(event) => set("mutexGroup", event.target.value)} />
             </Field>
             <Field label={t("tasks.misfire")}>
-              <select className={selectClass} value={spec.misfirePolicy} onChange={(event) => set("misfirePolicy", event.target.value as Spec["misfirePolicy"])}>
-                <option value="skip">{t("tasks.skip")}</option>
-                <option value="latest">{t("tasks.latest")}</option>
-              </select>
+              <Select
+                value={spec.misfirePolicy}
+                onValueChange={(value) => set("misfirePolicy", value as Spec["misfirePolicy"])}
+              >
+                <SelectTrigger aria-label={t("tasks.misfire")}>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="skip">{t("tasks.skip")}</SelectItem>
+                  <SelectItem value="latest">{t("tasks.latest")}</SelectItem>
+                </SelectContent>
+              </Select>
             </Field>
             <Field label={t("tasks.grace")}>
               <Input type="number" min={1} value={spec.graceSeconds} onChange={(event) => set("graceSeconds", Number(event.target.value))} />
@@ -397,19 +460,29 @@ function TaskForm({ existing, duplicateId }: { existing?: Schedule; duplicateId?
 
         <Card>
           <CardContent className="grid gap-4 p-4">
-            <label className="flex items-start gap-3 text-sm">
-              <input className="mt-1" type="checkbox" checked={spec.enabled} onChange={(event) => set("enabled", event.target.checked)} />
+            <label className="flex cursor-pointer items-start justify-between gap-4 text-sm">
               <span>
-                <b className="block">{t("tasks.enabled")}</b>
+                <b className="block font-medium">{t("tasks.enabled")}</b>
                 <span className="text-muted-foreground">{t("tasks.enabledHint")}</span>
               </span>
+              <Switch
+                size="default"
+                className="mt-0.5"
+                checked={spec.enabled}
+                onCheckedChange={(checked) => set("enabled", checked)}
+              />
             </label>
-            <label className="flex items-start gap-3 text-sm">
-              <input className="mt-1" type="checkbox" checked={spec.authorized} onChange={(event) => set("authorized", event.target.checked)} />
+            <label className="flex cursor-pointer items-start justify-between gap-4 text-sm">
               <span>
-                <b className="block">{t("tasks.authorized")}</b>
+                <b className="block font-medium">{t("tasks.authorized")}</b>
                 <span className="text-muted-foreground">{t("tasks.authorizedHint")}</span>
               </span>
+              <Switch
+                size="default"
+                className="mt-0.5"
+                checked={spec.authorized}
+                onCheckedChange={(checked) => set("authorized", checked)}
+              />
             </label>
           </CardContent>
         </Card>
@@ -418,7 +491,7 @@ function TaskForm({ existing, duplicateId }: { existing?: Schedule; duplicateId?
           <Card>
             <CardHeader><CardTitle>{t("tasks.preview")}</CardTitle></CardHeader>
             <CardContent>
-              <ol className="grid gap-2 text-sm sm:grid-cols-2">
+              <ol className="grid gap-2 text-sm tabular-nums sm:grid-cols-2">
                 {preview.map((value, index) => (
                   <li key={value} className="rounded-md bg-surface-recessed-solid px-3 py-2">
                     <span className="mr-2 text-muted-foreground">{index + 1}.</span>{fmt(value)}

@@ -1597,9 +1597,9 @@ function DesktopSession({
           role="status"
           className={cn(
             "break-words text-xs",
-            status.cls === "ok" && "text-success",
-            status.cls === "warn" && "text-attention",
-            status.cls === "err" && "text-destructive",
+            status.cls === "ok" && "text-success-foreground",
+            status.cls === "warn" && "text-warning-text",
+            status.cls === "err" && "text-destructive-text",
             !status.cls && "text-muted-foreground",
           )}
         >

@@ -2,6 +2,16 @@ import { HistorySearch } from "./history-search";
 import { WorktreeControl } from "./worktree-control";
 import { useWorkspaceHistory } from "./use-workspace-history";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "../alert-dialog";
 import { AutonomyControls } from "./autonomy";
 import { ThreadTimelineLoadingSkeleton } from "../loading-skeletons";
 import { useComposerAutosize } from "./use-composer-autosize";
@@ -158,7 +168,11 @@ export function ChatPaneView({
   onOpenFile,
 }: ChatPaneViewProps) {
   const [offlineConfirmed, setOfflineConfirmed] = useState(false);
-  useEffect(() => setOfflineConfirmed(false), [device, threadId, offline]);
+  const [confirmAction, setConfirmAction] = useState<"recover_history" | "offline_continue" | null>(null);
+  useEffect(() => {
+    setOfflineConfirmed(false);
+    setConfirmAction(null);
+  }, [device, threadId, offline]);
   const modelReasoningLevels = models.find((item) => item.id === model)?.reasoningLevels;
   const supportedReasoning = REASONING_LEVELS.filter((item) => !modelReasoningLevels || modelReasoningLevels.includes(item.level));
   const reasoningOptions = supportedReasoning.length ? supportedReasoning : REASONING_LEVELS;
@@ -942,18 +956,42 @@ export function ChatPaneView({
         </div>
       )}
 
-		{historyError && <div role="alert" className="mx-auto flex w-full max-w-[760px] items-center gap-3 border-t border-destructive/30 bg-destructive/5 px-4 py-3 text-sm">
-			<div className="min-w-0 flex-1"><p className="font-medium">{t("agent.historyIncomplete")}</p><p className="mt-1 break-words text-xs text-muted-foreground">{historyError}</p></div>
-			<Button size="sm" variant="outline" disabled={!connectionReady || running} onClick={() => {
-				if (window.confirm(t("agent.historyRecoverConfirm")) && !sendRaw({ op: "recover_history", thread: threadId })) setComposerError(t("agent.historyRecoverFailed"));
-			}}>{t("agent.historyRecover")}</Button>
-		</div>}
+      {historyError && <div role="alert" className="mx-auto flex w-full max-w-[760px] items-center gap-3 border-t border-destructive/30 bg-destructive/5 px-4 py-3 text-sm">
+        <div className="min-w-0 flex-1"><p className="font-medium">{t("agent.historyIncomplete")}</p><p className="mt-1 break-words text-xs text-muted-foreground">{historyError}</p></div>
+        <Button size="sm" variant="outline" disabled={!connectionReady || running} onClick={() => setConfirmAction("recover_history")}>{t("agent.historyRecover")}</Button>
+      </div>}
       {offline && <div className="mx-auto flex w-full max-w-[760px] items-center gap-2 px-4 py-2 text-xs text-muted-foreground">
         <span className="flex-1">{t(offlineConfirmed ? "agent.offlineChatEnabled" : "agent.offlineHistory")}</span>
-        {!offlineConfirmed && <Button size="sm" variant="outline" disabled={!connectionReady} onClick={() => {
-          if (window.confirm(t("agent.offlineConfirm"))) setOfflineConfirmed(true);
-        }}>{t("agent.offlineContinue")}</Button>}
+        {!offlineConfirmed && <Button size="sm" variant="outline" disabled={!connectionReady} onClick={() => setConfirmAction("offline_continue")}>{t("agent.offlineContinue")}</Button>}
       </div>}
+      <AlertDialog open={confirmAction !== null} onOpenChange={(open) => !open && setConfirmAction(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {confirmAction === "recover_history" ? t("agent.historyRecover") : t("agent.offlineContinue")}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {confirmAction === "recover_history" ? t("agent.historyRecoverConfirm") : t("agent.offlineConfirm")}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{t("common.cancel")}</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                const pending = confirmAction;
+                setConfirmAction(null);
+                if (pending === "recover_history") {
+                  if (!sendRaw({ op: "recover_history", thread: threadId })) setComposerError(t("agent.historyRecoverFailed"));
+                } else if (pending === "offline_continue") {
+                  setOfflineConfirmed(true);
+                }
+              }}
+            >
+              {t("common.confirm")}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
       {/* Composer (bb footer: same 760px column and padding as the content) */}
       <div className="mx-auto w-full max-w-[760px] shrink-0 px-4 pb-2">
         <div className="grid grid-cols-[minmax(0,1fr)] gap-2">
@@ -1284,15 +1322,29 @@ export function ChatPaneView({
               />
             )}
             {device && cwd !== undefined && <WorktreeControl device={device} thread={threadId} cwd={cwd} ready={ready && !running} ops={ops} sendRaw={sendRaw} t={t} />}
-            {device && branch && (
-              <span
-                className="flex h-6 min-w-0 cursor-pointer items-center gap-1 rounded-md px-1.5 py-0.5 text-xs text-muted-foreground transition-colors hover:bg-state-hover hover:text-foreground"
-                title={branch}
-              >
-                <Icon name="GitBranch" className="size-3.5 shrink-0" />
-                <span className="min-w-0 truncate">{branch}</span>
-              </span>
-            )}
+            {device && branch && (() => {
+              const branchCopyId = `branch:${threadId}:${branch}`;
+              const branchCopied = copiedId === branchCopyId;
+              return (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      type="button"
+                      aria-label={`${t("common.copy")}: ${branch}`}
+                      className={cn(
+                        "flex h-6 min-w-0 cursor-pointer items-center gap-1 rounded-md px-1.5 py-0.5 text-xs text-muted-foreground transition-colors hover:bg-state-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+                        branchCopied && "text-success-foreground hover:text-success-foreground",
+                      )}
+                      onClick={() => onCopy(branchCopyId, branch)}
+                    >
+                      <Icon name={branchCopied ? "Check" : "GitBranch"} className="size-3.5 shrink-0" />
+                      <span className="min-w-0 truncate">{branch}</span>
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent>{branchCopied ? t("common.copied") : branch}</TooltipContent>
+                </Tooltip>
+              );
+            })()}
           </span>
           <span className="flex shrink-0 items-center gap-2">
             <DropdownMenu>

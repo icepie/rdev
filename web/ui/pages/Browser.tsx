@@ -11,8 +11,7 @@ export function BrowserPage() {
   const device = params.get("device") || "";
   return <SplitPageShell storageKey="rdev.browser.rail" selectedDevice={device} onDevicePick={id => setParams({ device: id })}>
     <div className="flex h-full min-h-0 flex-col">
-      <div className="md:hidden"><MobileSidebarTrigger /></div>
-      <BrowserPanel key={device} device={device} deviceSelection="sidebar" />
+      <BrowserPanel key={device} device={device} deviceSelection="sidebar" toolbarStart={<MobileSidebarTrigger />} />
     </div>
   </SplitPageShell>;
 }

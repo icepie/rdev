@@ -131,7 +131,7 @@ export function statusBadgeClass(s: TaskStatus) {
     case "running":
       return "border-transparent bg-timeline-accent/15 text-timeline-accent";
     case "completed":
-      return "border-transparent bg-success/15 text-success";
+      return "border-transparent bg-success/15 text-success-foreground";
     case "failed":
       return "border-transparent bg-destructive/15 text-destructive-text";
     case "paused":

@@ -13,6 +13,7 @@ import { cn } from "../../lib/utils";
 import type { DeviceInfo } from "../../lib/api";
 import { threadIdentity, useThreadUnread } from "../../hooks/use-thread-unread";
 import { Button } from "../button";
+import { Input } from "../input";
 import { COARSE_POINTER_HEADER_ICON_BUTTON_CLASS } from "../coarse-pointer-sizing";
 import { DeviceIcon } from "../device-icon";
 import {
@@ -686,7 +687,7 @@ export function ThreadSidebar({
               </DropdownMenu>
             {threadSearchOpen && (
               <div className="w-full px-2 pb-0.5">
-                <input
+                <Input
                   autoFocus
                   value={threadQuery}
                   onChange={(e) => setThreadQuery(e.target.value)}
@@ -699,7 +700,7 @@ export function ThreadSidebar({
                   }}
                   aria-label={t("agent.searchThreads")}
                   placeholder={t("agent.searchThreads")}
-                  className="h-9 w-full rounded-md border border-border bg-background px-2 text-sm outline-none placeholder:text-muted-foreground focus:border-timeline-accent"
+                  className="bg-background"
                 />
               </div>
             )}

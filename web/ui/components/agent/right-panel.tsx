@@ -21,6 +21,7 @@ import { CSS } from "@dnd-kit/utilities";
 import { useI18n } from "../../lib/i18n";
 import { cn } from "../../lib/utils";
 import { Button } from "../button";
+import { COARSE_POINTER_HEADER_ICON_BUTTON_CLASS } from "../coarse-pointer-sizing";
 import { Popover, PopoverAnchor, PopoverContent } from "../popover";
 import {
   ContextMenu,
@@ -1164,7 +1165,10 @@ export function AgentRightPanel({
             type="button"
             aria-label={t("agent.openNewTab")}
             title={t("agent.openNewTab")}
-            className="inline-flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground/70 transition-colors hover:bg-sidebar-accent hover:text-foreground"
+            className={cn(
+              COARSE_POINTER_HEADER_ICON_BUTTON_CLASS,
+              "inline-flex shrink-0 cursor-pointer items-center justify-center text-muted-foreground/70 transition-colors hover:bg-sidebar-accent hover:text-foreground",
+            )}
             onClick={openNewTab}
           >
             <Icon name="Plus" className="size-4" />
@@ -1179,7 +1183,7 @@ export function AgentRightPanel({
                   size="icon"
                   aria-label={t("agent.refresh")}
                   disabled={!connected}
-                  className="size-7"
+                  className={COARSE_POINTER_HEADER_ICON_BUTTON_CLASS}
                   onClick={() => {
                     setRefreshing(true);
                     onRefresh();
@@ -1210,7 +1214,7 @@ export function AgentRightPanel({
                 variant="ghost"
                 size="icon"
                 aria-label={t("agent.hideRightPanel")}
-                className="size-7"
+                className={COARSE_POINTER_HEADER_ICON_BUTTON_CLASS}
                 onClick={onHide}
               >
                 <Icon name="PanelRight" />

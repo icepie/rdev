@@ -1,6 +1,6 @@
 import type { AutomationView } from "./agent/automation";
 import { BrowserPreview } from "./browser-preview";
-import { type FormEvent, useEffect, useRef, useState } from "react";
+import { type FormEvent, type ReactNode, useEffect, useRef, useState } from "react";
 import { apiFetch, getDevicePassword } from "../lib/api";
 import { useDevices } from "../lib/devices";
 import { useServerCapabilities } from "../lib/server-capabilities";
@@ -14,7 +14,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 interface Target { id: string; title: string; url: string }
 
 /** Chrome's own inspector frontend includes its interactive Screencast app. */
-export function BrowserPanel({ device, visible = true, deviceSelection = "inline", automation }: { automation?: AutomationView; device: string; visible?: boolean; deviceSelection?: "inline" | "sidebar" }) {
+export function BrowserPanel({ device, visible = true, deviceSelection = "inline", automation, toolbarStart }: { automation?: AutomationView; device: string; visible?: boolean; deviceSelection?: "inline" | "sidebar"; toolbarStart?: ReactNode }) {
   const { devicePasswordInputsHidden } = useServerCapabilities();
   const { devices } = useDevices();
   const { t, lang } = useI18n();
@@ -169,12 +169,13 @@ export function BrowserPanel({ device, visible = true, deviceSelection = "inline
 
   return <div className="flex min-h-0 min-w-0 w-full flex-1 flex-col overflow-hidden bg-background">
     <div className="flex min-h-11 shrink-0 flex-wrap items-center gap-2 border-b border-border-seam px-3 py-2 text-xs">
-      <Icon name="Globe" className="size-4 text-muted-foreground" />
+      {toolbarStart}
+      <Icon name="Globe" className="size-4 shrink-0 text-muted-foreground" />
       <span className="min-w-0 max-w-48 truncate">{t("nav.browser")}{exitDevice && ` · ${deviceLabel}`}</span>
       {base && <>
         <Button variant="ghost" size="sm" disabled={busy || !!automation} onClick={() => void newTab()} aria-label={t("agent.newTabLabel")}><Icon name="Plus" className="size-4" /></Button>
         <Select value={selected} onValueChange={value => { setSelected(value); setAddress(targets.find(target => target.id === value)?.url ?? ""); }} disabled={targets.length === 0 || !!automation}>
-          <SelectTrigger aria-label={t("browser.tabs")} className="h-8 w-auto min-w-0 max-w-48 text-xs">
+          <SelectTrigger aria-label={t("browser.tabs")} className="h-8 w-auto min-w-0 max-w-48 text-xs max-md:pointer-coarse:h-10">
             <SelectValue placeholder={t("browser.tabs")} />
           </SelectTrigger>
           <SelectContent>
@@ -182,10 +183,10 @@ export function BrowserPanel({ device, visible = true, deviceSelection = "inline
           </SelectContent>
         </Select>
         <form onSubmit={navigate} className="flex min-w-0 flex-1 items-center gap-1">
-          <Input ref={addressRef} aria-label={t("browser.address")} placeholder={t("browser.addressPlaceholder")} value={address} onChange={event => setAddress(event.target.value)} disabled={busy || !selected || !!automation} className="h-8 min-w-0 flex-1 text-xs" />
+          <Input ref={addressRef} aria-label={t("browser.address")} placeholder={t("browser.addressPlaceholder")} value={address} onChange={event => setAddress(event.target.value)} disabled={busy || !selected || !!automation} className="h-8 min-w-0 flex-1 text-xs max-md:pointer-coarse:h-10" />
           <Button type="submit" size="sm" disabled={busy || !selected || !!automation}>{t("browser.go")}</Button>
         </form>
-        {inspector && <a href={inspector} target="_blank" rel="noreferrer" className="rounded px-2 py-1 hover:bg-state-hover">{t("browser.expand")}</a>}
+        {inspector && <Button variant="ghost" size="sm" asChild><a href={inspector} target="_blank" rel="noreferrer">{t("browser.expand")}</a></Button>}
         <Button variant="ghost" size="sm" disabled={busy || !!automation} onClick={() => void stop()}>{t("browser.stop")}</Button>
       </>}
     </div>

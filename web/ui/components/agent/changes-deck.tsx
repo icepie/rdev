@@ -102,7 +102,7 @@ function DiffFileCard({
     }
     if (diff.error) {
       return (
-        <div className="px-3 py-3 text-xs break-words text-destructive">
+        <div className="px-3 py-3 text-xs break-words text-destructive-text">
           {diff.error}
         </div>
       );

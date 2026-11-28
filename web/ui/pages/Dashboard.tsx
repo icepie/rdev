@@ -14,6 +14,7 @@ import { useDevices } from "../lib/devices";
 import { apiFetch, apiJSON, type DeviceInfo } from "../lib/api";
 import { cn } from "../lib/utils";
 import { Button } from "../components/button";
+import { Input } from "../components/input";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/card";
 import { Badge } from "../components/badge";
 import {
@@ -116,7 +117,7 @@ function CopyButton({
     <Button
       variant="outline"
       size="sm"
-      className={cn("shrink-0", ok && "border-success text-success")}
+      className={cn("shrink-0", ok && "border-success text-success-foreground")}
       aria-label={label}
       onClick={() => onCopy(id, text)}
     >
@@ -216,8 +217,8 @@ function DesktopBadge({
       className={cn(
         "border-transparent",
         ready
-          ? "bg-success/15 text-success"
-          : "bg-attention/15 text-attention",
+          ? "bg-success/15 text-success-foreground"
+          : "bg-attention/15 text-warning-text",
       )}
     >
       {text}
@@ -239,7 +240,8 @@ function DesktopBadge({
 export function DashboardPage() {
   const { t } = useI18n();
   const { open: openMobileNav } = useContext(MobileNavContext);
-  const { devices, error: devicesError, refresh: refreshDevices } = useDevices();
+  const { devices, loading: devicesLoading, error: devicesError, refresh: refreshDevices } = useDevices();
+  const [deviceQuery, setDeviceQuery] = useState("");
 
   const [cfg, setCfg] = useState<Required<ServerConfig>>({
     sshPort: "2222",
@@ -387,7 +389,7 @@ export function DashboardPage() {
     {
       label: t("index.onlineDevices"),
       value: String(devices.length),
-      cls: "text-success",
+      cls: "text-success-foreground",
     },
     {
       label: t("index.activeSessions"),
@@ -397,10 +399,23 @@ export function DashboardPage() {
     {
       label: t("index.portForwards"),
       value: String(totalForwards),
-      cls: "text-attention",
+      cls: "text-warning-text",
     },
     { label: t("index.sshPort"), value: SP, cls: "" },
   ];
+
+  const normalizedDeviceQuery = deviceQuery.trim().toLowerCase();
+  const visibleDevices = useMemo(
+    () =>
+      normalizedDeviceQuery
+        ? devices.filter((d) =>
+            [d.id, d.displayName, d.os, d.version].some((v) =>
+              v?.toLowerCase().includes(normalizedDeviceQuery),
+            ),
+          )
+        : devices,
+    [devices, normalizedDeviceQuery],
+  );
 
   const flavorTags: { value: ClientFlavor; key: string }[] = [
     { value: "go", key: "index.clientCompat" },
@@ -447,7 +462,7 @@ export function DashboardPage() {
               <div className="text-xs tracking-wide text-muted-foreground uppercase">
                 {s.label}
               </div>
-              <div className={cn("mt-1 text-2xl font-bold", s.cls)}>
+              <div className={cn("mt-1 text-2xl font-bold tabular-nums", s.cls)}>
                 {s.value}
               </div>
             </CardContent>
@@ -469,6 +484,39 @@ export function DashboardPage() {
 
       {/* Devices */}
       <Card className="min-w-0 overflow-hidden">
+        <CardHeader className="flex-row flex-wrap items-center justify-between gap-2 space-y-0 border-b border-border-seam px-4 py-3">
+          <CardTitle className="flex items-center gap-2 text-sm font-semibold">
+            <Icon name="Radio" className="size-4 text-muted-foreground" />
+            <span>{t("index.onlineDevices")}</span>
+            <span className="rounded-full bg-surface-recessed px-2 py-0.5 text-2xs font-medium tabular-nums text-muted-foreground">
+              {normalizedDeviceQuery ? `${visibleDevices.length}/${devices.length}` : devices.length}
+            </span>
+          </CardTitle>
+          <div className="flex w-full items-center gap-2 sm:w-auto">
+            {devices.length > 0 && (
+              <div className="relative min-w-0 flex-1 sm:w-56 sm:flex-none">
+                <Icon name="Search" className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  value={deviceQuery}
+                  onChange={(e) => setDeviceQuery(e.target.value)}
+                  aria-label={t("rail.search")}
+                  placeholder={t("rail.search")}
+                  className="h-8 pl-8 text-xs max-md:pointer-coarse:h-10"
+                />
+              </div>
+            )}
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={devicesLoading}
+              aria-label={t("files.refresh")}
+              onClick={refreshDevices}
+            >
+              <Icon name="Refresh" className={cn(devicesLoading && "animate-spin motion-reduce:animate-none")} />
+              <span className="hidden sm:inline">{t("files.refresh")}</span>
+            </Button>
+          </div>
+        </CardHeader>
         <Table aria-label={t("index.onlineDevices")} className="block md:table">
           <TableHeader className="hidden md:table-header-group">
             <TableRow>
@@ -486,19 +534,23 @@ export function DashboardPage() {
             </TableRow>
           </TableHeader>
           <TableBody className="block md:table-row-group">
-            {devices.length === 0 && (
+            {visibleDevices.length === 0 && (
               <TableRow className="block md:table-row">
                 <TableCell colSpan={9} className="flex h-32 items-center justify-center text-center md:table-cell">
                   <div className="flex flex-col items-center gap-2 text-muted-foreground">
-                    <Icon name="Radio" className="size-8 opacity-30" />
+                    <Icon name={normalizedDeviceQuery ? "Search" : "Radio"} className="size-8 opacity-30" />
                     <span className="text-sm">
-                      {devicesError ? t("common.error") : t("index.waitingDevices")}
+                      {devicesError
+                        ? t("common.error")
+                        : normalizedDeviceQuery
+                          ? t("rail.noMatches")
+                          : t("index.waitingDevices")}
                     </span>
                   </div>
                 </TableCell>
               </TableRow>
             )}
-            {devices.map((d) => {
+            {visibleDevices.map((d) => {
               return (
                 <TableRow key={d.id} className="grid grid-cols-2 p-2 md:table-row md:p-0">
                   <TableCell className="col-start-2 row-start-1 block text-right md:table-cell md:text-left" aria-label={t("index.status")}>
@@ -522,16 +574,16 @@ export function DashboardPage() {
                   <TableCell className="hidden text-muted-foreground md:table-cell">
                     {ago(d.connectedAt, t)}
                   </TableCell>
-                  <TableCell className="hidden md:table-cell">{Number(d.sessions ?? 0)}</TableCell>
-                  <TableCell className="hidden md:table-cell">{Number(d.forwards ?? 0)}</TableCell>
+                  <TableCell className="hidden tabular-nums md:table-cell">{Number(d.sessions ?? 0)}</TableCell>
+                  <TableCell className="hidden tabular-nums md:table-cell">{Number(d.forwards ?? 0)}</TableCell>
                   <TableCell className="block md:table-cell" aria-label={t("index.auth")}>
                     <Badge
                       variant="outline"
                       className={cn(
                         "border-transparent",
                         d.hasPassword
-                          ? "bg-success/15 text-success"
-                          : "bg-attention/15 text-attention",
+                          ? "bg-success/15 text-success-foreground"
+                          : "bg-attention/15 text-warning-text",
                       )}
                     >
                       {d.hasPassword
@@ -580,7 +632,7 @@ export function DashboardPage() {
                             className={cn(
                               copiedId?.startsWith("conn:") &&
                                 copiedId.endsWith(":" + d.id) &&
-                                "border-success text-success",
+                                "border-success text-success-foreground",
                             )}
                           >
                             {copiedId?.startsWith("conn:") &&
@@ -857,7 +909,7 @@ export function DashboardPage() {
           )}
 
           <HintSection
-            icon="Monitor"
+            icon="Workflow"
             title={t("index.forwardTitle")}
             copy={hintCopy([
               {
@@ -958,7 +1010,7 @@ function HintCopyMenu({
               className={cn(
                 COARSE_POINTER_HEADER_ICON_BUTTON_CLASS,
                 "shrink-0 text-muted-foreground hover:text-foreground",
-                anyCopied && "text-success hover:text-success",
+                anyCopied && "text-success-foreground hover:text-success-foreground",
               )}
             >
               <Icon name={anyCopied ? "Check" : "Copy"} className="size-3.5" />
@@ -979,7 +1031,7 @@ function HintCopyMenu({
               {it.cmd}
             </span>
             {copiedId === itemId(i) && (
-              <Icon name="Check" className="size-4 text-success" />
+              <Icon name="Check" className="size-4 text-success-foreground" />
             )}
           </DropdownMenuItem>
         ))}
@@ -1034,13 +1086,13 @@ function HintCode({ cmd, suffix }: { cmd: string; suffix?: string }) {
     <CodeBlock className="py-1.5 text-muted-foreground">
       <span className="font-semibold text-foreground">{head}</span>
       {rest}
-      {suffix && <span className="text-success">{"  " + suffix}</span>}
+      {suffix && <span className="text-success-foreground">{"  " + suffix}</span>}
     </CodeBlock>
   );
 }
 
 function HintComment({ text }: { text: string }) {
   return (
-    <CodeBlock className="py-1.5 text-attention">{text}</CodeBlock>
+    <CodeBlock className="py-1.5 text-warning-text">{text}</CodeBlock>
   );
 }

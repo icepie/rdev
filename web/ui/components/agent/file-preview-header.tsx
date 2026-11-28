@@ -105,6 +105,6 @@ export function FilePreviewHeader({ path, name, externalUrl, content, loading, p
         </div>
       </div>
     </TooltipProvider>
-    <div role="status" className={copyStatus === "error" ? "px-4 py-1 text-xs text-destructive" : "sr-only"}>{copyStatus ? t(copyStatus === "error" ? "agent.copyFileFailed" : "common.copied") : ""}</div>
+    <div role="status" className={copyStatus === "error" ? "px-4 py-1 text-xs text-destructive-text" : "sr-only"}>{copyStatus ? t(copyStatus === "error" ? "agent.copyFileFailed" : "common.copied") : ""}</div>
   </div>;
 }

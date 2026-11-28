@@ -54,7 +54,7 @@ export function ApprovalCard({
               "shrink-0 text-xs font-medium",
               item.state === "denied"
                 ? "text-destructive-text"
-                : "text-success",
+                : "text-success-foreground",
             )}
           >
             {item.state === "denied"
